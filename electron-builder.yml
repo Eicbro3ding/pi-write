@@ -1,0 +1,34 @@
+# pi-writer 桌面端打包配置(electron-builder)
+# 产物输出到 release/electron/。files 为自定义白名单 + node_modules 显式
+# 负向排除(electron-builder 会自动加入 package.json 的生产依赖,必须显式
+# 排除;主进程与服务端均为单文件产物,运行时不需要 node_modules)。
+appId: dev.pi.writer
+productName: pi-writer
+directories:
+  output: release/electron
+# 产物名对齐设计文档 §7 的 pi-writer-web 命名(版本号取 package.json version)
+artifactName: pi-writer-web-${version}.${ext}
+# 显式 executableName:防未来包名再带 scope 时被拼成非法路径
+# (曾因 @earendil-works/pi-writer 拼出 @earendil-workspi-writer 报错)
+executableName: pi-writer
+linux:
+  target: appimage
+  icon: ico.png
+files:
+  - dist/web/server.cjs
+  - dist/electron/main.cjs
+  - dist/electron/preload.js
+  - web/dist/**
+  - ico.png
+  - package.json
+  - "!node_modules/**/*"
+  - "!**/node_modules/**/*"
+win:
+  target: nsis
+  # 项目图标(1254×1254 PNG,electron-builder 自动转 .ico 用于安装包/exe)
+  icon: ico.png
+nsis:
+  # 向导式安装:允许用户选择安装目录(默认 %LOCALAPPDATA%\Programs\pi-writer,
+  # per-user 安装无需管理员权限);一键模式(oneClick)无路径选择
+  oneClick: false
+  allowToChangeInstallationDirectory: true

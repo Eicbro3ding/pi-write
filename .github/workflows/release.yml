@@ -1,0 +1,103 @@
+# 多平台 Release 发布:推送 v* 标签时,在 GitHub 原生 runner 上分别构建
+# Windows NSIS / macOS dmg / Linux AppImage,并上传到对应 GitHub Release。
+# 本机(Windows)只能打 Windows 安装包;macOS 需要 mac 工具链、Linux AppImage
+# 交叉构建需要符号链接权限(开发者模式)——统一由 CI 完成。
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            args: --win nsis
+          - os: macos-latest
+            args: --mac dmg
+          - os: ubuntu-latest
+            args: --linux appimage
+    runs-on: ${{ matrix.os }}
+    env:
+      # 无签名证书:跳过自动代码签名(macOS/Windows 均不签名)
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # node 20 自带 npm 触发 arborist "edgesOut" 崩溃;node 22(npm 10.9.x)与本地一致
+          node-version: 22
+
+      - name: 安装依赖
+        # 用提交的 package-lock.json(npm ci 规避 fresh install 的 arborist edgesOut 崩溃)
+        run: npm ci
+
+      - name: 构建服务端/主进程/前端
+        # build:web = esbuild 服务端单文件 + Electron 主进程/preload + vite 前端
+        run: npm run build:web
+
+      - name: 打包安装包
+        run: npx electron-builder ${{ matrix.args }} --publish never
+
+      - name: 上传 Release 产物
+        uses: softprops/action-gh-release@v2
+        with:
+          # 每个平台只匹配自己的产物;release 已存在(如本机先发的 Windows 包)时更新追加,
+          # 同名资产覆盖(overwrite_files)
+          files: |
+            release/electron/pi-writer-web-*.exe
+            release/electron/pi-writer-web-*.dmg
+            release/electron/pi-writer-web-*.AppImage
+          overwrite_files: true
+          fail_on_unmatched_files: false
+
+  # TUI 单文件 zip 发行包:一个 runner 上 bun 交叉编译全平台,再打 zip 上传。
+  # 每个包 = 平台可执行文件 + start.bat(仅 Windows)+ skills/ + theme/ + 文档。
+  tui-zips:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: bun 交叉编译 6 平台单文件
+        # bun build --compile 支持任意目标交叉编译,产物互不依赖
+        run: |
+          set -e
+          bun build src/cli.ts --compile --target=bun-windows-x64 --outfile release/dist-tui/win-x64/pi-writer.exe
+          bun build src/cli.ts --compile --target=bun-windows-arm64 --outfile release/dist-tui/win-arm64/pi-writer.exe
+          bun build src/cli.ts --compile --target=bun-linux-x64 --outfile release/dist-tui/linux-x64/pi-writer
+          bun build src/cli.ts --compile --target=bun-linux-arm64 --outfile release/dist-tui/linux-arm64/pi-writer
+          bun build src/cli.ts --compile --target=bun-darwin-x64 --outfile release/dist-tui/darwin-x64/pi-writer
+          bun build src/cli.ts --compile --target=bun-darwin-arm64 --outfile release/dist-tui/darwin-arm64/pi-writer
+
+      - name: 准备附加文件(skills/theme/文档)
+        run: |
+          cp -r skills release/skills
+          mkdir -p release/theme
+          cp vendor/pi-coding-agent/src/modes/interactive/theme/*.json release/theme/
+          cp package.json README.md CHANGELOG.md release/
+
+      - name: 打 zip 发行包
+        run: node scripts/make-release-zips.mjs $(node -p "require('./package.json').version")
+
+      - name: 上传 zip 包
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/release-zips/*.zip
+          overwrite_files: true
+          fail_on_unmatched_files: false
