@@ -12,7 +12,6 @@ AI 原生的长篇创作环境——基于 [Pi](https://pi.dev) 框架,让作者
 
 ![界面 3](docs/screenshots/screenshot-3.png)
 
-> GIF 待补充:写作一章 → AI 更新世界书 → 关系图变化 → 预览卡出现 → 作者确认归档
 
 ps:这是vibe coding出来的，所以不要期待代码质量很高，但是！！！我会人为控制的 (绝对会！！！)
 
