@@ -8,7 +8,10 @@ import { loadCast } from "../stage/cast.ts";
 import { readStage } from "../stage/stage-store.ts";
 import { StageOrchestrator, type StageEvent } from "../stage/orchestrator.ts";
 import type { CastConfig, DirectorMode, ScenePhase, SceneScript, ScriptPatch, StageEntry, StageStatus } from "../stage/types.ts";
+import type { ToolDefinition } from "../../vendor/pi-coding-agent/src/index.ts";
 import { ensureWorld } from "../world-data.ts";
+import type { WriterHost } from "./writer-host.ts";
+import type { AgentSessionEvent } from "../../vendor/pi-coding-agent/src/index.ts";
 
 /**
  * 舞台区 web 宿主：每本书一个 StageOrchestrator（惰性创建），把 CLI 命令面
@@ -27,18 +30,31 @@ export interface StageHostOptions {
 	model?: string;
 	/** --thinking 档位。 */
 	thinkingLevel?: string;
+	/** 常驻编剧宿主(收幕委托;未注入时编排器走内置 writer,CLI 行为)。 */
+	writerHost?: WriterHost;
+	/** MCP 外部工具惰性获取(web 注入,编排器创建时才取最新——启动时 stdio 连接
+	 *  可能未就绪,构造时快照会拿到空,2026-08-11 实测)。 */
+	getMcpTools?: () => ToolDefinition[];
 	/** 测试注入：自定义编排器工厂（缺省创建真实编排器）。 */
 	createOrchestrator?: (bookDir: string) => StageOrchestrator;
 }
 
 export type StageHostEvent =
-	| { type: "entry"; slug: string; entry: StageEntry }
-	| { type: "system"; slug: string; text: string }
-	| { type: "done"; slug: string; cmd: string; ok: boolean; text?: string; thinking?: string }
-	| { type: "tool_start"; slug: string; toolCallId: string; toolName: string; args: Record<string, unknown> }
-	| { type: "tool_end"; slug: string; toolCallId: string; toolName: string; isError: boolean }
-	// 导演回复流式(完整文本):orchestrator 经 message_update 转发,前端替换流式气泡
-	| { type: "director_text"; slug: string; text: string };
+	| { type: "entry"; slug: string; chapterFile: string | null; entry: StageEntry }
+	| { type: "system"; slug: string; chapterFile: string | null; text: string }
+	| { type: "done"; slug: string; chapterFile: string | null; cmd: string; ok: boolean; text?: string; thinking?: string }
+	// 导演会话事件全量透传(与 writer_event 同款,内层是主会话同款会话事件):
+	// 前端复用 processAgentEvent 归约 + MessageList 渲染(2026-08-11 统一重构);
+	// 消息/思考/工具卡片/流式全在内层,不再需要独立的 tool_*/director_text 事件
+	| { type: "director_event"; slug: string; chapterFile: string | null; event: AgentSessionEvent }
+	// 剧本待确认(script_confirm 提交):前端以卡片展示剧本 + 确认/修改按钮
+	| { type: "script_confirm"; slug: string; chapterFile: string | null; sceneId: string; script: SceneScript }
+	// 世界书编辑信号(world_update 工具已写记录文件;前端回合结束读文件渲染预览卡)
+	| { type: "world_edit"; slug: string; chapterFile: string | null }
+	// 收幕导演整理回合结束:前端撤「导演正在编辑消息」提示条(不等编剧成文)
+	| { type: "director_done"; slug: string; chapterFile: string | null }
+	// 舞台阶段变化(开演/收幕):前端收到后自动刷新快照
+	| { type: "phase"; slug: string; chapterFile: string | null; phase: ScenePhase };
 
 export interface StageCommandResult {
 	/** 命令即时文本结果（CLI 打印同款）。 */
@@ -49,11 +65,15 @@ export interface StageCommandResult {
 
 export interface StageSnapshot {
 	slug: string;
+	/** 归属章节(舞台按章节隔离;null = 书级)。 */
+	chapterFile: string | null;
 	sceneId: string | null;
 	phase: ScenePhase;
 	status: StageStatus;
 	mode: DirectorMode;
 	script: SceneScript | null;
+	/** 待确认剧本（script_confirm 提交后、用户确认前；null = 无待确认）。 */
+	pendingScript: { sceneId: string; script: SceneScript; confirmed: boolean } | null;
 	cast: CastConfig;
 	transcript: StageEntry[];
 	counts: ReturnType<typeof countStage>;
@@ -83,13 +103,16 @@ async function collectAvatars(bookDir: string): Promise<Record<string, string>> 
 export type DirectorChatMessage = { role: "user" | "assistant"; text: string; thinking?: string };
 
 /**
- * 从磁盘导演会话文件(stage-director.jsonl)恢复讨论历史——导演会话由
- * SessionManager 持久化,服务重启后 orchestrator 未创建时,快照仍能给出
- * 气泡与「导演最近一句」(否则重启后对话看起来全丢)。坏行跳过。
+ * 从磁盘导演会话文件恢复讨论历史——导演会话由 SessionManager 持久化,服务重启后
+ * orchestrator 未创建时,快照仍能给出气泡与「导演最近一句」(否则重启后对话看起来
+ * 全丢)。文件按章节隔离(stage-director-<chapterId>.jsonl,舞台按章节一幕,2026-08-10)。
+ * 坏行跳过。
  */
-function readDirectorChatFromDisk(slug: string): DirectorChatMessage[] {
+function readDirectorChatFromDisk(slug: string, chapterFile: string | null): DirectorChatMessage[] {
 	try {
-		const abs = join(getBookSessionsDir(slug), "stage-director.jsonl");
+		const chapterId = chapterFile ? chapterFile.replace(/\.jsonl$/, "") : null;
+		const file = chapterId ? `stage-director-${chapterId}.jsonl` : "stage-director.jsonl";
+		const abs = join(getBookSessionsDir(slug), file);
 		if (!existsSync(abs)) return [];
 		const chat: DirectorChatMessage[] = [];
 		for (const line of readFileSync(abs, "utf-8").split("\n")) {
@@ -132,9 +155,15 @@ export class StageHost {
 		this.eventSink = sink;
 	}
 
-	/** 取（或惰性创建并启动）某本书的编排器。 */
-	private async getOrCreate(slug: string): Promise<StageOrchestrator> {
-		const existing = this.orchestrators.get(slug);
+	/** 编排器键:书 + 章节(舞台按章节隔离——每章一幕独立对话/演出,切章不串,2026-08-10)。 */
+	private static key(slug: string, chapterFile: string | null | undefined): string {
+		return `${slug}:${chapterFile ?? "default"}`;
+	}
+
+	/** 取（或惰性创建并启动）某书某章的编排器。 */
+	private async getOrCreate(slug: string, chapterFile: string | null | undefined): Promise<StageOrchestrator> {
+		const key = StageHost.key(slug, chapterFile);
+		const existing = this.orchestrators.get(key);
 		if (existing) return existing;
 		const bookDir = getBookDir(slug);
 		const orch = this.options.createOrchestrator
@@ -142,24 +171,34 @@ export class StageHost {
 				: new StageOrchestrator({
 						bookDir,
 						agentDir: getAgentDir(),
+						chapterFile: chapterFile ?? null,
 						model: this.options.model,
 						thinkingLevel: this.options.thinkingLevel,
+						writerHost: this.options.writerHost,
+						mcpTools: this.options.getMcpTools?.(),
 						onEvent: (event) => {
+							const cf = chapterFile ?? null;
 							if (event.type === "stage") {
-								this.eventSink(slug, { type: "entry", slug, entry: event.entry });
+								this.eventSink(slug, { type: "entry", slug, chapterFile: cf, entry: event.entry });
 							} else if (event.type === "system") {
-								this.eventSink(slug, { type: "system", slug, text: event.text });
-							} else if (event.type === "tool_start") {
-								this.eventSink(slug, { type: "tool_start", slug, toolCallId: event.toolCallId, toolName: event.toolName, args: event.args });
-							} else if (event.type === "director_text") {
-								this.eventSink(slug, { type: "director_text", slug, text: event.text });
+								this.eventSink(slug, { type: "system", slug, chapterFile: cf, text: event.text });
+							} else if (event.type === "director_event") {
+								this.eventSink(slug, { type: "director_event", slug, chapterFile: cf, event: event.event });
+								} else if (event.type === "script_confirm") {
+									this.eventSink(slug, { type: "script_confirm", slug, chapterFile: cf, sceneId: event.sceneId, script: event.script });
+								} else if (event.type === "world_edit") {
+									this.eventSink(slug, { type: "world_edit", slug, chapterFile: cf });
+								} else if (event.type === "director_done") {
+									this.eventSink(slug, { type: "director_done", slug, chapterFile: cf });
+								} else if (event.type === "phase") {
+								this.eventSink(slug, { type: "phase", slug, chapterFile: cf, phase: event.phase });
 							} else {
-								this.eventSink(slug, { type: "tool_end", slug, toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError });
+								this.eventSink(slug, { type: "done", slug, chapterFile: cf, cmd: "director", ok: true });
 							}
 						},
 					});
 		await orch.start();
-		this.orchestrators.set(slug, orch);
+		this.orchestrators.set(key, orch);
 		return orch;
 	}
 
@@ -170,30 +209,36 @@ export class StageHost {
 		await Promise.allSettled(all.map((o) => o.dispose()));
 	}
 
-	/** 释放某本书的舞台编排器（删除书前调用;无编排器时静默）。
+	/** 释放某本书的全部章节编排器（删除书前调用;无编排器时静默）。
 	 *  不释放则删除后编排器仍在内存,继续写 world.json/outline.md,目录复活。 */
 	async dispose(slug: string): Promise<void> {
-		const orch = this.orchestrators.get(slug);
-		if (!orch) return;
-		this.orchestrators.delete(slug);
-		await orch.dispose();
+		const all: StageOrchestrator[] = [];
+		for (const [key, orch] of this.orchestrators) {
+			if (key.startsWith(`${slug}:`)) all.push(orch);
+		}
+		for (const key of [...this.orchestrators.keys()]) {
+			if (key.startsWith(`${slug}:`)) this.orchestrators.delete(key);
+		}
+		await Promise.allSettled(all.map((o) => o.dispose()));
 	}
 
 	/** 舞台快照（纯读，不创建编排器；无活跃编排器时返回空态）。 */
-	async snapshot(slug: string): Promise<StageSnapshot> {
-		const orch = this.orchestrators.get(slug);
+	async snapshot(slug: string, chapterFile?: string | null): Promise<StageSnapshot> {
+		const orch = this.orchestrators.get(StageHost.key(slug, chapterFile));
 		const bookDir = getBookDir(slug);
 		if (!orch) {
 			// 无活跃编排器(服务重启/从未对话):导演讨论从磁盘会话文件恢复,
 			// 否则刷新/重启后对话气泡全丢(directorLast 同源恢复)
-			const chat = readDirectorChatFromDisk(slug);
+			const chat = readDirectorChatFromDisk(slug, chapterFile ?? null);
 			return {
 				slug,
+				chapterFile: chapterFile ?? null,
 				sceneId: null,
 				phase: "idle",
 				status: "normal",
 				mode: "discussion",
 				script: null,
+				pendingScript: null,
 				cast: await loadCast(bookDir),
 				transcript: [],
 				counts: { lines: 0, perActor: {}, perCharacter: {}, cnChars: 0, turn: 0 },
@@ -202,29 +247,32 @@ export class StageHost {
 				avatars: await collectAvatars(bookDir),
 			};
 		}
-		const entries = orch.sceneId ? await readStage(bookDir, orch.sceneId) : [];
-		return {
-			slug,
-			sceneId: orch.sceneId,
-			phase: orch.phase,
-			status: orch.status,
-			mode: orch.getDirectorMode(),
-			script: orch.script,
-			cast: await loadCast(bookDir),
-			transcript: entries,
-			counts: countStage(entries),
-			directorLast: orch.getDirectorLast(),
-			directorChat: orch.getDirectorChat(),
-			avatars: await collectAvatars(bookDir),
-		};
-	}
+			const entries = orch.sceneId ? await readStage(bookDir, orch.sceneId) : [];
+			return {
+				slug,
+				chapterFile: chapterFile ?? null,
+				sceneId: orch.sceneId,
+				phase: orch.phase,
+				status: orch.status,
+				mode: orch.getDirectorMode(),
+				script: orch.script,
+				/** 待确认剧本（script_confirm 提交后、用户确认前；前端显示「待确认」态）。 */
+				pendingScript: orch.getPendingScript(),
+				cast: await loadCast(bookDir),
+				transcript: entries,
+				counts: countStage(entries),
+				directorLast: orch.getDirectorLast(),
+				directorChat: orch.getDirectorChat(),
+				avatars: await collectAvatars(bookDir),
+			};
+		}
 
 	/**
 	 * 命令分发。同步命令直接返回 { text, async: false }；
 	 * 长命令校验通过后后台执行（结果经 onEvent done 事件），返回 { text: "", async: true }。
 	 */
-	async command(slug: string, cmdName: string, args: Record<string, unknown>): Promise<StageCommandResult> {
-		const orch = await this.getOrCreate(slug);
+	async command(slug: string, cmdName: string, args: Record<string, unknown>, chapterFile?: string | null): Promise<StageCommandResult> {
+		const orch = await this.getOrCreate(slug, chapterFile);
 		switch (cmdName) {
 			case "next":
 				return { text: await orch.userNext(), async: false };
@@ -257,6 +305,7 @@ export class StageHost {
 				const text = requireString(args, "text");
 				void this.runLong(
 					slug,
+					chapterFile ?? null,
 					cmdName,
 					async () => {
 						await orch.directorSay(text);
@@ -270,14 +319,17 @@ export class StageHost {
 				const index = requireInt(args, "index");
 				const feedback = requireString(args, "feedback");
 				if (index < 1) throw new StageCommandError("fix 序号必须 ≥ 1");
-				void this.runLong(slug, cmdName, async () => orch.userFix(index, feedback));
+				void this.runLong(slug, chapterFile ?? null, cmdName, async () => orch.userFix(index, feedback));
 				return { text: "", async: true };
 			}
 			case "cut":
-				void this.runLong(slug, cmdName, async () => orch.userCut());
+				void this.runLong(slug, chapterFile ?? null, cmdName, async () => orch.userCut());
 				return { text: "", async: true };
+			case "confirm_script":
+				// 用户确认剧本（前端卡片确认按钮）→ 置 confirmed + 提示导演开演；同步返回
+				return { text: await orch.confirmScript(), async: false };
 			default:
-				throw new StageCommandError(`未知命令：${cmdName}（next/auto/force/retry/revise/wrap/thoughts/mode/director/fix/cut）`);
+				throw new StageCommandError(`未知命令：${cmdName}（next/auto/force/retry/revise/wrap/thoughts/mode/director/fix/cut/confirm_script）`);
 		}
 	}
 
@@ -285,6 +337,7 @@ export class StageHost {
 	 *  thinkingFn 可选：导演发言等命令在 done 事件携带回复的思考链（前端折叠查看）。 */
 	private async runLong(
 		slug: string,
+		chapterFile: string | null,
 		cmdName: string,
 		fn: () => Promise<string>,
 		thinkingFn?: () => string | undefined,
@@ -294,6 +347,7 @@ export class StageHost {
 			this.eventSink(slug, {
 				type: "done",
 				slug,
+				chapterFile,
 				cmd: cmdName,
 				ok: true,
 				...(text ? { text } : {}),
@@ -301,8 +355,8 @@ export class StageHost {
 			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			this.eventSink(slug, { type: "system", slug, text: `舞台异常：${message}` });
-			this.eventSink(slug, { type: "done", slug, cmd: cmdName, ok: false, text: message });
+			this.eventSink(slug, { type: "system", slug, chapterFile, text: `舞台异常：${message}` });
+			this.eventSink(slug, { type: "done", slug, chapterFile, cmd: cmdName, ok: false, text: message });
 		}
 	}
 }

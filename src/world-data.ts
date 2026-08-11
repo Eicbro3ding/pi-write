@@ -18,7 +18,7 @@ export interface NoticeData { text: string; enabled: boolean; updatedAt: number;
 export interface StoryNode { id: string; title: string; status: StoryNodeStatus; goal: string; next: string | null; }
 export interface StorylineData { enabled: boolean; nodes: StoryNode[]; }
 export interface TimelineEvent { id: string; chapter: string; text: string; }
-export interface WorldData { version: 1; entries: WorldEntry[]; relations: WorldRelation[]; constraints: WorldConstraint[]; styleSample: StyleSample | null; notice: NoticeData; storyline: StorylineData; timeline: TimelineEvent[]; }
+export interface WorldData { version: 1; entries: WorldEntry[]; relations: WorldRelation[]; constraints: WorldConstraint[]; styleSample: StyleSample | null; worldSummary: string; notice: NoticeData; storyline: StorylineData; timeline: TimelineEvent[]; }
 
 export class WorldValidationError extends Error {
 	constructor(message: string) {
@@ -32,6 +32,8 @@ const ENTRY_STATUSES = ["alive", "dead", "unknown", "active", "archived", "draft
 const STORY_STATUSES = ["pending", "in-progress", "done", "shelved"] as const;
 const RELATION_ARROWS = ["none", "single", "double"] as const;
 const NOTICE_LIMIT = 1000;
+/** 简要世界观概述的字数上限。 */
+const SUMMARY_LIMIT = 600;
 const CONSTRAINT_LIMIT = 800;
 const SAMPLE_LIMIT = 500;
 const MAX_ENTRY_IMAGES = 9;
@@ -66,6 +68,7 @@ export function createEmptyWorld(): WorldData {
 		relations: [],
 		constraints: [],
 		styleSample: null,
+		worldSummary: "",
 		notice: { text: "", enabled: true, updatedAt: 0 },
 		storyline: { enabled: true, nodes: [] },
 		timeline: [],
@@ -103,6 +106,11 @@ function worldErrors(value: unknown): string | null {
 	// 必填小节:notice/storyline 缺失(或为 null)视为非法,避免下游空指针
 	if (raw.notice === undefined || raw.notice === null) return "world.json 缺少 notice";
 	if (raw.storyline === undefined || raw.storyline === null) return "world.json 缺少 storyline";
+	// 简要世界观:缺失/显式 null 放行(规范化时补空),存在则必须是字符串且限长
+	if (raw.worldSummary !== undefined && raw.worldSummary !== null) {
+		if (typeof raw.worldSummary !== "string") return "worldSummary 必须是字符串";
+		if (raw.worldSummary.length > SUMMARY_LIMIT) return `worldSummary 超过 ${SUMMARY_LIMIT} 字上限`;
+	}
 	const entries = Array.isArray(raw.entries) ? raw.entries : [];
 	const seenIds = new Set<string>();
 	for (const e of entries) {
@@ -190,9 +198,12 @@ export function validateWorld(value: unknown): WorldData {
 		const imgs = dedupe(e.images ?? []);
 		return e.avatar === undefined || e.images === undefined || imgs.length !== e.images.length || (avatar !== null && !imgs.includes(avatar));
 	});
-	if (!needsArrow && !needsImages) return raw;
+	// 规范化:旧数据缺 worldSummary 字段(或显式 null),补空
+	const needsSummary = raw.worldSummary === undefined || raw.worldSummary === null;
+	if (!needsArrow && !needsImages && !needsSummary) return raw;
 	return {
 		...raw,
+		worldSummary: needsSummary ? "" : raw.worldSummary,
 		relations: needsArrow
 			? raw.relations.map((r) => ({ ...r, arrow: (r as { arrow?: RelationArrow }).arrow ?? "double" }))
 			: raw.relations,
@@ -241,6 +252,33 @@ export async function saveWorld(bookDir: string, data: WorldData): Promise<void>
 		throw new WorldValidationError(`world.json 写入校验失败,已回滚: ${err instanceof Error ? err.message : String(err)}`);
 	}
 	await writeWorldViews(bookDir, data);
+}
+
+/** 世界书编辑记录文件:内容每次覆盖、路径稳定(「内容 tmp、文件不 tmp」)。
+ *  world_update 成功后的 before/after 快照——diff 在应用时刻由工具算好落盘,
+ *  前端回合结束据此渲染预览卡(2026-08-11 简化:替代 SSE 工具事件竞态捕获)。 */
+export const WORLD_EDIT_RECORD_FILE = "stage/last-world-edit.json";
+
+/** 写世界书编辑记录(工具调;失败不影响世界书更新)。 */
+export async function writeWorldEditRecord(
+	bookDir: string,
+	record: { op: string; before: WorldData; after: WorldData; timestamp: number },
+): Promise<void> {
+	await atomicWriteFile(join(resolveBookDir(bookDir), WORLD_EDIT_RECORD_FILE), JSON.stringify(record));
+}
+
+/** 读世界书编辑记录(前端回合结束渲染预览卡;无记录/损坏 → null)。 */
+export async function readWorldEditRecord(
+	bookDir: string,
+): Promise<{ op: string; before: WorldData; after: WorldData; timestamp: number } | null> {
+	try {
+		const raw = await readFile(join(resolveBookDir(bookDir), WORLD_EDIT_RECORD_FILE), "utf-8");
+		const parsed = JSON.parse(raw) as { op: string; before: WorldData; after: WorldData; timestamp: number };
+		if (typeof parsed.op !== "string" || !parsed.before || !parsed.after) return null;
+		return parsed;
+	} catch {
+		return null;
+	}
 }
 
 /** 存在 → 读+校验;不存在 → 迁移旧 md(无则空世界)并落盘。 */

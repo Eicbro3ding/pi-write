@@ -629,6 +629,24 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .world-loading .notice { margin: 0; }
 .world-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .world-body .notice { max-width: none; margin: 12px 20px 0; }
+/* 简要世界观编辑体(开关在顶栏 w-bar;折叠时整块不渲染) */
+.w-summary { flex: none; padding: 12px 20px 10px; border-bottom: 1px solid var(--line); }
+.w-summary textarea {
+	width: 100%; box-sizing: border-box; background: var(--bg-elev); border: 1px solid var(--line);
+	border-radius: var(--r-sm); color: var(--ink); font-size: 13px; padding: 6px 10px; outline: none;
+	resize: vertical; min-height: 40px; transition: border-color var(--dur-fast);
+}
+.w-summary textarea:focus { border-color: var(--amber); }
+.w-summary .w-count { font-family: var(--mono); font-size: 11px; color: var(--faint); padding-top: 4px; }
+.w-summary .w-count.over { color: var(--red); }
+/* 顶栏折叠开关(世界书页 w-bar 内,列表/关系图 tabs 左侧) */
+.w-summary-toggle {
+	flex: none; font-size: 12px; color: var(--muted); padding: 4px 10px;
+	border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg-elev);
+	cursor: pointer; transition: color var(--dur-fast), border-color var(--dur-fast);
+}
+.w-summary-toggle:hover { color: var(--ink); border-color: var(--amber); }
+.w-summary-toggle.on { color: var(--amber); border-color: var(--amber); }
 .w-bar { flex: none; display: flex; align-items: center; gap: 12px; padding: 12px 20px 10px; border-bottom: 1px solid var(--line); }
 .w-file { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .w-dirty { margin-left: auto; font-size: 12px; color: var(--faint); }
@@ -1173,6 +1191,17 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .st-counts { margin-left: auto; font-size: 11.5px; color: var(--faint); font-family: var(--mono); white-space: nowrap; }
 .st-dir-last { display: block; width: 100%; font-size: 12px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* 收幕进行中提示条(2026-08-11):固定于主区顶部、不随滚动消失——
+   收幕 = 导演整理 + 编剧成文,长命令全程置 busy(cut),用户一定能看到 */
+.stage-editing {
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 8px 16px; background: var(--amber-tint);
+  border-bottom: 1px solid var(--amber); color: var(--amber);
+  font-size: 12.5px; letter-spacing: 0.03em;
+}
+.stage-editing .se-spin { animation: se-blink 1.2s ease-in-out infinite; }
+@keyframes se-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
 /* 演出控制条(演出前全灰:next/收尾/重演/强制发言/思考档/修订/收幕) */
 .stage-controls { flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--bg-elev); }
 .st-next { color: var(--amber); border: 1px solid var(--amber); }
@@ -1188,6 +1217,17 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 
 /* 舞台流 */
 .stage-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px 24px; display: flex; flex-direction: column; gap: 10px; }
+/* 舞台对话不压缩(2026-08-11):取消 flex:1,对话区改自然高度——确认卡/预览卡展开
+   不再挤压对话可见区,内容超出时由 stage-scroll 整列滚动(编辑页右栏对话不受影响) */
+.stage-scroll > .chat-scroll { flex: none; }
+/* 收幕完成引导卡(2026-08-11):成文提示 + 去编辑页跳转 */
+.stage-done { border: 1px solid var(--green); border-radius: var(--r-md); padding: 12px 14px; background: var(--green-tint); }
+.stage-done .sd-title { font-size: 13px; font-weight: 600; color: var(--green); margin-bottom: 4px; }
+.stage-done .sd-line { font-size: 12.5px; color: var(--muted); line-height: 1.7; }
+.stage-done .sd-actions { margin-top: 10px; display: flex; gap: 10px; }
+.stage-done .sd-actions .btn { padding: 6px 16px; border-radius: var(--r-sm); border: 1px solid var(--green); color: var(--green); background: transparent; cursor: pointer; font-size: 12.5px; transition: background var(--dur-fast); }
+.stage-done .sd-actions .btn.primary { background: var(--green); color: var(--bg); }
+.stage-done .sd-actions .btn.primary:hover:not(:disabled) { background: var(--green-tint-strong); }
 .st-entry { display: flex; gap: 10px; align-items: center; }
 .st-idx { flex: none; font-size: 10.5px; color: var(--faint); font-family: var(--mono); width: 26px; text-align: right; }
 .st-avatar { flex: none; width: 30px; height: 30px; border-radius: 50%; overflow: hidden; background: var(--bg-elev-2); border: 1px solid var(--line); }
@@ -1238,6 +1278,11 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
    = 一个标签的宽;等宽标签的前提:文案等长、padding 一致) */
 .st-tabs[data-active="1"]::before { transform: translateX(calc(100% + 2px)); }
 .st-tabs[data-active="2"]::before { transform: translateX(calc((100% + 2px) * 2)); }
+/* ScriptView 标签页(概要/节拍/演员指令)文案不等长:按钮 flex 均分制造等宽前提,
+   指示块宽度按 flex 布局重算(基础规则的 (100% - 8px)/3 按内容宽度假设) */
+.st-tabs.tabs-equal { display: flex; align-self: stretch; }
+.st-tabs.tabs-equal::before { width: calc((100% - 12px) / 3); }
+.st-tabs.tabs-equal .st-tab { flex: 1; justify-content: center; }
 .st-tab { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; font-size: 12.5px; color: var(--muted); border-radius: calc(var(--r-md) - 2px); transition: color var(--dur-fast), background var(--dur-fast); }
 .st-tab:hover { color: var(--ink); background: var(--hover-tint); }
 .st-tab.active { color: var(--amber); background: transparent; }
@@ -1292,3 +1337,23 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .confirm-card .cc-actions .cc-revert:hover:not(:disabled) { color: var(--ink); background: var(--hover-tint); }
 .confirm-card.auto .cc-actions.auto { justify-content: flex-end; }
 .confirm-card.auto .cc-applied { font-size: 11.5px; color: var(--green); display: inline-flex; align-items: center; gap: 4px; }
+
+/* 剧本展示表格(2026-08-11):概要/节拍/演员指令标签页内的紧凑表格 */
+.sc-table { width: 100%; border-collapse: collapse; font-size: 12px; line-height: 1.6; }
+.sc-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.sc-table tr:last-child td { border-bottom: none; }
+.sc-table td.k { width: 64px; color: var(--muted); white-space: nowrap; }
+.sc-table .pa-line { color: var(--muted); }
+.sc-table .pa-line.st-examples { color: var(--faint); }
+/* 演员指令块(每角色一块):标签列窄宽(2 字中文),示例逐条成引语行 */
+.pa-block .sc-table td.k { width: 44px; }
+.sc-table .pa-ex { color: var(--faint); border-left: 2px solid var(--line-strong); padding: 2px 0 2px 8px; margin: 3px 0; }
+
+/* 预览卡动作区(2026-08-11):剧本确认卡等底部动作按钮——真实按钮外观 + 间距 */
+.preview-actions { display: flex; gap: 10px; padding: 10px 12px; border-top: 1px solid var(--line); align-items: center; }
+.preview-actions .btn { padding: 5px 14px; border-radius: var(--r-sm); border: 1px solid var(--line-strong); color: var(--ink); background: var(--bg); cursor: pointer; font-size: 12px; line-height: 1.5; }
+.preview-actions .btn:hover:not(:disabled) { background: var(--hover-tint); }
+.preview-actions .btn.primary { background: var(--amber); border-color: var(--amber); color: var(--bg); }
+.preview-actions .btn.primary:hover:not(:disabled) { background: var(--amber-tint-strong); }
+.preview-actions .btn:disabled { opacity: 0.5; cursor: default; }
+.preview-actions .preview-note { color: var(--muted); font-size: 12px; }

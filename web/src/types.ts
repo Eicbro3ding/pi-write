@@ -116,6 +116,7 @@ export interface WorldDataDto {
 	relations: WorldRelationDto[];
 	constraints: WorldConstraintDto[];
 	styleSample: StyleSampleDto | null;
+	worldSummary: string;
 	notice: NoticeDto;
 	storyline: StorylineDto;
 	timeline: TimelineEventDto[];
@@ -194,15 +195,23 @@ export type AgentEventDto =
 	| { type: "world_changed"; slug: string; mtime: number }
 	| { type: "draft_changed"; slug: string | null; file: string; mtime: number }
 	| { type: "messages_retracted" }
-	// 舞台区事件(server 广播,字段与 src/web/stage-host.ts 的 StageHostEvent 对齐)
-	| { type: "stage_entry"; slug: string; entry: StageEntryDto }
-	| { type: "stage_system"; slug: string; text: string }
-	| { type: "stage_done"; slug: string; cmd: string; ok: boolean; text?: string; thinking?: string }
-	// 导演工具调用(预览卡:world_update/write/edit 的 start/end,前端捕获 before/after)
-	| { type: "stage_tool_start"; slug: string; toolCallId: string; toolName: string; args?: unknown }
-	| { type: "stage_tool_end"; slug: string; toolCallId: string; toolName: string; isError?: boolean }
-	// 导演回复流式(完整文本):前端以完整文本替换流式导演气泡,stage_done 定稿
-	| { type: "stage_director_text"; slug: string; text: string }
+	// 舞台区事件(server 广播,字段与 src/web/stage-host.ts 的 StageHostEvent 对齐;
+	// chapterFile 标记归属章节——舞台按章节隔离,前端按 slug+chapter 过滤)
+	| { type: "stage_entry"; slug: string; chapterFile: string | null; entry: StageEntryDto }
+	| { type: "stage_system"; slug: string; chapterFile: string | null; text: string }
+	| { type: "stage_done"; slug: string; chapterFile: string | null; cmd: string; ok: boolean; text?: string; thinking?: string }
+	// 导演会话事件全量透传(与 writer_event 同款,内层是主会话同款会话事件):
+	// 前端复用 processAgentEvent 归约 + MessageList 渲染(2026-08-11 统一重构)
+	| { type: "stage_director_event"; slug: string; chapterFile: string | null; event: WriterSessionEventDto }
+	// 舞台阶段变化(开演/收幕):前端收到后自动刷新快照
+	| { type: "stage_phase"; slug: string; chapterFile: string | null; phase: string }
+	// 剧本确认门(2026-08-11):导演 script_confirm 提交剧本 → 前端卡片确认后才可开演
+	| { type: "stage_script_confirm"; slug: string; chapterFile: string | null; sceneId: string; script: StageScriptDto }
+	// 世界书编辑信号(2026-08-11):world_update 工具已写记录文件,前端回合结束
+	// (agent_settled)读 GET /api/stage/:slug/last-world-edit 渲染预览卡
+	| { type: "stage_world_edit"; slug: string; chapterFile: string | null }
+	// 收幕导演整理回合结束(2026-08-11):前端撤「导演正在编辑消息」提示条
+	| { type: "stage_director_done"; slug: string; chapterFile: string | null }
 	// 常驻编剧事件(server 广播 writer_event,内层是主会话同款会话事件——
 	// 前端复用 processAgentEvent 归约,消息/思考/工具卡片零新逻辑)
 	| { type: "writer_event"; slug: string; event: WriterSessionEventDto };
@@ -309,8 +318,19 @@ export type StageStatusDto = "normal" | "wrapping" | "closed";
 export type StageModeDto = "discussion" | "scripting" | "directing";
 
 /** GET /api/stage/:slug 快照(与后端 StageSnapshot 对齐,含角色头像表)。 */
+/** 世界书编辑记录(world_update 工具写的 before/after 快照;前端回合结束渲染预览卡)。
+ *  before/after 为完整世界数据——diff 由前端 buildWorldDiff 计算(与旧捕获链路同款)。 */
+export interface StageWorldEditRecordDto {
+	op: string;
+	before: WorldDataDto;
+	after: WorldDataDto;
+	timestamp: number;
+}
+
 export interface StageSnapshotDto {
 	slug: string;
+	/** 归属章节(舞台按章节隔离;null = 书级)。 */
+	chapterFile: string | null;
 	sceneId: string | null;
 	phase: StagePhaseDto;
 	status: StageStatusDto;
@@ -324,6 +344,9 @@ export interface StageSnapshotDto {
 	directorChat: Array<{ role: "user" | "assistant"; text: string; thinking?: string }>;
 	/** 角色名 → 世界书条目头像文件(无头像角色前端走首字+角色色兜底)。 */
 	avatars: Record<string, string>;
+	/** 剧本确认门(2026-08-11):导演已提交待确认的剧本;null = 无待确认。
+	 *  confirmed: false 待确认 / true 已确认待开演(短暂态,导演 stage_script 后清空)。 */
+	pendingScript: { sceneId: string; script: StageScriptDto; confirmed: boolean } | null;
 }
 
 /** 常驻编剧会话状态(与后端 src/web/writer-host.ts 的 WriterState 对齐)。 */

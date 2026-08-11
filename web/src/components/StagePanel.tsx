@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { ScriptPatchDto, StageSnapshotDto } from "../types.ts";
 import { buildRevisePatch, emptyReviseForm, type ReviseFormState } from "../stage-web.ts";
 import { StageAvatar } from "./StageAvatar.tsx";
+import { ScriptView } from "./ScriptView.tsx";
 
 /**
  * 舞台右侧面板:剧本(版本 + shared 全字段 + perActor 折叠块)| 选角(cast 表)|
@@ -27,6 +28,9 @@ export function StagePanel({
 }) {
 	const script = snapshot?.script ?? null;
 	const cast = snapshot?.cast ?? null;
+	/** 本幕选角来源:开演中 = snapshot.script;待确认 = pendingScript.script
+	 *  (选角页据此显示角色名,而非只显示裸槽位 actor-1/2/3/4)。 */
+	const activeScript = script ?? snapshot?.pendingScript?.script ?? null;
 	/** 标签切换方向(内容滑入跟随分段控件指示器:向右切从右滑入,向左切从左滑入)。 */
 	const [dir, setDir] = useState<"left" | "right">("right");
 	/** 修订表单(提交后清空——patch 只含非空字段,不清空会把旧值反复带上)。 */
@@ -37,7 +41,7 @@ export function StagePanel({
 		onTab(t);
 	}
 
-	/** 剧本定义段:演员 id → 角色名(display 用;perActor 同键)。 */
+	/** 剧本定义段:演员 id → 角色名(修订表单演员下拉用;perActor 同键)。 */
 	const castNames: Record<string, string> = {};
 	if (script) {
 		for (const [actorId, chars] of Object.entries(script.definition.cast)) {
@@ -65,64 +69,13 @@ export function StagePanel({
 			</div>
 			{/* 标签内容按 tab key 重挂载;方向跟随指示器(slide-left = 指示块向左滑,
 			   内容从左滑入;缺省向右滑入),触发 st-panel-anim 的卡片级滑入动画 */}
-			<div className="st-panel-scroll">
-				<div key={tab} className={dir === "left" ? "st-panel-anim slide-left" : "st-panel-anim"}>
-				{tab === "script" &&
-					(script ? (
-						<>
-							<div className="s-head">
-								剧本 v{script.version} · {script.chapter}
-							</div>
-							<div className="s-field">
-								<span className="k">场景意象</span>
-								{script.text.shared.setting}
-							</div>
-							<div className="s-field">
-								<span className="k">本幕任务</span>
-								{script.text.shared.goal}
-							</div>
-							<div className="s-field">
-								<span className="k">节拍</span>
-								{script.text.shared.beats.map((b, i) => (
-									<div key={i} className="st-beat">
-										<span className="st-beat-idx">{i + 1}</span>
-										{b}
-									</div>
-								))}
-							</div>
-							<div className="s-field">
-								<span className="k">基调</span>
-								{script.text.shared.tone}
-							</div>
-							{script.text.shared.forbidden.length > 0 && (
-								<div className="s-field">
-									<span className="k">禁区</span>
-									{script.text.shared.forbidden.map((f, i) => (
-										<div key={i} className="st-forbidden">
-											{f}
-										</div>
-									))}
-								</div>
-							)}
-							<div className="s-head">演员指令</div>
-							{Object.entries(script.text.perActor).map(([actorId, a]) => (
-								<div key={actorId} className="pa-block">
-									<div className="pa-name">{castNames[actorId] ?? actorId}</div>
-									<div className="pa-line">objective: {a.objective}</div>
-									{a.state && <div className="pa-line">state: {a.state}</div>}
-									{a.relation && <div className="pa-line">relation: {a.relation}</div>}
-									{a.voice && <div className="pa-line">voice: {a.voice}</div>}
-									{a.boundary && <div className="pa-line">boundary: {a.boundary}</div>}
-									{a.examples.length > 0 && (
-										<div className="pa-line st-examples">
-											examples: {a.examples.join(" / ")}
-										</div>
-									)}
-								</div>
-							))}
-						</>
-					) : (
-						<div className="st-empty">
+				<div className="st-panel-scroll">
+					<div key={tab} className={dir === "left" ? "st-panel-anim slide-left" : "st-panel-anim"}>
+					{tab === "script" &&
+						(script ? (
+							<ScriptView script={script} />
+						) : (
+							<div className="st-empty">
 							还没有剧本。
 							<br />
 							讨论到火候后示意「写剧本」,导演会用 stage_script 工具开演。
@@ -133,19 +86,24 @@ export function StagePanel({
 					(cast && cast.actors.length > 0 ? (
 						<>
 							<div className="s-head">演员池(cast.json v{cast.version})</div>
-							{cast.actors.map((a) => (
-								<div key={a.id} className="st-cast-row">
-									<StageAvatar slug={slug} name={a.character ?? a.id} narrator={a.type === "narrator"} size="sm" />
-									<span className="st-cast-name">{a.character ?? a.id}</span>
-									<span className="st-cast-meta">
-										{a.id} · {a.type}
-									</span>
-									<span className="st-cast-role">
-										{a.model ?? "缺省模型"}
-										{a.thinking ? ` · ${a.thinking}` : ""}
-									</span>
-								</div>
-							))}
+							{cast.actors.map((a) => {
+								// 本幕选角优先:actor-1 → 沈昭;无选角时退回槽位 id
+								const assigned = activeScript?.definition.cast[a.id]?.[0];
+								const name = assigned ?? a.character ?? a.id;
+								return (
+									<div key={a.id} className="st-cast-row">
+										<StageAvatar slug={slug} name={name} narrator={a.type === "narrator"} size="sm" />
+										<span className="st-cast-name">{name}</span>
+										<span className="st-cast-meta">
+											{a.id} · {a.type}
+										</span>
+										<span className="st-cast-role">
+											{a.model ?? "缺省模型"}
+											{a.thinking ? ` · ${a.thinking}` : ""}
+										</span>
+									</div>
+								);
+							})}
 						</>
 					) : (
 						<div className="st-empty">导演尚未编制演员池(讨论期导演会用工具维护 cast.json)</div>

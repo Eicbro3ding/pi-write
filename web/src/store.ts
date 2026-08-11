@@ -16,16 +16,17 @@ export function initialSessionState(): SessionViewState {
 }
 
 /**
- * 把服务端会话历史(getSession().messages)转为 message_start 事件序列,
+ * 把服务端会话历史(getSession().messages)转为 message_start/message_end 事件序列,
  * 与 SSE 事件走同一条 reducer 路径(整体替换聊天时先 RESET 再逐条 dispatch)。
  * 历史消息带服务端 entry id(entryId),ChatMessage.id 直接用它(稳定,撤回定位依据)。
- * 历史消息不追加 message_end:done 仅影响流式增量匹配,不参与渲染,
- * user/assistant 历史气泡 done 恒 false 无副作用。
+ * 每条历史消息成对补 message_end:置 done——思考块渲染「思考」且不显示计时
+ * (重载思维链无计时起点;2026-08-11)。
  */
 export function messagesToEvents(
 	messages: ReadonlyArray<{ role: "user" | "assistant"; text: string; thinking?: string; id?: string }>,
-): Array<Extract<AgentEventDto, { type: "message_start" }>> {
-	return messages.map((m) => {
+): Array<Extract<AgentEventDto, { type: "message_start" } | { type: "message_end" }>> {
+	const events: Array<Extract<AgentEventDto, { type: "message_start" } | { type: "message_end" }>> = [];
+	for (const m of messages) {
 		// 历史水合的 thinking 一并还原:reducer 的 message_start 经 splitContent
 		// 提取 thinking 块,思考链随消息恢复(刷新/重开页面后不丢)
 		const content: Array<{ type: string; text: string }> = [];
@@ -33,12 +34,25 @@ export function messagesToEvents(
 			content.push({ type: "thinking", text: m.thinking });
 		}
 		content.push({ type: "text", text: m.text });
-		return {
+		events.push({
 			type: "message_start",
 			message: { role: m.role, content },
 			...(m.id ? { entryId: m.id } : {}),
-		};
-	});
+		});
+		// 水合消息成对补 message_end:置 done——思考块渲染为「思考」且不显示
+		// 计时(重载思维链无计时起点;此前 done 恒 false,显示「思考中 x 秒」)
+		events.push({ type: "message_end", message: {} });
+	}
+	return events;
+}
+
+/** 本地重置事件(切章清空聊天);vendor 事件流不会出现该类型,reducer 透传原状态。 */
+export const RESET = { type: "session_reset" } as const;
+
+/** 主会话与编剧/导演会话共用的 reducer 包装:RESET 本地事件 → 重置,其余走 processAgentEvent。
+ *  2026-08-11 由 WritePage 内部提取为共享导出(舞台导演对话统一走同一套对话逻辑)。 */
+export function sessionReducer(s: SessionViewState, e: AgentEventDto | typeof RESET): SessionViewState {
+	return e.type === RESET.type ? initialSessionState() : processAgentEvent(s, e);
 }
 
 /** 把 message.content(字符串或 block 数组)拆为正文与思考文本。 */

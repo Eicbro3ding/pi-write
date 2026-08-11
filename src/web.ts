@@ -220,12 +220,13 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 
 	const host = new SessionHost({ createRuntime, cwd: bookDir, agentDir, sessionManager });
 	await host.start();
-	// 舞台区宿主:每本书一个编排器,惰性创建;model/thinking 复用 web 的 CLI 选项
-	// (stage 端点未装配时由 server 侧 404,与 MCP 同款)
-	const stageHost = new StageHost({ model: opts.model, thinkingLevel: opts.thinking });
 	// 常驻编剧宿主:每本书一个 writer 会话,惰性创建;model/thinking 同 stage
 	// (writer 端点未装配时由 server 侧 404,与 MCP/stage 同款)
-	const writerHost = new WriterHost({ model: opts.model, thinkingLevel: opts.thinking });
+	const writerHost = new WriterHost({ model: opts.model, thinkingLevel: opts.thinking, getMcpTools: () => mcpManager.getTools() });
+	// 舞台区宿主:每本书每个章节一个编排器,惰性创建;model/thinking 复用 web 的 CLI 选项
+	// (stage 端点未装配时由 server 侧 404,与 MCP 同款);writerHost 注入用于收幕委托
+	// (常驻编剧 === 收幕编剧,2026-08-11)
+	const stageHost = new StageHost({ model: opts.model, thinkingLevel: opts.thinking, writerHost, getMcpTools: () => mcpManager.getTools() });
 	// PI_WRITER_TOKEN:可选 Bearer token(Android 壳注入);未设置时与桌面版行为完全一致
 	const server = new WriterServer({
 		host: "127.0.0.1",

@@ -16,7 +16,13 @@ vitest.tmp.config.ts
 
 
 AGENTS.md
-docs/
+# docs/ 整体忽略(日志、设计草稿等不入库),仅放开公开文档与截图
+docs/*
+!docs/architecture.md
+!docs/design.md
+!docs/development.md
+!docs/security.md
+!docs/screenshots/
 
 *.nvmrc
 
@@ -25,3 +31,5 @@ docs/
 **/auth.json
 **/models.json
 .VSCodeCounter/
+
+.github/

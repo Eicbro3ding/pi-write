@@ -125,7 +125,7 @@ export function App() {
 				    (流式增量只在客户端,卸载后重水合会丢未完成消息);隐藏页不再重播
 				    入场动画,换取状态连续性 */}
 				<section className={`view ${view === "stage" ? "" : "hidden"}`}>
-					<StagePage client={client} library={library} active={view === "stage"} />
+					<StagePage client={client} library={library} active={view === "stage"} onGoEdit={() => setView("edit")} simplifiedTools={simplifiedTools} />
 				</section>
 					<section className={`view ${view === "edit" ? "" : "hidden"}`}>
 						<WritePage

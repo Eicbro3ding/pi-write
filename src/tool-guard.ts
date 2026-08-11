@@ -9,7 +9,7 @@
  * 守卫未安装时 vendor 行为完全不变,不影响 pi 其他使用方。
  */
 
-import { resolve, sep } from "node:path";
+import { relative, resolve, sep } from "node:path";
 import { clearToolPathGuard, setToolPathGuard } from "../vendor/pi-coding-agent/src/core/tools/path-utils.ts";
 
 /** 判定绝对路径是否落在 root 内(root 本身与 root/ 前缀均放行)。 */
@@ -38,11 +38,27 @@ export function assertPathWithinRoot(absPath: string, root: string): void {
  * readOnlyDirs 中的目录仅放行读操作(read/grep/find/ls),写操作(write/edit)
  * 依旧拒绝——内置技能文件(skills/)因此可读但不可被 AI 篡改。
  * 会话工厂每次创建运行时调用(切书时 cwd 变化,守卫随新书目录重建)。
+ * draftFile(如 "ch01.md")启用正文目录白名单:write/edit 只允许写该文件,
+ * 防止 agent 自由发挥文件名导致正文写到 draft/第一章.md,前端按约定路径
+ * 读 draft/ch01.md 读到空(2026-08-11,编剧正文乱写文件名根因)。
  */
-export function installToolPathGuard(bookDir: string, readOnlyDirs: string[] = []): void {
+export function installToolPathGuard(bookDir: string, readOnlyDirs: string[] = [], draftFile?: string): void {
 	const root = resolve(bookDir);
 	const readOnly = readOnlyDirs.map((d) => resolve(d));
 	setToolPathGuard((absPath, mode) => {
+		// 世界书文件禁直写(write/edit):world_update 是唯一变更通道(校验 + 原子写 +
+		// 视图生成 + 回滚保护),AI 工具直写会绕过全部保护(2026-08-11,编剧统一方案)
+		if (mode === "write") {
+			const rel = relative(root, absPath);
+			if (rel === "world.json" || rel.startsWith(`.writer${sep}`)) {
+				throw new Error("世界书文件只能经 world_update 工具修改,禁止直写");
+			}
+			// 正文目录白名单:只允许当前章节文件(agent 无章节上下文时按约定路径创建,
+			// 而不是自创文件名——自由发挥会把正文写到前端读不到的路径)
+			if (draftFile && rel.startsWith(`draft${sep}`) && rel !== `draft${sep}${draftFile}`) {
+				throw new Error(`正文目录只允许写当前章节文件 draft/${draftFile}`);
+			}
+		}
 		// 书目录内:读写均放行
 		if (pathWithinRoot(absPath, root)) return;
 		// 额外只读目录:仅读操作放行

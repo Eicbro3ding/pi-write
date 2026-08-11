@@ -5,7 +5,7 @@
  * 注意:本文件不得在 import 时触碰 DOM 专属 API(EventSource 只在 subscribeEvents 内使用),
  * 以兼容 node 环境的 vitest 单测。
  */
-import type { AgentEventDto, BookDetail, BookMeta, ChapterRef, McpServerInfo, McpServerStatus, ProviderInfo, SessionState, SessionTreeDto, StageSnapshotDto, WorldDataDto, WriterStateDto } from "../types.ts";
+import type { AgentEventDto, BookDetail, BookMeta, ChapterRef, McpServerInfo, McpServerStatus, ProviderInfo, SessionState, SessionTreeDto, StageSnapshotDto, StageWorldEditRecordDto, WorldDataDto, WriterStateDto } from "../types.ts";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
 
 /** 图片访问 URL(同源相对路径;生产/Electron 同源,vite dev 经代理)。 */
@@ -353,25 +353,38 @@ export class ApiClient {
 		});
 	}
 
-	/** 舞台快照(纯读不创建编排器;未启用舞台区 404)。 */
-	async getStage(slug: string): Promise<StageSnapshotDto> {
-		return this.request<StageSnapshotDto>(`/api/stage/${encodeURIComponent(slug)}`);
+	/** 舞台快照(纯读不创建编排器;未启用舞台区 404)。chapterFile 可选:舞台按章节隔离。 */
+	async getStage(slug: string, chapterFile?: string | null): Promise<StageSnapshotDto> {
+		const q = new URLSearchParams();
+		if (chapterFile) q.set("chapterFile", chapterFile);
+		const qs = q.toString();
+		return this.request<StageSnapshotDto>(`/api/stage/${encodeURIComponent(slug)}${qs ? `?${qs}` : ""}`);
+	}
+
+	/** 世界书编辑记录(world_update 工具写的 before/after 快照;无记录 → null)。 */
+	async getStageLastWorldEdit(slug: string): Promise<StageWorldEditRecordDto | null> {
+		try {
+			return await this.request<StageWorldEditRecordDto>(`/api/stage/${encodeURIComponent(slug)}/last-world-edit`);
+		} catch {
+			return null;
+		}
 	}
 
 	/**
 	 * 舞台命令(与 CLI 命令面对齐):同步命令 200 { text }(即时文本结果,前端直接展示);
 	 * 长命令(director/fix/cut,内部有模型回合)202,结果经 stage_done SSE 事件到达。
-	 * 按 res.status 判别返回,无类型断言。
+	 * 按 res.status 判别返回,无类型断言。chapterFile 可选:舞台按章节隔离。
 	 */
 	async stageCommand(
 		slug: string,
 		cmd: string,
 		args: Record<string, unknown>,
+		chapterFile?: string | null,
 	): Promise<{ async: true } | { async: false; text: string }> {
 		const res = await fetch(`${this.baseUrl}/api/stage/${encodeURIComponent(slug)}/command`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ cmd, ...args }),
+			body: JSON.stringify({ cmd, ...args, ...(chapterFile ? { chapterFile } : {}) }),
 		});
 		if (!res.ok) throw await apiErrorFrom(res);
 		if (res.status === 202) return { async: true };
@@ -423,9 +436,13 @@ export class ApiClient {
 		};
 	}
 
-	/** 常驻编剧会话状态(纯读;未对话过的书返回空态,不创建会话)。 */
-	async getWriterState(slug: string): Promise<WriterStateDto> {
-		return this.request<WriterStateDto>(`/api/writer/${encodeURIComponent(slug)}`);
+	/** 常驻编剧会话状态(纯读;未对话过的章节返回空态,不创建会话)。
+	 *  chapterFile 可选:缺省用该书最近对话章节。 */
+	async getWriterState(slug: string, chapterFile?: string | null): Promise<WriterStateDto> {
+		const q = new URLSearchParams();
+		if (chapterFile) q.set("chapterFile", chapterFile);
+		const qs = q.toString();
+		return this.request<WriterStateDto>(`/api/writer/${encodeURIComponent(slug)}${qs ? `?${qs}` : ""}`);
 	}
 
 	/** 发消息给编剧(202 立即返回,消息/工具事件经 writer_event SSE 到达)。 */
@@ -441,24 +458,32 @@ export class ApiClient {
 		await this.request<{ ok: boolean }>(`/api/writer/${encodeURIComponent(slug)}/abort`, { method: "POST" });
 	}
 
-	/** 编剧会话「编辑重发」:撤回最新用户消息(及之后),replacement 非空时撤回后重发。 */
-	async writerRetract(slug: string, entryId: string, replacement?: string): Promise<void> {
+	/** 编剧会话「编辑重发」:撤回最新用户消息(及之后),replacement 非空时撤回后重发。
+	 *  chapterFile 声明归属章节(编剧对话按章节隔离)。 */
+	async writerRetract(slug: string, entryId: string, replacement?: string, chapterFile?: string | null): Promise<void> {
 		await this.request<{ ok: boolean }>(`/api/writer/${encodeURIComponent(slug)}/retract`, {
 			method: "POST",
-			body: JSON.stringify({ entryId, ...(replacement ? { replacement } : {}) }),
+			body: JSON.stringify({
+				entryId,
+				...(replacement ? { replacement } : {}),
+				...(chapterFile ? { chapterFile } : {}),
+			}),
 		});
 	}
 
-	/** 编剧会话分支树(切换 UI 数据)。 */
-	async writerTree(slug: string): Promise<SessionTreeDto> {
-		return this.request<SessionTreeDto>(`/api/writer/${encodeURIComponent(slug)}/tree`);
+	/** 编剧会话分支树(切换 UI 数据;按章节)。 */
+	async writerTree(slug: string, chapterFile?: string | null): Promise<SessionTreeDto> {
+		const q = new URLSearchParams();
+		if (chapterFile) q.set("chapterFile", chapterFile);
+		const qs = q.toString();
+		return this.request<SessionTreeDto>(`/api/writer/${encodeURIComponent(slug)}/tree${qs ? `?${qs}` : ""}`);
 	}
 
 	/** 编剧会话分支切换(leafId);服务端重建上下文并广播,前端经 messages_retracted 对齐。 */
-	async writerNavigate(slug: string, entryId: string): Promise<void> {
+	async writerNavigate(slug: string, entryId: string, chapterFile?: string | null): Promise<void> {
 		await this.request<{ ok: boolean }>(`/api/writer/${encodeURIComponent(slug)}/navigate`, {
 			method: "POST",
-			body: JSON.stringify({ entryId }),
+			body: JSON.stringify({ entryId, ...(chapterFile ? { chapterFile } : {}) }),
 		});
 	}
 }

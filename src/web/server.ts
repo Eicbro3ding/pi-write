@@ -31,7 +31,7 @@ import {
 } from "../book-manager.ts";
 import { getBookDir, getWriterDir } from "../config.ts";
 import { MAX_ZIP_BYTES, exportBookZip, readImportZip, type BookZipImport } from "./book-zip.ts";
-import { ensureWorld, newId, saveWorld, WorldValidationError, type WorldData } from "../world-data.ts";
+import { ensureWorld, newId, readWorldEditRecord, saveWorld, WorldValidationError, type WorldData } from "../world-data.ts";
 import { buildChapterContext, DEFAULT_CONTEXT_BUDGET, trimMemory } from "../world-context.ts";
 import type { SessionHost } from "./session-host.ts";
 import { extractMessagesFromManager } from "./session-host.ts";
@@ -358,20 +358,31 @@ export class WriterServer {
 		if (options.stageHost) {
 			options.stageHost.setEventSink((slug, event) => {
 				if (event.type === "entry") {
-					this.broadcast({ type: "stage_entry", slug, entry: event.entry });
+					this.broadcast({ type: "stage_entry", slug, chapterFile: event.chapterFile, entry: event.entry });
 				} else if (event.type === "system") {
-					this.broadcast({ type: "stage_system", slug, text: event.text });
-				} else if (event.type === "tool_start") {
-					this.broadcast({ type: "stage_tool_start", slug, toolCallId: event.toolCallId, toolName: event.toolName, args: event.args });
-				} else if (event.type === "tool_end") {
-					this.broadcast({ type: "stage_tool_end", slug, toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError });
-				} else if (event.type === "director_text") {
-					// 导演回复流式(完整文本):前端以完整文本替换流式气泡
-					this.broadcast({ type: "stage_director_text", slug, text: event.text });
+					this.broadcast({ type: "stage_system", slug, chapterFile: event.chapterFile, text: event.text });
+				} else if (event.type === "director_event") {
+					// 导演会话事件全量透传(与 writer_event 同款):前端复用
+					// processAgentEvent 归约 + MessageList 渲染(2026-08-11 统一重构)
+					this.broadcast({ type: "stage_director_event", slug, chapterFile: event.chapterFile, event: event.event });
+				} else if (event.type === "script_confirm") {
+					// 剧本待确认:前端以卡片展示剧本并询问用户是否修改
+					this.broadcast({ type: "stage_script_confirm", slug, chapterFile: event.chapterFile, sceneId: event.sceneId, script: event.script });
+				} else if (event.type === "phase") {
+					// 舞台阶段变化(开演/收幕):前端自动刷新快照
+					this.broadcast({ type: "stage_phase", slug, chapterFile: event.chapterFile, phase: event.phase });
+				} else if (event.type === "world_edit") {
+					// 世界书编辑信号(world_update 工具已写记录文件):前端回合结束
+					// 读 GET /api/stage/:slug/last-world-edit 渲染预览卡
+					this.broadcast({ type: "stage_world_edit", slug, chapterFile: event.chapterFile });
+				} else if (event.type === "director_done") {
+					// 收幕导演整理回合结束:前端撤「导演正在编辑消息」提示条
+					this.broadcast({ type: "stage_director_done", slug, chapterFile: event.chapterFile });
 				} else {
 					this.broadcast({
 						type: "stage_done",
 						slug,
+						chapterFile: event.chapterFile,
 						cmd: event.cmd,
 						ok: event.ok,
 						...(event.text !== undefined ? { text: event.text } : {}),
@@ -456,6 +467,7 @@ export class WriterServer {
 			{ method: "DELETE", segments: ["mcp", ":name"], handler: (ctx) => this.handleDeleteMcpServer(ctx) },
 			// stage
 			{ method: "GET", segments: ["stage", ":slug"], handler: (ctx) => this.handleGetStage(ctx) },
+			{ method: "GET", segments: ["stage", ":slug", "last-world-edit"], handler: (ctx) => this.handleGetStageLastWorldEdit(ctx) },
 			{ method: "POST", segments: ["stage", ":slug", "command"], handler: (ctx) => this.handlePostStageCommand(ctx) },
 			// writer(常驻编剧/编辑 agent)
 			{ method: "GET", segments: ["writer", ":slug"], handler: (ctx) => this.handleGetWriter(ctx) },
@@ -1341,19 +1353,31 @@ export class WriterServer {
 	private async handleGetStage(ctx: RouteContext): Promise<void> {
 		const stage = this.options.stageHost;
 		if (!stage) throw new HttpError(404, "not_found", "舞台区未启用");
-		this.send(ctx.res, 200, await stage.snapshot(ctx.params.slug!));
+		const chapterFile = ctx.url.searchParams.get("chapterFile");
+		this.send(ctx.res, 200, await stage.snapshot(ctx.params.slug!, chapterFile));
+	}
+
+	/** GET /api/stage/:slug/last-world-edit:世界书编辑记录(world_update 工具写的
+	 *  before/after 快照,前端回合结束渲染预览卡);无记录 → 404。 */
+	private async handleGetStageLastWorldEdit(ctx: RouteContext): Promise<void> {
+		const record = await readWorldEditRecord(getBookDir(ctx.params.slug!));
+		if (!record) throw new HttpError(404, "not_found", "尚无世界书编辑记录");
+		this.send(ctx.res, 200, record);
 	}
 
 	/**
 	 * POST /api/stage/:slug/command:舞台命令。同步命令 200 { text }(即时文本结果,
 	 * 与 CLI 打印一致);长命令(director/fix/cut,内部有模型回合)202 + stage_done 事件。
+	 * chapterFile 可选:舞台按章节隔离(编排器键书+章节)。
 	 */
 	private async handlePostStageCommand(ctx: RouteContext): Promise<void> {
 		const stage = this.options.stageHost;
 		if (!stage) throw new HttpError(404, "not_found", "舞台区未启用");
 		const body = await readJsonBody(ctx.req);
 		const cmd = requireString(body, "cmd");
-		const result = await stage.command(ctx.params.slug!, cmd, body as Record<string, unknown>);
+		const args = body as Record<string, unknown>;
+		const chapterFile = args.chapterFile === undefined ? undefined : requireString(body, "chapterFile");
+		const result = await stage.command(ctx.params.slug!, cmd, body as Record<string, unknown>, chapterFile);
 		if (result.async) {
 			this.send(ctx.res, 202, { ok: true });
 		} else {
@@ -1363,11 +1387,13 @@ export class WriterServer {
 
 	// ---- writer 路由(常驻编剧/编辑 agent) ----
 
-	/** GET /api/writer/:slug:编剧会话状态(纯读不创建会话;未装配 writerHost 时 404)。 */
+	/** GET /api/writer/:slug?chapterFile=:编剧会话状态(纯读不创建会话;未装配 writerHost 时 404)。
+	 *  chapterFile 可选:缺省用该书最近对话章节。 */
 	private async handleGetWriter(ctx: RouteContext): Promise<void> {
 		const writer = this.options.writerHost;
 		if (!writer) throw new HttpError(404, "not_found", "常驻编剧未启用");
-		this.send(ctx.res, 200, await writer.state(ctx.params.slug!));
+		const chapterFile = ctx.url.searchParams.get("chapterFile");
+		this.send(ctx.res, 200, await writer.state(ctx.params.slug!, chapterFile));
 	}
 
 	/**
@@ -1397,9 +1423,10 @@ export class WriterServer {
 	}
 
 	/**
-	 * POST /api/writer/:slug/retract {entryId, replacement?}:编剧会话「编辑重发」——
-	 * 撤回最新一条用户消息及其后所有消息(leaf 回退,AI 上下文同步截断),replacement
-	 * 存在时撤回后异步重发。广播 messages_retracted(与主会话同款,前端编剧会话重新对齐)。
+	 * POST /api/writer/:slug/retract {entryId, replacement?, chapterFile?}:编剧会话
+	 * 「编辑重发」——撤回最新一条用户消息及其后所有消息(leaf 回退,AI 上下文同步截断),
+	 * replacement 存在时撤回后异步重发。chapterFile 缺省用该书最近对话章节。
+	 * 广播 messages_retracted(与主会话同款,前端编剧会话重新对齐)。
 	 */
 	private async handlePostWriterRetract(ctx: RouteContext): Promise<void> {
 		const writer = this.options.writerHost;
@@ -1407,8 +1434,10 @@ export class WriterServer {
 		const body = await readJsonBody(ctx.req);
 		const entryId = requireString(body, "entryId");
 		const replacement = optionalString(body, "replacement");
+		const args = body as Record<string, unknown>;
+		const chapterFile = args.chapterFile === undefined ? undefined : requireString(body, "chapterFile");
 		try {
-			await writer.retractMessage(ctx.params.slug!, entryId, replacement);
+			await writer.retractMessage(ctx.params.slug!, entryId, replacement, chapterFile);
 		} catch (err) {
 			// 未知 entry / 非 user 消息 / 非最新消息 / 流式中:业务性错误,映射 400
 			throw new HttpError(400, "bad_request", err instanceof Error ? err.message : String(err));
@@ -1417,24 +1446,27 @@ export class WriterServer {
 		this.send(ctx.res, 200, { ok: true });
 	}
 
-	/** GET /api/writer/:slug/tree:编剧会话分支树(切换 UI 数据;无会话返回空树,不创建)。 */
+	/** GET /api/writer/:slug/tree?chapterFile=:编剧会话分支树(切换 UI 数据;无会话返回空树,不创建)。 */
 	private async handleGetWriterTree(ctx: RouteContext): Promise<void> {
 		const writer = this.options.writerHost;
 		if (!writer) throw new HttpError(404, "not_found", "常驻编剧未启用");
-		this.send(ctx.res, 200, await writer.getSessionTree(ctx.params.slug!));
+		const chapterFile = ctx.url.searchParams.get("chapterFile");
+		this.send(ctx.res, 200, await writer.getSessionTree(ctx.params.slug!, chapterFile));
 	}
 
 	/**
-	 * POST /api/writer/:slug/navigate {entryId}:编剧会话分支切换——leaf 移到指定
-	 * 消息,以其为当前分支重建上下文;广播 messages_retracted(前端编剧会话重新对齐)。
+	 * POST /api/writer/:slug/navigate {entryId, chapterFile?}:编剧会话分支切换——leaf 移到
+	 * 指定消息,以其为当前分支重建上下文;广播 messages_retracted(前端编剧会话重新对齐)。
 	 */
 	private async handlePostWriterNavigate(ctx: RouteContext): Promise<void> {
 		const writer = this.options.writerHost;
 		if (!writer) throw new HttpError(404, "not_found", "常驻编剧未启用");
 		const body = await readJsonBody(ctx.req);
 		const entryId = requireString(body, "entryId");
+		const args = body as Record<string, unknown>;
+		const chapterFile = args.chapterFile === undefined ? undefined : requireString(body, "chapterFile");
 		try {
-			await writer.navigate(ctx.params.slug!, entryId);
+			await writer.navigate(ctx.params.slug!, entryId, chapterFile);
 		} catch (err) {
 			throw new HttpError(400, "bad_request", err instanceof Error ? err.message : String(err));
 		}

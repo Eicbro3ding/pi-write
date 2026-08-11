@@ -113,3 +113,46 @@ describe("installToolPathGuard 只读目录(skills)", () => {
 		expect(() => resolveToCwd(mixedCase, bookDir, "write")).toThrow("工具路径越界");
 	});
 });
+
+describe("世界书禁直写（2026-08-11，编剧统一方案）", () => {
+	it("write 模式拒绝 world.json 与 .writer/ 下文件；read 仍放行", () => {
+		installToolPathGuard(bookDir);
+		expect(() => resolveToCwd("world.json", bookDir, "write")).toThrow(/world_update/);
+		expect(() => resolveToCwd(".writer/world.md", bookDir, "write")).toThrow(/world_update/);
+		expect(() => resolveToCwd(".writer/characters.md", bookDir, "write")).toThrow(/world_update/);
+		// 读仍放行(编剧/导演 read 世界书上下文不受影响)
+		expect(resolveToCwd("world.json", bookDir, "read")).toBe(join(bookDir, "world.json"));
+		expect(resolveToCwd(".writer/world.md", bookDir, "read")).toBe(join(bookDir, ".writer", "world.md"));
+	});
+	it("书内其他路径写不受影响(draft/advice.md 等)", () => {
+		installToolPathGuard(bookDir);
+		expect(resolveToCwd("draft/ch01.md", bookDir, "write")).toBe(join(bookDir, "draft", "ch01.md"));
+		expect(resolveToCwd("advice.md", bookDir, "write")).toBe(join(bookDir, "advice.md"));
+		expect(resolveToCwd("outline.md", bookDir, "write")).toBe(join(bookDir, "outline.md"));
+	});
+});
+
+describe("正文目录白名单（2026-08-11，draftFile）", () => {
+	it("draftFile 启用后只允许写当前章节文件(防 agent 自创文件名)", () => {
+		installToolPathGuard(bookDir, [], "ch01.md");
+		expect(resolveToCwd("draft/ch01.md", bookDir, "write")).toBe(join(bookDir, "draft", "ch01.md"));
+		// agent 自由发挥文件名(draft/第一章.md)——正文写到前端读不到的路径,必须拦
+		expect(() => resolveToCwd("draft/第一章.md", bookDir, "write")).toThrow(/正文目录只允许写当前章节文件/);
+		// draft 子目录同样不设放行(严格匹配,防嵌套路径绕过白名单)
+		expect(() => resolveToCwd("draft/sub/ch01.md", bookDir, "write")).toThrow(/正文目录只允许写当前章节文件/);
+		// 读不受影响(查看/引用其他文件照常)
+		expect(resolveToCwd("draft/第一章.md", bookDir, "read")).toBe(join(bookDir, "draft", "第一章.md"));
+	});
+
+	it("未传 draftFile 时 draft/ 写不设限(主会话/TUI 行为不变)", () => {
+		installToolPathGuard(bookDir);
+		expect(resolveToCwd("draft/第一章.md", bookDir, "write")).toBe(join(bookDir, "draft", "第一章.md"));
+	});
+
+	it("draft 白名单与世界书禁直写共存", () => {
+		installToolPathGuard(bookDir, [], "ch01.md");
+		expect(() => resolveToCwd("world.json", bookDir, "write")).toThrow(/world_update/);
+		expect(resolveToCwd("draft/ch01.md", bookDir, "write")).toBe(join(bookDir, "draft", "ch01.md"));
+		expect(() => resolveToCwd("draft/第一章.md", bookDir, "write")).toThrow(/正文目录只允许写当前章节文件/);
+	});
+});

@@ -1,10 +1,10 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { getBookSessionsDir, initChapterFile } from "../book-manager.ts";
 import { resolveSkillsDir } from "../config.ts";
 import { createSessionRuntimeFactory } from "../session-factory.ts";
-import { chatTextOfMessage } from "../session-text.ts";
 import { SessionHost } from "../web/session-host.ts";
+import type { WriterHost } from "../web/writer-host.ts";
 import {
 	type CreateAgentSessionRuntimeFactory,
 	type InlineExtension,
@@ -12,13 +12,14 @@ import {
 	type ToolDefinition,
 } from "../../vendor/pi-coding-agent/src/index.ts";
 import type { AgentMessage, ThinkingLevel } from "../../vendor/pi-agent-core/src/index.ts";
+import type { AgentSessionEvent } from "../../vendor/pi-coding-agent/src/index.ts";
 import { buildActorContextBlocks, formatStageLines, resolveWorldInjection } from "./assembler.ts";
 import { loadCast, saveCast, validateCast, validateSceneCast } from "./cast.ts";
 import { countStage } from "./counters.ts";
 import { loadScript, reviseScript, saveScript } from "./script-store.ts";
 import { appendStageEntry, makeStageEntry, readStage, truncateStage } from "./stage-store.ts";
 import { ensureWorld } from "../world-data.ts";
-import { actorRole, directorRole, writerRole, SCRIPT_METHOD_BLOCK } from "./stage-extension.ts";
+import { actorRole, buildScriptMethodBlock, directorRole, writerRole } from "./stage-extension.ts";
 import {
 	type ActorText,
 	type CastConfig,
@@ -45,20 +46,35 @@ import {
 export type StageEvent =
 	| { type: "stage"; entry: StageEntry }
 	| { type: "system"; text: string }
-	// 导演工具调用(转发给 web 宿主 → SSE → 前端预览卡:导演用 world_update 维护世界书时
-	// 实时展示变更;start 是工具执行前、end 是执行后,前端据此捕获 before/after)
-	| { type: "tool_start"; toolCallId: string; toolName: string; args: Record<string, unknown> }
-	| { type: "tool_end"; toolCallId: string; toolName: string; isError: boolean }
-	// 导演回复流式:message_update(assistant)时转发完整文本——前端以完整文本
-	// 替换流式气泡(比增量拼接抗丢帧/断线),回合结束(stage_done)定稿
-	| { type: "director_text"; text: string };
+	// 舞台阶段变化(开演/收幕):前端收到后自动刷新快照(演出 UI 形态切换)
+	| { type: "phase"; phase: ScenePhase }
+	// 导演会话事件全量透传(与 writer_event 同款,内层是主会话同款会话事件):
+	// 前端复用 processAgentEvent 归约 + MessageList 渲染——导演对话与编剧/主会话
+	// 同一套对话逻辑(2026-08-11 统一重构);silent 回合(收幕自动指令)抑制
+	| { type: "director_event"; event: AgentSessionEvent }
+	// 剧本待确认(script_confirm 提交):前端收到后以卡片展示剧本并询问用户是否修改
+	| { type: "script_confirm"; sceneId: string; script: SceneScript }
+	// 世界书编辑信号(world_update 工具已写记录文件;前端回合结束读文件渲染预览卡)
+	| { type: "world_edit" }
+	// 收幕导演整理回合结束(① 块之后;无回合时也发):前端撤下「导演正在编辑消息」
+	// 提示条——导演消息发完即撤,不等编剧成文(2026-08-11)
+	| { type: "director_done" };
 
 export interface StageOrchestratorOptions {
 	bookDir: string;
 	agentDir: string;
+	/** 归属章节(舞台按章节隔离:每章一幕,导演会话文件按章;null = 书级兜底)。 */
+	chapterFile?: string | null;
 	/** --model 模式串（resolveCliModel 解析）。 */
 	model?: string;
 	thinkingLevel?: string;
+	/**
+	 * 常驻编剧宿主(web 模式注入):收幕成文委托给同一 (书, 章节) 编剧会话
+	 * (常驻编剧 === 收幕编剧,2026-08-11);未注入(CLI)时收幕走内置 writer。
+	 */
+	writerHost?: WriterHost;
+	/** MCP 外部工具(web 模式注入,导演/编剧会话可用;CLI 无 MCP)。 */
+	mcpTools?: ToolDefinition[];
 	onEvent?: (event: StageEvent) => void;
 }
 
@@ -85,33 +101,22 @@ export function decideTurnAction(
 	return "speak";
 }
 
-/** 导演模式切换事件（三模式状态机的输入）。 */
+/** 导演模式切换事件（三模式状态机的输入，只剩硬信号——文本意图检测已移除）。 */
 export type DirectorModeEvent =
-	| "user-script-intent"
-	| "director-script-intent"
-	| "tool-stage-script"
+	| "tool-script-confirm"
 	| "scene-started"
 	| "scene-closed";
 
 /** 三模式状态机（纯函数）：discussion ↔ scripting ↔ directing。 */
 export function nextDirectorMode(current: DirectorMode, event: DirectorModeEvent): DirectorMode {
 	switch (event) {
-		case "user-script-intent":
-		case "director-script-intent":
-		case "tool-stage-script":
+		case "tool-script-confirm":
 			return "scripting";
 		case "scene-started":
 			return "directing";
 		case "scene-closed":
 			return "discussion";
 	}
-}
-
-/** 剧本意图检测（纯函数，弱信号）：用户/导演文本中出现写剧本信号。 */
-export function detectScriptIntent(text: string): boolean {
-	const signals = ["写剧本", "开一幕", "开幕", "剧本", "选角", "排一幕", "写一幕"];
-	const lower = text.toLowerCase();
-	return signals.some((s) => lower.includes(s));
 }
 
 /** 全局轮数上限（含 pass，防无限空转——不针对任何角色，见 §10.3）。 */
@@ -229,6 +234,19 @@ async function runTurn(host: SessionHost, send: () => Promise<void>, timeoutMs: 
 	return result === "sent";
 }
 
+/** 编剧建议文件(书目录,常驻编剧维护;导演「讨论/剧本」模式注入)。 */
+export const ADVICE_FILE = "advice.md";
+
+/** 读编剧建议;不存在/为空返回 null。模块级导出供单测。 */
+export async function readAdvice(bookDir: string): Promise<string | null> {
+	try {
+		const text = await readFile(join(bookDir, ADVICE_FILE), "utf8");
+		return text.trim().length > 0 ? text : null;
+	} catch {
+		return null;
+	}
+}
+
 export class StageOrchestrator {
 	readonly bookDir: string;
 	phase: ScenePhase = "idle";
@@ -240,17 +258,27 @@ export class StageOrchestrator {
 	private readonly agentDir: string;
 	private readonly model?: string;
 	private readonly thinkingLevel?: string;
+	/** 归属章节(舞台按章节隔离;null = 书级兜底,导演会话文件用 stage-director.jsonl)。 */
+	private readonly chapterFile: string | null;
 	private readonly onEvent?: (event: StageEvent) => void;
+	/** 常驻编剧宿主(收幕委托;undefined = CLI 走内置 writer)。 */
+	private readonly writerHost: WriterHost | undefined;
+	/** MCP 外部工具(web 注入;undefined = CLI 无 MCP)。 */
+	private readonly mcpTools: ToolDefinition[] | undefined;
 	private cast: CastConfig | null = null;
 	private director: SessionHost | null = null;
 	private writer: SessionHost | null = null;
 	private readonly actorHosts = new Map<string, SessionHost>();
 	private turnIndex = 0;
 	private turnRunning = false;
-	/** 导演三模式（讨论/剧本/导演），事件驱动切换（见 nextDirectorMode）。 */
+	/** 导演三模式（讨论/剧本/导演），事件驱动切换（见 nextDirectorMode；
+	 *  文本意图检测已移除——进入剧本模式的唯一途径是导演主动调用 script_confirm）。 */
 	private _directorMode: DirectorMode = "discussion";
-	/** 一致性检测：导演表达了剧本意图但未调用工具 → 注入确认语。 */
-	private pendingDirectorConfirm = false;
+	/**
+	 * 待确认剧本（script_confirm 提交后、用户确认前）：stage_script 开演的门。
+	 * confirmed 后导演可调 stage_script 开演（开演后清空）。
+	 */
+	private pendingScript: { sceneId: string; script: SceneScript; confirmed: boolean } | null = null;
 	/** 导演会话的工具调用记录（tool_result 事件累计）。 */
 	private readonly directorToolCalls: string[] = [];
 	/** step/auto 推进（§10.1）：auto=false 时每轮等用户 /next。 */
@@ -273,13 +301,21 @@ export class StageOrchestrator {
 	constructor(options: StageOrchestratorOptions) {
 		this.bookDir = options.bookDir;
 		this.agentDir = options.agentDir;
+		this.chapterFile = options.chapterFile ?? null;
 		this.model = options.model;
 		this.thinkingLevel = options.thinkingLevel;
 		this.onEvent = options.onEvent;
+		this.writerHost = options.writerHost;
+		this.mcpTools = options.mcpTools;
 	}
 
 	private emit(text: string): void {
 		this.onEvent?.({ type: "system", text });
+	}
+
+	/** 阶段变化广播:前端收到后自动刷新快照(演出 UI 形态切换,无需手动刷新)。 */
+	private emitPhase(): void {
+		this.onEvent?.({ type: "phase", phase: this.phase });
 	}
 
 	private emitEntry(entry: StageEntry): void {
@@ -308,10 +344,15 @@ export class StageOrchestrator {
 	/** 导演工具执行完成（扩展 tool_result 事件回调）。 */
 	onDirectorToolResult(toolName: string): void {
 		this.directorToolCalls.push(toolName);
-		// 开演后（sceneId 已置）不再回跳「剧本」模式：startScene 已切「导演」，
-		// tool_result 事件晚于 startScene 到达，避免把模式拉回去（2026-08-09 实测）
-		if (toolName === "stage_script" && !this.sceneId) {
-			this.setDirectorMode("tool-stage-script", "导演调用 stage_script 工具");
+		// 导演主动提交剧本（script_confirm 调用）→ 进入剧本模式（2026-08-11：
+		// 意图识别已移除，模式切换只剩硬信号；开演后不回跳）
+		if (toolName === "script_confirm" && !this.sceneId) {
+			this.setDirectorMode("tool-script-confirm", "导演提交剧本");
+		}
+		// 世界书编辑信号(2026-08-11):world_update 成功时工具已把 before/after
+		// 快照写进记录文件,这里只发信号——前端回合结束(agent_settled)读文件渲染预览卡
+		if (toolName === "world_update") {
+			this.onEvent?.({ type: "world_edit" });
 		}
 	}
 
@@ -322,30 +363,13 @@ export class StageOrchestrator {
 		await mkdir(this.bookDir, { recursive: true });
 		await ensureDefaultCast(this.bookDir);
 		this.director = await this.createRoleHost("stage-director", directorRole(this));
-		// 导演工具事件转发:world_update/write/edit 的 start/end 供前端捕获 before/after
-		// 生成预览卡(世界书变更 diff / 关系图);只转发编辑类工具,避免事件噪声
+		// 导演会话事件全量透传:前端复用 processAgentEvent 归约 + MessageList 渲染,
+		// 与编剧/主会话同一套对话逻辑(消息/思考/工具卡片/流式零新逻辑)。
+		// silent 回合(收幕自动指令)整体抑制——回复不进前端对话流;但 agent_settled
+		// 放行:前端据此撤下「导演正在编辑消息」提示条(导演消息发完即撤,不等编剧成文)
 		this.director.subscribe((event) => {
-			if (event.type === "tool_execution_start" && event.toolName && isPreviewTool(event.toolName)) {
-				this.onEvent?.({
-					type: "tool_start",
-					toolCallId: event.toolCallId ?? "",
-					toolName: event.toolName,
-					args: (event.args ?? {}) as Record<string, unknown>,
-				});
-			} else if (event.type === "tool_execution_end" && event.toolName && isPreviewTool(event.toolName)) {
-				this.onEvent?.({
-					type: "tool_end",
-					toolCallId: event.toolCallId ?? "",
-					toolName: event.toolName,
-					isError: !!event.isError,
-				});
-			} else if (event.type === "message_update" && event.message?.role === "assistant") {
-				// 导演回复流式:转发完整文本(前端以完整文本替换流式气泡)
-				const text = chatTextOfMessage(event.message);
-				if (text && text.trim().length > 0) {
-					this.onEvent?.({ type: "director_text", text });
-				}
-			}
+			if (this.silentTurn && event.type !== "agent_settled") return;
+			this.onEvent?.({ type: "director_event", event });
 		});
 	}
 
@@ -363,7 +387,11 @@ export class StageOrchestrator {
 	private async ensureRoleSession(fileBase: string): Promise<{ sessionsDir: string; abs: string }> {
 		const sessionsDir = getBookSessionsDir(basename(this.bookDir));
 		await mkdir(sessionsDir, { recursive: true });
-		const abs = join(sessionsDir, `${fileBase}.jsonl`);
+		// 导演会话按章节隔离(每章一幕独立对话,切章不串):stage-director-<chapterId>.jsonl;
+		// 演员/编剧会话保持书级(角色状态跨章节共享,2026-08-10)
+		const chapterId = this.chapterFile ? this.chapterFile.replace(/\.jsonl$/, "") : null;
+		const file = fileBase === "stage-director" && chapterId ? `${fileBase}-${chapterId}.jsonl` : `${fileBase}.jsonl`;
+		const abs = join(sessionsDir, file);
 		await initChapterFile(abs, this.bookDir);
 		return { sessionsDir, abs };
 	}
@@ -382,7 +410,8 @@ export class StageOrchestrator {
 			excludeTools: spec.excludeTools,
 			initialActiveToolNames: spec.activeTools,
 			noTools: spec.noTools,
-			customTools: spec.customTools,
+			// MCP 外部工具与角色自定义工具合并(web 模式;2026-08-11 修复导演无 MCP 的根因)
+			customTools: [...(spec.customTools ?? []), ...(this.mcpTools ?? [])],
 		});
 	}
 
@@ -405,25 +434,22 @@ export class StageOrchestrator {
 
 	// ---- 导演 ----
 
-	/** 导演对话：意图检测切换模式 → 发送并等待回合 → 一致性检测。 */
-	async directorSay(text: string): Promise<void> {
+	/** 自动回合标记:silent 回合(收幕思考链提炼等)的回复不进前端对话流。
+	 *  由 directorSay 的 silent 选项驱动,回合结束还原。 */
+	private silentTurn = false;
+
+	/** 导演对话：发送并等待回合（模式切换只由硬信号驱动，意图检测已移除）。
+	 *  silent: 自动回合(非用户发起的收幕指令等)——回复不流式转发、不进 directorChat。 */
+	async directorSay(text: string, options?: { silent?: boolean }): Promise<void> {
 		if (!this.director) throw new Error("导演会话未启动");
-		const callsBefore = this.directorToolCalls.length;
-		if (detectScriptIntent(text)) this.setDirectorMode("user-script-intent", "用户表达剧本意图");
-		// 导演回合可能很长（多工具调用 + 高思考档），10 分钟兜底，超时只跳过不崩
-		if (!(await runTurn(this.director, () => this.director!.sendMessage(text), 600_000))) {
-			this.emit("导演回合超时（>10 分钟），本轮跳过");
-			return;
-		}
-		// 弱信号：导演回复表达写剧本意图（如"好，我来写剧本"）；开演后不再回跳（守卫同 onDirectorToolResult）
-		const last = this.getDirectorLast() ?? "";
-		if (detectScriptIntent(last) && !this.sceneId) this.setDirectorMode("director-script-intent", "导演主动表达剧本意图");
-		// 一致性检测：有剧本意图但本轮未调用 stage_script → 显式暴露 + 下一轮确认注入
-		const hasToolCall = this.directorToolCalls.length > callsBefore;
-		const intent = detectScriptIntent(text) || detectScriptIntent(last);
-		if (intent && !hasToolCall && this._directorMode === "scripting") {
-			this.pendingDirectorConfirm = true;
-			this.emit("导演未调用 stage_script 工具。已注入确认指令，请指示其用工具重写，或重试。");
+		this.silentTurn = !!options?.silent;
+		try {
+			// 导演回合可能很长（多工具调用 + 高思考档），10 分钟兜底，超时只跳过不崩
+			if (!(await runTurn(this.director, () => this.director!.sendMessage(text), 600_000))) {
+				this.emit("导演回合超时（>10 分钟），本轮跳过");
+			}
+		} finally {
+			this.silentTurn = false;
 		}
 	}
 
@@ -447,18 +473,28 @@ export class StageOrchestrator {
 		return undefined;
 	}
 
+	/** 自动回合指令前缀(收幕思考链提炼等):这些指令及导演回复不进前端对话(快照恢复也不显示)。 */
+	private static readonly AUTO_DIRECTOR_PREFIXES = ["【本幕各演员思考链】"];
+
 	/**
 	 * 导演讨论历史(用户提问 + 导演回复,按时间顺序;空文本跳过;assistant 带思考链)。
+	 * 自动回合(指令以 AUTO_DIRECTOR_PREFIXES 开头)及其回复跳过——收幕内部流程
+	 * 不进前端对话(快照恢复 directorChat 时同样过滤,刷新后不复活)。
 	 * 供快照恢复前端对话气泡——讨论只存于导演会话内存,快照不含历史时刷新页面
 	 * 气泡会全部消失(仅剩 directorLast 一行)。
 	 */
 	getDirectorChat(): Array<{ role: "user" | "assistant"; text: string; thinking?: string }> {
 		if (!this.director) return [];
 		const chat: Array<{ role: "user" | "assistant"; text: string; thinking?: string }> = [];
+		let skip = false;
 		for (const m of this.director.getState().messages) {
 			if (m.role === "user" || m.role === "assistant") {
 				const text = (m.text ?? "").trim();
-				if (text.length > 0) chat.push({ role: m.role, text, thinking: m.thinking });
+				if (text.length === 0) continue;
+				if (m.role === "user") {
+					skip = StageOrchestrator.AUTO_DIRECTOR_PREFIXES.some((p) => text.startsWith(p));
+				}
+				if (!skip) chat.push({ role: m.role, text, thinking: m.thinking });
 			}
 		}
 		return chat;
@@ -466,12 +502,11 @@ export class StageOrchestrator {
 
 	/** 导演的 "context" 事件处理器：按模式注入（scripting → 写作方法；directing → 舞台视图）。 */
 	async directorContext(messages: AgentMessage[]): Promise<AgentMessage[] | undefined> {
+		// 编剧建议(advice.md):未开演(讨论/剧本模式)时注入——导演规划下一章的依据
+		const advice = await readAdvice(this.bookDir);
+		const adviceBlock = advice ? `\n\n【编剧建议（来自 advice.md，收幕编剧整理）】\n${advice}` : "";
 		if (this._directorMode === "scripting") {
-			const confirm = this.pendingDirectorConfirm
-				? "\n· 你上一轮表达了写剧本意图但未调用工具——剧本必须经 stage_script 工具输出，请重新调用该工具。"
-				: "";
-			this.pendingDirectorConfirm = false;
-			return [...messages, { role: "user", content: SCRIPT_METHOD_BLOCK + confirm, timestamp: Date.now() }];
+			return [...messages, { role: "user", content: buildScriptMethodBlock(resolveSkillsDir()) + adviceBlock, timestamp: Date.now() }];
 		}
 		if (this._directorMode === "directing" && this.sceneId) {
 			const entries = await readStage(this.bookDir, this.sceneId);
@@ -480,7 +515,50 @@ export class StageOrchestrator {
 			const view = `【舞台区】\n${formatStageLines(entries).join("\n")}\n——对话 ${counts.lines} 条，${counts.cnChars} 字`;
 			return [...messages, { role: "user", content: view, timestamp: Date.now() }];
 		}
+		if (this._directorMode === "discussion" && advice) {
+			return [...messages, { role: "user", content: `【编剧建议（来自 advice.md，收幕编剧整理）】\n${advice}`, timestamp: Date.now() }];
+		}
 		return undefined;
+	}
+
+	// ---- 剧本确认门（script_confirm，2026-08-11） ----
+
+	/** script_confirm 工具回调：剧本已落盘，置待确认状态并广播卡片事件（前端展示 + 用户确认）。 */
+	async submitScript(sceneId: string): Promise<{ ok: boolean; text: string }> {
+		const script = await loadScript(this.bookDir, sceneId);
+		if (!script) return { ok: false, text: `剧本不存在：${sceneId}` };
+		this.pendingScript = { sceneId, script, confirmed: false };
+		this.onEvent?.({ type: "script_confirm", sceneId, script });
+		this.emit(`剧本已提交（${script.scene} v${script.version}），等待用户确认`);
+		return { ok: true, text: `剧本已提交（${script.scene} v${script.version}），等待用户确认` };
+	}
+
+	/** 用户确认剧本（HTTP confirm_script / CLI /confirm）：置 confirmed + 提示导演开演。 */
+	async confirmScript(): Promise<string> {
+		if (!this.pendingScript) return "当前没有待确认的剧本（导演尚未用 script_confirm 提交）";
+		if (this.pendingScript.confirmed) return "剧本已确认，可直接开演（导演会收到提示）";
+		this.pendingScript.confirmed = true;
+		// nextTurn 注入（SessionHost.injectContext）：随导演下一次 prompt 进入上下文，零模型回合
+		try {
+			await this.director?.injectContext(
+				"【系统】用户已确认你提交的剧本。请调用 stage_script 工具开演（确认前该工具不可用，现已放行）。",
+			);
+		} catch {
+			/* 注入失败不阻断：导演后续回合仍可被用户提示 */
+		}
+		this.emit(`剧本已确认（${this.pendingScript.sceneId}），可开演`);
+		// 确认即自动开演（2026-08-11）：确认后立即唤起导演回合——导演带着注入指令调
+		// stage_script 开演，无需用户再发话；导演仍在回复时 sendMessage 抛「AI 正在
+		// 回复中」，注入顺延到下一回合，此处静默跳过
+		if (this.director) {
+			await this.directorSay("剧本已确认——请开演。").catch(() => {});
+		}
+		return `剧本已确认，可开演`;
+	}
+
+	/** 待确认剧本快照（前端「待确认」态展示）。 */
+	getPendingScript(): { sceneId: string; script: SceneScript; confirmed: boolean } | null {
+		return this.pendingScript;
 	}
 
 	// ---- 演出推进（§10.1） ----
@@ -589,6 +667,21 @@ export class StageOrchestrator {
 
 	/** stage_script 工具回调：校验选角 → 惰性建演员会话 → 开演。 */
 	async startScene(sceneId: string): Promise<{ ok: boolean; errors: string[] }> {
+		// 确认门（script_confirm，2026-08-11）：剧本必须经用户确认后才能开演
+		if (!this.pendingScript || !this.pendingScript.confirmed) {
+			return {
+				ok: false,
+				errors: [
+					this.pendingScript
+						? "剧本已提交，等待用户确认（确认后即可开演）"
+						: "请先用 script_confirm 提交剧本并经用户确认，再调用 stage_script 开演",
+				],
+			};
+		}
+		if (this.pendingScript.sceneId !== sceneId) {
+			return { ok: false, errors: [`待确认的剧本是 ${this.pendingScript.sceneId}，与本次调用的 ${sceneId} 不一致`] };
+		}
+		this.pendingScript = null; // 确认已消费：开演后清空，下一幕须重新提交+确认
 		const script = await loadScript(this.bookDir, sceneId);
 		if (!script) return { ok: false, errors: [`剧本不存在：${sceneId}`] };
 		const cast = await loadCast(this.bookDir);
@@ -613,6 +706,7 @@ export class StageOrchestrator {
 		}
 		this.phase = "running";
 		this.setDirectorMode("scene-started", "开演");
+		this.emitPhase();
 		const rules = script.definition.rules;
 		this.emit(
 			`开演：${script.scene}（v${script.version}，演员 ${Object.keys(script.definition.cast).length} 名，${rules.minLines}-${rules.maxLines} 条，收尾窗口 ${rules.wrapUpWindow}）`,
@@ -817,6 +911,7 @@ export class StageOrchestrator {
 
 	private async closeScene(forced: boolean): Promise<void> {
 		this.phase = "closed";
+		this.emitPhase();
 		const script = this.script;
 		this.emit(forced ? `收幕（已达上限 ${script?.definition.rules.maxLines ?? "?"} 条）` : "收幕");
 		if (!script || !this.sceneId) return;
@@ -827,10 +922,15 @@ export class StageOrchestrator {
 				const thoughts = await this.collectActorThoughts();
 				if (thoughts) {
 					this.emit("收幕：导演正在检视各演员思考链并提炼角色内心…");
+					// silent:自动回合,回复不进前端对话流(用户不看收幕内部流程)
 					await this.directorSay(
-						`【本幕各演员思考链】\n${thoughts}\n\n本幕已收幕。请：1) 从思考链提炼各角色内心（含矛盾），用 world_update 更新世界书角色条目；2) 简短回复确认。`,
+						`【本幕各演员思考链】\n${thoughts}\n\n本幕已收幕。请：1) 从思考链提炼各角色内心（含矛盾），用 world_update 更新世界书角色条目；2) 简短回复确认。本幕已完结，不要提议继续演下一幕——新的一幕由用户切换章节后开始。`,
+						{ silent: true },
 					);
 				}
+				// 导演整理回合结束(或无此回合):前端撤「导演正在编辑消息」提示条——
+				// 编剧成文阶段不再提示(2026-08-11)
+				this.onEvent?.({ type: "director_done" });
 				// ② 编剧成文（§10.7 修订）：输入 = 舞台转录 + 剧本 state + 世界书（导演已更新）
 				const lines = formatStageLines(entries).join("\n");
 				const stateText = renderStateForWriter(script);
@@ -839,8 +939,11 @@ export class StageOrchestrator {
 					.filter((e) => e.type === "character" || e.type === "world")
 					.map((e) => `【${e.title}】${e.body}`)
 					.join("\n");
-				const chapter = script.chapter;
-				const writer = await this.ensureWriter();
+				// 章节文件基名(ch01):收幕成文(draft/ch01.md)与编剧会话(writer-ch01.jsonl)
+				// 都按「章节文件」命名,与编辑页/常驻编剧读取一致(2026-08-11 修:此前用
+				// script.chapter 标题,产出 draft/第一章.md、writer-第一章.jsonl,
+				// 编辑页按 ch01 读不到——草稿空白、编剧对话不重载的根因)
+				const chapter = this.chapterFile ? this.chapterFile.replace(/\.jsonl$/, "") : script.chapter;
 				const styleSample = world.styleSample && world.styleSample.text ? world.styleSample.text : null;
 				const writerMsg = buildWriterMessage({
 					transcript: lines,
@@ -852,15 +955,25 @@ export class StageOrchestrator {
 					thoughtAccess: this.writerThoughtAccess,
 				});
 				// 编剧回合 10 分钟兜底：超时则正文缺失，但收尾流程继续（"一幕完成" 仍会提示）
-				if (!(await runTurn(writer, () => writer.sendMessage(writerMsg), 600_000))) {
-					this.emit("编剧回合超时（>10 分钟），正文未生成");
+				if (this.writerHost) {
+					// 常驻编剧 === 收幕编剧(2026-08-11):委托同一 (书, 章节) 会话
+					// (chapterFile = <章节文件基名>.jsonl,如 ch01.jsonl)——编辑页「编剧」
+					// 标签的对话与收幕成文同一份记忆;无 writerHost(CLI)走内置 stage-writer
+					if (!(await this.writerHost.chatAndWait(basename(this.bookDir), writerMsg, `${chapter}.jsonl`, 600_000))) {
+						this.emit("编剧回合超时（>10 分钟），正文未生成");
+					}
+				} else {
+					const writer = await this.ensureWriter();
+					if (!(await runTurn(writer, () => writer.sendMessage(writerMsg), 600_000))) {
+						this.emit("编剧回合超时（>10 分钟），正文未生成");
+					}
 				}
 				this.emit(`编剧已完成，正文 → draft/${chapter}.md`);
 			}
 		} catch (error) {
 			this.emit(`编剧整理失败：${error instanceof Error ? error.message : String(error)}`);
 		}
-		this.emit("一幕完成。可与导演讨论：更新世界书、修订剧本重演，或开新一幕。");
+		this.emit("一幕完成。这一幕已完结：可在本章内修订重演，或切换到新章节开始下一幕的讨论。");
 		this.setDirectorMode("scene-closed", "收幕");
 	}
 
@@ -902,9 +1015,4 @@ async function ensureDefaultCast(bookDir: string): Promise<void> {
 	if (cast.actors.length > 0) return;
 	cast.actors.push({ id: "actor-1", type: "pool" }, { id: "actor-2", type: "pool" }, { id: "actor-3", type: "pool" }, { id: "actor-4", type: "narrator" });
 	await saveCast(bookDir, cast);
-}
-
-/** 预览类工具(write/edit/world_update):工具 start/end 事件转发给前端生成预览卡。 */
-function isPreviewTool(toolName: string): boolean {
-	return toolName === "write" || toolName === "edit" || toolName === "world_update";
 }

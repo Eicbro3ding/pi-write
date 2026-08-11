@@ -11,6 +11,7 @@ import { EntryForm } from "../components/EntryForm.tsx";
 import { RelationGraph } from "../components/RelationGraph.tsx";
 import { EntryCard } from "../components/EntryCard.tsx";
 import { NoticePanel } from "../components/NoticePanel.tsx";
+import { WorldSummaryPanel } from "../components/WorldSummaryPanel.tsx";
 import { StorylinePanel } from "../components/StorylinePanel.tsx";
 import { TimelinePanel } from "../components/TimelinePanel.tsx";
 import { ConstraintsPanel } from "../components/ConstraintsPanel.tsx";
@@ -48,6 +49,11 @@ export function WorldPage({
 	const [createTitle, setCreateTitle] = useState("");
 	/** 视图切换:列表(分类树 + 表单)⇄ 关系图(cytoscape + 词条面板)。 */
 	const [view, setView] = useState<"list" | "graph">("list");
+	/** 简要世界观面板折叠态(localStorage 持久化;折叠时整块隐藏,开关在顶栏)。 */
+	const [summaryCollapsed, setSummaryCollapsed] = useState(() => localStorage.getItem("pi-writer:world-summary-collapsed") === "1");
+	useEffect(() => {
+		localStorage.setItem("pi-writer:world-summary-collapsed", summaryCollapsed ? "1" : "0");
+	}, [summaryCollapsed]);
 	/** 正在滑出的旧视图(切换动画期间置位,240ms 后清理;内容双常驻保留状态)。 */
 	const [leaving, setLeaving] = useState<"list" | "graph" | null>(null);
 	/** 视图切换:旧视图播放向左滑出,新视图自右滑入。 */
@@ -321,6 +327,14 @@ export function WorldPage({
 			<section className="world-body">
 				<div className="w-bar">
 					<span className="w-file">世界书 · 条目管理</span>
+					<button
+						type="button"
+						className={summaryCollapsed ? "w-summary-toggle" : "w-summary-toggle on"}
+						onClick={() => setSummaryCollapsed((c) => !c)}
+						title={summaryCollapsed ? "展开简要世界观" : "折叠简要世界观"}
+					>
+						简要世界观 {summaryCollapsed ? "▸" : "▾"}
+					</button>
 					<div className="w-view-tabs">
 						<button
 							type="button"
@@ -342,6 +356,12 @@ export function WorldPage({
 						{saving ? "保存中…" : "保存"}
 					</button>
 				</div>
+				{world !== null && !summaryCollapsed && (
+					<WorldSummaryPanel
+						summary={world.worldSummary}
+						onChange={(v) => updateWorld((w) => ({ ...w, worldSummary: v }))}
+					/>
+				)}
 				{saveErr && <div className="notice err">{saveErr}</div>}
 				{world === null ? (
 					<div className="world-scroll">

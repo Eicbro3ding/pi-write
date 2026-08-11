@@ -84,6 +84,14 @@ class FakeOrchestrator {
 	getDirectorLast(): string {
 		return this.last;
 	}
+	getPendingScript(): { sceneId: string; script: unknown; confirmed: boolean } | null {
+		return this.pending;
+	}
+	async confirmScript(): Promise<string> {
+		this.calls.push("confirm_script");
+		return this.pending ? "剧本已确认，可开演" : "当前没有待确认的剧本";
+	}
+	pending: { sceneId: string; script: unknown; confirmed: boolean } | null = null;
 	getDirectorLastThinking(): string | undefined {
 		return "导演思考链";
 	}
@@ -145,9 +153,9 @@ describe("StageHost 命令分发", () => {
 		expect(await host.command("b1", "cut", {})).toEqual({ text: "", async: true });
 		await vi.waitFor(() => expect(events.filter((e) => e.event.type === "done")).toHaveLength(3));
 		expect(events).toEqual([
-			{ slug: "b1", event: { type: "done", slug: "b1", cmd: "director", ok: true, text: "导演最后回复", thinking: "导演思考链" } },
-			{ slug: "b1", event: { type: "done", slug: "b1", cmd: "fix", ok: true, text: "导演已修订剧本" } },
-			{ slug: "b1", event: { type: "done", slug: "b1", cmd: "cut", ok: true, text: "已收幕" } },
+			{ slug: "b1", event: { type: "done", slug: "b1", chapterFile: null, cmd: "director", ok: true, text: "导演最后回复", thinking: "导演思考链" } },
+			{ slug: "b1", event: { type: "done", slug: "b1", chapterFile: null, cmd: "fix", ok: true, text: "导演已修订剧本" } },
+			{ slug: "b1", event: { type: "done", slug: "b1", chapterFile: null, cmd: "cut", ok: true, text: "已收幕" } },
 		]);
 		expect(orchs[0].calls).toContain("director:开一幕");
 		expect(orchs[0].calls).toContain("fix:2:这句 OOC");
@@ -164,8 +172,8 @@ describe("StageHost 命令分发", () => {
 		};
 		await host.command("b1", "director", { text: "hi" });
 		await vi.waitFor(() => expect(events.filter((e) => e.event.type === "done")).toHaveLength(1));
-		expect(events).toContainEqual({ slug: "b1", event: { type: "system", slug: "b1", text: "舞台异常：模型调用失败" } });
-		expect(events).toContainEqual({ slug: "b1", event: { type: "done", slug: "b1", cmd: "director", ok: false, text: "模型调用失败" } });
+		expect(events).toContainEqual({ slug: "b1", event: { type: "system", slug: "b1", chapterFile: null, text: "舞台异常：模型调用失败" } });
+		expect(events).toContainEqual({ slug: "b1", event: { type: "done", slug: "b1", chapterFile: null, cmd: "director", ok: false, text: "模型调用失败" } });
 	});
 
 	it("参数校验：缺失/非法抛 StageCommandError", async () => {
@@ -210,7 +218,7 @@ describe("StageHost 快照", () => {
 		mkdirSync(bookDirOf("b1"), { recursive: true });
 		const snap = await host.snapshot("b1");
 		expect(created).toBe(0);
-		expect(snap).toMatchObject({ slug: "b1", sceneId: null, phase: "idle", mode: "discussion", script: null });
+		expect(snap).toMatchObject({ slug: "b1", sceneId: null, phase: "idle", mode: "discussion", script: null, pendingScript: null });
 		expect(snap.transcript).toEqual([]);
 		expect(snap.counts).toEqual({ lines: 0, perActor: {}, perCharacter: {}, cnChars: 0, turn: 0 });
 	});
@@ -245,6 +253,7 @@ describe("StageHost 快照", () => {
 		expect(snap.sceneId).toBe("s1");
 		expect(snap.phase).toBe("running");
 		expect(snap.mode).toBe("discussion");
+		expect(snap.pendingScript).toBeNull();
 		expect(snap.script?.version).toBe(2);
 		expect(snap.cast.actors[0]).toMatchObject({ id: "actor-1", character: "陈叔" });
 		expect(snap.transcript).toHaveLength(2);
@@ -254,5 +263,21 @@ describe("StageHost 快照", () => {
 		expect(snap.directorChat).toHaveLength(2);
 		expect(snap.directorChat[0]).toEqual({ role: "user", text: "想写一个雾港的故事" });
 		expect(snap.directorChat[1]).toEqual({ role: "assistant", text: "导演最后回复" });
+	});
+});
+
+describe("confirm_script（剧本确认门，2026-08-11）", () => {
+	it("有待确认剧本 → 置 confirmed 并返回提示", async () => {
+		const { host, orchs } = makeHost([]);
+		await host.command("b1", "mode", {}); // 创建编排器
+		orchs[0].pending = { sceneId: "s1", script: {}, confirmed: false };
+		const res = await host.command("b1", "confirm_script", {});
+		expect(res).toEqual({ text: "剧本已确认，可开演", async: false });
+		expect(orchs[0].calls).toContain("confirm_script");
+	});
+	it("无待确认剧本 → 返回提示（不抛错）", async () => {
+		const { host } = makeHost([]);
+		await host.command("b1", "mode", {});
+		expect(await host.command("b1", "confirm_script", {})).toEqual({ text: "当前没有待确认的剧本", async: false });
 	});
 });

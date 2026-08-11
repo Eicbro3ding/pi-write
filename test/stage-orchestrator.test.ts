@@ -1,14 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { saveScript } from "../src/stage/script-store.ts";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	buildWriterMessage,
 	classifyActorOutput,
 	cleanCrossTalk,
 	decideTurnAction,
-	detectScriptIntent,
 	nextDirectorMode,
 	parseReviseArgs,
+	readAdvice,
 	renderStateForWriter,
+	StageOrchestrator,
 } from "../src/stage/orchestrator.ts";
+import { buildScriptMethodBlock } from "../src/stage/stage-extension.ts";
 import type { DirectorMode, SceneRules, SceneScript } from "../src/stage/types.ts";
 
 const rules: SceneRules = { minLines: 10, maxLines: 20, wrapUpWindow: 3, turn: "round-robin" };
@@ -73,25 +79,10 @@ describe("parseReviseArgs（/revise k=v 解析，结构化字段）", () => {
 	});
 });
 
-describe("detectScriptIntent（剧本意图弱信号）", () => {
-	it("命中写剧本信号", () => {
-		for (const text of ["帮我写剧本", "开一幕酒馆重逢", "我来安排选角", "写一幕戏"]) {
-			expect(detectScriptIntent(text), text).toBe(true);
-		}
-	});
-
-	it("普通讨论不命中", () => {
-		for (const text of ["李四的性格怎么样", "世界书更新了吗", "今天天气不错"]) {
-			expect(detectScriptIntent(text), text).toBe(false);
-		}
-	});
-});
-
-describe("nextDirectorMode（三模式状态机）", () => {
-	it("剧本意图/工具调用 → scripting", () => {
-		expect(nextDirectorMode("discussion", "user-script-intent")).toBe("scripting");
-		expect(nextDirectorMode("directing", "director-script-intent")).toBe("scripting");
-		expect(nextDirectorMode("directing", "tool-stage-script")).toBe("scripting");
+describe("nextDirectorMode（三模式状态机，意图识别已移除）", () => {
+	it("script_confirm 工具调用 → scripting（导演主动进入剧本模式）", () => {
+		expect(nextDirectorMode("discussion", "tool-script-confirm")).toBe("scripting");
+		expect(nextDirectorMode("directing", "tool-script-confirm")).toBe("scripting");
 	});
 
 	it("开演 → directing；收幕 → discussion", () => {
@@ -100,7 +91,7 @@ describe("nextDirectorMode（三模式状态机）", () => {
 	});
 
 	it("同模式事件幂等", () => {
-		expect(nextDirectorMode("scripting", "user-script-intent")).toBe("scripting");
+		expect(nextDirectorMode("scripting", "tool-script-confirm")).toBe("scripting");
 		expect(nextDirectorMode("discussion", "scene-closed")).toBe("discussion");
 	});
 
@@ -109,7 +100,7 @@ describe("nextDirectorMode（三模式状态机）", () => {
 		for (const mode of all) {
 			expect(nextDirectorMode(mode, "scene-started")).toBe("directing");
 			expect(nextDirectorMode(mode, "scene-closed")).toBe("discussion");
-			expect(nextDirectorMode(mode, "user-script-intent")).toBe("scripting");
+			expect(nextDirectorMode(mode, "tool-script-confirm")).toBe("scripting");
 		}
 	});
 });
@@ -212,5 +203,110 @@ describe("buildWriterMessage（编剧成文消息，§10.7）", () => {
 
 	it("档2 时思考链不注入", () => {
 		expect(buildWriterMessage({ ...base, thoughts: "我是李四。", thoughtAccess: 2 })).not.toContain("【演员思考链");
+	});
+});
+
+describe("readAdvice + directorContext 注入（advice.md，编剧统一方案 2026-08-11）", () => {
+	let tmp: string;
+	beforeEach(() => {
+		tmp = mkdtempSync(join(tmpdir(), "piw-advice-"));
+	});
+	afterEach(() => {
+		rmSync(tmp, { recursive: true, force: true });
+	});
+	it("readAdvice：缺失/空白 → null，非空 → 原文", async () => {
+		expect(await readAdvice(tmp)).toBeNull();
+		writeFileSync(join(tmp, "advice.md"), "\n  \n", "utf8");
+		expect(await readAdvice(tmp)).toBeNull();
+		writeFileSync(join(tmp, "advice.md"), "下一幕节奏要更快", "utf8");
+		expect(await readAdvice(tmp)).toBe("下一幕节奏要更快");
+	});
+	it("讨论模式（未开演）：advice.md 存在时注入【编剧建议】块", async () => {
+		writeFileSync(join(tmp, "advice.md"), "下一幕节奏要更快", "utf8");
+		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
+		const result = await orch.directorContext([{ role: "user", content: "聊聊下一幕", timestamp: 1 }] as never);
+		expect(result).toBeDefined();
+		const content = (result as never as Array<{ content: string }>)[1].content;
+		expect(content).toContain("【编剧建议");
+		expect(content).toContain("下一幕节奏要更快");
+	});
+	it("advice.md 缺失时讨论模式不注入（返回 undefined）", async () => {
+		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
+		const result = await orch.directorContext([{ role: "user", content: "聊聊下一幕", timestamp: 1 }] as never);
+		expect(result).toBeUndefined();
+	});
+});
+
+describe("剧本确认门（script_confirm，2026-08-11）", () => {
+	let tmp: string;
+	beforeEach(() => {
+		tmp = mkdtempSync(join(tmpdir(), "piw-confirm-"));
+	});
+	afterEach(() => {
+		rmSync(tmp, { recursive: true, force: true });
+	});
+
+	const minimalScript: SceneScript = {
+		scene: "s1",
+		chapter: "第一章",
+		version: 1,
+		definition: {
+			cast: { "actor-1": ["李四"] },
+			inject: {},
+			rules: { minLines: 2, maxLines: 8, wrapUpWindow: 2, turn: "round-robin" },
+		},
+		text: { shared: { setting: "雾港", goal: "重逢", beats: [], tone: "安静", forbidden: [] }, perActor: {} },
+	};
+
+	it("未提交剧本时 stage_script 被 gate 拒绝（提示先 script_confirm）", async () => {
+		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
+		const r = await orch.startScene("s1");
+		expect(r.ok).toBe(false);
+		expect(r.errors[0]).toContain("script_confirm");
+	});
+
+	it("提交后未确认：仍被拒（等待确认）；confirmScript 确认后放行并清空 pending", async () => {
+		mkdirSync(join(tmp, "stage"), { recursive: true });
+		await saveScript(tmp, "s1", minimalScript);
+		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
+		const sub = await orch.submitScript("s1");
+		expect(sub.ok).toBe(true);
+		expect(orch.getPendingScript()).toMatchObject({ sceneId: "s1", confirmed: false });
+		// 未确认 → gate 拒绝（错误提示等待用户确认）
+		const before = await orch.startScene("s1");
+		expect(before.ok).toBe(false);
+		expect(before.errors[0]).toContain("等待用户确认");
+		// 确认 → confirmed
+		expect(await orch.confirmScript()).toContain("剧本已确认");
+		expect(orch.getPendingScript()!.confirmed).toBe(true);
+		// 确认后开演：gate 已过（错误不再是确认门，而是后续选角/会话层）
+		const after = await orch.startScene("s1");
+		expect(orch.getPendingScript()).toBeNull(); // 确认已消费
+		expect(after.errors.join(" ")).not.toContain("等待用户确认");
+	});
+
+	it("submitScript 场景不存在 → ok:false；confirmScript 无待确认 → 提示", async () => {
+		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
+		const sub = await orch.submitScript("ghost");
+		expect(sub.ok).toBe(false);
+		expect(sub.text).toContain("剧本不存在");
+		expect(await orch.confirmScript()).toContain("没有待确认的剧本");
+	});
+
+	it("确认后重复 confirmScript → 幂等提示", async () => {
+		mkdirSync(join(tmp, "stage"), { recursive: true });
+		await saveScript(tmp, "s1", minimalScript);
+		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
+		await orch.submitScript("s1");
+		await orch.confirmScript();
+		expect(await orch.confirmScript()).toContain("已确认");
+	});
+});
+
+describe("buildScriptMethodBlock（剧本写作方法注入，含 skill 绝对路径）", () => {
+	it("SKILL.md 路径为绝对路径且指向 stage-scripting（相对路径会解析到书目录内、读不到）", () => {
+		const block = buildScriptMethodBlock("C:/repo/skills");
+		expect(block).toContain("read C:/repo/skills/stage-scripting/SKILL.md");
+		expect(block).not.toContain("read skills/");
 	});
 });

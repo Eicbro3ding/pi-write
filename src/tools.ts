@@ -4,7 +4,7 @@ import { join, relative, resolve, sep } from "node:path";
 import { defineTool, type ToolDefinition } from "../vendor/pi-coding-agent/src/index.ts";
 import { Type } from "typebox";
 import { cjkCount } from "./cjk.ts";
-import { ensureWorld, newId, saveWorld, validateWorld, WorldValidationError, type EntryStatus, type EntryType, type RelationArrow, type StoryNodeStatus, type WorldData, type WorldEntry } from "./world-data.ts";
+import { ensureWorld, newId, saveWorld, validateWorld, writeWorldEditRecord, WorldValidationError, type EntryStatus, type EntryType, type RelationArrow, type StoryNodeStatus, type WorldData, type WorldEntry } from "./world-data.ts";
 import { pathWithinRoot } from "./tool-guard.ts";
 import { withWorldLock } from "./world-lock.ts";
 
@@ -270,6 +270,7 @@ export type WorldUpdateOp =
 	| { op: "upsert_constraint"; id?: string; name: string; text: string; enabled?: boolean }
 	| { op: "delete_constraint"; id: string }
 	| { op: "update_style_sample"; text: string; source?: string }
+	| { op: "set_world_summary"; text: string }
 	| { op: "upsert_relation"; id?: string; from: string; to: string; type?: string; label?: string; emphasized?: boolean; arrow?: RelationArrow }
 	| { op: "delete_relation"; id: string };
 
@@ -469,6 +470,10 @@ export function applyWorldUpdate(data: WorldData, update: WorldUpdateOp): WorldD
 		case "update_style_sample":
 			next.styleSample = { text: update.text, source: update.source ?? "", updatedAt: now };
 			break;
+		case "set_world_summary":
+			// 简要世界观概述:覆盖写(限长由 validateWorld 兜底)
+			next.worldSummary = update.text;
+			break;
 		case "upsert_relation": {
 			// from/to 容错:接受条目 id 或标题——先按 id 精确匹配,未命中按标题
 			// 精确匹配;标题命中多个条目时报错要求用 id 消歧(不静默取首个)。
@@ -570,7 +575,7 @@ export const worldUpdateTool: ToolDefinition = defineTool({
 	name: "world_update",
 	label: "World Update",
 	description:
-		"更新世界书(world.json):增删改条目、关系、约束、Notice、发展线、采样与时间线。这是修改世界设定的唯一通道;结构性约束(重复 id、悬空引用、多个 in-progress 等)由程序校验。upsert_entry 是真 upsert:带 id 时查不到就按该 id 新建;不带 id 时按 (type, title) 匹配已有条目(存在则更新、保留原 id),都不命中才新建——更新已有条目通常不需要先查 id。关系的 from/to 接受条目 id 或标题(标题自动解析为条目 id;标题匹配到多个条目时返回报错并列出候选 id,请用 world_find 查 id 消歧;成功时返回会回显解析结果 from id(标题) → to id(标题))。枚举只接受英文:type=character/world/timeline/outline;status=alive/dead/unknown/active/archived/draft;关系 arrow=none/single/double;发展线 status=pending/in-progress/done/shelved。注意 status 是条目状态,与条目是否参与上下文注入(active 字段,界面「注入上下文」开关)无关,world_update 不改 active。发展线:节点按数组顺序推进,upsert_storyline_node 创建/更新节点,advance_storyline 推进状态;节点的 next 字段 = 该节点完成后的下一步内容(填标题或描述;也接受已有节点 id,会自动转为该节点标题)。查找条目 id 用 world_find 工具。",
+		"更新世界书(world.json):增删改条目、关系、约束、Notice、发展线、采样、简要世界观与时间线。这是修改世界设定的唯一通道;结构性约束(重复 id、悬空引用、多个 in-progress 等)由程序校验。upsert_entry 是真 upsert:带 id 时查不到就按该 id 新建;不带 id 时按 (type, title) 匹配已有条目(存在则更新、保留原 id),都不命中才新建——更新已有条目通常不需要先查 id。关系的 from/to 接受条目 id 或标题(标题自动解析为条目 id;标题匹配到多个条目时返回报错并列出候选 id,请用 world_find 查 id 消歧;成功时返回会回显解析结果 from id(标题) → to id(标题))。枚举只接受英文:type=character/world/timeline/outline;status=alive/dead/unknown/active/archived/draft;关系 arrow=none/single/double;发展线 status=pending/in-progress/done/shelved。注意 status 是条目状态,与条目是否参与上下文注入(active 字段,界面「注入上下文」开关)无关,world_update 不改 active。发展线:节点按数组顺序推进,upsert_storyline_node 创建/更新节点,advance_storyline 推进状态;节点的 next 字段 = 该节点完成后的下一步内容(填标题或描述;也接受已有节点 id,会自动转为该节点标题)。查找条目 id 用 world_find 工具。set_world_summary 覆盖简要世界观概述(常驻注入,每次会话都会读到;建议 1-2 段,≤600 字)。新建条目后若与现有条目存在剧情关联,建议一并创建关系(upsert_relation)。",
 	parameters: Type.Object({
 		update: Type.Union([
 			Type.Object({ op: Type.Literal("upsert_entry"), id: Type.Optional(Type.String()), type: Type.String(), title: Type.String(), keys: Type.Optional(Type.Array(Type.String())), chapters: Type.Optional(Type.Array(Type.String())), status: Type.Optional(Type.String()), parent: Type.Optional(Type.Union([Type.String(), Type.Null()])), body: Type.Optional(Type.String()), avatar: Type.Optional(Type.Union([Type.String(), Type.Null()])), images: Type.Optional(Type.Array(Type.String())) }),
@@ -585,6 +590,7 @@ export const worldUpdateTool: ToolDefinition = defineTool({
 			Type.Object({ op: Type.Literal("upsert_constraint"), id: Type.Optional(Type.String()), name: Type.String(), text: Type.String(), enabled: Type.Optional(Type.Boolean()) }),
 			Type.Object({ op: Type.Literal("delete_constraint"), id: Type.String() }),
 			Type.Object({ op: Type.Literal("update_style_sample"), text: Type.String(), source: Type.Optional(Type.String()) }),
+			Type.Object({ op: Type.Literal("set_world_summary"), text: Type.String() }),
 			Type.Object({ op: Type.Literal("upsert_relation"), id: Type.Optional(Type.String()), from: Type.String(), to: Type.String(), type: Type.Optional(Type.String()), label: Type.Optional(Type.String()), emphasized: Type.Optional(Type.Boolean()), arrow: Type.Optional(Type.Union([Type.Literal("none"), Type.Literal("single"), Type.Literal("double")])) }),
 			Type.Object({ op: Type.Literal("delete_relation"), id: Type.String() }),
 		]),
@@ -608,6 +614,13 @@ export const worldUpdateTool: ToolDefinition = defineTool({
 			}
 			const next = applyWorldUpdate(world, params.update as WorldUpdateOp);
 			await saveWorld(dir, next);
+			// 世界书编辑记录(内容 tmp、文件不 tmp):before/after 快照落盘,前端
+			// 回合结束据此渲染预览卡——diff 在此刻算好,无 before/after 抓取竞态
+			try {
+				await writeWorldEditRecord(dir, { op: params.update.op, before: world, after: next, timestamp: Date.now() });
+			} catch {
+				/* 记录写失败不影响世界书更新(卡片只是展示,world.json 已落盘) */
+			}
 			return {
 				content: [{ type: "text", text: `已更新世界书(${params.update.op})${echo}。` }],
 				details: { op: params.update.op },

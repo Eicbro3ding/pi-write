@@ -2,7 +2,7 @@ import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
-import { initialSessionState, messagesToEvents, processAgentEvent } from "../store.ts";
+import { initialSessionState, messagesToEvents, processAgentEvent, RESET, sessionReducer } from "../store.ts";
 import type {
 	AgentEventDto,
 	BookDetail,
@@ -41,13 +41,8 @@ export interface HeaderInfo {
 	connected: boolean;
 }
 
-/** 本地重置事件(切章清空聊天);vendor 事件流不会出现该类型,reducer 透传原状态。 */
-const RESET = { type: "session_reset" } as const;
-
-/** 主会话与编剧会话共用的 reducer 包装:RESET 本地事件 → 重置,其余走 processAgentEvent。 */
-function sessionReducer(s: SessionViewState, e: AgentEventDto | typeof RESET): SessionViewState {
-	return e.type === RESET.type ? initialSessionState() : processAgentEvent(s, e);
-}
+/** 主会话与编剧会话共用的 reducer 包装(RESET → 重置,其余 processAgentEvent)。
+ *  2026-08-11 起与导演会话共用,统一导出自 store.ts(sessionReducer)。 */
 
 /**
  * 会话消息类事件(查看模式下整体过滤;session_changed/messages_retracted 等
@@ -293,15 +288,19 @@ export function WritePage({
 	}, [confirmCards, bookDetail, currentChapter]);
 
 	/** 编剧会话对齐:拉服务端状态 → RESET + 逐条水合(与主会话 alignWithServer 同模式,
-	 *  仅按书对齐一次;切书后 resetChat 置 writerAlignedRef=null 触发重新对齐)。 */
+	 *  按「书+章节」对齐一次——编剧会话按章节隔离,切章后重新对齐;
+	 *  切书/切章后 resetChat 置 writerAlignedRef=null 触发重新对齐)。 */
 	function alignWriter() {
 		const slug = bookDetailRef.current?.slug;
-		if (!slug || writerAlignedRef.current === slug) return;
-		writerAlignedRef.current = slug;
+		const ch = currentChapterRef.current;
+		if (!slug) return;
+		const scope = `${slug}:${ch?.file ?? ""}`;
+		if (writerAlignedRef.current === scope) return;
+		writerAlignedRef.current = scope;
 		client
-			.getWriterState(slug)
+			.getWriterState(slug, ch?.file ?? null)
 			.then((st) => {
-				if (writerAlignedRef.current !== slug) return; // 对齐期间又切书:放弃
+				if (writerAlignedRef.current !== scope) return; // 对齐期间又切书/切章:放弃
 				writerDispatch(RESET);
 				for (const ev of messagesToEvents(st.messages)) writerDispatch(ev);
 			})
@@ -311,12 +310,13 @@ export function WritePage({
 		refreshWriterTree();
 	}
 
-	/** 编剧分支树刷新(对齐/编辑重发/分支切换后调用,更新分支栏)。 */
+	/** 编剧分支树刷新(对齐/编辑重发/分支切换后调用,更新分支栏;按章节)。 */
 	function refreshWriterTree() {
 		const slug = bookDetailRef.current?.slug;
+		const ch = currentChapterRef.current;
 		if (!slug) return;
 		client
-			.writerTree(slug)
+			.writerTree(slug, ch?.file ?? null)
 			.then((tree) => {
 				if (bookDetailRef.current?.slug !== slug) return; // 期间切书:放弃
 				setWriterTree(tree);
@@ -327,12 +327,13 @@ export function WritePage({
 	}
 
 	/** 编剧分支切换(分支栏):服务端 navigate 重建上下文并广播,前端经
-	 *  messages_retracted 重新对齐(消息列表与分支树随之更新)。 */
+	 *  messages_retracted 重新对齐(消息列表与分支树随之更新;按章节)。 */
 	async function navigateWriter(leafId: string) {
 		const slug = bookDetailRef.current?.slug;
+		const ch = currentChapterRef.current;
 		if (!slug) return;
 		try {
-			await client.writerNavigate(slug, leafId);
+			await client.writerNavigate(slug, leafId, ch?.file ?? null);
 		} catch (err) {
 			setError(`分支切换失败: ${friendlyError(err)}`);
 		}
@@ -571,12 +572,12 @@ export function WritePage({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [client]);
 
-	// 编剧会话对齐:书就位后(openBook 完成)执行一次;书切换后 resetChat 置
-	// writerAlignedRef=null,bookDetail 变化触发重新对齐
+	// 编剧会话对齐:书/章节就位后执行;切书/切章后 resetChat 置 writerAlignedRef=null,
+	// bookDetail/currentChapter 变化触发重新对齐(编剧会话按章节隔离,切章必须重拉)
 	useEffect(() => {
 		if (bookDetail) alignWriter();
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [bookDetail]);
+	}, [bookDetail, currentChapter]);
 
 	// 初始化:拉书列表 → 打开第一本(服务端启动时已自动创建「未命名」与第一章)
 	useEffect(() => {
@@ -735,8 +736,12 @@ export function WritePage({
 					return;
 				}
 				if (!st.isStreaming) {
-					// 空闲:直接切服务端会话到本章(实时模式,不留查看提示)
+					// 空闲:直接切服务端会话到本章(实时模式,不留查看提示)。
+					// ensureServerSession 内部 resetChat 会清掉 alignWriter 刚水合的
+					// 编剧对话(effect 已触发、拉取可能已完成)——补一次对齐,
+					// 否则切章后编剧对话永久空白(2026-08-10 竞态)
 					await ensureServerSession();
+					alignWriter();
 					return;
 				}
 				setViewingOther(true);
@@ -995,12 +1000,13 @@ export function WritePage({
 	}
 
 	/** 编剧消息「编辑重发」:撤回该用户消息(及之后)并以新文本重发(服务端 retract +
-	 *  sendMessage;messages_retracted 广播后编剧会话重新对齐)。 */
+	 *  sendMessage;messages_retracted 广播后编剧会话重新对齐;按章节定位会话)。 */
 	async function editWriterMessage(m: { id: string; entryId?: string }, newText: string) {
 		const slug = bookDetailRef.current?.slug;
+		const ch = currentChapterRef.current;
 		if (!slug || m.entryId === undefined) return;
 		try {
-			await client.writerRetract(slug, m.entryId, newText);
+			await client.writerRetract(slug, m.entryId, newText, ch?.file ?? null);
 		} catch (err) {
 			setError(`编辑重发失败: ${friendlyError(err)}`);
 		}
@@ -1178,7 +1184,7 @@ export function WritePage({
 					</>
 				)}
 			</section>
-			{/* AI 伙伴:对话 | 批注 标签;宽屏常驻右栏,窄屏右侧抽屉 */}
+			{/* AI 伙伴:编剧对话单栏(批注 2026-08-10 退役并入编剧);宽屏常驻右栏,窄屏右侧抽屉 */}
 			<>
 				<AnimatePresence>
 					{isNarrow && mobileDrawer === "companion" && (

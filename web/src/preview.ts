@@ -2,7 +2,7 @@
  * AI 编辑实时预览 —— 纯逻辑层(不 import React/vendor,供 vitest 单测)。
  * 分类工具调用 → 判定预览类型;解析工具 args;行级 diff;世界书 diff。
  */
-import type { WorldDataDto, WorldEntryDto, WorldRelationDto } from "./types.ts";
+import type { StageScriptDto, WorldDataDto, WorldEntryDto, WorldRelationDto } from "./types.ts";
 
 /** 预览类型:draft = 草稿文档 diff;world = 世界树关系图。 */
 export type PreviewKind = "draft" | "world";
@@ -134,6 +134,15 @@ export type PreviewData =
 			entries: WorldEntryDto[];
 			allEntries: WorldEntryDto[];
 			relations: WorldRelationDto[];
+	  }
+	// 剧本确认门(2026-08-11):导演 script_confirm 提交的剧本——预览卡片家族的一种
+	// (与草稿 diff/世界书预览同一渲染通道),确认/修改动作由调用方经 PreviewCard
+	// 的 actions 插槽提供
+	| {
+			kind: "script";
+			toolName: "script_confirm";
+			sceneId: string;
+			script: StageScriptDto;
 	  }
 	| { kind: "draft" | "world"; error: true; toolName: string; path: string | null };
 

@@ -90,13 +90,11 @@ describe("reduceStage", () => {
 		const s = initialStageState();
 		expect(s).toEqual({ snapshot: null, feed: [], busy: null, turnPending: false });
 	});
-	it("snapshot:转录整体替换条目,本地行保留", () => {
+	it("snapshot:转录整体替换条目;导演对话(directorChat)不进 feed(2026-08-11 统一重构,StagePage 水合进 directorSession)", () => {
 		let s = initialStageState();
-		s = reduceStage(s, { type: "user", text: "你好" });
 		s = reduceStage(s, { type: "snapshot", snapshot: snapshot({ transcript: [entry()] }) });
-		expect(s.feed).toHaveLength(2);
+		expect(s.feed).toHaveLength(1);
 		expect(s.feed[0]).toMatchObject({ type: "entry" });
-		expect(s.feed[1]).toMatchObject({ type: "user", text: "你好" });
 		expect(s.snapshot?.sceneId).toBe("scene-1");
 	});
 	it("snapshot:旧条目被替换(磁盘为权威),不重复", () => {
@@ -105,42 +103,17 @@ describe("reduceStage", () => {
 		s = reduceStage(s, { type: "snapshot", snapshot: snapshot({ transcript: [entry({ id: "e2" })] }) });
 		expect(s.feed.filter((f) => f.type === "entry")).toHaveLength(1);
 	});
-	it("snapshot:导演对话历史转气泡(刷新页面不丢),本地新行保留在后", () => {
-		let s = initialStageState();
-		// 本地已有一轮新对话(刷新前刚发,快照未包含)
-		s = reduceStage(s, { type: "user", text: "新问题" });
-		s = reduceStage(s, {
-			type: "snapshot",
-			snapshot: snapshot({
-				directorChat: [
-					{ role: "user", text: "想写雾港的故事" },
-					{ role: "assistant", text: "好,先聊聊基调" },
-					{ role: "user", text: "灰暗一点" },
-					{ role: "assistant", text: "雾港确实适合灰暗基调" },
-				],
-			}),
-		});
-		expect(s.feed.map((f) => f.type)).toEqual(["user", "director", "user", "director", "user"]);
-		expect(s.feed[0]).toMatchObject({ type: "user", text: "想写雾港的故事" });
-		expect(s.feed[1]).toMatchObject({ type: "director", text: "好,先聊聊基调" });
-		expect(s.feed[4]).toMatchObject({ type: "user", text: "新问题" });
-	});
 	it("snapshot:无 directorChat(旧服务端)不崩", () => {
 		const s = reduceStage(initialStageState(), { type: "snapshot", snapshot: { ...snapshot(), directorChat: undefined } as unknown as StageSnapshotDto });
 		expect(s.feed).toHaveLength(0);
 	});
-	it("snapshot:重复派发(StrictMode 双跑/SSE 重连)幂等,对话历史不重复追加", () => {
+	it("snapshot:重复派发(StrictMode 双跑/SSE 重连)幂等,条目不重复追加", () => {
 		let s = initialStageState();
-		const snap = snapshot({
-			directorChat: [
-				{ role: "user", text: "你好" },
-				{ role: "assistant", text: "你好！我是导演。" },
-			],
-		});
+		const snap = snapshot({ transcript: [entry()] });
 		s = reduceStage(s, { type: "snapshot", snapshot: snap });
 		s = reduceStage(s, { type: "snapshot", snapshot: snap });
-		expect(s.feed).toHaveLength(2);
-		expect(s.feed.map((f) => f.type)).toEqual(["user", "director"]);
+		expect(s.feed).toHaveLength(1);
+		expect(s.feed[0]).toMatchObject({ type: "entry" });
 	});
 	it("entry 追加并清 turnPending", () => {
 		let s = reduceStage(initialStageState(), { type: "wake" });
@@ -155,54 +128,27 @@ describe("reduceStage", () => {
 		expect(s.turnPending).toBe(false);
 		expect(s.feed[0]).toMatchObject({ type: "system", text: "(王五 选择了沉默,跳过)", err: undefined });
 	});
-	it("done:导演发言上气泡并清 busy", () => {
+	it("done:清 busy(导演回复经 stage_director_event 到 MessageList,不进 feed)", () => {
 		let s = reduceStage(initialStageState(), { type: "busy", cmd: "director" });
 		expect(s.busy).toBe("director");
-		s = reduceStage(s, { type: "done", cmd: "director", ok: true, text: "好,我改一下王五的 boundary。" });
+		s = reduceStage(s, { type: "done", cmd: "director", ok: true });
 		expect(s.busy).toBeNull();
-		expect(s.feed[0]).toMatchObject({ type: "director", text: "好,我改一下王五的 boundary。" });
-	});
-	it("director_text:流式增量替换流式气泡,entry 到达定稿", () => {
-		let s = reduceStage(initialStageState(), { type: "user", text: "聊聊基调" });
-		s = reduceStage(s, { type: "director_text", text: "好,先" });
-		expect(s.feed[1]).toMatchObject({ type: "director", text: "好,先", streaming: true });
-		s = reduceStage(s, { type: "director_text", text: "好,先聊聊基调。" });
-		expect(s.feed[1]).toMatchObject({ type: "director", text: "好,先聊聊基调。", streaming: true });
-		// 回合结束信号(entry)定稿:清 streaming,不重复建气泡
-		s = reduceStage(s, { type: "entry", entry: entry() });
-		expect(s.feed[1]).toMatchObject({ type: "director", text: "好,先聊聊基调。", streaming: false });
-		expect(s.feed.map((f) => f.type)).toEqual(["user", "director", "entry"]);
-	});
-	it("done:流式气泡已存在时定稿(done 文本为准,补思考链),不重复 push", () => {
-		let s = reduceStage(initialStageState(), { type: "user", text: "写剧本" });
-		s = reduceStage(s, { type: "director_text", text: "好,我来" });
-		s = reduceStage(s, { type: "done", cmd: "director", ok: true, text: "好,我来写剧本。", thinking: "先想结构……" });
-		expect(s.feed.map((f) => f.type)).toEqual(["user", "director"]);
-		expect(s.feed[1]).toMatchObject({ type: "director", text: "好,我来写剧本。", thinking: "先想结构……", streaming: false });
-		expect(s.busy).toBeNull();
-	});
-	it("done:导演回合失败时流式气泡定稿(保留已流出文本)", () => {
-		let s = reduceStage(initialStageState(), { type: "user", text: "继续" });
-		s = reduceStage(s, { type: "director_text", text: "嗯," });
-		s = reduceStage(s, { type: "done", cmd: "director", ok: false, text: "导演回合超时" });
-		expect(s.feed.map((f) => f.type)).toEqual(["user", "director"]);
-		expect(s.feed[1]).toMatchObject({ type: "director", text: "嗯,", streaming: false });
+		expect(s.feed).toHaveLength(0);
 	});
 	it("done:非导演命令结果不进舞台流(SSE 系统行已覆盖,防重复)", () => {
 		let s = initialStageState();
-		s = reduceStage(s, { type: "done", cmd: "fix", ok: true, text: "导演已修订剧本(v2)" });
+		s = reduceStage(s, { type: "done", cmd: "fix", ok: true });
 		expect(s.feed).toHaveLength(0);
 		expect(s.busy).toBeNull();
 	});
 	it("done:失败只清 busy(错误行由 stage-host 的 stage_system 广播)", () => {
 		let s = reduceStage(initialStageState(), { type: "busy", cmd: "cut" });
-		s = reduceStage(s, { type: "done", cmd: "cut", ok: false, text: "舞台异常" });
+		s = reduceStage(s, { type: "done", cmd: "cut", ok: false });
 		expect(s.busy).toBeNull();
 		expect(s.feed).toHaveLength(0);
 	});
-	it("reset:切书时整体重置舞台流(旧书对话残留 = 串对话根因)", () => {
-		let s = reduceStage(initialStageState(), { type: "user", text: "旧书对话" });
-		s = reduceStage(s, { type: "director", text: "旧书导演回复" });
+	it("reset:切书/切章整体重置舞台流(旧对话残留 = 串对话根因)", () => {
+		let s = reduceStage(initialStageState(), { type: "system", text: "旧舞台行" });
 		s = reduceStage(s, { type: "busy", cmd: "director" });
 		s = reduceStage(s, { type: "reset" });
 		expect(s).toEqual(initialStageState());

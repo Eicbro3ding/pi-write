@@ -107,3 +107,36 @@ describe("collectStageScriptErrors（字段级中文校验）", () => {
 		expect(errors.some((e) => e.includes("类型不可注入"))).toBe(true);
 	});
 });
+
+describe("collectStageScriptErrors 强制 perActor（2026-08-11）", () => {
+	const world = worldWith();
+
+	it("perActor 整体缺失 → 报缺失（含正确格式示例）", () => {
+		const params = { cast: { "actor-1": ["李四"] }, text: { shared: { setting: "酒馆" } } };
+		const errors = collectStageScriptErrors(params as never, world);
+		expect(errors.some((e) => e.includes("text.perActor 缺失或为空") && e.includes("objective 必填"))).toBe(true);
+	});
+
+	it("perActor 为空对象 → 报缺失", () => {
+		const params = { cast: { "actor-1": ["李四"] }, text: { perActor: {} } };
+		const errors = collectStageScriptErrors(params as never, world);
+		expect(errors.some((e) => e.includes("text.perActor 缺失或为空"))).toBe(true);
+	});
+
+	it("cast 演员缺 perActor 条目 → 逐条列出缺的角色", () => {
+		const params = {
+			cast: { "actor-1": ["李四"], "actor-2": ["王五"] },
+			text: { perActor: { "actor-1": { objective: "x" } } },
+		};
+		const errors = collectStageScriptErrors(params as never, world);
+		expect(errors.some((e) => e.includes("演员 actor-2 缺少演出指令") && e.includes("text.perActor.actor-2"))).toBe(true);
+		// actor-1 有条目 → 不报缺失
+		expect(errors.some((e) => e.includes("actor-1 缺少演出指令"))).toBe(false);
+	});
+
+	it("perActor 传数组 → 报缺失或格式错误（不静默）", () => {
+		const params = { cast: { "actor-1": ["李四"] }, text: { perActor: ["李四"] } };
+		const errors = collectStageScriptErrors(params as never, world);
+		expect(errors.some((e) => e.includes("text.perActor 缺失或为空"))).toBe(true);
+	});
+});

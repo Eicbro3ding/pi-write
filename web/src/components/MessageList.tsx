@@ -112,13 +112,14 @@ export function ThinkingBlock({ text, done }: { text: string; done: boolean }) {
 	const startRef = useRef<number | null>(null);
 	const [elapsed, setElapsed] = useState(0);
 
-	// 起表:thinking 从空变非空的那一刻(消息开始思考)
+	// 起表:thinking 从空变非空的那一刻(消息开始思考);水合消息(done=true)不起表——
+	// 重载思维链无计时起点,不显示秒数(2026-08-11)
 	useEffect(() => {
-		if (text.length > 0 && startRef.current === null) {
+		if (!done && text.length > 0 && startRef.current === null) {
 			startRef.current = Date.now();
 			setElapsed(0);
 		}
-	}, [text]);
+	}, [text, done]);
 
 	// 流式中:每秒推进秒数;结束(done)后停止并固定最终值
 	useEffect(() => {

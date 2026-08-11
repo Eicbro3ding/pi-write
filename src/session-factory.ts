@@ -36,6 +36,9 @@ export interface SessionFactoryOptions {
 	extensionFactories: InlineExtension[];
 	/** 附加 skill 路径(TUI/web 加载打包 skills;stage 不加载)。 */
 	additionalSkillPaths?: string[];
+	/** 正文文件白名单(如 "ch01.md"):启用 draft/ 目录 write 强制,只允许写当前章节文件。
+	 *  防 agent 自由发挥文件名(正文写到 draft/第一章.md,前端按约定路径读到空)。 */
+	draftFile?: string;
 	/** 内置工具黑名单(web 禁 bash)。 */
 	excludeTools?: string[];
 	/** 初始激活的内置工具(不设白名单——白名单会把 MCP customTools 滤掉)。 */
@@ -59,18 +62,24 @@ export function createSessionRuntimeFactory(opts: SessionFactoryOptions): Create
 		// word_count/world_update 以会话 cwd(书目录)为路径基准,切书时随工厂重建更新
 		setWordCountCwd(cwd);
 		setWorldUpdateBookDir(cwd);
-		// 文件工具路径守卫:书目录内可读写;readOnlyDirs(skills 等)只读放行
-		installToolPathGuard(cwd, opts.readOnlyDirs ?? []);
-		const services = await createAgentSessionServices({
-			cwd,
-			agentDir: opts.agentDir,
-			resourceLoaderOptions: {
-				systemPromptOverride: opts.systemPromptOverride,
-				appendSystemPromptOverride: () => [],
-				...(opts.additionalSkillPaths ? { additionalSkillPaths: opts.additionalSkillPaths } : {}),
-				extensionFactories: opts.extensionFactories,
-			},
-		});
+		// 文件工具路径守卫:书目录内可读写;readOnlyDirs(skills 等)只读放行;
+		// draftFile 启用正文目录白名单(write 只允许写当前章节文件)
+		installToolPathGuard(cwd, opts.readOnlyDirs ?? [], opts.draftFile);
+			const services = await createAgentSessionServices({
+				cwd,
+				agentDir: opts.agentDir,
+				resourceLoaderOptions: {
+					systemPromptOverride: opts.systemPromptOverride,
+					appendSystemPromptOverride: () => [],
+					// 独立身份（2026-08-11）：不加载 ~/.agents 全局技能与祖先目录 AGENTS.md
+					// 项目上下文（导演实测混入主目录 skills/AGENTS.md 的根因）；技能只经
+					// additionalSkillPaths 显式加载（pi-writer 打包 skills）
+					noSkills: true,
+					noContextFiles: true,
+					...(opts.additionalSkillPaths ? { additionalSkillPaths: opts.additionalSkillPaths } : {}),
+					extensionFactories: opts.extensionFactories,
+				},
+			});
 		// 隐藏 skill 系统:会话的 / 菜单不再显示任何 /skill:xxx 命令
 		services.settingsManager.setEnableSkillCommands(false);
 		let model: CliModel;

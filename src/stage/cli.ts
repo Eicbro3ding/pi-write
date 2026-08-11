@@ -44,6 +44,7 @@ const HELP = `舞台区命令：
   /cast               打印演员池编制
   /mode               显示导演当前模式（讨论/剧本/导演）
   /thoughts <1|2|3>   编剧思考链可见性（1 不看 / 2 导演提炼版 / 3 原始思考链）
+  /confirm            确认导演提交的剧本（script_confirm 后、stage_script 开演前的门）
   /quit               退出`;
 
 export async function runStageCli(opts: StageCliOptions): Promise<void> {
@@ -158,6 +159,9 @@ async function handleLine(line: string, orch: StageOrchestrator): Promise<void> 
 				process.stdout.write(`导演当前模式：${label[orch.getDirectorMode()] ?? orch.getDirectorMode()}\n`);
 				return;
 			}
+			case "/confirm":
+				process.stdout.write(`${await orch.confirmScript()}\n`);
+				return;
 			case "/next":
 				process.stdout.write(`${await orch.userNext()}\n`);
 				return;

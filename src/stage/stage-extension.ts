@@ -1,6 +1,6 @@
 import { Type, type Static } from "typebox";
 import { defineTool, type ExtensionAPI, type ToolDefinition } from "../../vendor/pi-coding-agent/src/index.ts";
-import { slugify } from "../config.ts";
+import { resolveSkillsDir, slugify } from "../config.ts";
 import { ensureWorld, type WorldData } from "../world-data.ts";
 import { wordCountTool, worldFindTool, worldUpdateTool } from "../tools.ts";
 import { resolveWorldRefs } from "./assembler.ts";
@@ -15,11 +15,19 @@ import type { RoleSpec, StageOrchestrator } from "./orchestrator.ts";
  * 消息队列的挂载点：每次调用前重装 [舞台切片 | 剧本文字段 | 计数块]。
  */
 
-const DIRECTOR_PROMPT = `你是「导演」，一部小说的创作负责人。你处于三种模式之一（系统会提示你当前模式）：
+/** 剧本写作手册的绝对路径（注入提示用）：相对路径会解析到书目录内（不存在），
+ *  守卫对 skills 目录只读放行——必须给绝对路径模型才读得到（2026-08-11 实测）。 */
+export function scriptWritingManualPath(): string {
+	return `${resolveSkillsDir()}/stage-scripting/SKILL.md`;
+}
+
+const DIRECTOR_PROMPT = (skillsPath: string) => `你是「导演」，一部小说的创作负责人。你处于三种模式之一（由你主动进入，系统会提示当前模式）：
 · 讨论模式（开演前）：与用户讨论剧情走向、人物设定、大纲；维护世界书（world_find 查询 / world_update 修改角色、世界观、时间线、大纲等条目）。
-· 剧本模式（写剧本中，可主动进入）：与用户一起写剧本——剧本必须通过 stage_script 工具调用输出（结构化字段），禁止直接输出剧本文本。文字段 = 场景意象 / 节拍（事件序列，不是台词稿）/ 角色任务（objective：角色想要什么，不是性格标签）/ 风格示例（禁止复述）。完整方法论可 read skills/stage-scripting/SKILL.md。
+· 剧本模式（写剧本中，主动进入）：剧本讨论成熟后，由你主动用 script_confirm 工具提交剧本（结构化字段）——提交后等待用户确认，确认前禁止用 stage_script 开演。文字段 = 场景意象 / 节拍（事件序列，不是台词稿）/ 角色任务（objective：角色想要什么，不是性格标签）/ 风格示例（禁止复述）。完整方法论可 read ${skillsPath}。
 · 导演模式（演出中）：观看实时注入的舞台区，与用户讨论演出效果，可示意收尾、喊停、修订剧本。
-你决定每个演员知道什么：定义段 inject 指定注入哪些世界书节点（include-only——没指定的演员不知道，信息差即悬念）。一幕演完（编剧成文）后更新世界书与大纲。`;
+你决定每个演员知道什么：定义段 inject 指定注入哪些世界书节点（include-only——没指定的演员不知道，信息差即悬念）。
+**世界书维护纪律**：新建人物/组织/地点条目时，检查与已有条目是否确有剧情关联；有则一并 upsert_relation 建立关系（无则不强连）。关系必须来自剧情事实；拿不准的关联留给用户讨论，不要为连通虚构。
+**一章一幕**：一幕对应一个章节。收幕后这一幕即完结——不要主动要求继续演下一幕；新的一幕由用户切换到新章节后，在新章节的导演会话里讨论。`;
 
 const ACTOR_PROMPT = `你是「演员」，在一幕共演的舞台戏中饰演角色。规则：
 1. **第一人称代入**：思考时以角色第一人称代入（"我是李四。我想要……"）——你的思考链是角色的内心，绝不写进演出内容；
@@ -38,24 +46,28 @@ const NARRATOR_PROMPT = `你是「叙述者」，负责舞台的场景描写、�
 
 const WRITER_PROMPT = `你是「编剧」。你的唯一职责：把舞台区转录整理成正文小说——去掉对白标签与舞台指示，叙述化、连贯成文；**参考【剧本·角色内心】与【世界书】把潜台词与心理矛盾写进正文**（角色没说出口的内心，由导演声明的 state 与世界书提供）。整理完成后用 write 工具写入指定路径。`;
 
-/** 剧本模式注入块（scripting 模式每次调用前注入；含"必须经工具输出"状态指令）。 */
-export const SCRIPT_METHOD_BLOCK = `【剧本写作方法·你在剧本模式】
-· 你写剧本必须通过 stage_script 工具调用输出，禁止直接输出剧本文本
+/** 剧本模式注入块（scripting 模式每次调用前注入；含"必须经工具输出"状态指令）。
+ *  skillsDir = skills 根目录（注入绝对路径：相对路径会解析到书目录内，读不到）。 */
+export function buildScriptMethodBlock(skillsDir: string): string {
+	return `【剧本写作方法·你在剧本模式】
+· 剧本讨论成熟后，用 script_confirm 工具提交（结构化字段），禁止直接输出剧本文本
+· 提交后等待用户确认；确认前不要调用 stage_script（会被拒绝）
 · objective 写角色的欲望（想要什么），不是性格标签
 · beats 是事件序列（必须发生什么），不是台词稿；措辞留给演员
 · examples 是风格演示：最多 2-3 轮，禁止与剧情内容重复，演员不得复述
 · forbidden 只写硬禁区，别超过 3 条
 · perActor 的 id 必须与 cast 的演员 id 一致；世界书引用可传 id 或名称（title）
 · 分幕目标对齐世界书大纲；开演前检查选角约束（一幕一人一角）
-· 完整方法论与示例剧本：read skills/stage-scripting/SKILL.md（必要时查阅）`;
+· 完整方法论与示例剧本：read ${skillsDir}/stage-scripting/SKILL.md（必要时查阅）`;
+}
 
 export function directorRole(orch: StageOrchestrator): RoleSpec {
 	return {
-		systemPrompt: DIRECTOR_PROMPT,
+		systemPrompt: DIRECTOR_PROMPT(scriptWritingManualPath()),
 		extensions: [{ name: "stage-director", factory: (pi) => stageDirectorExtension(pi, orch) }],
 		excludeTools: ["bash"],
 		activeTools: ["read", "write", "edit", "ls", "grep"],
-		customTools: [stageScriptTool(orch), stageReviseTool(orch), worldFindTool, worldUpdateTool, wordCountTool],
+		customTools: [scriptConfirmTool(orch), stageScriptTool(orch), stageReviseTool(orch), worldFindTool, worldUpdateTool, wordCountTool],
 	};
 }
 
@@ -163,7 +175,21 @@ export function collectStageScriptErrors(
 	const errors: string[] = [];
 	const cast = (params.cast ?? {}) as Record<string, unknown>;
 	const text = (params.text ?? {}) as Record<string, unknown>;
-	const perActor = (text.perActor ?? {}) as Record<string, unknown>;
+	const perActorRaw = text.perActor;
+	const perActor = (perActorRaw ?? {}) as Record<string, unknown>;
+	// 强制校验（2026-08-11）：perActor 缺失/空 → 报缺失；cast 演员缺演出指令 → 逐条列出。
+	// 演员没有 objective/examples 等演出指令无法开演，这里不让静默通过。
+	if (!perActorRaw || typeof perActorRaw !== "object" || Array.isArray(perActorRaw) || Object.keys(perActor).length === 0) {
+		errors.push(
+			"text.perActor 缺失或为空：必须为每个参演角色提供演出指令（actorId → {objective 必填, state?, relation?, voice?, boundary?, examples?}）",
+		);
+	} else {
+		for (const actorId of Object.keys(cast)) {
+			if (!(actorId in perActor)) {
+				errors.push(`演员 ${actorId} 缺少演出指令：text.perActor.${actorId}（objective 必填，可含 state/relation/voice/boundary/examples）`);
+			}
+		}
+	}
 	for (const [actorId, fields] of Object.entries(perActor)) {
 		if (typeof fields !== "object" || fields === null) {
 			errors.push(`text.perActor.${actorId} 必须是对象（objective/state/relation/voice/boundary/examples 字段），你传了：${JSON.stringify(fields)}`);
@@ -351,88 +377,137 @@ function stageReviseTool(orch: StageOrchestrator): ToolDefinition {
 	});
 }
 
-/** 导演专属工具：编写剧本 → 写 stage/<scene>.json → 回调编排器开演。 */
-function stageScriptTool(orch: StageOrchestrator): ToolDefinition {
+/** 剧本参数 → 校验 → 组装 SceneScript → 落盘 stage/<sceneId>.json（两工具共用）。 */
+async function buildAndSaveScript(
+	orch: StageOrchestrator,
+	params: Static<typeof stageScriptParameters>,
+): Promise<{ sceneId: string; script: SceneScript }> {
+	const sceneId = slugify(params.scene);
+	const rules = {
+		minLines: params.rules?.minLines ?? 10,
+		maxLines: params.rules?.maxLines ?? 20,
+		wrapUpWindow: params.rules?.wrapUpWindow ?? 3,
+		turn: "round-robin" as const,
+	};
+	// 演员知识面：导演显式 inject 优先；缺省按 cast 角色名自动生成
+	// （character 注入 + budget 2000）——信息差即悬念，导演可借此
+	// 决定演员知道什么（include-only，见设计文档 §5.1）。
+	const inject: Record<string, InjectRule> = {};
+	for (const [actorId, characters] of Object.entries(params.cast)) {
+		const custom = params.inject?.[actorId];
+		inject[actorId] = custom
+			? { characters: custom.characters ?? characters, world: custom.world, budget: custom.budget ?? 2000 }
+			: { characters, budget: 2000 };
+	}
+	const shared = {
+		setting: params.text.shared.setting,
+		goal: params.text.shared.goal ?? "",
+		beats: params.text.shared.beats ?? [],
+		tone: params.text.shared.tone ?? "",
+		forbidden: params.text.shared.forbidden ?? [],
+	};
+	const perActor: Record<string, ActorText> = {};
+	for (const [actorId, fields] of Object.entries(params.text.perActor ?? {})) {
+		perActor[actorId] = {
+			objective: fields.objective,
+			state: fields.state,
+			relation: fields.relation,
+			voice: fields.voice,
+			boundary: fields.boundary,
+			examples: fields.examples ?? [],
+		};
+	}
+	const script: SceneScript = {
+		scene: params.scene,
+		chapter: params.chapter,
+		version: 1,
+		definition: { cast: params.cast, inject, rules },
+		text: { shared, perActor },
+	};
+	await saveScript(orch.bookDir, sceneId, script);
+	return { sceneId, script };
+}
+
+/** 字段级中文校验（含 inject 引用存在性）——错误带可用条目清单，模型可自我修正。 */
+async function validateScriptParams(
+	orch: StageOrchestrator,
+	params: Static<typeof stageScriptParameters>,
+	toolName: string,
+): Promise<string[] | null> {
+	const world = await ensureWorld(orch.bookDir);
+	const fieldErrors = collectStageScriptErrors(params as unknown as Record<string, unknown>, world);
+	if (fieldErrors.length > 0) {
+		return [`剧本校验未通过（请修正后重新调用 ${toolName}）：\n${fieldErrors.map((e) => `· ${e}`).join("\n")}`];
+	}
+	return null;
+}
+
+/**
+ * 导演专属工具：提交剧本 → 写 stage/<scene>.json → 置待确认（前端卡片）。
+ * 用户确认（confirm_script 命令）后，stage_script 才可开演（确认门）。
+ */
+function scriptConfirmTool(orch: StageOrchestrator): ToolDefinition {
 	return defineTool({
-		name: "stage_script",
-		label: "编写剧本开一幕",
+		name: "script_confirm",
+		label: "提交剧本等待确认",
 		description:
-			"编写一幕戏的剧本（定义段=选角+知识面注入+规则，文字段=场景/节拍/角色任务/示例），写入后立即开演。选角中引用的演员若不在 cast.json 会自动补为群演槽位。注入与校验容错：世界书引用接受 id 或名称（title），匹配不到会报错并列出可用条目。",
+			"提交一幕戏的剧本（定义段=选角+知识面注入+规则，文字段=场景/节拍/角色任务/示例）。提交后剧本会展示给用户确认（卡片），用户确认前不得调用 stage_script 开演。选角中引用的演员若不在 cast.json 会自动补为群演槽位。注入与校验容错：世界书引用接受 id 或名称（title），匹配不到会报错并列出可用条目。",
 		parameters: stageScriptParameters,
 		prepareArguments: prepareStageScriptArgs,
 		execute: async (_callId, params) => {
 			const sceneId = slugify(params.scene);
-			// 字段级中文校验（含 inject 引用存在性）——错误带可用条目清单，模型可自我修正
-			const world = await ensureWorld(orch.bookDir);
-			const fieldErrors = collectStageScriptErrors(params as unknown as Record<string, unknown>, world);
-			if (fieldErrors.length > 0) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: `剧本校验未通过（请修正后重新调用 stage_script）：\n${fieldErrors.map((e) => `· ${e}`).join("\n")}`,
-						},
-					],
-					details: { sceneId, ok: false },
-				};
+			const errors = await validateScriptParams(orch, params, "script_confirm");
+			if (errors) {
+				return { content: [{ type: "text", text: errors[0] }], details: { sceneId, ok: false } };
 			}
-			const rules = {
-				minLines: params.rules?.minLines ?? 10,
-				maxLines: params.rules?.maxLines ?? 20,
-				wrapUpWindow: params.rules?.wrapUpWindow ?? 3,
-				turn: "round-robin" as const,
+			const { script } = await buildAndSaveScript(orch, params);
+			const result = await orch.submitScript(sceneId);
+			return {
+				content: [
+					{
+						type: "text",
+						text: result.ok
+							? `剧本已提交（${script.scene} v${script.version}），等待用户确认。确认后请调用 stage_script 开演。`
+							: result.text,
+					},
+				],
+				details: { sceneId, ok: result.ok },
 			};
-			// 演员知识面：导演显式 inject 优先；缺省按 cast 角色名自动生成
-			// （character 注入 + budget 2000）——信息差即悬念，导演可借此
-			// 决定演员知道什么（include-only，见设计文档 §5.1）。
-			const inject: Record<string, InjectRule> = {};
-			for (const [actorId, characters] of Object.entries(params.cast)) {
-				const custom = params.inject?.[actorId];
-				inject[actorId] = custom
-					? { characters: custom.characters ?? characters, world: custom.world, budget: custom.budget ?? 2000 }
-					: { characters, budget: 2000 };
+		},
+	});
+}
+
+/** 导演专属工具：开演（确认门后可用——剧本须先 script_confirm 提交并经用户确认）。 */
+function stageScriptTool(orch: StageOrchestrator): ToolDefinition {
+	return defineTool({
+		name: "stage_script",
+		label: "开演一幕",
+		description:
+			"开演一幕戏（需用户已确认剧本：先用 script_confirm 提交，用户确认后本工具才可用）。选角中引用的演员若不在 cast.json 会自动补为群演槽位。",
+		parameters: stageScriptParameters,
+		prepareArguments: prepareStageScriptArgs,
+		execute: async (_callId, params) => {
+			const sceneId = slugify(params.scene);
+			const errors = await validateScriptParams(orch, params, "stage_script");
+			if (errors) {
+				return { content: [{ type: "text", text: errors[0] }], details: { sceneId, ok: false } };
 			}
-			const shared = {
-				setting: params.text.shared.setting,
-				goal: params.text.shared.goal ?? "",
-				beats: params.text.shared.beats ?? [],
-				tone: params.text.shared.tone ?? "",
-				forbidden: params.text.shared.forbidden ?? [],
-			};
-			const perActor: Record<string, ActorText> = {};
-			for (const [actorId, fields] of Object.entries(params.text.perActor ?? {})) {
-				perActor[actorId] = {
-					objective: fields.objective,
-					state: fields.state,
-					relation: fields.relation,
-					voice: fields.voice,
-					boundary: fields.boundary,
-					examples: fields.examples ?? [],
-				};
-			}
-			const script: SceneScript = {
-				scene: params.scene,
-				chapter: params.chapter,
-				version: 1,
-				definition: { cast: params.cast, inject, rules },
-				text: { shared, perActor },
-			};
-			await saveScript(orch.bookDir, sceneId, script);
-			const result = await orch.startScene(sceneId);
+			const { sceneId: savedSceneId, script } = await buildAndSaveScript(orch, params);
+			const result = await orch.startScene(savedSceneId);
 			if (!result.ok) {
 				return {
-					content: [{ type: "text", text: `剧本校验未通过，未开演：\n${result.errors.join("\n")}` }],
-					details: { sceneId, ok: false },
+					content: [{ type: "text", text: `未开演：\n${result.errors.join("\n")}` }],
+					details: { sceneId: savedSceneId, ok: false },
 				};
 			}
 			return {
 				content: [
 					{
 						type: "text",
-						text: `剧本已写入 stage/${sceneId}.json 并开演（v1：${rules.minLines}-${rules.maxLines} 条，收尾窗口 ${rules.wrapUpWindow} 条）`,
+						text: `开演：${script.scene}（v${script.version}：${script.definition.rules.minLines}-${script.definition.rules.maxLines} 条，收尾窗口 ${script.definition.rules.wrapUpWindow} 条）`,
 					},
 				],
-				details: { sceneId, ok: true },
+				details: { sceneId: savedSceneId, ok: true },
 			};
 		},
 	});

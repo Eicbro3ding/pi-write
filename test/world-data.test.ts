@@ -102,6 +102,28 @@ describe("validateWorld", () => {
 		delete noStoryline.storyline;
 		expect(() => validateWorld(noStoryline)).toThrow(/缺少 storyline/);
 	});
+	it("worldSummary:缺失/显式 null 规范化补空,非字符串与超长拒绝", () => {
+		// 旧数据无该字段:校验放行并补空(向后兼容)
+		const noSummary = createEmptyWorld() as unknown as Record<string, unknown>;
+		delete noSummary.worldSummary;
+		expect(validateWorld(noSummary).worldSummary).toBe("");
+		// 显式 null 同样补空
+		const nullSummary = createEmptyWorld() as unknown as Record<string, unknown>;
+		nullSummary.worldSummary = null;
+		expect(validateWorld(nullSummary).worldSummary).toBe("");
+		// 非字符串拒绝
+		const badType = createEmptyWorld() as unknown as Record<string, unknown>;
+		badType.worldSummary = 42;
+		expect(() => validateWorld(badType)).toThrow(/worldSummary 必须是字符串/);
+		// 超长拒绝
+		const tooLong = createEmptyWorld();
+		tooLong.worldSummary = "字".repeat(601);
+		expect(() => validateWorld(tooLong)).toThrow(/超过 600 字上限/);
+		// 正常值往返
+		const ok = createEmptyWorld();
+		ok.worldSummary = "蒸汽与旧神共存的雾港城邦。";
+		expect(validateWorld(ok).worldSummary).toBe("蒸汽与旧神共存的雾港城邦。");
+	});
 	it("entries 含 null / 非对象抛 WorldValidationError 而非原生 TypeError", () => {
 		const w = createEmptyWorld() as unknown as Record<string, unknown>;
 		w.entries = [null];
@@ -351,7 +373,7 @@ describe("avatar / images", () => {
 	it("9 张 images 且 avatar 已在其中:不超上限,通过", () => {
 		const w = createEmptyWorld();
 		const imgs = Array.from({ length: 9 }, (_, i) => `images/${i}.png`);
-		w.entries.push({ id: "a", type: "character", title: "A", keys: [], chapters: [], status: "alive", active: true, parent: null, tags: [], body: "", updatedAt: 0, avatar: imgs[0], images: imgs });
+		w.entries.push({ id: "a", type: "character", title: "A", keys: [], chapters: [], status: "alive", active: true, parent: null, tags: [], body: "", updatedAt: 0, avatar: imgs[0]!, images: imgs });
 		expect(validateWorld(w).entries[0]!.images).toHaveLength(9);
 	});
 	it("8 张 images + avatar 不在其中:规范化补主图后仍 9 张,通过", () => {

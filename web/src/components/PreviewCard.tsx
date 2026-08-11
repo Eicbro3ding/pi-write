@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { PreviewData } from "../preview.ts";
 import type { WorldDiff } from "../preview.ts";
 import { DUR, EASE, EDGE_IN } from "../motion.ts";
 import { PreviewGraph } from "./PreviewGraph.tsx";
 import { PreviewEntryCard } from "./PreviewEntryCard.tsx";
+import { ScriptView } from "./ScriptView.tsx";
 
 /** 世界树变更摘要行(图模式):新增/修改/删除的条目与关系;无变更返回 null。 */
 export function worldSummary(diff: WorldDiff): string | null {
@@ -18,8 +19,8 @@ export function worldSummary(diff: WorldDiff): string | null {
 	return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-/** AI 编辑预览内容(卡片主体):草稿 diff / 世界图 / 词条百科。PreviewCard 与
- *  编剧编辑确认卡(ConfirmCard)共用——确认队列复用同一渲染,零副本。 */
+/** AI 编辑预览内容(卡片主体):草稿 diff / 世界图 / 词条百科 / 剧本确认。
+ *  PreviewCard 与编剧编辑确认卡(ConfirmCard)共用——确认队列复用同一渲染,零副本。 */
 export function PreviewBody({ data }: { data: PreviewData }) {
 	return "error" in data ? (
 		<div className="preview-error">预览加载失败</div>
@@ -36,6 +37,10 @@ export function PreviewBody({ data }: { data: PreviewData }) {
 				</div>
 			))}
 		</div>
+	) : data.kind === "script" ? (
+		// 剧本确认门(2026-08-11):导演 script_confirm 提交的剧本——预览卡片家族
+		// 的一种,确认/修改动作由调用方经 actions 插槽提供
+		<ScriptView script={data.script} />
 	) : data.mode === "graph" ? (
 		<>
 			<PreviewGraph world={data.afterWorld} diff={data.worldDiff} slug={data.slug} />
@@ -56,16 +61,21 @@ export function PreviewBody({ data }: { data: PreviewData }) {
 	);
 }
 
-/** AI 编辑预览卡片:每回合一张;内容 = 最近一种编辑类型(草稿 diff / 世界图 / 词条百科)。 */
-export function PreviewCard({ data }: { data: PreviewData }) {
+/** AI 编辑预览卡片:每回合一张;内容 = 最近一种编辑类型(草稿 diff / 世界图 / 词条百科 / 剧本)。
+ *  actions 可选:卡片底部动作区(剧本确认卡的「确认开演/需要修改」等由调用方注入)。
+ *  折叠展开用 framer 高度动画(2026-08-11 恢复):「压缩」的真凶是舞台页对话区的
+ *  flex:1 弹性分配(stage-scroll > .chat-scroll { flex: none } 已解),动画本身无辜。 */
+export function PreviewCard({ data, actions }: { data: PreviewData; actions?: ReactNode }) {
 	const [open, setOpen] = useState(true);
 	const title = "error" in data
 		? "预览"
 		: data.kind === "draft"
 			? "预览 · 草稿"
-			: data.mode === "graph"
-				? "预览 · 世界树"
-				: "预览 · 词条";
+			: data.kind === "script"
+				? "剧本 · 待确认"
+				: data.mode === "graph"
+					? "预览 · 世界树"
+					: "预览 · 词条";
 	return (
 		<motion.div
 			className="preview-card"
@@ -88,6 +98,7 @@ export function PreviewCard({ data }: { data: PreviewData }) {
 						transition={{ duration: DUR.base, ease: EASE.inOut }}
 					>
 						<PreviewBody data={data} />
+						{actions && <div className="preview-actions">{actions}</div>}
 					</motion.div>
 				)}
 			</AnimatePresence>

@@ -155,6 +155,17 @@ describe("applyWorldUpdate", () => {
 		const c = applyWorldUpdate(b, { op: "upsert_relation", from: ida, to: idb, label: "姐弟" });
 		expect(() => applyWorldUpdate(c, { op: "delete_entry", id: ida })).toThrow(WorldValidationError);
 	});
+	it("set_world_summary 覆盖写", () => {
+		const w = createEmptyWorld();
+		const a = applyWorldUpdate(w, { op: "set_world_summary", text: "蒸汽与旧神共存的雾港。" });
+		expect(a.worldSummary).toBe("蒸汽与旧神共存的雾港。");
+		const b = applyWorldUpdate(a, { op: "set_world_summary", text: "修订版概述" });
+		expect(b.worldSummary).toBe("修订版概述");
+	});
+	it("set_world_summary 超长被 validateWorld 拒绝", () => {
+		const w = createEmptyWorld();
+		expect(() => applyWorldUpdate(w, { op: "set_world_summary", text: "字".repeat(601) })).toThrow(WorldValidationError);
+	});
 	it("upsert_relation 拒绝悬空引用与自环", () => {
 		const w = createEmptyWorld();
 		const a = applyWorldUpdate(w, { op: "upsert_entry", type: "character", title: "A" });
@@ -313,9 +324,9 @@ describe("upsert_entry 图片字段", () => {
 	});
 	it("更新条目 avatar/images 并校验非法引用", () => {
 		const w1 = applyWorldUpdate(createEmptyWorld(), { op: "upsert_entry", type: "character", title: "A", avatar: null, images: [] });
-		const w2 = applyWorldUpdate(w1, { op: "upsert_entry", id: w1.entries[0]!.id, title: "A", avatar: "images/a.png", images: ["images/a.png"] });
+		const w2 = applyWorldUpdate(w1, { op: "upsert_entry", id: w1.entries[0]!.id, type: "character", title: "A", avatar: "images/a.png", images: ["images/a.png"] });
 		expect(w2.entries[0]!.avatar).toBe("images/a.png");
-		expect(() => applyWorldUpdate(w1, { op: "upsert_entry", id: w1.entries[0]!.id, title: "A", avatar: "../x.png", images: [] })).toThrow(WorldValidationError);
+		expect(() => applyWorldUpdate(w1, { op: "upsert_entry", id: w1.entries[0]!.id, type: "character", title: "A", avatar: "../x.png", images: [] })).toThrow(WorldValidationError);
 	});
 });
 

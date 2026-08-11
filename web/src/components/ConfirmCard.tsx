@@ -35,7 +35,16 @@ export function ConfirmCard({
 	/** 免确认模式:编辑已归档,只读展示(无确认/回退按钮)。 */
 	auto?: boolean;
 }) {
-	const title = "error" in data ? "预览" : data.kind === "draft" ? "修改正文" : data.mode === "graph" ? "更新世界树" : "更新词条";
+	const title =
+		"error" in data
+			? "预览"
+			: data.kind === "draft"
+				? "修改正文"
+				: data.kind === "script"
+					? "剧本确认"
+					: data.mode === "graph"
+						? "更新世界树"
+						: "更新词条";
 	const firstPath = data.kind === "draft" && !("error" in data) ? data.sections[0]?.path : undefined;
 	return (
 		<motion.div

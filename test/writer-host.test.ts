@@ -3,8 +3,12 @@
  * 状态/中止/释放,不碰真实 provider(与 session-host.test.ts 同模式,fake 边界
  * 用仓库既有的 as never 约定)。
  */
-import { describe, expect, it, vi } from "vitest";
-import { WriterHost } from "../src/web/writer-host.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { appendStageEntry, makeStageEntry } from "../src/stage/stage-store.ts";
+import { latestStageTranscript, WriterHost } from "../src/web/writer-host.ts";
 
 interface FakeHostLike {
 	subscribe(l: (e: unknown) => void): () => void;
@@ -82,5 +86,64 @@ describe("WriterHost", () => {
 		expect(fake.dispose).toHaveBeenCalledTimes(2);
 		const st = await host.state("fog-harbor");
 		expect(st.exists).toBe(false);
+	});
+});
+
+describe("chatAndWait（收幕委托：发送 + 等待回合完成）", () => {
+	it("回合完成 → true（sendMessage 完成即回合完成，不再订阅 settle）", async () => {
+		const fake = makeFakeHost();
+		const host = new WriterHost({ createHost: async () => fake as never });
+		const ok = await host.chatAndWait("fog-harbor", "【舞台转录】…请成文", "ch01.jsonl", 2000);
+		expect(ok).toBe(true);
+		expect(fake.sendMessage).toHaveBeenCalledWith("【舞台转录】…请成文");
+	});
+	it("回合超时 → false（不抛错，调用方优雅降级）", async () => {
+		const fake = makeFakeHost();
+		fake.sendMessage.mockImplementation(() => new Promise(() => {})); // 永不完成
+		const host = new WriterHost({ createHost: async () => fake as never });
+		const ok = await host.chatAndWait("fog-harbor", "成文", null, 200);
+		expect(ok).toBe(false);
+	});
+	it("模型错误 → throw 上抛（编排器 catch 后 emit 整理失败）", async () => {
+		const fake = makeFakeHost();
+		fake.sendMessage.mockRejectedValue(new Error("模型调用失败"));
+		const host = new WriterHost({ createHost: async () => fake as never });
+		await expect(host.chatAndWait("fog-harbor", "成文", null, 2000)).rejects.toThrow("模型调用失败");
+	});
+	it("chapterFile 声明后记入 currentChapter（与 chat 同款）", async () => {
+		const fake = makeFakeHost();
+		const host = new WriterHost({ createHost: async () => fake as never });
+		await host.chatAndWait("fog-harbor", "成文", "ch03.jsonl", 2000);
+		const st = await host.state("fog-harbor");
+		expect(st.chapterFile).toBe("ch03.jsonl");
+	});
+});
+
+describe("latestStageTranscript（最近一幕舞台转录注入，§16 编剧统一方案）", () => {
+	let tmp: string;
+	beforeEach(() => {
+		tmp = mkdtempSync(join(tmpdir(), "piw-transcript-"));
+	});
+	afterEach(() => {
+		rmSync(tmp, { recursive: true, force: true });
+	});
+	it("无舞台数据 → null", async () => {
+		expect(await latestStageTranscript(tmp)).toBeNull();
+	});
+	it("取 stage/ 下最新场景：统计头 + 格式化台词；旧场景不入选", async () => {
+		await appendStageEntry(tmp, makeStageEntry("旧场景", 1, "a1", "李四", "旧台词"));
+		await new Promise((r) => setTimeout(r, 20)); // 拉开 mtime,保证「新场景」更新
+		await appendStageEntry(tmp, makeStageEntry("新场景", 1, "a2", "王五", "新台词"));
+		const text = await latestStageTranscript(tmp);
+		expect(text).toContain("【场景 新场景");
+		expect(text).toContain("对话 1 条");
+		expect(text).toContain("王五: 新台词");
+		expect(text).not.toContain("旧台词");
+	});
+	it("长转录截断保护", async () => {
+		await appendStageEntry(tmp, makeStageEntry("长场景", 1, "a1", "李四", "长".repeat(12000)));
+		const text = await latestStageTranscript(tmp);
+		expect(text!.length).toBeLessThanOrEqual(8500);
+		expect(text).toContain("(截断)");
 	});
 });
