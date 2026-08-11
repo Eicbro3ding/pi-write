@@ -1,0 +1,67 @@
+# 多平台 Release 发布:推送 v* 标签时,在 GitHub 原生 runner 上分别构建
+# Windows NSIS / macOS dmg / Linux AppImage,并上传到对应 GitHub Release。
+# 也可手动触发(workflow_dispatch):只构建产物,从 Actions 页面下载验证。
+name: release
+
+on:
+  # 手动触发(不打 tag 先验证 CI 是否跑通)
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            args: --win nsis
+          - os: macos-latest
+            args: --mac dmg
+          - os: ubuntu-latest
+            args: --linux appimage
+    runs-on: ${{ matrix.os }}
+    env:
+      # 无签名证书:跳过自动代码签名(macOS/Windows 均不签名)
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # node 22(npm 10.9.x)规避 arborist edgesOut 崩溃,与本地一致
+          node-version: 22
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 构建服务端/主进程/前端
+        # build:web = esbuild 服务端单文件 + Electron 主进程/preload + vite 前端
+        run: npm run build:web
+
+      - name: 打包安装包
+        run: npx electron-builder ${{ matrix.args }} --publish never
+
+      - name: 上传 workflow artifact(手动触发时从 Actions 页面下载)
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-${{ matrix.os }}
+          path: |
+            release/electron/pi-writer-web-*.*
+          if-no-files-found: error
+
+      - name: 上传 GitHub Release(仅 v* 标签触发)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          body: 第一个版本 0.0.1
+          files: |
+            release/electron/pi-writer-web-*.exe
+            release/electron/pi-writer-web-*.dmg
+            release/electron/pi-writer-web-*.AppImage
+          overwrite_files: true
+          fail_on_unmatched_files: false

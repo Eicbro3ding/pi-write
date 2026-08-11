@@ -31,5 +31,3 @@ docs/*
 **/auth.json
 **/models.json
 .VSCodeCounter/
-
-.github/

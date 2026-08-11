@@ -27,6 +27,11 @@ win:
   target: nsis
   # 项目图标(1254×1254 PNG,electron-builder 自动转 .ico 用于安装包/exe)
   icon: ico.png
+mac:
+  target: dmg
+  # 同款 PNG 自动转 .icns 用于 dmg/app
+  icon: ico.png
+  category: public.app-category.productivity
 nsis:
   # 向导式安装:允许用户选择安装目录(默认 %LOCALAPPDATA%\Programs\pi-writer,
   # per-user 安装无需管理员权限);一键模式(oneClick)无路径选择
