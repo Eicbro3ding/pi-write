@@ -29,7 +29,8 @@ import {
 	setCurrentChapter,
 	updateChapter,
 } from "../book-manager.ts";
-import { getBookDir, getWriterDir } from "../config.ts";
+import { getAgentDir, getBookDir, getWriterDir } from "../config.ts";
+import { atomicWriteFile } from "../atomic-write.ts";
 import { MAX_ZIP_BYTES, exportBookZip, readImportZip, type BookZipImport } from "./book-zip.ts";
 import { ensureWorld, newId, readWorldEditRecord, saveWorld, WorldValidationError, type WorldData } from "../world-data.ts";
 import { buildChapterContext, DEFAULT_CONTEXT_BUDGET, trimMemory } from "../world-context.ts";
@@ -446,6 +447,7 @@ export class WriterServer {
 			{ method: "POST", segments: ["abort"], handler: (ctx) => this.handleAbort(ctx) },
 			// models / providers
 			{ method: "GET", segments: ["models"], handler: (ctx) => this.handleGetModels(ctx) },
+			{ method: "POST", segments: ["models", "custom"], handler: (ctx) => this.handlePostModelCustom(ctx) },
 			{ method: "POST", segments: ["model"], handler: (ctx) => this.handlePostModel(ctx) },
 			{ method: "POST", segments: ["thinking"], handler: (ctx) => this.handlePostThinking(ctx) },
 			{ method: "GET", segments: ["providers"], handler: (ctx) => this.handleGetProviders(ctx) },
@@ -1087,6 +1089,57 @@ export class WriterServer {
 		const models = await runtime.session.modelRuntime.getAvailable();
 		const state = runtime.session.state;
 		this.send(ctx.res, 200, { models, current: state.model, thinking: state.thinkingLevel });
+	}
+
+	/**
+	 * POST /api/models/custom {provider, model, baseUrl, apiKey?, contextWindow?, maxTokens?}:
+	 * 把自定义 provider(openai-completions 协议,如本地 mock LLM)写进 models.json 并热重载。
+	 * models.json 是启动时一次性加载——写盘后重建运行时(切书同款机制)新 provider 才可见。
+	 */
+	private async handlePostModelCustom(ctx: RouteContext): Promise<void> {
+		const body = (await readJsonBody(ctx.req)) as Record<string, unknown>;
+		const providerId = requireString(body, "provider");
+		const modelId = requireString(body, "model");
+		const baseUrl = requireString(body, "baseUrl");
+		if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(providerId)) {
+			throw new HttpError(400, "bad_request", "provider id 只允许小写字母/数字/连字符(如 mock)");
+		}
+		if (!/^[a-z0-9][a-z0-9-_.]{0,127}$/.test(modelId)) {
+			throw new HttpError(400, "bad_request", "模型 id 只允许字母/数字/连字符/点/下划线(如 mock-1)");
+		}
+		if (!/^https?:\/\//.test(baseUrl)) {
+			throw new HttpError(400, "bad_request", "baseUrl 必须是 http(s) 地址(如 http://127.0.0.1:8787/v1)");
+		}
+		const modelsPath = join(getAgentDir(), "models.json");
+		let cfg: { providers?: Record<string, unknown> } = {};
+		try {
+			cfg = JSON.parse(await readFile(modelsPath, "utf8")) as { providers?: Record<string, unknown> };
+		} catch {
+			/* 不存在/损坏:从空开始 */
+		}
+		const provider = {
+			api: "openai-completions",
+			baseUrl,
+			// vendor 把无 apiKey 的 provider 视为未配置并跳过列表——本地 mock 等
+			// 无需鉴权的服务也须有占位 key(实测 provider-composer 跳过无 key provider)
+			apiKey: typeof body.apiKey === "string" && body.apiKey.length > 0 ? body.apiKey : "sk-custom",
+			models: [
+				{
+					id: modelId,
+					name: modelId,
+					reasoning: false,
+					contextWindow: Number(body.contextWindow ?? 32000),
+					maxTokens: Number(body.maxTokens ?? 4096),
+				},
+			],
+		};
+		cfg.providers = { ...(cfg.providers ?? {}), [providerId]: provider };
+		await atomicWriteFile(modelsPath, `${JSON.stringify(cfg, null, 2)}\n`);
+		// 热重载:ModelRuntime.refresh 重读 models.json 并重建 provider(本地配置,
+		// 不触发网络目录刷新;比 reloadRuntime 轻量,不重建整个会话运行时)
+		const runtime = this.options.sessionHost.getRuntime();
+		await runtime.session.modelRuntime.refresh({ allowNetwork: false });
+		this.send(ctx.res, 200, { ok: true, provider: providerId, model: `${providerId}/${modelId}` });
 	}
 
 	/** POST /api/model {model}:切换模型。 */
