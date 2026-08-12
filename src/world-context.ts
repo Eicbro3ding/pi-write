@@ -1,4 +1,4 @@
-import type { WorldData, WorldEntry } from "./world-data.ts";
+import type { WorldData, WorldEntry, ConstraintTarget } from "./world-data.ts";
 import { isCjkChar } from "./cjk.ts";
 
 /** 背景包默认 token 预算。 */
@@ -9,6 +9,14 @@ export const DEFAULT_MEMORY_BUDGET = 1500;
 
 /** 关联激活默认深度(0 = 关闭,与旧行为一致;>0 启用多源 BFS 展开)。 */
 export const DEFAULT_ACTIVATION_DEPTH = 0;
+
+/** Notice 备忘录注入上限(只注入未完成项,防上下文膨胀)。 */
+export const NOTICE_INJECT_LIMIT = 10;
+
+/** 约束 target 是否匹配某角色(缺省 undefined = all,旧数据行为不变)。 */
+export function constraintTargetMatches(target: ConstraintTarget | undefined, role: "main" | "director" | "writer"): boolean {
+	return target === undefined || target === "all" || target === role;
+}
 
 /** 已完成里程碑(发展线 done 节点)注入上限——标题列表防上下文膨胀(借鉴
  *  AI-Novel-Writing-Assistant 的 completedMilestones 守卫:已完成目标注入
@@ -203,7 +211,8 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 	const result: ChapterContextResult = { text: "", activatedIds: [], trimmedCount: 0, included: { constraints: [], hasSample: false, hasSummary: false, hasNotice: false, hasCompletedMilestones: false, storylineNode: null } };
 
 	// 常驻组:启用的约束 + 采样 + 简要世界观(裁剪顺序:先裁采样,仍超再裁概述,约束保留)
-	const enabledConstraints = data.constraints.filter((c) => c.enabled);
+	// 约束按 target 过滤:主写作会话只收 target ∈ {main, all}(导演/编剧各自收自己的,见注入点)
+	const enabledConstraints = data.constraints.filter((c) => c.enabled && constraintTargetMatches(c.target, "main"));
 	let resident = "";
 	if (enabledConstraints.length > 0) {
 		resident += "【写作约束】\n";
@@ -257,11 +266,12 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 		used += tokens;
 	}
 
-	// Notice(常驻,不可裁)+ 发展线:当前目标不可裁;已完成列表可裁——预算不足时
-	// 最后丢弃(裁剪顺序:采样 → 概述 → 已完成列表,与 AI-Novel dropOrder 同语义)
+	// Notice(全局备忘录·待办清单):只注入未完成项,上限 NOTICE_INJECT_LIMIT——完成
+	// 的条目留在 UI 板子可见,不进上下文(2026-08-12 回到初衷)。常驻不可裁。
 	let tail = "";
-	if (data.notice.enabled && data.notice.text.length > 0) {
-		tail += `【Notice】\n${data.notice.text}\n`;
+	const noticeItems = data.notice.items.filter((i) => !i.done).slice(0, NOTICE_INJECT_LIMIT);
+	if (data.notice.enabled && noticeItems.length > 0) {
+		tail += `【Notice·备忘录】\n${noticeItems.map((i) => `- [ ] ${i.text}`).join("\n")}\n`;
 		result.included.hasNotice = true;
 	}
 	const view = buildStorylineView(data);

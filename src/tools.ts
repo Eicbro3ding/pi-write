@@ -4,7 +4,7 @@ import { join, relative, resolve, sep } from "node:path";
 import { defineTool, type ToolDefinition } from "../vendor/pi-coding-agent/src/index.ts";
 import { Type } from "typebox";
 import { cjkCount } from "./cjk.ts";
-import { ensureWorld, newId, saveWorld, validateWorld, writeWorldEditRecord, WorldValidationError, type EntryStatus, type EntryType, type RelationArrow, type StoryNodeStatus, type WorldData, type WorldEntry } from "./world-data.ts";
+import { ensureWorld, newId, saveWorld, validateWorld, writeWorldEditRecord, WorldValidationError, type ConstraintTarget, type EntryStatus, type EntryType, type RelationArrow, type StoryNodeStatus, type WorldData, type WorldEntry } from "./world-data.ts";
 import { pathWithinRoot } from "./tool-guard.ts";
 import { withWorldLock } from "./world-lock.ts";
 
@@ -264,10 +264,14 @@ export type WorldUpdateOp =
 	| { op: "append_timeline"; chapter?: string; text: string }
 	| { op: "update_timeline"; id: string; chapter?: string; text?: string }
 	| { op: "delete_timeline"; id: string }
-	| { op: "update_notice"; text: string; enabled?: boolean }
+	| { op: "update_notice"; enabled?: boolean }
+	| { op: "notice_append"; text: string }
+	| { op: "notice_update"; id: string; text?: string }
+	| { op: "notice_set_done"; id: string; done: boolean }
+	| { op: "notice_delete"; id: string }
 	| { op: "advance_storyline"; id: string; status: StoryNodeStatus; next?: string | null }
 	| { op: "upsert_storyline_node"; id?: string; title: string; status?: StoryNodeStatus; goal?: string; next?: string | null }
-	| { op: "upsert_constraint"; id?: string; name: string; text: string; enabled?: boolean }
+	| { op: "upsert_constraint"; id?: string; name: string; text: string; enabled?: boolean; target?: ConstraintTarget }
 	| { op: "delete_constraint"; id: string }
 	| { op: "update_style_sample"; text: string; source?: string }
 	| { op: "set_world_summary"; text: string }
@@ -419,10 +423,29 @@ export function applyWorldUpdate(data: WorldData, update: WorldUpdateOp): WorldD
 			break;
 		}
 		case "update_notice":
-			next.notice.text = update.text;
-			// enabled 可选:不传保持现状(之前只能改 text,开关只能在 web 设置页切)
+			// 开关(备忘录整体注入开关;待办条目走 notice_* 系列)
 			if (update.enabled !== undefined) next.notice.enabled = update.enabled;
-			next.notice.updatedAt = now;
+			break;
+		case "notice_append":
+			// 追加一条未完成待办(备忘录)
+			next.notice.items.push({ id: newId("ntc"), text: update.text, done: false, updatedAt: now });
+			break;
+		case "notice_update": {
+			const it = next.notice.items.find((x) => x.id === update.id);
+			if (!it) throw new WorldValidationError(`Notice 待办不存在: ${update.id}`);
+			if (update.text !== undefined) it.text = update.text;
+			it.updatedAt = now;
+			break;
+		}
+		case "notice_set_done": {
+			const it = next.notice.items.find((x) => x.id === update.id);
+			if (!it) throw new WorldValidationError(`Notice 待办不存在: ${update.id}`);
+			it.done = update.done;
+			it.updatedAt = now;
+			break;
+		}
+		case "notice_delete":
+			next.notice.items = next.notice.items.filter((x) => x.id !== update.id);
 			break;
 		case "advance_storyline": {
 			const n = next.storyline.nodes.find((x) => x.id === update.id);
@@ -459,8 +482,9 @@ export function applyWorldUpdate(data: WorldData, update: WorldUpdateOp): WorldD
 				c.name = update.name;
 				c.text = update.text;
 				if (update.enabled !== undefined) c.enabled = update.enabled;
+				if (update.target !== undefined) c.target = update.target;
 			} else {
-				next.constraints.push({ id: newId("cst"), name: update.name, text: update.text, enabled: update.enabled ?? true });
+				next.constraints.push({ id: newId("cst"), name: update.name, text: update.text, enabled: update.enabled ?? true, ...(update.target !== undefined ? { target: update.target } : {}) });
 			}
 			break;
 		}
@@ -584,10 +608,14 @@ export const worldUpdateTool: ToolDefinition = defineTool({
 			Type.Object({ op: Type.Literal("append_timeline"), chapter: Type.Optional(Type.String()), text: Type.String() }),
 			Type.Object({ op: Type.Literal("update_timeline"), id: Type.String(), chapter: Type.Optional(Type.String()), text: Type.Optional(Type.String()) }),
 			Type.Object({ op: Type.Literal("delete_timeline"), id: Type.String() }),
-			Type.Object({ op: Type.Literal("update_notice"), text: Type.String(), enabled: Type.Optional(Type.Boolean()) }),
+			Type.Object({ op: Type.Literal("update_notice"), enabled: Type.Optional(Type.Boolean()) }),
+			Type.Object({ op: Type.Literal("notice_append"), text: Type.String() }),
+			Type.Object({ op: Type.Literal("notice_update"), id: Type.String(), text: Type.Optional(Type.String()) }),
+			Type.Object({ op: Type.Literal("notice_set_done"), id: Type.String(), done: Type.Boolean() }),
+			Type.Object({ op: Type.Literal("notice_delete"), id: Type.String() }),
 			Type.Object({ op: Type.Literal("advance_storyline"), id: Type.String(), status: Type.String(), next: Type.Optional(Type.Union([Type.String(), Type.Null()])) }),
 			Type.Object({ op: Type.Literal("upsert_storyline_node"), id: Type.Optional(Type.String()), title: Type.String(), status: Type.Optional(Type.String()), goal: Type.Optional(Type.String()), next: Type.Optional(Type.Union([Type.String(), Type.Null()])) }),
-			Type.Object({ op: Type.Literal("upsert_constraint"), id: Type.Optional(Type.String()), name: Type.String(), text: Type.String(), enabled: Type.Optional(Type.Boolean()) }),
+			Type.Object({ op: Type.Literal("upsert_constraint"), id: Type.Optional(Type.String()), name: Type.String(), text: Type.String(), enabled: Type.Optional(Type.Boolean()), target: Type.Optional(Type.Union([Type.Literal("main"), Type.Literal("director"), Type.Literal("writer"), Type.Literal("all")])) }),
 			Type.Object({ op: Type.Literal("delete_constraint"), id: Type.String() }),
 			Type.Object({ op: Type.Literal("update_style_sample"), text: Type.String(), source: Type.Optional(Type.String()) }),
 			Type.Object({ op: Type.Literal("set_world_summary"), text: Type.String() }),

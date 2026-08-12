@@ -33,7 +33,7 @@ import {
 	SessionManager,
 } from "../../vendor/pi-coding-agent/src/index.ts";
 import { ensureWorld } from "../world-data.ts";
-import { buildStorylineView } from "../world-context.ts";
+import { buildStorylineView, constraintTargetMatches, NOTICE_INJECT_LIMIT } from "../world-context.ts";
 import { loadPromptText } from "../prompts.ts";
 import { worldFindTool } from "../tools.ts";
 import { SessionHost } from "./session-host.ts";
@@ -220,6 +220,16 @@ export class WriterHost {
 				if (view.currentTitle) lines.push(`当前位置: ${view.currentTitle}`);
 				if (view.completed.length > 0) lines.push(`已完成(禁止重复追求/推进): ${view.completed.join("、")}`);
 				if (lines.length > 0) blocks.push(`【发展线】\n${lines.join("\n")}`);
+			}
+			// 全局备忘录(Notice 待办,未完成项)——编剧要遵守/续写埋伏笔(2026-08-12 回到初衷)
+			const noticeOpen = world.notice.items.filter((i) => !i.done).slice(0, NOTICE_INJECT_LIMIT);
+			if (world.notice.enabled && noticeOpen.length > 0) {
+				blocks.push(`【Notice·备忘录】\n${noticeOpen.map((i) => `- [ ] ${i.text}`).join("\n")}`);
+			}
+			// 写作约束(按 target 过滤:编剧收 writer/all)——酒馆式规则包(2026-08-12)
+			const editorConstraints = world.constraints.filter((c) => c.enabled && constraintTargetMatches(c.target, "writer"));
+			if (editorConstraints.length > 0) {
+				blocks.push(`【写作约束】\n${editorConstraints.map((c) => `- ${c.name}: ${c.text}`).join("\n")}`);
 			}
 		} catch {
 			/* 世界书缺失:跳过注入,不阻断对话 */
