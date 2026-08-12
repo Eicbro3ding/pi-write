@@ -22,7 +22,7 @@
 	"scripts": {
 		"clean": "shx rm -rf dist",
 		"build": "tsgo -p tsconfig.build.json && shx chmod +x dist/cli.js",
-		"bundle": "node scripts/check-bun.mjs && bun build src/cli.ts --compile --outfile release/pi-writer.exe && shx rm -rf release/skills release/theme && shx cp -r skills release/skills && shx mkdir -p release/theme && shx cp vendor/pi-coding-agent/src/modes/interactive/theme/*.json release/theme/ && shx cp package.json README.md release/",
+		"bundle": "node scripts/check-bun.mjs && bun build src/cli.ts --compile --outfile release/pi-writer.exe && shx rm -rf release/skills release/theme release/prompts && shx cp -r skills release/skills && shx cp -r prompts release/prompts && shx mkdir -p release/theme && shx cp vendor/pi-coding-agent/src/modes/interactive/theme/*.json release/theme/ && shx cp package.json README.md release/",
 		"test": "vitest --run",
 		"prepublishOnly": "npm run clean && npm run build",
 		"build:web": "node scripts/web-build.mjs",
