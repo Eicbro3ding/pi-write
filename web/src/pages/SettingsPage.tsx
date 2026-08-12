@@ -6,6 +6,7 @@ import { THEMES, type ThemeId } from "../themes.ts";
 import { applyTheme, currentTheme } from "../theme.ts";
 import { ProviderList } from "../components/ProviderList.tsx";
 import { McpServerList } from "../components/McpServerList.tsx";
+import { IconBook, IconDoc, IconGear, IconGlobe } from "../components/Icons.tsx";
 
 /** 思考级别选项(与后端 session-host 的 ThinkingLevel 对齐)。 */
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -15,6 +16,15 @@ interface ModelInfo {
 	id: string;
 	provider: string;
 }
+
+/** 设置分类(左侧导航):模型 / 界面 / 世界书 / 集成。 */
+const SETTING_CATS = [
+	{ id: "model", label: "模型", icon: IconGear },
+	{ id: "ui", label: "界面", icon: IconDoc },
+	{ id: "world", label: "世界书", icon: IconBook },
+	{ id: "integrations", label: "集成", icon: IconGlobe },
+] as const;
+type SettingCat = (typeof SETTING_CATS)[number]["id"];
 
 /**
  * 归一模型引用为 "provider/id"(与服务端 resolveCliModel 的 canonical 格式一致)。
@@ -52,8 +62,8 @@ function extractModels(models: readonly unknown[]): ModelInfo[] {
 }
 
 /**
- * 设置页:模型选择、思考级别、世界书注入开关、模型提供商(key 管理)、MCP 服务器。
- * 数据源为 GET /api/models、GET /api/providers 与 GET /api/world;
+ * 设置页(2026-08-12 分类导航布局):左侧分类栏(模型/界面/世界书/集成)+
+ * 右侧分组设置项。数据源为 GET /api/models、GET /api/providers 与 GET /api/world;
  * 切换模型/思考级别/认证后重新拉取;注入开关读写 world.json(无会话 404 → 分组提示)。
  */
 export function SettingsPage({
@@ -76,6 +86,8 @@ export function SettingsPage({
 	autoConfirmEdits: boolean;
 	onAutoConfirmEditsChange: (enabled: boolean) => void;
 }) {
+	/** 当前分类(左侧导航激活项;默认「模型」)。 */
+	const [cat, setCat] = useState<SettingCat>("model");
 	/** null = 加载中;[] = 已加载但为空(或加载失败)。 */
 	const [models, setModels] = useState<ModelInfo[] | null>(null);
 	const [current, setCurrent] = useState<string | null>(null);
@@ -128,14 +140,14 @@ export function SettingsPage({
 	// 世界书注入:挂载时读取 world.json(无会话 404 → 分组提示未打开书,非 404 走分组错误 + 重试)
 	useEffect(() => {
 		let cancelled = false;
-	void client
-		.getWorld()
-		.then((r) => {
-			if (cancelled) return;
-			setWorld(r.world);
-			setNoBook(false);
-			setWorldErr(null);
-		})
+		void client
+			.getWorld()
+			.then((r) => {
+				if (cancelled) return;
+				setWorld(r.world);
+				setNoBook(false);
+				setWorldErr(null);
+			})
 			.catch((e) => {
 				if (cancelled) return;
 				setWorld(null);
@@ -265,270 +277,307 @@ export function SettingsPage({
 
 	return (
 		<div className="settings">
-			<div className="settings-inner">
-				{models === null && !loadErr && <div className="notice">设置加载中…</div>}
-				{loadErr && (
-					<div className="notice err">
-						{loadErr}
+			{/* 左侧分类导航(窄屏横排胶囊) */}
+			<aside className="settings-side">
+				<div className="settings-side-title">设置</div>
+				<nav className="settings-nav" role="tablist" aria-label="设置分类">
+					{SETTING_CATS.map((c) => (
 						<button
+							key={c.id}
 							type="button"
-							className="btn-ghost"
-							onClick={() => {
-								// 重试:回到加载态;失败时与挂载 effect 相同方式呈现错误
-								setLoadErr(null);
-								setModels(null);
-								void load().catch((e) => {
-									setModels([]);
-									setLoadErr(`设置加载失败: ${friendlyError(e)}`);
-								});
-							}}
+							role="tab"
+							aria-selected={cat === c.id}
+							className={cat === c.id ? "st-cat active" : "st-cat"}
+							onClick={() => setCat(c.id)}
 						>
-							重试
-						</button>
-					</div>
-				)}
-				{actErr && <div className="notice err">{actErr}</div>}
-
-				<div className="s-head">主题</div>
-				<div className="theme-cards">
-					{THEMES.map((t) => (
-						<button
-							key={t.id}
-							className={`theme-card${theme === t.id ? " active" : ""}`}
-							onClick={() => {
-								setTheme(t.id);
-								applyTheme(t.id);
-							}}
-						>
-							<span className="theme-swatch">
-								{t.swatch.map((c) => (
-									<i key={c} style={{ background: c }} />
-								))}
-							</span>
-							<span className="theme-label">{t.label}</span>
-							<span className="theme-desc">{t.desc}</span>
+							<c.icon size={15} />
+							<span>{c.label}</span>
 						</button>
 					))}
-				</div>
-
-				<div className="s-head">界面偏好</div>
-				<div className="s-row">
-					<span className="s-key">简化输出</span>
-					<span className="s-val">
-						<label className="w-switch">
-							<input
-								type="checkbox"
-								checked={simplifiedTools}
-								onChange={(e) => onSimplifiedToolsChange(e.target.checked)}
-							/>
-							<span>{simplifiedTools ? "已开启" : "已关闭"}</span>
-						</label>
-					</span>
-				</div>
-				<div className="s-note">开启后对话中不显示工具调用卡片,以「正在阅读 / 正在编辑」等动态提示代替(默认开启)。</div>
-
-				<div className="s-row">
-					<span className="s-key">自动展开思考</span>
-					<span className="s-val">
-						<label className="w-switch">
-							<input
-								type="checkbox"
-								checked={autoExpandThinking}
-								onChange={(e) => onAutoExpandThinkingChange(e.target.checked)}
-							/>
-							<span>{autoExpandThinking ? "已开启" : "已关闭"}</span>
-						</label>
-					</span>
-				</div>
-				<div className="s-note">开启后思考块默认展开,无需逐条点击;关闭后回到手动展开(默认开启)。</div>
-
-				<div className="s-row">
-					<span className="s-key">编辑免确认</span>
-					<span className="s-val">
-						<label className="w-switch">
-							<input
-								type="checkbox"
-								checked={autoConfirmEdits}
-								onChange={(e) => onAutoConfirmEditsChange(e.target.checked)}
-							/>
-							<span>{autoConfirmEdits ? "已开启" : "已关闭"}</span>
-						</label>
-					</span>
-				</div>
-				<div className="s-note">开启后编剧(编辑 agent)的修改落盘即生效,不再弹「待确认」卡;关闭则每次编辑需手动确认/回退(默认关闭)。</div>
-
-				{notice && <div className="notice">{notice}</div>}
-
-				<div className="s-head">模型</div>
-				<div className="s-row">
-					<span className="s-key">当前提供商</span>
-					<span className="s-val">{current ? current.split("/")[0] : "未设置"}</span>
-				</div>
-				<div className="s-row">
-					<span className="s-key">当前模型</span>
-					<span className="s-val">{current ?? "未设置"}</span>
-				</div>
-				<div className="s-row">
-					<span className="s-key">切换模型</span>
-					<select
-						className="s-select"
-						value={current ?? ""}
-						onChange={(e) => {
-							setNotice(null);
-							void changeModel(e.target.value);
-						}}
-						disabled={busy || models === null}
-						title="按 provider 分组选择模型"
-					>
-						<option value="" disabled>
-							{models === null ? "加载中…" : "请选择模型"}
-						</option>
-						{groups.map(([provider, list]) => (
-							<optgroup key={provider} label={provider}>
-								{list.map((m) => (
-									<option key={`${m.provider}/${m.id}`} value={`${m.provider}/${m.id}`}>
-										{m.provider} · {m.id}
-									</option>
-								))}
-							</optgroup>
-						))}
-					</select>
-					{busy && <span className="s-busy">设置中…</span>}
-				</div>
-
-				<div className="s-head">思考级别</div>
-				<div className="s-row">
-					<span className="s-key">思考级别</span>
-					<select
-						className="s-select"
-						value={thinking ?? ""}
-						onChange={(e) => {
-							setNotice(null);
-							void changeThinking(e.target.value);
-						}}
-						disabled={busy || thinking === null}
-						title="思考强度(off 关闭;max 最强)"
-					>
-						<option value="" disabled>
-							{thinking === null ? "未设置" : "请选择"}
-						</option>
-						{THINKING_LEVELS.map((l) => (
-							<option key={l} value={l}>
-								{l}
-							</option>
-						))}
-					</select>
-						{busy && <span className="s-busy">设置中…</span>}
-					</div>
-
-					<div className="s-head">世界书注入</div>
-					{worldErr ? (
+				</nav>
+			</aside>
+			<main className="settings-main">
+				<div className="settings-inner">
+					{/* 全局提示(加载/操作错误、成功通知):所有分类顶部可见 */}
+					{models === null && !loadErr && <div className="notice">设置加载中…</div>}
+					{loadErr && (
 						<div className="notice err">
-							{worldErr}
-							<button type="button" className="btn-ghost" onClick={() => setWorldReloadKey((k) => k + 1)}>
+							{loadErr}
+							<button
+								type="button"
+								className="btn-ghost"
+								onClick={() => {
+									// 重试:回到加载态;失败时与挂载 effect 相同方式呈现错误
+									setLoadErr(null);
+									setModels(null);
+									void load().catch((e) => {
+										setModels([]);
+										setLoadErr(`设置加载失败: ${friendlyError(e)}`);
+									});
+								}}
+							>
 								重试
 							</button>
 						</div>
-					) : noBook ? (
-						<div className="s-note">
-							未打开书,无法读取世界书注入设置。请先在写作页打开一本书,再到此页切换开关。
-						</div>
-					) : world === null ? (
-						<div className="s-note">世界书注入设置加载中…</div>
-					) : (
+					)}
+					{actErr && <div className="notice err">{actErr}</div>}
+					{notice && <div className="notice">{notice}</div>}
+
+					{cat === "model" && (
 						<>
-							<label className="s-row w-switch">
+							<div className="s-head">当前模型</div>
+							<div className="s-row">
+								<span className="s-key">当前提供商</span>
+								<span className="s-val">{current ? current.split("/")[0] : "未设置"}</span>
+							</div>
+							<div className="s-row">
+								<span className="s-key">当前模型</span>
+								<span className="s-val">{current ?? "未设置"}</span>
+							</div>
+							<div className="s-row">
+								<span className="s-key">切换模型</span>
+								<select
+									className="s-select"
+									value={current ?? ""}
+									onChange={(e) => {
+										setNotice(null);
+										void changeModel(e.target.value);
+									}}
+									disabled={busy || models === null}
+									title="按 provider 分组选择模型"
+								>
+									<option value="" disabled>
+										{models === null ? "加载中…" : "请选择模型"}
+									</option>
+									{groups.map(([provider, list]) => (
+										<optgroup key={provider} label={provider}>
+											{list.map((m) => (
+												<option key={`${m.provider}/${m.id}`} value={`${m.provider}/${m.id}`}>
+													{m.provider} · {m.id}
+												</option>
+											))}
+										</optgroup>
+									))}
+								</select>
+								{busy && <span className="s-busy">设置中…</span>}
+							</div>
+
+							<div className="s-head">思考级别</div>
+							<div className="s-row">
+								<span className="s-key">思考级别</span>
+								<select
+									className="s-select"
+									value={thinking ?? ""}
+									onChange={(e) => {
+										setNotice(null);
+										void changeThinking(e.target.value);
+									}}
+									disabled={busy || thinking === null}
+									title="思考强度(off 关闭;max 最强)"
+								>
+									<option value="" disabled>
+										{thinking === null ? "未设置" : "请选择"}
+									</option>
+									{THINKING_LEVELS.map((l) => (
+										<option key={l} value={l}>
+											{l}
+										</option>
+									))}
+								</select>
+								{busy && <span className="s-busy">设置中…</span>}
+							</div>
+
+							<div className="s-head">自定义模型</div>
+							<div className="s-row">
+								<span className="s-key">provider id</span>
 								<input
-									type="checkbox"
-									checked={world.notice.enabled}
-									disabled={worldBusy}
-									onChange={(e) => void toggleInjection("notice", e.target.checked)}
+									className="s-select"
+									style={{ marginLeft: "auto" }}
+									placeholder="如 mock"
+									value={customProvider}
+									disabled={customBusy}
+									onChange={(e) => setCustomProvider(e.target.value)}
 								/>
-								<span className="s-key">Notice 注入</span>
-								<span className="s-val muted">背景包包含当前剧情指引</span>
-								{worldBusy && <span className="s-busy">设置中…</span>}
-							</label>
-							<label className="s-row w-switch">
+							</div>
+							<div className="s-row">
+								<span className="s-key">模型 id</span>
 								<input
-									type="checkbox"
-									checked={world.storyline.enabled}
-									disabled={worldBusy}
-									onChange={(e) => void toggleInjection("storyline", e.target.checked)}
+									className="s-select"
+									style={{ marginLeft: "auto" }}
+									placeholder="如 mock-1"
+									value={customModel}
+									disabled={customBusy}
+									onChange={(e) => setCustomModel(e.target.value)}
 								/>
-								<span className="s-key">发展线注入</span>
-								<span className="s-val muted">背景包包含剧情进度与下一步</span>
-								{worldBusy && <span className="s-busy">设置中…</span>}
-							</label>
+							</div>
+							<div className="s-row">
+								<span className="s-key">baseUrl</span>
+								<input
+									className="s-select"
+									style={{ marginLeft: "auto" }}
+									placeholder="http://127.0.0.1:8787/v1"
+									value={customBaseUrl}
+									disabled={customBusy}
+									onChange={(e) => setCustomBaseUrl(e.target.value)}
+								/>
+							</div>
+							<div className="s-row">
+								<span className="s-key">apiKey(可选)</span>
+								<input
+									className="s-select"
+									style={{ marginLeft: "auto" }}
+									placeholder="留空则无鉴权"
+									value={customApiKey}
+									disabled={customBusy}
+									onChange={(e) => setCustomApiKey(e.target.value)}
+								/>
+							</div>
+							<div className="s-note">
+								添加 OpenAI 兼容的自定义模型(如本地 mock LLM 服务器),保存后自动切换。模型引用为 provider id / 模型 id。
+							</div>
+							<div className="s-row">
+								<button className="btn-ghost" type="button" disabled={customBusy} onClick={() => void addCustomModel()}>
+									{customBusy ? "添加中…" : "添加并切换"}
+								</button>
+								{customErr && <span className="s-busy" style={{ color: "#e08a8a" }}>{customErr}</span>}
+							</div>
+
+							<div className="s-head">模型提供商</div>
+							<div className="s-note">
+								为 provider 添加 API key 后其模型即可在「切换模型」中使用;key 存储在 ~/.pi/writer/agent/auth.json。
+							</div>
+							<ProviderList client={client} onAuthChanged={() => void handleAuthChanged()} />
 						</>
 					)}
 
-					<div className="s-head">自定义模型</div>
-				<div className="s-row">
-					<span className="s-key">provider id</span>
-					<input
-						className="s-select"
-						style={{ marginLeft: "auto" }}
-						placeholder="如 mock"
-						value={customProvider}
-						disabled={customBusy}
-						onChange={(e) => setCustomProvider(e.target.value)}
-					/>
-				</div>
-				<div className="s-row">
-					<span className="s-key">模型 id</span>
-					<input
-						className="s-select"
-						style={{ marginLeft: "auto" }}
-						placeholder="如 mock-1"
-						value={customModel}
-						disabled={customBusy}
-						onChange={(e) => setCustomModel(e.target.value)}
-					/>
-				</div>
-				<div className="s-row">
-					<span className="s-key">baseUrl</span>
-					<input
-						className="s-select"
-						style={{ marginLeft: "auto" }}
-						placeholder="http://127.0.0.1:8787/v1"
-						value={customBaseUrl}
-						disabled={customBusy}
-						onChange={(e) => setCustomBaseUrl(e.target.value)}
-					/>
-				</div>
-				<div className="s-row">
-					<span className="s-key">apiKey(可选)</span>
-					<input
-						className="s-select"
-						style={{ marginLeft: "auto" }}
-						placeholder="留空则无鉴权"
-						value={customApiKey}
-						disabled={customBusy}
-						onChange={(e) => setCustomApiKey(e.target.value)}
-					/>
-				</div>
-				<div className="s-note">
-					添加 OpenAI 兼容的自定义模型(如本地 mock LLM 服务器),保存后自动切换。模型引用为 provider id / 模型 id。
-				</div>
-				<div className="s-row">
-					<button className="btn-ghost" type="button" disabled={customBusy} onClick={() => void addCustomModel()}>
-						{customBusy ? "添加中…" : "添加并切换"}
-					</button>
-					{customErr && <span className="s-busy" style={{ color: "#e08a8a" }}>{customErr}</span>}
-				</div>
+					{cat === "ui" && (
+						<>
+							<div className="s-head">主题</div>
+							<div className="theme-cards">
+								{THEMES.map((t) => (
+									<button
+										key={t.id}
+										className={`theme-card${theme === t.id ? " active" : ""}`}
+										onClick={() => {
+											setTheme(t.id);
+											applyTheme(t.id);
+										}}
+									>
+										<span className="theme-swatch">
+											{t.swatch.map((c) => (
+												<i key={c} style={{ background: c }} />
+											))}
+										</span>
+										<span className="theme-label">{t.label}</span>
+										<span className="theme-desc">{t.desc}</span>
+									</button>
+								))}
+							</div>
 
-				<div className="s-head">模型提供商</div>
-				<div className="s-note">
-					为 provider 添加 API key 后其模型即可在「切换模型」中使用;key 存储在 ~/.pi/writer/agent/auth.json。
-				</div>
-				<ProviderList client={client} onAuthChanged={() => void handleAuthChanged()} />
+							<div className="s-head">界面偏好</div>
+							<div className="s-row">
+								<span className="s-key">简化输出</span>
+								<span className="s-val">
+									<label className="w-switch">
+										<input
+											type="checkbox"
+											checked={simplifiedTools}
+											onChange={(e) => onSimplifiedToolsChange(e.target.checked)}
+										/>
+										<span>{simplifiedTools ? "已开启" : "已关闭"}</span>
+									</label>
+								</span>
+							</div>
+							<div className="s-note">开启后对话中不显示工具调用卡片,以「正在阅读 / 正在编辑」等动态提示代替(默认开启)。</div>
 
-					<div className="s-head">MCP 服务器</div>
-				<div className="s-note">
-					为 AI 接入外部工具(如文件系统、资料库、计算器)。配置存 ~/.pi/writer/agent/mcp.json。
+							<div className="s-row">
+								<span className="s-key">自动展开思考</span>
+								<span className="s-val">
+									<label className="w-switch">
+										<input
+											type="checkbox"
+											checked={autoExpandThinking}
+											onChange={(e) => onAutoExpandThinkingChange(e.target.checked)}
+										/>
+										<span>{autoExpandThinking ? "已开启" : "已关闭"}</span>
+									</label>
+								</span>
+							</div>
+							<div className="s-note">开启后思考块默认展开,无需逐条点击;关闭后回到手动展开(默认开启)。</div>
+
+							<div className="s-row">
+								<span className="s-key">编辑免确认</span>
+								<span className="s-val">
+									<label className="w-switch">
+										<input
+											type="checkbox"
+											checked={autoConfirmEdits}
+											onChange={(e) => onAutoConfirmEditsChange(e.target.checked)}
+										/>
+										<span>{autoConfirmEdits ? "已开启" : "已关闭"}</span>
+									</label>
+								</span>
+							</div>
+							<div className="s-note">开启后编剧(编辑 agent)的修改落盘即生效,不再弹「待确认」卡;关闭则每次编辑需手动确认/回退(默认关闭)。</div>
+						</>
+					)}
+
+					{cat === "world" && (
+						<>
+							<div className="s-head">世界书注入</div>
+							{worldErr ? (
+								<div className="notice err">
+									{worldErr}
+									<button type="button" className="btn-ghost" onClick={() => setWorldReloadKey((k) => k + 1)}>
+										重试
+									</button>
+								</div>
+							) : noBook ? (
+								<div className="s-note">
+									未打开书,无法读取世界书注入设置。请先在写作页打开一本书,再到此页切换开关。
+								</div>
+							) : world === null ? (
+								<div className="s-note">世界书注入设置加载中…</div>
+							) : (
+								<>
+									<label className="s-row w-switch">
+										<input
+											type="checkbox"
+											checked={world.notice.enabled}
+											disabled={worldBusy}
+											onChange={(e) => void toggleInjection("notice", e.target.checked)}
+										/>
+										<span className="s-key">Notice 注入</span>
+										<span className="s-val muted">背景包包含当前剧情指引</span>
+										{worldBusy && <span className="s-busy">设置中…</span>}
+									</label>
+									<label className="s-row w-switch">
+										<input
+											type="checkbox"
+											checked={world.storyline.enabled}
+											disabled={worldBusy}
+											onChange={(e) => void toggleInjection("storyline", e.target.checked)}
+										/>
+										<span className="s-key">发展线注入</span>
+										<span className="s-val muted">背景包包含剧情进度与下一步</span>
+										{worldBusy && <span className="s-busy">设置中…</span>}
+									</label>
+								</>
+							)}
+						</>
+					)}
+
+					{cat === "integrations" && (
+						<>
+							<div className="s-head">MCP 服务器</div>
+							<div className="s-note">
+								为 AI 接入外部工具(如文件系统、资料库、计算器)。配置存 ~/.pi/writer/agent/mcp.json。
+							</div>
+							<McpServerList client={client} />
+						</>
+					)}
 				</div>
-				<McpServerList client={client} />
-			</div>
+			</main>
 		</div>
 	);
 }

@@ -979,9 +979,24 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 /* ════════════════════════════════════════════════════════════════
    设置页
    ════════════════════════════════════════════════════════════════ */
-.settings { flex: 1; min-width: 0; overflow-y: auto; }
+.settings { flex: 1; min-width: 0; display: flex; overflow: hidden; }
 .settings-inner { max-width: 720px; margin: 0 auto; padding: 26px 24px 48px; }
 .settings .notice { max-width: none; margin: 12px 0 0; }
+/* 设置页分类导航布局(2026-08-12):左侧分类栏 + 右侧分组内容(设计稿左侧导航式) */
+.settings-side {
+  flex: none; width: 190px; display: flex; flex-direction: column; gap: 2px;
+  padding: 16px 10px 20px; background: var(--bg-elev); border-right: 1px solid var(--line);
+  overflow-y: auto;
+}
+.settings-side-title { font-size: 11px; letter-spacing: 0.12em; color: var(--faint); font-weight: 500; padding: 0 12px 10px; }
+.settings-nav { display: flex; flex-direction: column; gap: 2px; }
+.st-cat {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: var(--r-md);
+  font-size: 13px; color: var(--muted); transition: color var(--dur-fast), background var(--dur-fast);
+}
+.st-cat:hover { color: var(--ink); background: var(--hover-tint); }
+.st-cat.active { color: var(--amber); background: var(--amber-tint); }
+.settings-main { flex: 1; min-width: 0; overflow-y: auto; }
 .s-head { font-size: 11px; letter-spacing: 0.12em; color: var(--faint); padding: 24px 0 8px; font-weight: 500; }
 .settings-inner > .s-head:first-child { padding-top: 0; }
 .s-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
@@ -1136,6 +1151,17 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
    响应式
    ════════════════════════════════════════════════════════════════ */
 /* ≤900px:书库与伙伴变抽屉,纸张独占 */
+@media (max-width: 900px) {
+  /* 设置页窄屏:侧栏横排胶囊(2026-08-12,设计稿移动端同款),整体页随容器滚动 */
+  .settings { flex-direction: column; overflow-y: auto; }
+  .settings-side { width: auto; flex-direction: row; flex-wrap: wrap; gap: 4px; padding: 10px 12px; border-right: none; border-bottom: 1px solid var(--line); overflow-y: visible; }
+  .settings-side-title { display: none; }
+  .settings-nav { flex-direction: row; flex-wrap: wrap; gap: 4px; }
+  .st-cat { padding: 6px 12px; border-radius: var(--r-full); background: var(--bg); border: 1px solid var(--line); }
+  .st-cat.active { background: var(--amber-tint); border-color: var(--amber); }
+  .settings-main { overflow-y: visible; }
+  .settings-inner { padding: 18px 16px 40px; }
+}
 @media (max-width: 900px) {
   .writing-workspace-shell { grid-template-columns: minmax(0, 1fr); }
   .chapters, .companion {
