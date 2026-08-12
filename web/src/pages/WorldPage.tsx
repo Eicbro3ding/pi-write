@@ -10,7 +10,6 @@ import { ENTRY_TYPES, ENTRY_TYPE_LABELS, WorldTree } from "../components/WorldTr
 import { EntryForm } from "../components/EntryForm.tsx";
 import { RelationGraph } from "../components/RelationGraph.tsx";
 import { EntryCard } from "../components/EntryCard.tsx";
-import { NoticePanel } from "../components/NoticePanel.tsx";
 import { WorldSummaryPanel } from "../components/WorldSummaryPanel.tsx";
 import { StorylinePanel } from "../components/StorylinePanel.tsx";
 import { TimelinePanel } from "../components/TimelinePanel.tsx";
@@ -413,9 +412,8 @@ export function WorldPage({
 										onDelete={() => deleteEntry(selEntry.id)}
 									/>
 								) : (
-									<div className="w-empty">选择左侧条目进行编辑</div>
-								)}
-								<NoticePanel notice={world.notice} onChange={(n) => updateWorld((w) => ({ ...w, notice: n }))} />
+								<div className="w-empty">选择左侧条目进行编辑</div>
+							)}
 								<StorylinePanel
 									storyline={world.storyline}
 									onChange={(s) => updateWorld((w) => ({ ...w, storyline: s }))}

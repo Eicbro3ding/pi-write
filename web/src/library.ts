@@ -20,6 +20,9 @@ export interface Library {
 	importing: boolean;
 	sidebarWidth: number;
 	sidebarCollapsed: boolean;
+	/** AI 伙伴栏标签(编剧/备忘录):两页同步 + localStorage 持久化(2026-08-12)。 */
+	memoTab: "chat" | "memo";
+	changeMemoTab(t: "chat" | "memo"): void;
 	setSidebarWidth(w: number): void;
 	toggleSidebarCollapsed(): void;
 	/** 拉书列表(返回列表供调用方继续处理,如打开第一本)。 */
@@ -68,6 +71,23 @@ export function useLibrary(client: ApiClient, onBookChange?: (slug: string | nul
 			return false;
 		}
 	});
+	/** AI 伙伴栏标签(编剧/备忘录):localStorage 持久化,两页共享。
+	 *  旧值 "library"(书库侧栏标签时代)按默认 "chat" 处理,自然迁移。 */
+	const [memoTab, setMemoTab] = useState<"chat" | "memo">(() => {
+		try {
+			return localStorage.getItem("pi-writer:sidebar-tab") === "memo" ? "memo" : "chat";
+		} catch {
+			return "chat";
+		}
+	});
+	const changeMemoTab = useCallback((t: "chat" | "memo") => {
+		setMemoTab(t);
+		try {
+			localStorage.setItem("pi-writer:sidebar-tab", t);
+		} catch {
+			/* localStorage 不可用:仅内存态 */
+		}
+	}, []);
 	const toggleSidebarCollapsed = () => {
 		setSidebarCollapsed((v) => {
 			const next = !v;
@@ -222,6 +242,8 @@ export function useLibrary(client: ApiClient, onBookChange?: (slug: string | nul
 		importing,
 		sidebarWidth,
 		sidebarCollapsed,
+		memoTab,
+		changeMemoTab,
 		setSidebarWidth,
 		toggleSidebarCollapsed,
 		loadBooks,

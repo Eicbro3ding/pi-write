@@ -1,17 +1,19 @@
 import { useState } from "react";
 import type { ScriptPatchDto, StageSnapshotDto } from "../types.ts";
 import { buildRevisePatch, emptyReviseForm, type ReviseFormState } from "../stage-web.ts";
+import { NoticeBoard } from "./NoticeBoard.tsx";
 import { StageAvatar } from "./StageAvatar.tsx";
 import { ScriptView } from "./ScriptView.tsx";
 
 /**
  * 舞台右侧面板:剧本(版本 + shared 全字段 + perActor 折叠块)| 选角(cast 表)|
- * 修订(buildRevisePatch 表单 → /revise)。开演前(script=null)剧本/修订为空态。
+ * 修订(buildRevisePatch 表单 → /revise)| 备忘录(全局 Notice 待办板,2026-08-12)。
+ * 开演前(script=null)剧本/修订为空态。
  */
-export type StagePanelTab = "script" | "cast" | "revise";
+export type StagePanelTab = "script" | "cast" | "revise" | "memo";
 
-/** 剧本/选角/修订 标签索引(滑动指示块定位用)。 */
-const TAB_INDEX: Record<StagePanelTab, number> = { script: 0, cast: 1, revise: 2 };
+/** 剧本/选角/修订/备忘录 标签索引(滑动指示块定位用)。 */
+const TAB_INDEX: Record<StagePanelTab, number> = { script: 0, cast: 1, revise: 2, memo: 3 };
 
 export function StagePanel({
 	slug,
@@ -56,7 +58,7 @@ export function StagePanel({
 
 	return (
 		<>
-			<div className="st-tabs" data-active={TAB_INDEX[tab]}>
+			<div className="st-tabs tabs-4" data-active={TAB_INDEX[tab]}>
 				<button type="button" className={tab === "script" ? "st-tab active" : "st-tab"} onClick={() => selectTab("script")}>
 					剧本
 				</button>
@@ -65,6 +67,9 @@ export function StagePanel({
 				</button>
 				<button type="button" className={tab === "revise" ? "st-tab active" : "st-tab"} onClick={() => selectTab("revise")}>
 					修订
+				</button>
+				<button type="button" className={tab === "memo" ? "st-tab active" : "st-tab"} onClick={() => selectTab("memo")}>
+					备忘录
 				</button>
 			</div>
 			{/* 标签内容按 tab key 重挂载;方向跟随指示器(slide-left = 指示块向左滑,
@@ -182,6 +187,7 @@ export function StagePanel({
 						) : (
 							<div className="st-empty">开演后才可修订(修订 = 下一轮生效,版本 +1)</div>
 						))}
+				{tab === "memo" && <NoticeBoard slug={slug} />}
 				</div>
 			</div>
 		</>

@@ -200,8 +200,8 @@ export function ChapterSidebar({
 							{activeBook.title.slice(0, 1)}
 						</button>
 					)
-				) : (
-					<>
+					) : (
+						<>
 						{books.length >= 1 && (
 							<>
 								<div className="c-head">书</div>
@@ -437,9 +437,9 @@ export function ChapterSidebar({
 						<button className="c-new" disabled={importing} onClick={() => fileRef.current?.click()}>
 							{importing ? "导入中…" : "＋ 导入书"}
 						</button>
-					</>
-				)}
-				{onToggleCollapse && (
+						</>
+					)}
+					{onToggleCollapse && (
 					<button type="button" className="c-collapse" onClick={onToggleCollapse} title={collapsed ? "展开书库" : "收起书库"}>
 						<span aria-hidden="true">{collapsed ? "›" : "‹"}</span>
 						<span className="c-collapse-text">{collapsed ? "展开" : "收起"}</span>
