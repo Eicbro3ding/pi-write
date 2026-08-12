@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildChapterContext, DEFAULT_CONTEXT_BUDGET, estimateTokens, activatedEntryIds, expandActivation, rankActivationCandidates, trimMemory } from "../src/world-context.ts";
+import { buildChapterContext, buildStorylineView, COMPLETED_MILESTONE_LIMIT, DEFAULT_CONTEXT_BUDGET, estimateTokens, activatedEntryIds, expandActivation, rankActivationCandidates, trimMemory } from "../src/world-context.ts";
 import { createEmptyWorld, type WorldData } from "../src/world-data.ts";
 
 function worldWith(...titles: Array<{ title: string; type: "character" | "world" | "timeline" | "outline"; keys?: string[]; chapters?: string[] }>): WorldData {
@@ -319,5 +319,75 @@ describe("trimMemory", () => {
 		const r = trimMemory("字".repeat(5000), 100);
 		expect(r).toContain("已截断");
 		expect(estimateTokens(r)).toBeLessThan(5000);
+	});
+});
+
+describe("buildStorylineView(已完成里程碑视图)", () => {
+	const doneNode = (id: string, title: string) => ({ id, title, status: "done" as const, goal: "", next: null });
+
+	it("返回当前目标 + 已完成列表(数组顺序)", () => {
+		const w = worldWith({ title: "林婉", type: "character" });
+		w.storyline.nodes = [
+			{ id: "s1", title: "第一章·结怨", status: "done", goal: "", next: null },
+			{ id: "s2", title: "第二章·寻剑", status: "in-progress", goal: "找到婉姐的剑", next: "第三章" },
+			{ id: "s3", title: "第三章·剑冢", status: "done", goal: "", next: null },
+		];
+		expect(buildStorylineView(w)).toEqual({ currentTitle: "第二章·寻剑", completed: ["第一章·结怨", "第三章·剑冢"] });
+	});
+	it("未启用或无节点返回 null", () => {
+		const w = worldWith({ title: "林婉", type: "character" });
+		w.storyline.enabled = false;
+		w.storyline.nodes = [doneNode("s1", "x")];
+		expect(buildStorylineView(w)).toBeNull();
+		expect(buildStorylineView(worldWith({ title: "林婉", type: "character" }))).toBeNull();
+	});
+	it("只有 pending/shelved 时返回 null(无进行中也无完成)", () => {
+		const w = worldWith({ title: "林婉", type: "character" });
+		w.storyline.nodes = [{ id: "s1", title: "待办", status: "pending", goal: "", next: null }];
+		expect(buildStorylineView(w)).toBeNull();
+	});
+	it(`已完成超过 ${COMPLETED_MILESTONE_LIMIT} 个时只取尾部`, () => {
+		const w = worldWith({ title: "林婉", type: "character" });
+		w.storyline.nodes = Array.from({ length: COMPLETED_MILESTONE_LIMIT + 2 }, (_, i) => doneNode(`s${i}`, `完成${i}`));
+		const v = buildStorylineView(w)!;
+		expect(v.completed).toHaveLength(COMPLETED_MILESTONE_LIMIT);
+		expect(v.completed[0]).toBe("完成2");
+	});
+});
+
+describe("buildChapterContext(发展线·已完成注入)", () => {
+	it("注入已完成列表并标注禁止重复追求(进行中目标保留详情)", () => {
+		const w = worldWith({ title: "林婉", type: "character" });
+		w.storyline.nodes = [
+			{ id: "s1", title: "第一章·结怨", status: "done", goal: "", next: null },
+			{ id: "s2", title: "第二章·寻剑", status: "in-progress", goal: "找到剑", next: "第三章" },
+		];
+		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: DEFAULT_CONTEXT_BUDGET });
+		expect(r.included.hasCompletedMilestones).toBe(true);
+		expect(r.text).toContain("【发展线·已完成】");
+		expect(r.text).toContain("第一章·结怨");
+		expect(r.text).toContain("禁止重复追求/推进");
+		expect(r.text).toContain("【发展线】\n当前位置: 第二章·寻剑");
+		expect(r.text).toContain("目标: 找到剑");
+	});
+	it("预算不足时已完成列表被裁(约束与进行中目标保留)", () => {
+		const w = worldWith({ title: "林婉", type: "character" });
+		w.storyline.nodes = [
+			{ id: "s1", title: "第一章·结怨", status: "done", goal: "", next: null },
+			{ id: "s2", title: "第二章·寻剑", status: "in-progress", goal: "找到剑", next: null },
+		];
+		w.constraints.push({ id: "c1", name: "对话风格", text: "对话不用引号。", enabled: true });
+		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: 30 });
+		expect(r.included.hasCompletedMilestones).toBe(false);
+		expect(r.text).not.toContain("【发展线·已完成】");
+		expect(r.text).toContain("对话不用引号");
+		expect(r.text).toContain("当前位置: 第二章·寻剑");
+	});
+	it("无已完成节点时不注入已完成块", () => {
+		const w = worldWith({ title: "林婉", type: "character" });
+		w.storyline.nodes = [{ id: "s1", title: "第二章·寻剑", status: "in-progress", goal: "", next: null }];
+		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: DEFAULT_CONTEXT_BUDGET });
+		expect(r.included.hasCompletedMilestones).toBe(false);
+		expect(r.text).not.toContain("【发展线·已完成】");
 	});
 });

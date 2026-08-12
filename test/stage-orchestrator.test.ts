@@ -15,6 +15,7 @@ import {
 	StageOrchestrator,
 } from "../src/stage/orchestrator.ts";
 import { buildScriptMethodBlock } from "../src/stage/stage-extension.ts";
+import { createEmptyWorld } from "../src/world-data.ts";
 import type { DirectorMode, SceneRules, SceneScript } from "../src/stage/types.ts";
 
 const rules: SceneRules = { minLines: 10, maxLines: 20, wrapUpWindow: 3, turn: "round-robin" };
@@ -234,6 +235,21 @@ describe("readAdvice + directorContext 注入（advice.md，编剧统一方案 2
 		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
 		const result = await orch.directorContext([{ role: "user", content: "聊聊下一幕", timestamp: 1 }] as never);
 		expect(result).toBeUndefined();
+	});
+	it("讨论模式：world.json 有已完成节点时注入【发展线】块（勿重复追求）", async () => {
+		const w = createEmptyWorld();
+		w.storyline.nodes = [
+			{ id: "s1", title: "第一章·结怨", status: "done", goal: "", next: null },
+			{ id: "s2", title: "第二章·寻剑", status: "in-progress", goal: "找到剑", next: null },
+		];
+		writeFileSync(join(tmp, "world.json"), JSON.stringify(w), "utf8");
+		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
+		const result = await orch.directorContext([{ role: "user", content: "聊聊下一幕", timestamp: 1 }] as never);
+		expect(result).toBeDefined();
+		const content = (result as never as Array<{ content: string }>)[1].content;
+		expect(content).toContain("【发展线】");
+		expect(content).toContain("当前目标：第二章·寻剑");
+		expect(content).toContain("已完成（禁止重复追求/推进）：第一章·结怨");
 	});
 });
 
