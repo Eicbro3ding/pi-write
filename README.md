@@ -1,4 +1,4 @@
-# pi-writer
+# <img src="ico.png" alt="pi-writer" width="32" height="32" /> pi-writer
 
 AI 原生的长篇创作环境——基于 [Pi](https://pi.dev) 框架,让作者与 Agent 在一部**持续存在的世界里**协作完成长篇创作:章节、人物、世界观、关系网、跨章记忆,都由系统与 Agent 共同维护。
 
