@@ -8,7 +8,7 @@
 |------|------|
 | `src/cli.ts` | CLI 入口:TUI / print / web / stage 分支、参数解析 |
 | `src/session-factory.ts` | **会话装配唯一入口**:cli / web / stage 三处共用样板(路径基准注入、工具守卫、隐藏 skill 命令、模型解析、工具集) |
-| `src/config.ts` | 路径解析(getWriterDir / getBooksDir)、slugify(保留 CJK)、`resolveSkillsDir` 三态探测 |
+| `src/config.ts` | 路径解析(getWriterDir / getBooksDir)、slugify(保留 CJK)、`resolveSkillsDir` 三态探测、`VERSION` |
 | `src/web.ts` | web 子命令装配:`parseWebArgs` / `startWebServer` |
 | `src/web/server.ts` | `WriterServer`:Node 原生 http,**路由表驱动**(method + 路径段模式)+ SSE 事件流 + 静态服务 |
 | `src/web/session-host.ts` | `SessionHost`:agent 会话 headless 封装(事件扇出、prompt/abort、撤回/分支/导航/树) |
@@ -30,7 +30,7 @@
 
 ```
 ~/.pi/writer/
-├── agent/                     # 认证、模型、设置、MCP 配置(独立于 Pi coding-agent)
+├── agent/         # 认证、模型、设置、MCP 配置(独立Picoding-agent)
 ├── books/<slug>/
 │   ├── book.json              # 书/章节索引
 │   ├── world.json             # 世界书(单一真相源)
@@ -38,7 +38,11 @@
 │   ├── draft/<chapter>.md     # 草稿
 │   ├── .writer/*.md           # world.json 导出视图(只读,编辑走界面)
 │   └── stage/*.jsonl          # 舞台转录(每幕一个文件)
-└── sessions/<slug>/<chapter>.jsonl   # 章节会话转录(append-only)
+└── sessions/<slug>/
+    ├── <chapter>.jsonl        # TUI 主会话(每章一个,append-only)
+    ├── writer-<章节>.jsonl           # 常驻编剧会话(web,每章一个)
+    ├── stage-director-<章节>.jsonl  # 舞台导演会话(每章一幕,按章节隔离)
+    └── stage-actor-<id>.jsonl        # 舞台角色会话(书级;收幕编剧 stage-writer.jsonl)
 ```
 
 - 会话文件:条目有 `id` / `parentId` / `timestamp`;`branch()` / `resetLeaf()` 移动 leaf 指针决定当前分支;分支位置只在内存,不落盘。
@@ -54,7 +58,7 @@ agent 会话事件(pi vendor AgentSessionEvent)
   → 前端 store reducer(processAgentEvent)
 ```
 
-- 舞台 / 编剧事件经同一 `/api/events` 管道:`stage_entry` / `stage_director_text` / `writer_event`(内层是主会话同款事件,前端复用同一归约)。
+- 舞台 / 编剧事件经同一 `/api/events` 管道:`stage_entry` / `stage_director_event` / `writer_event`(导演与编剧的内层都是主会话同款会话事件,前端复用同一归约)。
 - 撤回 / 重发:服务端 `retractMessage` → `sm.branch()` + 重建 AI 上下文(`state.messages = buildSessionContext().messages`)→ 广播 `messages_retracted` → 前端 alignWithServer。
 
 ## 4. 工具系统
@@ -63,7 +67,6 @@ agent 会话事件(pi vendor AgentSessionEvent)
 - **系统提示**:`buildWriterSystemPrompt(customTools, hasBash)` 动态生成(文末追加 MCP 工具清单);静态 override 会整个替换 pi 的动态工具段。
 - **世界书**:`world_update` 是唯一变更通道(提示词禁止 edit/write 直改);`applyWorldUpdate` 纯函数(判别联合 → clone → mutate → validateWorld),`withWorldLock` 串行化读-改-写。
 - **守卫**:`installToolPathGuard(bookDir, readOnlyDirs)` 把文件工具限制在书目录内,`skills/` 目录只读放行。
-- **bash 只属于 TUI**;web 模式永远无 bash(见 [security.md](security.md))。
 
 ## 5. 上下文注入(背景包)
 
@@ -83,13 +86,13 @@ agent 会话事件(pi vendor AgentSessionEvent)
 
 - 编排器键 = 「书:章节」,每书每章独立;导演会话文件 `sessions/<slug>/stage-director-<章节>.jsonl`。
 - 模式切换只有硬信号(`script_confirm` → 剧本 / 开演 → 导演 / 收幕 → 讨论),无文本意图识别。
-- 演员 = 对等角色(非导演子 agent),共享舞台,知识面由导演 inject 规则决定(include-only,信息差即悬念)。
+- 演员 = 对等角色,共享舞台,知识面由导演 inject 规则决定,目前没有加入其它工具的打算
 
 ## 7. Web 前端
 
-「深夜书房」三栏写作台:书库(library,可折叠 56px 图标条)| 纸张(正文常驻 DraftWorkspace,CodeMirror 6)| AI 伙伴(编剧对话单栏,选中正文自动预填输入框)。主题三套(night / paper / parchment,26 色 token)。
+四页顶层视图(顶栏入口,四页常驻挂载、切换只改 hidden,保流式状态):**舞台**(默认;演出前 = 导演讨论室,演出中同页)｜**编辑**(章节侧栏 + 正文常驻 DraftWorkspace,CodeMirror 6 + 右栏 AI 伙伴「编剧」对话单栏,选中正文自动预填输入框;批注已退役并入编剧)｜**世界书**｜**设置**。书库栏(`web/src/library.ts` `useLibrary`,App 持有)在舞台 / 编辑两页常驻且状态同步,可折叠 56px 图标条;主题三套(night / paper / parchment,26 色 token)。
 
-已知结构性问题:**舞台对话(StageFeedItem 独立 reducer)与编剧/主会话(processAgentEvent + MessageList)两套对话逻辑并存**——同类 bug 需两边各修,待收敛重构。
+舞台对话与编剧 / 主会话同款归约(2026-08-11 统一重构):导演回复经 `stage_director_event`(内层主会话同款事件)→ `processAgentEvent` + MessageList;舞台流(feed,`StageFeedItem`)只剩舞台条目与系统行,不再含对话气泡。
 
 ## 8. 关键机制索引
 
