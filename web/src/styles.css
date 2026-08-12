@@ -385,6 +385,28 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   animation: slide-in-right var(--dur-base) var(--ease-out);
 }
 .companion-title { font-size: 12.5px; color: var(--ink-2); font-weight: 500; }
+/* AI 伙伴栏标签条(编剧 | 备忘录,2026-08-12):与舞台页 st-tabs 分段控件同款——
+   深底容器 + 琥珀滑动指示器(::before 按 data-active 位移,按钮 flex 均分保证等宽)。 */
+.companion-head .c-tabs {
+  position: relative; flex: 1; min-width: 0; display: flex; align-items: center; gap: 2px;
+  padding: 2px; background: var(--bg-elev-2); border: 1px solid var(--line); border-radius: var(--r-md);
+}
+.companion-head .c-tabs::before {
+  content: ""; position: absolute; top: 2px; bottom: 2px; left: 2px; z-index: 0;
+  width: calc((100% - 6px) / 2);
+  background: var(--amber-tint);
+  border-radius: calc(var(--r-md) - 2px);
+  transition: transform var(--dur-base) var(--ease-inout);
+}
+.companion-head .c-tabs[data-active="1"]::before { transform: translateX(calc(100% + 2px)); }
+.companion-head .c-tabs .c-tab {
+  flex: 1; justify-content: center; padding: 5px 0; font-size: 12.5px; color: var(--muted);
+  border-radius: calc(var(--r-md) - 2px);
+}
+.companion-head .c-tabs .c-tab:hover { color: var(--ink); background: var(--hover-tint); }
+.companion-head .c-tabs .c-tab.active { color: var(--amber); background: transparent; }
+/* 备忘录板占满伙伴栏高度(自身带 overflow-y:auto) */
+.companion-body > .notice-board { flex: 1; }
 .companion-badge {
   font-family: var(--mono); font-size: 10.5px; color: var(--bg);
   background: var(--amber); border-radius: var(--r-full); padding: 0 6px; line-height: 15px;
@@ -525,6 +547,18 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   transition: color var(--dur-fast), background var(--dur-fast);
 }
 .btn-abort:hover { color: var(--err-soft); background: var(--red-tint-strong); }
+/* 幽灵按钮(面板通用操作):此前只有局部变体、无基础样式,按钮呈浏览器裸态;
+   2026-08-12 补基础规则统一全局(约束面板新建/导入/删除/清空等共用) */
+.btn-ghost {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 12px; font-size: 12.5px; color: var(--ink-2);
+  background: transparent; border: 1px solid var(--line); border-radius: var(--r-sm);
+  cursor: pointer; transition: color var(--dur-fast), background var(--dur-fast), border-color var(--dur-fast);
+}
+.btn-ghost:hover:not(:disabled) { color: var(--amber); background: var(--hover-tint); border-color: var(--line-strong); }
+.btn-ghost.danger { color: var(--red); }
+.btn-ghost.danger:hover:not(:disabled) { color: var(--red); background: var(--red-tint-strong); }
+.btn-ghost:disabled { opacity: 0.4; cursor: default; }
 /* 紧凑变体(批注面板输入) */
 .inputbar.compact { border-top: 1px solid var(--line); padding: 10px 0 0; background: transparent; }
 .inputbar.compact .inputbar-inner { border-radius: var(--r-md); padding: 6px 6px 6px 12px; }
@@ -771,10 +805,16 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .w-timeline-text { font-size: 13px; color: var(--ink); line-height: 1.6; }
 .w-timeline-add { display: flex; gap: 8px; padding: 10px 0 2px; }
 .w-timeline-add select { flex: none; width: 140px; }
-.w-cst-row { display: grid; grid-template-columns: 150px 1fr 84px auto auto; gap: 8px; align-items: center; padding: 8px 10px; border-radius: var(--r-md); transition: background var(--dur-fast); }
+.w-cst-row { display: grid; grid-template-columns: 150px 1fr 84px auto auto auto; gap: 8px; align-items: center; padding: 8px 10px; border-radius: var(--r-md); transition: background var(--dur-fast); }
 .w-cst-row:hover { background: var(--hover-tint); }
 .w-cst-row .w-switch { justify-self: end; }
 .w-cst-row .w-count { padding: 0; font-family: var(--mono); font-size: 11px; white-space: nowrap; }
+.w-cst-row .btn-ghost { padding: 4px 10px; font-size: 12px; }
+/* 约束面板折叠(2026-08-12):点击面板头切换;▸/▾ 指示当前态(仅本面板,其他
+   面板头不带 collapsible 不受影响) */
+.w-panel-head.collapsible { cursor: pointer; user-select: none; }
+.w-panel-head.collapsible .s-head::before { content: "▾ "; color: var(--faint); font-size: 11px; }
+.w-panel-head.collapsible.collapsed .s-head::before { content: "▸ "; }
 .w-count { font-size: 11px; color: var(--faint); text-align: right; padding-top: 4px; }
 .w-count.over { color: var(--red); }
 .w-sample-src { font-size: 12px; color: var(--faint); padding: 0 0 8px; font-family: var(--mono); word-break: break-all; }
@@ -1278,11 +1318,17 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
    = 一个标签的宽;等宽标签的前提:文案等长、padding 一致) */
 .st-tabs[data-active="1"]::before { transform: translateX(calc(100% + 2px)); }
 .st-tabs[data-active="2"]::before { transform: translateX(calc((100% + 2px) * 2)); }
+.st-tabs[data-active="3"]::before { transform: translateX(calc((100% + 2px) * 3)); }
 /* ScriptView 标签页(概要/节拍/演员指令)文案不等长:按钮 flex 均分制造等宽前提,
    指示块宽度按 flex 布局重算(基础规则的 (100% - 8px)/3 按内容宽度假设) */
 .st-tabs.tabs-equal { display: flex; align-self: stretch; }
 .st-tabs.tabs-equal::before { width: calc((100% - 12px) / 3); }
 .st-tabs.tabs-equal .st-tab { flex: 1; justify-content: center; }
+/* StagePanel 4 标签(剧本/选角/修订/备忘录)文案不等长:同 tabs-equal 思路,4 均分
+   (指示块宽 = (100% - 容器 padding 4px - 3 个 gap 6px) / 4) */
+.st-tabs.tabs-4 { display: flex; align-self: stretch; }
+.st-tabs.tabs-4::before { width: calc((100% - 10px) / 4); }
+.st-tabs.tabs-4 .st-tab { flex: 1; justify-content: center; }
 .st-tab { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; font-size: 12.5px; color: var(--muted); border-radius: calc(var(--r-md) - 2px); transition: color var(--dur-fast), background var(--dur-fast); }
 .st-tab:hover { color: var(--ink); background: var(--hover-tint); }
 .st-tab.active { color: var(--amber); background: transparent; }
@@ -1357,3 +1403,39 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .preview-actions .btn.primary:hover:not(:disabled) { background: var(--amber-tint-strong); }
 .preview-actions .btn:disabled { opacity: 0.5; cursor: default; }
 .preview-actions .preview-note { color: var(--muted); font-size: 12px; }
+
+/* ---- 侧栏标签条(书库 | 备忘录,2026-08-12)---- */
+.c-tabs { display: flex; gap: 2px; padding: 6px 8px 2px; border-bottom: 1px solid var(--line); }
+.c-tab {
+	flex: 1; padding: 5px 0; font-size: 12px; color: var(--faint); border-radius: 6px;
+	transition: color var(--dur-fast), background var(--dur-fast);
+}
+.c-tab:hover { color: var(--muted); background: var(--hover-tint); }
+.c-tab.active { color: var(--amber); background: var(--amber-tint); }
+
+/* ---- 备忘录板(Notice 待办,2026-08-12)---- */
+.notice-board { display: flex; flex-direction: column; gap: 6px; padding: 10px; min-height: 0; overflow-y: auto; }
+.notice-enable { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.notice-enable input[type="checkbox"] { width: 14px; height: 14px; accent-color: var(--amber); cursor: pointer; }
+.notice-item { display: flex; align-items: center; gap: 6px; }
+.notice-item input[type="checkbox"] { width: 14px; height: 14px; accent-color: var(--amber); cursor: pointer; flex: none; }
+.notice-item .notice-text {
+	flex: 1; min-width: 0; background: transparent; border: 1px solid transparent; border-radius: 6px;
+	color: var(--ink); font-size: 13px; padding: 4px 6px; outline: none; transition: border-color var(--dur-fast);
+}
+.notice-item .notice-text:hover, .notice-item .notice-text:focus { border-color: var(--line-strong); }
+.notice-item.done .notice-text { color: var(--faint); text-decoration: line-through; }
+.notice-del { flex: none; color: var(--faint); font-size: 14px; padding: 2px 6px; border-radius: 6px; }
+.notice-del:hover { color: var(--err-soft); background: var(--red-tint-strong); }
+.notice-add { display: flex; gap: 6px; margin-top: 4px; }
+.notice-add input {
+	flex: 1; min-width: 0; background: var(--bg-elev); border: 1px solid var(--line); border-radius: 6px;
+	color: var(--ink); font-size: 12.5px; padding: 5px 8px; outline: none;
+}
+.notice-add input:focus { border-color: var(--amber); }
+.notice-add button {
+	flex: none; color: var(--amber); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px;
+	font-size: 12px; transition: border-color var(--dur-fast), background var(--dur-fast);
+}
+.notice-add button:hover:not(:disabled) { border-color: var(--amber); background: var(--amber-tint); }
+.notice-add button:disabled { color: var(--faint); cursor: default; }

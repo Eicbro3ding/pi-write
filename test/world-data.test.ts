@@ -66,7 +66,7 @@ describe("validateWorld", () => {
 	it("枚举错误信息带合法值列表(type/status/arrow/storyline status)", () => {
 		const base = {
 			version: 1 as const, entries: [], relations: [], constraints: [],
-			styleSample: null, notice: { text: "", enabled: true, updatedAt: 0 },
+			styleSample: null, notice: { enabled: true, items: [] },
 			storyline: { enabled: true, nodes: [] }, timeline: [],
 		};
 		// 校验按序报错,type 与 status 分开构造分别断言
@@ -184,10 +184,32 @@ describe("validateWorld", () => {
 		const normalized = validateWorld(legacy);
 		expect(normalized.relations[0]?.arrow).toBe("double");
 	});
-	it("拒绝 notice 超限(>1000 字)", () => {
+	it("旧式单条 Notice 自动迁移为待办清单(2026-08-12)", () => {
+		const w = createEmptyWorld() as unknown as { notice: { text: string; enabled: boolean; updatedAt: number } };
+		w.notice = { text: "保持悬疑。", enabled: true, updatedAt: 123 };
+		const normalized = validateWorld(w as never) as ReturnType<typeof createEmptyWorld>;
+		expect(normalized.notice.items).toHaveLength(1);
+		expect(normalized.notice.items[0]?.text).toBe("保持悬疑。");
+		expect(normalized.notice.items[0]?.done).toBe(false);
+		expect(normalized.notice.enabled).toBe(true);
+	});
+	it("拒绝 Notice 待办超限(单条 >500 字)", () => {
 		const w = createEmptyWorld();
-		w.notice.text = "字".repeat(1001);
-		expect(() => validateWorld(w)).toThrow(/1000/);
+		w.notice.items.push({ id: "n1", text: "字".repeat(501), done: false });
+		expect(() => validateWorld(w)).toThrow(/500/);
+	});
+	it("拒绝 Notice 待办 id 重复 / done 非布尔", () => {
+		const w = createEmptyWorld();
+		w.notice.items.push({ id: "n1", text: "a", done: false }, { id: "n1", text: "b", done: false });
+		expect(() => validateWorld(w)).toThrow(/id 重复/);
+		const w2 = createEmptyWorld();
+		w2.notice.items.push({ id: "n1", text: "a", done: "yes" as never });
+		expect(() => validateWorld(w2)).toThrow(/done/);
+	});
+	it("拒绝约束 target 非法枚举", () => {
+		const w = createEmptyWorld();
+		w.constraints.push({ id: "c1", name: "C", text: "x", enabled: true, target: "narrator" as never });
+		expect(() => validateWorld(w)).toThrow(/target/);
 	});
 	it("拒绝多个 in-progress 发展线节点", () => {
 		const w = createEmptyWorld();

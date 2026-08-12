@@ -460,13 +460,15 @@ function writerFactory(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("notice", {
-		description: "查看 Notice(当前剧情指引)",
+		description: "查看 Notice·备忘录(全局待办清单)",
 		handler: async (_args, ctx) => {
 			const slug = bookSlugFromSessionFile(ctx.sessionManager.getSessionFile() ?? undefined);
 			if (!slug) { ctx.ui.notify("当前不在任何书中", "error"); return; }
 			const world = await ensureWorld(slug);
-			if (world.notice.text.length === 0) { ctx.ui.notify("Notice 为空", "info"); return; }
-			ctx.ui.notify(`[Notice${world.notice.enabled ? "" : "(已停用)"}] ${world.notice.text}`, "info");
+			if (world.notice.items.length === 0) { ctx.ui.notify("Notice 为空", "info"); return; }
+			const open = world.notice.items.filter((i) => !i.done).length;
+			const lines = world.notice.items.map((i) => `[${i.done ? "x" : " "}] ${i.text}`);
+			ctx.ui.notify(`[Notice${world.notice.enabled ? "" : "(已停用)"}·${open} 未完成] ${lines.join(" | ")}`, "info");
 		},
 	});
 

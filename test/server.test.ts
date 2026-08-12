@@ -441,7 +441,7 @@ describe("WriterServer", () => {
 			});
 			expect(res.status).toBe(202);
 			expect(fake.injectCalls.length).toBeGreaterThan(0);
-			expect(fake.injectCalls[0]).toContain("【Notice】");
+			expect(fake.injectCalls[0]).toContain("【Notice·备忘录】");
 		} finally {
 			fake.state.bookSlug = null;
 		}
@@ -564,7 +564,7 @@ describe("WriterServer", () => {
 		const body = await res.json();
 		// 世界书以 world.json 为准:entries 数组 + notice/storyline 等小节
 		expect(Array.isArray(body.world.entries)).toBe(true);
-		expect(typeof body.world.notice.text).toBe("string");
+		expect(Array.isArray(body.world.notice.items)).toBe(true);
 	});
 	it("PUT /api/world 非法数据返回 400 且不落盘", async () => {
 		fake.state.bookSlug = "测试之书";

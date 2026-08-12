@@ -104,9 +104,12 @@ export interface WorldEntryDto {
 /** 关系箭头方向:none 无箭头 / single 单向(from→to)/ double 双向。 */
 export type RelationArrowDto = "none" | "single" | "double";
 export interface WorldRelationDto { id: string; from: string; to: string; type: string; label: string; emphasized: boolean; arrow: RelationArrowDto; }
-export interface WorldConstraintDto { id: string; name: string; text: string; enabled: boolean; }
+export interface WorldConstraintDto { id: string; name: string; text: string; enabled: boolean; target?: "main" | "director" | "writer" | "all"; }
 export interface StyleSampleDto { text: string; source: string; updatedAt: number; }
-export interface NoticeDto { text: string; enabled: boolean; updatedAt: number; }
+/** Notice 待办条目(备忘录):done=false 未完成(注入上下文)/ true 已完成(仅板子可见)。 */
+export interface NoticeItemDto { id: string; text: string; done: boolean; updatedAt?: number; }
+/** Notice = 全局备忘录/待办清单(2026-08-12 回到初衷)。 */
+export interface NoticeDto { enabled: boolean; items: NoticeItemDto[]; }
 export interface StoryNodeDto { id: string; title: string; status: "pending" | "in-progress" | "done" | "shelved"; goal: string; next: string | null; }
 export interface StorylineDto { enabled: boolean; nodes: StoryNodeDto[]; }
 export interface TimelineEventDto { id: string; chapter: string; text: string; }

@@ -287,18 +287,44 @@ describe("applyWorldUpdate", () => {
 		const c = applyWorldUpdate(a, { op: "update_timeline", id, text: "改后的描述" });
 		expect(c.timeline[0]!.text).toBe("改后的描述");
 	});
-	it("update_notice 支持 enabled 开关(不传则保留现状)", () => {
+	it("update_notice 只切注入开关(enabled)", () => {
 		const w = createEmptyWorld();
-		const a = applyWorldUpdate(w, { op: "update_notice", text: "基调:克制" });
-		expect(a.notice.text).toBe("基调:克制");
-		expect(a.notice.enabled).toBe(true);
-		const b = applyWorldUpdate(a, { op: "update_notice", text: "基调:克制", enabled: false });
+		const a = applyWorldUpdate(w, { op: "update_notice", enabled: false });
+		expect(a.notice.enabled).toBe(false);
+		expect(a.notice.items).toEqual([]);
+		// 不传 enabled 保持现状
+		const b = applyWorldUpdate(a, { op: "update_notice" });
 		expect(b.notice.enabled).toBe(false);
-		expect(b.notice.text).toBe("基调:克制");
 	});
-	it("update_notice 超限拒绝", () => {
+	it("notice_append 追加未完成待办;notice_set_done 勾选", () => {
 		const w = createEmptyWorld();
-		expect(() => applyWorldUpdate(w, { op: "update_notice", text: "字".repeat(1001) })).toThrow(WorldValidationError);
+		const a = applyWorldUpdate(w, { op: "notice_append", text: "埋伏笔:青冥剑的来历" });
+		expect(a.notice.items).toHaveLength(1);
+		expect(a.notice.items[0]?.text).toBe("埋伏笔:青冥剑的来历");
+		expect(a.notice.items[0]?.done).toBe(false);
+		const b = applyWorldUpdate(a, { op: "notice_set_done", id: a.notice.items[0]!.id, done: true });
+		expect(b.notice.items[0]?.done).toBe(true);
+	});
+	it("notice_update 改文本;notice_delete 删除;不存在的 id 抛错", () => {
+		const w = createEmptyWorld();
+		const a = applyWorldUpdate(w, { op: "notice_append", text: "旧文本" });
+		const id = a.notice.items[0]!.id;
+		const b = applyWorldUpdate(a, { op: "notice_update", id, text: "新文本" });
+		expect(b.notice.items[0]?.text).toBe("新文本");
+		const c = applyWorldUpdate(b, { op: "notice_delete", id });
+		expect(c.notice.items).toHaveLength(0);
+		expect(() => applyWorldUpdate(a, { op: "notice_set_done", id: "nope", done: true })).toThrow(WorldValidationError);
+	});
+	it("upsert_constraint 支持 target(新建/更新)", () => {
+		const w = createEmptyWorld();
+		const a = applyWorldUpdate(w, { op: "upsert_constraint", name: "对话风格", text: "口语化", target: "director" });
+		expect(a.constraints[0]?.target).toBe("director");
+		const id = a.constraints[0]!.id;
+		const b = applyWorldUpdate(a, { op: "upsert_constraint", id, name: "对话风格", text: "口语化", target: "all" });
+		expect(b.constraints[0]?.target).toBe("all");
+		// 不带 target 的新建:不写字段(缺省 all)
+		const c = applyWorldUpdate(w, { op: "upsert_constraint", name: "无 target", text: "x" });
+		expect(c.constraints[0]?.target).toBeUndefined();
 	});
 	it("update_style_sample 写入并记录来源", () => {
 		const w = createEmptyWorld();

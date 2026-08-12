@@ -1,4 +1,4 @@
-import type { WorldData, WorldEntry } from "./world-data.ts";
+import type { WorldData, WorldEntry, ConstraintTarget } from "./world-data.ts";
 import { isCjkChar } from "./cjk.ts";
 
 /** 背景包默认 token 预算。 */
@@ -9,6 +9,36 @@ export const DEFAULT_MEMORY_BUDGET = 1500;
 
 /** 关联激活默认深度(0 = 关闭,与旧行为一致;>0 启用多源 BFS 展开)。 */
 export const DEFAULT_ACTIVATION_DEPTH = 0;
+
+/** Notice 备忘录注入上限(只注入未完成项,防上下文膨胀)。 */
+export const NOTICE_INJECT_LIMIT = 10;
+
+/** 约束 target 是否匹配某角色(缺省 undefined = all,旧数据行为不变)。 */
+export function constraintTargetMatches(target: ConstraintTarget | undefined, role: "main" | "director" | "writer"): boolean {
+	return target === undefined || target === "all" || target === role;
+}
+
+/** 已完成里程碑(发展线 done 节点)注入上限——标题列表防上下文膨胀(借鉴
+ *  AI-Novel-Writing-Assistant 的 completedMilestones 守卫:已完成目标注入
+ *  「勿再追求」列表,而非靠祈使句约束)。 */
+export const COMPLETED_MILESTONE_LIMIT = 6;
+
+/** 发展线视图(2026-08-12):当前目标 + 已完成里程碑列表。未启用或无节点返回 null。 */
+export interface StorylineView {
+	/** 当前进行中目标标题(至多一个,world-data 校验保证)。 */
+	currentTitle: string | null;
+	/** 已完成节点标题(取节点数组尾部——较新的追加在后,上限 COMPLETED_MILESTONE_LIMIT)。 */
+	completed: string[];
+}
+
+/** 组装发展线视图:in-progress 节点 = 当前目标;done 节点 = 已完成列表(尾部优先)。 */
+export function buildStorylineView(data: WorldData): StorylineView | null {
+	if (!data.storyline.enabled || data.storyline.nodes.length === 0) return null;
+	const current = data.storyline.nodes.find((n) => n.status === "in-progress");
+	const completed = data.storyline.nodes.filter((n) => n.status === "done").map((n) => n.title);
+	if (!current && completed.length === 0) return null;
+	return { currentTitle: current?.title ?? null, completed: completed.slice(-COMPLETED_MILESTONE_LIMIT) };
+}
 
 export interface ChapterContextInput {
 	/** 当前章节 id,如 "ch04"。 */
@@ -34,6 +64,7 @@ export interface ChapterContextResult {
 		hasSample: boolean;
 		hasSummary: boolean;
 		hasNotice: boolean;
+		hasCompletedMilestones: boolean;
 		storylineNode: string | null;
 	};
 }
@@ -177,10 +208,11 @@ export function rankActivationCandidates(data: WorldData, seeds: string[], expan
 
 /** 组装背景包文本(常驻组 + 激活组,预算裁剪)。 */
 export function buildChapterContext(data: WorldData, input: ChapterContextInput): ChapterContextResult {
-	const result: ChapterContextResult = { text: "", activatedIds: [], trimmedCount: 0, included: { constraints: [], hasSample: false, hasSummary: false, hasNotice: false, storylineNode: null } };
+	const result: ChapterContextResult = { text: "", activatedIds: [], trimmedCount: 0, included: { constraints: [], hasSample: false, hasSummary: false, hasNotice: false, hasCompletedMilestones: false, storylineNode: null } };
 
 	// 常驻组:启用的约束 + 采样 + 简要世界观(裁剪顺序:先裁采样,仍超再裁概述,约束保留)
-	const enabledConstraints = data.constraints.filter((c) => c.enabled);
+	// 约束按 target 过滤:主写作会话只收 target ∈ {main, all}(导演/编剧各自收自己的,见注入点)
+	const enabledConstraints = data.constraints.filter((c) => c.enabled && constraintTargetMatches(c.target, "main"));
 	let resident = "";
 	if (enabledConstraints.length > 0) {
 		resident += "【写作约束】\n";
@@ -234,19 +266,29 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 		used += tokens;
 	}
 
-	// Notice 与发展线(常驻,不可裁)
+	// Notice(全局备忘录·待办清单):只注入未完成项,上限 NOTICE_INJECT_LIMIT——完成
+	// 的条目留在 UI 板子可见,不进上下文(2026-08-12 回到初衷)。常驻不可裁。
 	let tail = "";
-	if (data.notice.enabled && data.notice.text.length > 0) {
-		tail += `【Notice】\n${data.notice.text}\n`;
+	const noticeItems = data.notice.items.filter((i) => !i.done).slice(0, NOTICE_INJECT_LIMIT);
+	if (data.notice.enabled && noticeItems.length > 0) {
+		tail += `【Notice·备忘录】\n${noticeItems.map((i) => `- [ ] ${i.text}`).join("\n")}\n`;
 		result.included.hasNotice = true;
 	}
-	if (data.storyline.enabled) {
-		const current = data.storyline.nodes.find((n) => n.status === "in-progress");
-		if (current) {
-			tail += `【发展线】\n当前位置: ${current.title}\n`;
-			if (current.goal) tail += `目标: ${current.goal}\n`;
-			if (current.next) tail += `下一步: ${current.next}\n`;
-			result.included.storylineNode = current.id;
+	const view = buildStorylineView(data);
+	if (view) {
+		if (view.currentTitle) {
+			const current = data.storyline.nodes.find((n) => n.status === "in-progress");
+			tail += `【发展线】\n当前位置: ${view.currentTitle}\n`;
+			if (current?.goal) tail += `目标: ${current.goal}\n`;
+			if (current?.next) tail += `下一步: ${current.next}\n`;
+			if (current) result.included.storylineNode = current.id;
+		}
+		if (view.completed.length > 0) {
+			const completedBlock = `【发展线·已完成】以下目标已完成,禁止重复追求/推进:\n${view.completed.map((t) => `- ${t}`).join("\n")}`;
+			if (used + estimateTokens(completedBlock) <= input.budget) {
+				tail += `\n${completedBlock}\n`;
+				result.included.hasCompletedMilestones = true;
+			}
 		}
 	}
 

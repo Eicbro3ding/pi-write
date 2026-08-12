@@ -15,6 +15,7 @@ import {
 	StageOrchestrator,
 } from "../src/stage/orchestrator.ts";
 import { buildScriptMethodBlock } from "../src/stage/stage-extension.ts";
+import { createEmptyWorld } from "../src/world-data.ts";
 import type { DirectorMode, SceneRules, SceneScript } from "../src/stage/types.ts";
 
 const rules: SceneRules = { minLines: 10, maxLines: 20, wrapUpWindow: 3, turn: "round-robin" };
@@ -234,6 +235,44 @@ describe("readAdvice + directorContext 注入（advice.md，编剧统一方案 2
 		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
 		const result = await orch.directorContext([{ role: "user", content: "聊聊下一幕", timestamp: 1 }] as never);
 		expect(result).toBeUndefined();
+	});
+	it("讨论模式：world.json 有已完成节点时注入【发展线】块（勿重复追求）", async () => {
+		const w = createEmptyWorld();
+		w.storyline.nodes = [
+			{ id: "s1", title: "第一章·结怨", status: "done", goal: "", next: null },
+			{ id: "s2", title: "第二章·寻剑", status: "in-progress", goal: "找到剑", next: null },
+		];
+		writeFileSync(join(tmp, "world.json"), JSON.stringify(w), "utf8");
+		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
+		const result = await orch.directorContext([{ role: "user", content: "聊聊下一幕", timestamp: 1 }] as never);
+		expect(result).toBeDefined();
+		const content = (result as never as Array<{ content: string }>)[1].content;
+		expect(content).toContain("【发展线】");
+		expect(content).toContain("当前目标：第二章·寻剑");
+		expect(content).toContain("已完成（禁止重复追求/推进）：第一章·结怨");
+	});
+	it("讨论模式：注入【Notice·备忘录】与【写作约束】(按 target 过滤)", async () => {
+		const w = createEmptyWorld();
+		w.notice.items.push({ id: "n1", text: "埋伏笔:断剑来历", done: false }, { id: "n2", text: "已完成项", done: true });
+		w.constraints.push(
+			{ id: "c1", name: "导演规则", text: "一幕一人一角", enabled: true, target: "director" },
+			{ id: "c2", name: "全局规则", text: "语言克制", enabled: true },
+			{ id: "c3", name: "编剧规则", text: "口语化", enabled: true, target: "writer" },
+			{ id: "c4", name: "停用规则", text: "x", enabled: false, target: "director" },
+		);
+		writeFileSync(join(tmp, "world.json"), JSON.stringify(w), "utf8");
+		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
+		const result = await orch.directorContext([{ role: "user", content: "聊聊下一幕", timestamp: 1 }] as never);
+		expect(result).toBeDefined();
+		const content = (result as never as Array<{ content: string }>)[1].content;
+		expect(content).toContain("【Notice·备忘录】");
+		expect(content).toContain("- [ ] 埋伏笔:断剑来历");
+		expect(content).not.toContain("已完成项");
+		expect(content).toContain("【写作约束】");
+		expect(content).toContain("导演规则");
+		expect(content).toContain("全局规则");
+		expect(content).not.toContain("编剧规则");
+		expect(content).not.toContain("停用规则");
 	});
 });
 

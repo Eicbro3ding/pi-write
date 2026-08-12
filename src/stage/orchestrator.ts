@@ -19,6 +19,7 @@ import { countStage } from "./counters.ts";
 import { loadScript, reviseScript, saveScript } from "./script-store.ts";
 import { appendStageEntry, makeStageEntry, readStage, truncateStage } from "./stage-store.ts";
 import { ensureWorld } from "../world-data.ts";
+import { buildStorylineView, constraintTargetMatches, NOTICE_INJECT_LIMIT } from "../world-context.ts";
 import { actorRole, buildScriptMethodBlock, directorRole, writerRole } from "./stage-extension.ts";
 import {
 	type ActorText,
@@ -505,8 +506,33 @@ export class StageOrchestrator {
 		// 编剧建议(advice.md):未开演(讨论/剧本模式)时注入——导演规划下一章的依据
 		const advice = await readAdvice(this.bookDir);
 		const adviceBlock = advice ? `\n\n【编剧建议（来自 advice.md，收幕编剧整理）】\n${advice}` : "";
+		// 发展线视图(当前目标 + 已完成列表)——导演推进世界书/规划下一幕前核对
+		// 进度,已完成目标勿重复追求(借鉴 AI-Novel completedMilestones,2026-08-12)
+		let storylineBlock = "";
+		try {
+			const world = await ensureWorld(this.bookDir);
+			const view = buildStorylineView(world);
+			if (view) {
+				const lines: string[] = [];
+				if (view.currentTitle) lines.push(`当前目标：${view.currentTitle}`);
+				if (view.completed.length > 0) lines.push(`已完成（禁止重复追求/推进）：${view.completed.join("、")}`);
+				storylineBlock = `\n\n【发展线】\n${lines.join("\n")}`;
+			}
+			// 全局备忘录(Notice 待办,未完成项)——导演埋伏笔/记重要事项(2026-08-12 回到初衷)
+			const noticeOpen = world.notice.items.filter((i) => !i.done).slice(0, NOTICE_INJECT_LIMIT);
+			if (world.notice.enabled && noticeOpen.length > 0) {
+				storylineBlock += `\n\n【Notice·备忘录】\n${noticeOpen.map((i) => `- [ ] ${i.text}`).join("\n")}`;
+			}
+			// 写作约束(按 target 过滤:导演收 director/all)——酒馆式规则包(2026-08-12)
+			const directorConstraints = world.constraints.filter((c) => c.enabled && constraintTargetMatches(c.target, "director"));
+			if (directorConstraints.length > 0) {
+				storylineBlock += `\n\n【写作约束】\n${directorConstraints.map((c) => `- ${c.name}: ${c.text}`).join("\n")}`;
+			}
+		} catch {
+			/* 世界书缺失:跳过发展线注入,不阻断 */
+		}
 		if (this._directorMode === "scripting") {
-			return [...messages, { role: "user", content: buildScriptMethodBlock(resolveSkillsDir()) + adviceBlock, timestamp: Date.now() }];
+			return [...messages, { role: "user", content: buildScriptMethodBlock(resolveSkillsDir()) + adviceBlock + storylineBlock, timestamp: Date.now() }];
 		}
 		if (this._directorMode === "directing" && this.sceneId) {
 			const entries = await readStage(this.bookDir, this.sceneId);
@@ -515,8 +541,8 @@ export class StageOrchestrator {
 			const view = `【舞台区】\n${formatStageLines(entries).join("\n")}\n——对话 ${counts.lines} 条，${counts.cnChars} 字`;
 			return [...messages, { role: "user", content: view, timestamp: Date.now() }];
 		}
-		if (this._directorMode === "discussion" && advice) {
-			return [...messages, { role: "user", content: `【编剧建议（来自 advice.md，收幕编剧整理）】\n${advice}`, timestamp: Date.now() }];
+		if (this._directorMode === "discussion" && (advice || storylineBlock)) {
+			return [...messages, { role: "user", content: `${advice ? `【编剧建议（来自 advice.md，收幕编剧整理）】\n${advice}` : ""}${storylineBlock}`, timestamp: Date.now() }];
 		}
 		return undefined;
 	}

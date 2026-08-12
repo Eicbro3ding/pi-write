@@ -21,6 +21,7 @@ import { DraftWorkspace, type DraftWorkspaceHandle } from "../components/DraftWo
 import { FullScreenEditor } from "../components/FullScreenEditor.tsx";
 import { InputBar, type InputBarHandle } from "../components/InputBar.tsx";
 import { MessageList } from "../components/MessageList.tsx";
+import { NoticeBoard } from "../components/NoticeBoard.tsx";
 import { newId } from "../components/id.ts";
 import { createEditCapture } from "../edit-capture.ts";
 import type { Library } from "../library.ts";
@@ -130,6 +131,8 @@ export function WritePage({
 		sidebarCollapsed,
 		setSidebarWidth,
 		toggleSidebarCollapsed,
+		memoTab,
+		changeMemoTab,
 		applyBookDetail,
 		applyBooks,
 		applyChapter,
@@ -1215,14 +1218,26 @@ export function WritePage({
 					{!isNarrow && <div className="comp-resize" onMouseDown={startCompanionResize} title="拖拽调整宽度" />}
 					<div className="companion-head">
 						<span className="companion-label">AI 伙伴</span>
-						<span className="companion-title">编剧</span>
-						{/* 待确认编辑数(免确认模式下恒为 0) */}
-						{confirmCards.filter((c) => !c.auto).length > 0 && (
+						{/* 标签:编剧对话 | 备忘录(全局 Notice 待办板,2026-08-12 从书库栏移来);
+						    外观与舞台页 st-tabs 分段控件同款(data-active 驱动滑动指示器) */}
+						<div className="c-tabs" role="tablist" data-active={memoTab === "memo" ? "1" : "0"}>
+							<button type="button" className={memoTab === "chat" ? "c-tab active" : "c-tab"} onClick={() => changeMemoTab("chat")}>
+								编剧
+							</button>
+							<button type="button" className={memoTab === "memo" ? "c-tab active" : "c-tab"} onClick={() => changeMemoTab("memo")}>
+								备忘录
+							</button>
+						</div>
+						{/* 待确认编辑数(免确认模式下恒为 0)与生成指示灯只属于编剧对话 */}
+						{memoTab === "chat" && confirmCards.filter((c) => !c.auto).length > 0 && (
 							<span className="companion-badge">{confirmCards.filter((c) => !c.auto).length}</span>
 						)}
-						{writerSession.isStreaming && <span className="companion-live" title="生成中" aria-label="生成中" />}
+						{memoTab === "chat" && writerSession.isStreaming && <span className="companion-live" title="生成中" aria-label="生成中" />}
 					</div>
 					<div className="companion-body">
+						{memoTab === "memo" ? (
+							<NoticeBoard slug={bookDetail?.slug ?? null} />
+						) : (
 						<div className="chat active">
 							{/* 编剧(常驻编辑 agent)对话:会话状态经 processAgentEvent 维护,
 							   MessageList/InputBar 原样复用;确认卡锚定在触发编辑的 assistant 消息下;
@@ -1257,6 +1272,7 @@ export function WritePage({
 								ariaLabel="向编剧说话"
 							/>
 						</div>
+						)}
 					</div>
 				</motion.aside>
 			</>

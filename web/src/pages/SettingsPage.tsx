@@ -83,6 +83,13 @@ export function SettingsPage({
 	const [loadErr, setLoadErr] = useState<string | null>(null);
 	const [actErr, setActErr] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
+	/** 自定义模型表单(openai-completions 协议,如本地 mock LLM)。 */
+	const [customProvider, setCustomProvider] = useState("");
+	const [customModel, setCustomModel] = useState("");
+	const [customBaseUrl, setCustomBaseUrl] = useState("");
+	const [customApiKey, setCustomApiKey] = useState("");
+	const [customBusy, setCustomBusy] = useState(false);
+	const [customErr, setCustomErr] = useState<string | null>(null);
 	const [theme, setTheme] = useState<ThemeId>(() => currentTheme());
 	const [notice, setNotice] = useState<string | null>(null);
 	/** 世界书注入分组:null = 未加载成功(加载中/失败);worldErr 为分组加载错误;noBook = 无打开书(404)。 */
@@ -196,6 +203,35 @@ export function SettingsPage({
 			setActErr(`思考级别设置失败: ${friendlyError(e)}`);
 		} finally {
 			setBusy(false);
+		}
+	}
+
+	/** 添加自定义模型(写 models.json + 服务端热重载)→ 刷新列表并自动切换到新模型。 */
+	async function addCustomModel() {
+		if (customBusy) return;
+		if (!customProvider.trim() || !customModel.trim() || !customBaseUrl.trim()) {
+			setCustomErr("provider id、模型 id 与 baseUrl 必填");
+			return;
+		}
+		setCustomBusy(true);
+		setCustomErr(null);
+		try {
+			await client.addCustomModel({
+				provider: customProvider.trim(),
+				model: customModel.trim(),
+				baseUrl: customBaseUrl.trim(),
+				...(customApiKey.trim() ? { apiKey: customApiKey.trim() } : {}),
+			});
+			await load();
+			const ref = `${customProvider.trim()}/${customModel.trim()}`;
+			const ok = await changeModel(ref);
+			setNotice(ok ? `自定义模型已添加并切换: ${ref}` : `自定义模型已添加,请手动选择: ${ref}`);
+			setCustomBaseUrl("");
+			setCustomApiKey("");
+		} catch (e) {
+			setCustomErr(`添加失败: ${friendlyError(e)}`);
+		} finally {
+			setCustomBusy(false);
 		}
 	}
 
@@ -426,7 +462,62 @@ export function SettingsPage({
 						</>
 					)}
 
-					<div className="s-head">模型提供商</div>
+					<div className="s-head">自定义模型</div>
+				<div className="s-row">
+					<span className="s-key">provider id</span>
+					<input
+						className="s-select"
+						style={{ marginLeft: "auto" }}
+						placeholder="如 mock"
+						value={customProvider}
+						disabled={customBusy}
+						onChange={(e) => setCustomProvider(e.target.value)}
+					/>
+				</div>
+				<div className="s-row">
+					<span className="s-key">模型 id</span>
+					<input
+						className="s-select"
+						style={{ marginLeft: "auto" }}
+						placeholder="如 mock-1"
+						value={customModel}
+						disabled={customBusy}
+						onChange={(e) => setCustomModel(e.target.value)}
+					/>
+				</div>
+				<div className="s-row">
+					<span className="s-key">baseUrl</span>
+					<input
+						className="s-select"
+						style={{ marginLeft: "auto" }}
+						placeholder="http://127.0.0.1:8787/v1"
+						value={customBaseUrl}
+						disabled={customBusy}
+						onChange={(e) => setCustomBaseUrl(e.target.value)}
+					/>
+				</div>
+				<div className="s-row">
+					<span className="s-key">apiKey(可选)</span>
+					<input
+						className="s-select"
+						style={{ marginLeft: "auto" }}
+						placeholder="留空则无鉴权"
+						value={customApiKey}
+						disabled={customBusy}
+						onChange={(e) => setCustomApiKey(e.target.value)}
+					/>
+				</div>
+				<div className="s-note">
+					添加 OpenAI 兼容的自定义模型(如本地 mock LLM 服务器),保存后自动切换。模型引用为 provider id / 模型 id。
+				</div>
+				<div className="s-row">
+					<button className="btn-ghost" type="button" disabled={customBusy} onClick={() => void addCustomModel()}>
+						{customBusy ? "添加中…" : "添加并切换"}
+					</button>
+					{customErr && <span className="s-busy" style={{ color: "#e08a8a" }}>{customErr}</span>}
+				</div>
+
+				<div className="s-head">模型提供商</div>
 				<div className="s-note">
 					为 provider 添加 API key 后其模型即可在「切换模型」中使用;key 存储在 ~/.pi/writer/agent/auth.json。
 				</div>

@@ -33,22 +33,16 @@ import {
 	SessionManager,
 } from "../../vendor/pi-coding-agent/src/index.ts";
 import { ensureWorld } from "../world-data.ts";
+import { buildStorylineView, constraintTargetMatches, NOTICE_INJECT_LIMIT } from "../world-context.ts";
+import { loadPromptText } from "../prompts.ts";
+import { worldFindTool } from "../tools.ts";
 import { SessionHost } from "./session-host.ts";
 import { formatStageLines } from "../stage/assembler.ts";
 import { countStage } from "../stage/counters.ts";
 import { readStage } from "../stage/stage-store.ts";
 
-/** 常驻编剧系统提示:讨论为主、修改为辅,改动说明意图;收幕委托为正式写作任务。 */
-const EDITOR_PROMPT = `你是「编剧」,写作台的常驻编辑伙伴。随时可与用户讨论行文、取舍、节奏、人物与细节。
-· 你可以在思考里面拟人化的对剧进行吐槽和思考;
-· 需要修改正文时用 write/edit 工具直接修改,并在回复里说明改了什么、为什么;
-· 正文文件固定为 draft/<章节id>.md(如 draft/ch01.md),由当前章节决定——文件不存在时用 write 创建该路径,不得自创其他文件名,也不要在 draft/ 目录写别的文件(写其他路径会被工具拒绝);
-· 你的修改会立即落盘,用户在批注栏能看到「待确认」卡片并可回退——所以改动前想清楚,每次改动尽量小、意图明确;
-· 上下文里的【当前正文】是讨论对象,不是必须保留的定稿;【世界书】与【文风采样】是背景知识,引用时保持设定一致;
-· 讨论为主、修改为辅:用户没让你改,不要擅自大改;
-· 收幕委托:导演收幕时会发来【舞台转录】并要求你把舞台记录整理成正文——消息里会写明目标文件(draft/…),这是你的正式写作任务,完成后用 write 工具落盘;
-· 为导演维护书目录下的 advice.md:写下对下一章的建议(节奏/人物/悬念/可补充的世界书设定)(主要是剧本),导演开下一幕前会读到;没有想说的可保持原样;
-· 禁止直接修改世界书文件(world.json 与 .writer/ 目录)——世界书由导演维护,你的世界书相关建议写进 advice.md;`;
+/** 常驻编剧系统提示(外置 prompts/writer-editor.md):讨论为主、修改为辅,改动说明意图;收幕委托为正式写作任务。 */
+const EDITOR_PROMPT = loadPromptText("writer-editor.md");
 
 /** 注入块长度上限(草稿/世界书正文截断,防上下文膨胀)。 */
 const DRAFT_LIMIT = 4000;
@@ -175,7 +169,9 @@ export class WriterHost {
 			thinkingLevel: thinkingLevel as ThinkingLevel | undefined,
 			excludeTools: ["bash"],
 			initialActiveToolNames: ["write", "read"],
-			customTools: this.options.getMcpTools?.(),
+			// world_find(只读检索世界书):编剧无 world_update,但可结构化查条目——
+			// 长篇小说条目多时,read 全文翻找成本高(2026-08-12,审计后补)
+			customTools: [worldFindTool, ...(this.options.getMcpTools?.() ?? [])],
 		});
 	}
 
@@ -215,6 +211,25 @@ export class WriterHost {
 			if (style && style.trim().length > 0) {
 				const body = style.length > STYLE_LIMIT ? `${style.slice(0, STYLE_LIMIT)}…(截断)` : style;
 				blocks.push(`【文风采样】\n${body}`);
+			}
+			// 发展线视图(当前目标 + 已完成列表)——编剧成文/讨论时不重复推进已完成
+			// 目标(借鉴 AI-Novel completedMilestones 守卫,2026-08-12)
+			const view = buildStorylineView(world);
+			if (view) {
+				const lines: string[] = [];
+				if (view.currentTitle) lines.push(`当前位置: ${view.currentTitle}`);
+				if (view.completed.length > 0) lines.push(`已完成(禁止重复追求/推进): ${view.completed.join("、")}`);
+				if (lines.length > 0) blocks.push(`【发展线】\n${lines.join("\n")}`);
+			}
+			// 全局备忘录(Notice 待办,未完成项)——编剧要遵守/续写埋伏笔(2026-08-12 回到初衷)
+			const noticeOpen = world.notice.items.filter((i) => !i.done).slice(0, NOTICE_INJECT_LIMIT);
+			if (world.notice.enabled && noticeOpen.length > 0) {
+				blocks.push(`【Notice·备忘录】\n${noticeOpen.map((i) => `- [ ] ${i.text}`).join("\n")}`);
+			}
+			// 写作约束(按 target 过滤:编剧收 writer/all)——酒馆式规则包(2026-08-12)
+			const editorConstraints = world.constraints.filter((c) => c.enabled && constraintTargetMatches(c.target, "writer"));
+			if (editorConstraints.length > 0) {
+				blocks.push(`【写作约束】\n${editorConstraints.map((c) => `- ${c.name}: ${c.text}`).join("\n")}`);
 			}
 		} catch {
 			/* 世界书缺失:跳过注入,不阻断对话 */

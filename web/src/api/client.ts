@@ -224,6 +224,21 @@ export class ApiClient {
 		await this.request<{ ok: boolean }>("/api/model", { method: "POST", body: JSON.stringify({ model }) });
 	}
 
+	/** 添加自定义模型(openai-completions 协议,如本地 mock LLM):写 models.json + 服务端热重载。 */
+	async addCustomModel(opts: {
+		provider: string;
+		model: string;
+		baseUrl: string;
+		apiKey?: string;
+		contextWindow?: number;
+		maxTokens?: number;
+	}): Promise<{ ok: boolean; provider: string; model: string }> {
+		return this.request<{ ok: boolean; provider: string; model: string }>("/api/models/custom", {
+			method: "POST",
+			body: JSON.stringify(opts),
+		});
+	}
+
 	/** 设置思考等级。 */
 	async setThinking(level: string): Promise<void> {
 		await this.request<{ ok: boolean }>("/api/thinking", { method: "POST", body: JSON.stringify({ level }) });

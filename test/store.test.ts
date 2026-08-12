@@ -148,22 +148,26 @@ describe("processAgentEvent", () => {
     expect(s.messages[1]!.entryId).toBe("entry-hist");
     expect(s.messages[0]!.entryId).toBe("entry-abc"); // 旧消息不受影响
   });
-  it("messagesToEvents 把历史转为 message_start 事件序列,经 reducer 归约与 SSE 一致", () => {
+  it("messagesToEvents 把历史转为 message_start/message_end 事件序列,经 reducer 归约与 SSE 一致", () => {
     const events = messagesToEvents([
       { role: "user", text: "你好" },
       { role: "assistant", text: "你好呀" },
     ]);
     expect(events).toEqual([
       { type: "message_start", message: { role: "user", content: [{ type: "text", text: "你好" }] } },
+      { type: "message_end", message: {} },
       { type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "你好呀" }] } },
+      { type: "message_end", message: {} },
     ]);
     // 走与 SSE 相同的 reducer 路径:user/assistant 历史气泡逐条还原
     let s = initialSessionState();
     for (const e of events) s = processAgentEvent(s, e);
     expect(s.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
     expect(s.messages.map((m) => m.text)).toEqual(["你好", "你好呀"]);
-    // 历史消息 done 恒 false(不做 message_end),不影响渲染
-    expect(s.messages.every((m) => m.done === false)).toBe(true);
+    // message_end 忠实模拟 SSE(每条消息成对发射;reducer 只标记 assistant 的
+    // done——user 的 message_end 被忽略,与真实事件流一致):assistant 历史消息
+    // 渲染为完成态(思考块不显示「思考中」计时),user 消息无 done 语义
+    expect(s.messages.map((m) => m.done)).toEqual([false, true]);
   });
   it("messagesToEvents 携带 thinking:历史水合后思考链还原", () => {
     let s = initialSessionState();

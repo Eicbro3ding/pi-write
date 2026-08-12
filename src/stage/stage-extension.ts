@@ -2,6 +2,7 @@ import { Type, type Static } from "typebox";
 import { defineTool, type ExtensionAPI, type ToolDefinition } from "../../vendor/pi-coding-agent/src/index.ts";
 import { resolveSkillsDir, slugify } from "../config.ts";
 import { ensureWorld, type WorldData } from "../world-data.ts";
+import { loadPromptText, renderPrompt } from "../prompts.ts";
 import { wordCountTool, worldFindTool, worldUpdateTool } from "../tools.ts";
 import { resolveWorldRefs } from "./assembler.ts";
 import { loadScript, reviseScript, saveScript } from "./script-store.ts";
@@ -10,6 +11,10 @@ import type { RoleSpec, StageOrchestrator } from "./orchestrator.ts";
 
 /**
  * 舞台区扩展工厂：导演/演员/编剧三种角色的会话装配（系统提示 + 工具 + "context" 钩子）。
+ *
+ * 角色提示词外置在 prompts/*.md(2026-08-12,与 skills 同目录模式);带路径占位的
+ * 用 {SKILLS_PATH} 渲染(相对路径会解析到书目录内,守卫只读放行 skills 目录——
+ * 必须给绝对路径模型才读得到,2026-08-11 实测)。
  *
  * "context" 事件即 transformContext（每次 LLM 调用前重写消息列表）——模块化
  * 消息队列的挂载点：每次调用前重装 [舞台切片 | 剧本文字段 | 计数块]。
@@ -21,49 +26,26 @@ export function scriptWritingManualPath(): string {
 	return `${resolveSkillsDir()}/stage-scripting/SKILL.md`;
 }
 
-const DIRECTOR_PROMPT = (skillsPath: string) => `你是「导演」，一部小说的创作负责人。你处于三种模式之一（由你主动进入，系统会提示当前模式）：
-· 讨论模式（开演前）：与用户讨论剧情走向、人物设定、大纲；维护世界书（world_find 查询 / world_update 修改角色、世界观、时间线、大纲等条目）。
-· 剧本模式（写剧本中，主动进入）：剧本讨论成熟后，由你主动用 script_confirm 工具提交剧本（结构化字段）——提交后等待用户确认，确认前禁止用 stage_script 开演。文字段 = 场景意象 / 节拍（事件序列，不是台词稿）/ 角色任务（objective：角色想要什么，不是性格标签）/ 风格示例（禁止复述）。完整方法论可 read ${skillsPath}。
-· 导演模式（演出中）：观看实时注入的舞台区，与用户讨论演出效果，可示意收尾、喊停、修订剧本。
-你决定每个演员知道什么：定义段 inject 指定注入哪些世界书节点（include-only——没指定的演员不知道，信息差即悬念）。
-**世界书维护纪律**：新建人物/组织/地点条目时，检查与已有条目是否确有剧情关联；有则一并 upsert_relation 建立关系（无则不强连）。关系必须来自剧情事实；拿不准的关联留给用户讨论，不要为连通虚构。
-**一章一幕**：一幕对应一个章节。收幕后这一幕即完结——不要主动要求继续演下一幕；新的一幕由用户切换到新章节后，在新章节的导演会话里讨论。`;
+const DIRECTOR_PROMPT_TEMPLATE = loadPromptText("director.md");
+const ACTOR_PROMPT = loadPromptText("actor.md");
+const NARRATOR_PROMPT = loadPromptText("narrator.md");
+const WRITER_PROMPT = loadPromptText("writer-scene.md");
 
-const ACTOR_PROMPT = `你是「演员」，在一幕共演的舞台戏中饰演角色。规则：
-1. **第一人称代入**：思考时以角色第一人称代入（"我是李四。我想要……"）——你的思考链是角色的内心，绝不写进演出内容；
-2. 每次轮到你时，舞台提示会告知你饰演的角色；只演自己：自己的台词、动作、神态、内心；可**提及**他人（作为你台词/动作的对象："店小二，上酒"），**不代演**他人（不给他写台词、不描写其动作反应）；环境描写留给叙述者；
-3. 无话可说时**优先输出动作/神态描写**（如（垂着眼，摩挲着杯沿）），确无行动可演才输出 <pass>；<pass> 不用于回避剧情推进；
-4. 上下文里的【场务·演员不可在演出中提及此信息】是制作信息，绝不能在演出内容中提及；
-5. 剧本演出指令是你的表演依据；若收到「提示收尾」，请在剩余条数内自然收束本角色。`;
-
-/** 叙述者专属（场景描写/环境/龙套代演，§10.4）。 */
-const NARRATOR_PROMPT = `你是「叙述者」，负责舞台的场景描写、氛围与无专属演员的龙套代演。规则：
-1. 以第一人称代入"这场戏的镜头"，描写环境、光线、声音、物件与群像氛围；
-2. **代演龙套**：一句台词的无主龙套由你代演，输出"店小二：好嘞"格式（对白归属该角色名）；
-3. 不描写主要角色的内心（那是他们的隐私），只写可观察的外在：动作、神态、位置；
-4. 你的描写用括号包裹（（烛火晃了一下。）），输出可直接进转录；
-5. 上下文里的【场务】信息是制作信息，绝不能在演出内容中提及。`;
-
-const WRITER_PROMPT = `你是「编剧」。你的唯一职责：把舞台区转录整理成正文小说——去掉对白标签与舞台指示，叙述化、连贯成文；**参考【剧本·角色内心】与【世界书】把潜台词与心理矛盾写进正文**（角色没说出口的内心，由导演声明的 state 与世界书提供）。整理完成后用 write 工具写入指定路径。`;
+/** 导演提示词(渲染 {SKILLS_PATH} 为剧本写作手册绝对路径)。 */
+function directorPrompt(skillsPath: string): string {
+	return renderPrompt(DIRECTOR_PROMPT_TEMPLATE, { SKILLS_PATH: skillsPath });
+}
 
 /** 剧本模式注入块（scripting 模式每次调用前注入；含"必须经工具输出"状态指令）。
- *  skillsDir = skills 根目录（注入绝对路径：相对路径会解析到书目录内，读不到）。 */
+ *   模板外置 prompts/script-method.md;skillsDir 渲染进 {SKILLS_PATH}(注入绝对路径:
+ *   相对路径会解析到书目录内,读不到——2026-08-11 实测)。 */
 export function buildScriptMethodBlock(skillsDir: string): string {
-	return `【剧本写作方法·你在剧本模式】
-· 剧本讨论成熟后，用 script_confirm 工具提交（结构化字段），禁止直接输出剧本文本
-· 提交后等待用户确认；确认前不要调用 stage_script（会被拒绝）
-· objective 写角色的欲望（想要什么），不是性格标签
-· beats 是事件序列（必须发生什么），不是台词稿；措辞留给演员
-· examples 是风格演示：最多 2-3 轮，禁止与剧情内容重复，演员不得复述
-· forbidden 只写硬禁区，别超过 3 条
-· perActor 的 id 必须与 cast 的演员 id 一致；世界书引用可传 id 或名称（title）
-· 分幕目标对齐世界书大纲；开演前检查选角约束（一幕一人一角）
-· 完整方法论与示例剧本：read ${skillsDir}/stage-scripting/SKILL.md（必要时查阅）`;
+	return renderPrompt(loadPromptText("script-method.md"), { SKILLS_PATH: skillsDir });
 }
 
 export function directorRole(orch: StageOrchestrator): RoleSpec {
 	return {
-		systemPrompt: DIRECTOR_PROMPT(scriptWritingManualPath()),
+		systemPrompt: directorPrompt(scriptWritingManualPath()),
 		extensions: [{ name: "stage-director", factory: (pi) => stageDirectorExtension(pi, orch) }],
 		excludeTools: ["bash"],
 		activeTools: ["read", "write", "edit", "ls", "grep"],
@@ -88,6 +70,8 @@ export function writerRole(): RoleSpec {
 		extensions: [],
 		excludeTools: ["bash"],
 		activeTools: ["write", "read"],
+		// world_find(只读):收幕编剧查世界书条目(与常驻编剧同款,2026-08-12)
+		customTools: [worldFindTool],
 	};
 }
 

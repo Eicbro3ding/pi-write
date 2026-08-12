@@ -9,12 +9,17 @@ export type EntryStatus = "alive" | "dead" | "unknown" | "active" | "archived" |
 export type StoryNodeStatus = "pending" | "in-progress" | "done" | "shelved";
 /** 关系箭头方向:none 无箭头 / single 单向(from→to)/ double 双向。 */
 export type RelationArrow = "none" | "single" | "double";
+/** 约束生效范围(酒馆式规则包):main=主写作会话 / director=导演 / writer=编剧 / all=全部。 */
+export type ConstraintTarget = "main" | "director" | "writer" | "all";
 
 export interface WorldEntry { id: string; type: EntryType; title: string; keys: string[]; chapters: string[]; status: EntryStatus; active: boolean; parent: string | null; tags: string[]; body: string; avatar: string | null; images: string[]; updatedAt: number; }
 export interface WorldRelation { id: string; from: string; to: string; type: string; label: string; emphasized: boolean; arrow: RelationArrow; }
-export interface WorldConstraint { id: string; name: string; text: string; enabled: boolean; }
+export interface WorldConstraint { id: string; name: string; text: string; enabled: boolean; target?: ConstraintTarget; }
 export interface StyleSample { text: string; source: string; updatedAt: number; }
-export interface NoticeData { text: string; enabled: boolean; updatedAt: number; }
+/** Notice 待办条目(备忘录):done=false 未完成(注入上下文)/ done=true 已完成(仅 UI 板子可见)。 */
+export interface NoticeItem { id: string; text: string; done: boolean; updatedAt?: number; }
+/** Notice = 全局备忘录/待办清单(2026-08-12 回到初衷:不再是单条文本,是常驻板子的待办列表)。 */
+export interface NoticeData { enabled: boolean; items: NoticeItem[]; }
 export interface StoryNode { id: string; title: string; status: StoryNodeStatus; goal: string; next: string | null; }
 export interface StorylineData { enabled: boolean; nodes: StoryNode[]; }
 export interface TimelineEvent { id: string; chapter: string; text: string; }
@@ -31,7 +36,13 @@ const ENTRY_TYPES = ["character", "world", "timeline", "outline"] as const;
 const ENTRY_STATUSES = ["alive", "dead", "unknown", "active", "archived", "draft"] as const;
 const STORY_STATUSES = ["pending", "in-progress", "done", "shelved"] as const;
 const RELATION_ARROWS = ["none", "single", "double"] as const;
+const CONSTRAINT_TARGETS = ["main", "director", "writer", "all"] as const;
+/** 旧式单条 Notice 的文本上限(迁移兼容)。 */
 const NOTICE_LIMIT = 1000;
+/** Notice 待办单条文本上限。 */
+const NOTICE_ITEM_LIMIT = 500;
+/** Notice 待办条数上限。 */
+const NOTICE_ITEMS_MAX = 50;
 /** 简要世界观概述的字数上限。 */
 const SUMMARY_LIMIT = 600;
 const CONSTRAINT_LIMIT = 800;
@@ -69,7 +80,7 @@ export function createEmptyWorld(): WorldData {
 		constraints: [],
 		styleSample: null,
 		worldSummary: "",
-		notice: { text: "", enabled: true, updatedAt: 0 },
+		notice: { enabled: true, items: [] },
 		storyline: { enabled: true, nodes: [] },
 		timeline: [],
 	};
@@ -161,14 +172,35 @@ function worldErrors(value: unknown): string | null {
 		if (typeof c.text !== "string" || c.text.length > CONSTRAINT_LIMIT) {
 			return `约束 ${c.id} 超过 ${CONSTRAINT_LIMIT} 字上限`;
 		}
+		// target 可选(旧数据缺省=all);存在则必须合法枚举
+		if (c.target !== undefined && c.target !== null && !CONSTRAINT_TARGETS.includes(c.target as ConstraintTarget)) {
+			return `约束 ${c.id} 的 target 非法: ${String(c.target)}(合法值: ${CONSTRAINT_TARGETS.join(" / ")})`;
+		}
 	}
 	const sample = raw.styleSample ?? null;
 	if (sample !== null && (typeof sample.text !== "string" || sample.text.length > SAMPLE_LIMIT)) {
 		return `采样超过 ${SAMPLE_LIMIT} 字上限`;
 	}
-	const notice = raw.notice as Partial<NoticeData>;
-	if (typeof notice.text !== "string" || notice.text.length > NOTICE_LIMIT) {
-		return `Notice 超过 ${NOTICE_LIMIT} 字上限`;
+	const notice = raw.notice as Partial<NoticeData> & { text?: string };
+	// 旧式单条 Notice(迁移前形态):text 必须为字符串且 ≤ 旧上限
+	if (notice.text !== undefined && notice.text !== null) {
+		if (typeof notice.text !== "string" || notice.text.length > NOTICE_LIMIT) {
+			return `Notice 超过 ${NOTICE_LIMIT} 字上限`;
+		}
+	}
+	// 待办清单形态:items 数组、id 唯一、每条 text ≤ NOTICE_ITEM_LIMIT、done 布尔
+	const items = Array.isArray(notice.items) ? notice.items : [];
+	if (items.length > NOTICE_ITEMS_MAX) return `Notice 待办超过 ${NOTICE_ITEMS_MAX} 条上限`;
+	const itemSeen = new Set<string>();
+	for (const it of items) {
+		if (typeof it !== "object" || it === null) return "Notice 待办必须是对象";
+		if (typeof it.id !== "string" || it.id.length === 0) return "Notice 待办缺少 id";
+		if (itemSeen.has(it.id)) return `Notice 待办 id 重复: ${it.id}`;
+		itemSeen.add(it.id);
+		if (typeof it.text !== "string" || it.text.length > NOTICE_ITEM_LIMIT) {
+			return `Notice 待办 ${it.id} 超过 ${NOTICE_ITEM_LIMIT} 字上限`;
+		}
+		if (typeof it.done !== "boolean") return `Notice 待办 ${it.id} 的 done 必须是布尔值`;
 	}
 	const nodes = Array.isArray(raw.storyline.nodes) ? raw.storyline.nodes : [];
 	const nodeSeen = new Set<string>();
@@ -200,10 +232,27 @@ export function validateWorld(value: unknown): WorldData {
 	});
 	// 规范化:旧数据缺 worldSummary 字段(或显式 null),补空
 	const needsSummary = raw.worldSummary === undefined || raw.worldSummary === null;
-	if (!needsArrow && !needsImages && !needsSummary) return raw;
+	// 规范化:旧式单条 Notice({text,enabled,updatedAt})迁移为待办清单形态(2026-08-12 回到初衷)
+	const needsNoticeMigrate =
+		!Array.isArray((raw.notice as unknown as { items?: unknown }).items) &&
+		typeof (raw.notice as unknown as { text?: unknown }).text === "string";
+	if (!needsArrow && !needsImages && !needsSummary && !needsNoticeMigrate) return raw;
 	return {
 		...raw,
 		worldSummary: needsSummary ? "" : raw.worldSummary,
+		notice: needsNoticeMigrate
+			? {
+					enabled: (raw.notice as unknown as { enabled?: boolean }).enabled ?? true,
+					items: [
+						{
+							id: newId("ntc"),
+							text: (raw.notice as unknown as { text: string }).text,
+							done: false,
+							updatedAt: (raw.notice as unknown as { updatedAt?: number }).updatedAt ?? Date.now(),
+						},
+					],
+				}
+			: raw.notice,
 		relations: needsArrow
 			? raw.relations.map((r) => ({ ...r, arrow: (r as { arrow?: RelationArrow }).arrow ?? "double" }))
 			: raw.relations,
