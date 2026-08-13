@@ -16,23 +16,15 @@ export interface CodeMirrorBoxProps {
 	/** 受控文档内容(保存后回填 / 切换章节重新加载)。 */
 	value: string;
 	onChange: (text: string) => void;
-	/** 保存回调(供外层 Ctrl+S / 显式保存按钮调用)。 */
-	onSave?: () => void;
 	/** 选区变化回调(光标移动 / 选中范围变化 / 文档编辑均触发,供上层同步选区快照)。 */
 	onSelectionChange?: (selection: CodeMirrorSelection) => void;
 	vimMode?: boolean;
 	className?: string;
 }
 
-/** 暴露给外层的命令句柄(如 Alt+E 聚焦编辑器、选区替换与重载)。 */
+/** 暴露给外层的命令句柄(Alt+E 聚焦编辑器)。 */
 export interface CodeMirrorBoxHandle {
 	focus: () => void;
-	/** 用 text 替换 [from, to) 区间(供选区替换命令调用)。 */
-	replaceRange: (from: number, to: number, text: string) => void;
-	/** 整体替换文档内容(与当前内容相同时跳过,避免无谓的事务)。 */
-	replaceDocument: (text: string) => void;
-	/** 移动光标 / 设置选区,并滚动到可见区域。 */
-	selectRange: (from: number, to: number) => void;
 }
 
 /**
@@ -43,15 +35,13 @@ export interface CodeMirrorBoxHandle {
  * 变更(切换章节重载草稿)才会触发整体替换。
  */
 export const CodeMirrorBox = forwardRef<CodeMirrorBoxHandle, CodeMirrorBoxProps>(function CodeMirrorBox(
-	{ value, onChange, onSave, onSelectionChange, vimMode = false, className },
+	{ value, onChange, onSelectionChange, vimMode = false, className },
 	ref,
 ) {
 	const hostRef = useRef<HTMLDivElement>(null);
 	const viewRef = useRef<EditorView | null>(null);
 	const onChangeRef = useRef(onChange);
 	onChangeRef.current = onChange;
-	const onSaveRef = useRef(onSave);
-	onSaveRef.current = onSave;
 	const onSelectionChangeRef = useRef(onSelectionChange);
 	onSelectionChangeRef.current = onSelectionChange;
 	const vimRef = useRef(vimMode);
@@ -119,15 +109,6 @@ export const CodeMirrorBox = forwardRef<CodeMirrorBoxHandle, CodeMirrorBoxProps>
 		ref,
 		() => ({
 			focus: () => viewRef.current?.focus(),
-			replaceRange: (from, to, text) =>
-				viewRef.current?.dispatch({ changes: { from, to, insert: text } }),
-			replaceDocument: (text) => {
-				const view = viewRef.current;
-				if (!view || view.state.doc.toString() === text) return;
-				view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
-			},
-			selectRange: (from, to) =>
-				viewRef.current?.dispatch({ selection: { anchor: from, head: to }, scrollIntoView: true }),
 		}),
 		[],
 	);

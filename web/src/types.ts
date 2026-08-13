@@ -381,7 +381,8 @@ export interface ThemeManifest {
 
 // —— 专注写作台 workspace 类型(前端本地模型,不与后端字段对齐)——
 
-/** CodeMirror 选区快照:编剧「选中文本自动填入」与正文安全编辑所需的纯文本信息。 */
+/** CodeMirror 选区快照:编剧「选中文本自动填入」所需的纯文本信息(书/文件/章节归属
+ *  用于跨书同名文件区分与过期校验)。 */
 export interface TextSelectionSnapshot {
 	/** 选区起点(字符偏移,含)。 */
 	from: number;
@@ -395,26 +396,6 @@ export interface TextSelectionSnapshot {
 	file: string;
 	/** 所属章节会话文件 basename。 */
 	chapterFile: string;
-}
-
-/** 一次已应用(或待撤回)的文本编辑记录。 */
-export interface AppliedEdit {
-	/** 编辑所在的正文文件。 */
-	file: string;
-	/** 编辑所在的章节会话文件。 */
-	chapterFile: string;
-	/** 编辑前的完整文档。 */
-	beforeText: string;
-	/** 编辑后的完整文档。 */
-	afterText: string;
-	/** 编辑区间起点。 */
-	from: number;
-	/** 编辑区间终点(insert 模式等于 from)。 */
-	to: number;
-	/** 被替换的原文(insert 模式为空串)。 */
-	replacedText: string;
-	/** 插入的文本。 */
-	insertedText: string;
 }
 
 /** 正文保存状态:加载中 / 已保存 / 未保存 / 保存中 / 保存失败。 */

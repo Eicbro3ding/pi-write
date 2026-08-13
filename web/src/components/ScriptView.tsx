@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { StageScriptDto } from "../types.ts";
+import { castNameMap } from "../stage-web.ts";
 
 type ScriptTab = "summary" | "beats" | "actors";
 const TAB_INDEX: Record<ScriptTab, number> = { summary: 0, beats: 1, actors: 2 };
@@ -13,13 +14,7 @@ const TAB_INDEX: Record<ScriptTab, number> = { summary: 0, beats: 1, actors: 2 }
 export function ScriptView({ script }: { script: StageScriptDto }) {
 	const [tab, setTab] = useState<ScriptTab>("summary");
 	/** 演员 id → 角色名(definition.cast 首名;perActor 同键)——仅展示用。 */
-	const names = useMemo(() => {
-		const m: Record<string, string> = {};
-		for (const [actorId, chars] of Object.entries(script.definition.cast)) {
-			m[actorId] = chars[0] ?? actorId;
-		}
-		return m;
-	}, [script]);
+	const names = useMemo(() => castNameMap(script.definition.cast), [script]);
 	return (
 		<>
 			{/* tabs-equal:标签文案不等长(演员指令 4 字),指示块位移前提是等宽——

@@ -28,8 +28,10 @@ export interface CapturedEdit {
  * 幂等:同一 toolCallId 的重复 start/end(SSE 重放)只处理一次。
  */
 export function createEditCapture(client: ApiClient, slugFn: () => string | null) {
-	/** 待配对编辑:按 toolCallId 存(before 在 start 时抓取,可能慢于工具执行,用 promise)。 */
-	const pending = new Map<string, { kind: "draft" | "world"; path: string | null; toolName: string; before: Promise<string | WorldDataDto> }>();
+	/** 待配对编辑:按 toolCallId 存(before 在 start 时抓取,可能慢于工具执行,用 promise);
+	 *  slug 在 start 时捕获(发起回合的书),after 取数按它解析——工具事件经 SSE 异步
+	 *  到达,await 期间若切书,slugFn() 已指向新书,用 p.slug 才能读对旧书的草稿。 */
+	const pending = new Map<string, { kind: "draft" | "world"; path: string | null; toolName: string; before: Promise<string | WorldDataDto>; slug: string | null }>();
 	/** 已处理过的 end 的 toolCallId(防 SSE 重放重复组装)。 */
 	const handled = new Set<string>();
 	/** 回合级预取基线:回合开始(user message_start)时抓取「编辑前」内容——
@@ -41,9 +43,9 @@ export function createEditCapture(client: ApiClient, slugFn: () => string | null
 	};
 
 	return {
-		/** 回合开始预取基线(用户消息到达时调用):草稿按路径、世界书整体。 */
-		prefetchBaseline(draftPath: string | null | undefined): void {
-			if (draftPath) turnBaseline.draft.set(draftPath, client.getDraft(draftPath).then((r) => r.text));
+		/** 回合开始预取基线(用户消息到达时调用):草稿按路径+书解析、世界书整体。 */
+		prefetchBaseline(draftPath: string | null | undefined, slug?: string | null): void {
+			if (draftPath) turnBaseline.draft.set(draftPath, client.getDraft(draftPath, slug ?? undefined).then((r) => r.text));
 			turnBaseline.world = client.getWorld().then((r) => r.world);
 		},
 
@@ -54,13 +56,15 @@ export function createEditCapture(client: ApiClient, slugFn: () => string | null
 			const path = pathFromArgs(parseToolArgs(args));
 			const kind = classifyToolCall(toolName, path);
 			if (!kind) return null;
+			// 发起回合的书:捕获用于 after 取数(切书后不按新书读旧草稿路径)
+			const slug = slugFn();
 			let before: Promise<string | WorldDataDto>;
 			if (kind === "draft" && path) {
-				before = turnBaseline.draft.get(path) ?? client.getDraft(path).then((r) => r.text);
+				before = turnBaseline.draft.get(path) ?? client.getDraft(path, slug ?? undefined).then((r) => r.text);
 			} else {
 				before = turnBaseline.world ?? client.getWorld().then((r) => r.world);
 			}
-			pending.set(toolCallId, { kind, path: path ?? null, toolName, before });
+			pending.set(toolCallId, { kind, path: path ?? null, toolName, before, slug });
 			return kind;
 		},
 
@@ -73,11 +77,13 @@ export function createEditCapture(client: ApiClient, slugFn: () => string | null
 			pending.delete(toolCallId);
 			if (!p || isError) return null; // 失败:不弹卡
 			try {
-				const slug = slugFn();
+				// 预览数据携带的书:以发起回合的书为准(p.slug),而非 slugFn() 的当前值——
+				// await 期间切书时卡片数据仍归属旧书(页面层另有 scope 守卫决定是否丢弃)
+				const slug = p.slug ?? slugFn();
 				const before = await p.before;
 				if (p.kind === "draft" && p.path) {
 					if (typeof before !== "string") return null;
-					const after = await client.getDraft(p.path);
+					const after = await client.getDraft(p.path, p.slug ?? undefined);
 					if (before === after.text) return null; // 无实质变化
 					return {
 						toolCallId,

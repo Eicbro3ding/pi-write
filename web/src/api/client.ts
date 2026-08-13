@@ -180,40 +180,6 @@ export class ApiClient {
 		return this.request<SessionState>(`/api/session${q}`);
 	}
 
-	/** 发送聊天消息(202 立即返回,结果走 SSE)。 */
-	async sendChat(text: string): Promise<void> {
-		await this.request<{ ok: boolean }>("/api/chat", { method: "POST", body: JSON.stringify({ text }) });
-	}
-
-	/**
-	 * 分支对话:从某条消息处开始新分支(该消息保留为起点,其后消息离开当前对话,
-	 * 仍在会话文件中)。之后发送的消息 append 到该消息之下。
-	 */
-	async branchMessage(entryId: string): Promise<void> {
-		await this.request<{ ok: boolean }>("/api/messages/branch", {
-			method: "POST",
-			body: JSON.stringify({ entryId }),
-		});
-	}
-
-	/** 切换到任意分支上的消息(不限于当前链);分支栏来回切换的入口。 */
-	async navigateMessage(entryId: string): Promise<void> {
-		await this.request<{ ok: boolean }>("/api/messages/navigate", {
-			method: "POST",
-			body: JSON.stringify({ entryId }),
-		});
-	}
-
-	/** 会话分支树概览(分支栏数据)。 */
-	async getSessionTree(): Promise<SessionTreeDto> {
-		return this.request<SessionTreeDto>("/api/session/tree");
-	}
-
-	/** 中止当前生成。 */
-	async abort(): Promise<void> {
-		await this.request<{ ok: boolean }>("/api/abort", { method: "POST" });
-	}
-
 	/** 模型列表、当前模型与思考等级(vendor 模型元素最小形状见 SettingsPage)。 */
 	async getModels(): Promise<{ models: unknown[]; current: unknown; thinking: unknown }> {
 		return this.request<{ models: unknown[]; current: unknown; thinking: unknown }>("/api/models");

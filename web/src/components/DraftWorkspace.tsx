@@ -1,28 +1,10 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CodeMirrorBox, type CodeMirrorBoxHandle, type CodeMirrorSelection } from "../editor/CodeMirrorBox.tsx";
-import { applyTextEdit, resolveSaveOutcome, selectionStillMatches } from "../workspace.ts";
+import { resolveSaveOutcome } from "../workspace.ts";
 import type { ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
 import { useCrossWindowReload } from "../cross-window-sync.ts";
-import type { AppliedEdit, DraftStatus, TextSelectionSnapshot } from "../types.ts";
-
-/** 正文工作区暴露给外层的命令句柄(供 WritePage / 批注面板调用)。 */
-export interface DraftWorkspaceHandle {
-	/** 聚焦编辑器(Alt+E)。 */
-	focus: () => void;
-	/** 立即保存;true 表示本次写入成功,无未保存内容 / 正在保存 / 写入失败返回 false。 */
-	saveNow: () => Promise<boolean>;
-	/** 当前文档全文。 */
-	getText: () => string;
-	/** 对当前选区应用替换/插入;选区失效(selectionStillMatches 为 false)时返回 null,不触碰文档。 */
-	applySelectionEdit: (mode: "replace" | "insert", text: string) => AppliedEdit | null;
-	/** 撤回已应用的编辑;仅当当前文档与 edit.afterText 一致时成功(true),否则由调用层提示「正文已变化,无法自动撤回」。 */
-	undoEdit: (edit: AppliedEdit) => boolean;
-	/** 移动光标 / 设置选区,并滚动到可见区域。 */
-	selectRange: (from: number, to: number) => void;
-	/** 重新加载草稿(加载失败后的「重试加载」)。 */
-	retryLoad: () => void;
-}
+import type { DraftStatus, TextSelectionSnapshot } from "../types.ts";
 
 interface DraftWorkspaceProps {
 	client: ApiClient;
@@ -30,7 +12,7 @@ interface DraftWorkspaceProps {
 	slug: string | null;
 	/** 正文文件(书内相对路径,如 draft/ch01.md);变化时取消旧请求与 debounce 并重新加载。 */
 	file: string;
-	/** 所属章节会话文件 basename,用于选区快照与安全编辑校验。 */
+	/** 所属章节会话文件 basename,用于选区快照归属。 */
 	chapterFile: string;
 	/** 标题(通常为当前章节名)。 */
 	title: string;
@@ -71,14 +53,24 @@ const HINT_CLASS: Record<DraftStatus, string> = {
 
 /**
  * 正文主编辑 workspace:CodeMirror 编辑器 + 800ms debounce 自动保存 + Ctrl+S 立即保存 +
- * Alt+E 聚焦 + 保存状态机(loading/saved/dirty/saving/save-error)+ 选区快照 +
- * 安全的 apply/undo handle(基于 selectionStillMatches / undoAppliedEdit 纯逻辑)。
+ * Alt+E 聚焦 + 保存状态机(loading/saved/dirty/saving/save-error)+ 选区快照上报
+ * (编剧「选中文本自动填入」的数据源)。批注退役后不再暴露命令句柄(原 apply/undo/
+ * selectRange/retryLoad 无调用方,2026-08 移除)。
  * 加载失败必须可见(中文文案 + 重试加载),不能吞掉错误后继续显示「已保存」。
  */
-export const DraftWorkspace = forwardRef<DraftWorkspaceHandle, DraftWorkspaceProps>(function DraftWorkspace(
-	{ client, slug, file, chapterFile, title, onWordCount, onStatusChange, onSelectionChange, onError, className, headerless = false },
-	ref,
-) {
+export function DraftWorkspace({
+	client,
+	slug,
+	file,
+	chapterFile,
+	title,
+	onWordCount,
+	onStatusChange,
+	onSelectionChange,
+	onError,
+	className,
+	headerless = false,
+}: DraftWorkspaceProps) {
 	const [text, setText] = useState("");
 	const [status, setStatus] = useState<DraftStatus>("loading");
 	const [wordCount, setWordCount] = useState(0);
@@ -100,7 +92,6 @@ export const DraftWorkspace = forwardRef<DraftWorkspaceHandle, DraftWorkspacePro
 	statusRef.current = status;
 	const loadErrorRef = useRef(loadError);
 	loadErrorRef.current = loadError;
-	const selectionRef = useRef<TextSelectionSnapshot | null>(null);
 	const savingRef = useRef(false);
 	const editorRef = useRef<CodeMirrorBoxHandle>(null);
 	const statusCbRef = useRef(onStatusChange);
@@ -120,9 +111,8 @@ export const DraftWorkspace = forwardRef<DraftWorkspaceHandle, DraftWorkspacePro
 		statusCbRef.current?.(s);
 	}
 
-	/** 清除当前选区快照并上报 null(加载开始 / 加载成功时调用)。 */
+	/** 清除当前选区上报 null(加载开始 / 加载成功时调用:旧选区快照不再有效)。 */
 	function clearSelection() {
-		selectionRef.current = null;
 		selectionCbRef.current?.(null);
 	}
 
@@ -138,16 +128,17 @@ export const DraftWorkspace = forwardRef<DraftWorkspaceHandle, DraftWorkspacePro
 		setLoadError(null);
 		errorCbRef.current?.(null);
 		clearSelection();
-	void client
-		.getDraft(file, slug ?? undefined)
-		.then((r) => {
+		void client
+			.getDraft(file, slug ?? undefined)
+			.then((r) => {
 				if (cancelled) return;
 				setText(r.text);
 				reportStatus("saved");
 				setExternalConflict(false);
 				lastMtimeRef.current = r.mtime; // 记录磁盘版本,保存时作 If-Match
-				setWordCount(count(r.text));
-				wordsCbRef.current?.(count(r.text));
+				const c = count(r.text);
+				setWordCount(c);
+				wordsCbRef.current?.(c);
 			})
 			.catch((err: unknown) => {
 				if (cancelled) return;
@@ -280,13 +271,14 @@ export const DraftWorkspace = forwardRef<DraftWorkspaceHandle, DraftWorkspacePro
 		if (t === textRef.current) return;
 		setText(t);
 		reportStatus("dirty");
-		setWordCount(count(t));
-		wordsCbRef.current?.(count(t));
+		const c = count(t);
+		setWordCount(c);
+		wordsCbRef.current?.(c);
 		if (timerRef.current) clearTimeout(timerRef.current);
 		timerRef.current = setTimeout(() => void saveNow(), 800);
 	}
 
-	/** CodeMirror 选区变化:只负责转换成带 slug/file/chapterFile 的快照;零宽光标也上报。 */
+	/** CodeMirror 选区变化:转换成带 slug/file/chapterFile 的快照上报(零宽光标也上报)。 */
 	function handleSelectionChange(sel: CodeMirrorSelection) {
 		const snapshot: TextSelectionSnapshot = {
 			from: sel.from,
@@ -296,54 +288,8 @@ export const DraftWorkspace = forwardRef<DraftWorkspaceHandle, DraftWorkspacePro
 			file: fileRef.current,
 			chapterFile: chapterFileRef.current,
 		};
-		selectionRef.current = snapshot;
 		selectionCbRef.current?.(snapshot);
 	}
-
-	/**
-	 * 对当前选区应用替换/插入:先校验选区快照仍与当前书/文件/章节/文档一致,
-	 * 失效直接返回 null(调用层禁止把旧建议写入);成功时补齐 edit 并整体替换文档。
-	 * 替换文档会触发 CodeMirror updateListener → handleChange → 自动保存流程。
-	 */
-	function applySelectionEdit(mode: "replace" | "insert", textToInsert: string): AppliedEdit | null {
-		const selection = selectionRef.current;
-		const source = textRef.current;
-		if (!selection || !selectionStillMatches(selection, slugRef.current ?? "", fileRef.current, chapterFileRef.current, source)) {
-			return null;
-		}
-		const result = applyTextEdit(source, selection.from, selection.to, textToInsert, mode);
-		const edit: AppliedEdit = {
-			...result.edit,
-			file: fileRef.current,
-			chapterFile: chapterFileRef.current,
-		};
-		editorRef.current?.replaceDocument(result.text);
-		return edit;
-	}
-
-	/**
-	 * 撤回已应用的编辑:仅当当前文档仍等于 edit.afterText 时成功(true),替换回 edit.beforeText;
-	 * 文档已被后续修改则返回 false,由调用层提示「正文已变化,无法自动撤回」。
-	 */
-	function undoEdit(edit: AppliedEdit): boolean {
-		if (textRef.current !== edit.afterText) return false;
-		editorRef.current?.replaceDocument(edit.beforeText);
-		return true;
-	}
-
-	useImperativeHandle(
-		ref,
-		() => ({
-			focus: () => editorRef.current?.focus(),
-			saveNow: () => saveNow(),
-			getText: () => textRef.current,
-			applySelectionEdit,
-			undoEdit,
-			selectRange: (from: number, to: number) => editorRef.current?.selectRange(from, to),
-			retryLoad: () => setRetryKey((k) => k + 1),
-		}),
-		[],
-	);
 
 	return (
 		<aside className={className ? `draft ${className}` : "draft"}>
@@ -389,7 +335,7 @@ export const DraftWorkspace = forwardRef<DraftWorkspaceHandle, DraftWorkspacePro
 			</div>
 		</aside>
 	);
-});
+}
 
 /** 保存状态的中文提示(加载失败与保存失败共用 save-error 状态,文案区分)。 */
 function statusHint(status: DraftStatus, hasLoadError: boolean): string {

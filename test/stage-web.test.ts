@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	buildRevisePatch,
+	castNameMap,
 	emptyReviseForm,
 	formatCounts,
 	initialStageState,
@@ -54,6 +55,12 @@ describe("stageEntryText", () => {
 describe("formatCounts", () => {
 	it("渲染轮次/条数/字数", () => {
 		expect(formatCounts({ lines: 12, perActor: {}, perCharacter: {}, cnChars: 486, turn: 5 })).toBe("轮次 5 · 对话 12 条 · 486 字");
+	});
+});
+
+describe("castNameMap", () => {
+	it("演员 id → 角色名(取 cast 首名;空数组回退 id)", () => {
+		expect(castNameMap({ "actor-1": ["沈昭"], "actor-2": [] })).toEqual({ "actor-1": "沈昭", "actor-2": "actor-2" });
 	});
 });
 

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { ApiClient } from "../api/client.ts";
 import type { ScriptPatchDto, StageSnapshotDto } from "../types.ts";
-import { buildRevisePatch, emptyReviseForm, type ReviseFormState } from "../stage-web.ts";
+import { buildRevisePatch, castNameMap, emptyReviseForm, type ReviseFormState } from "../stage-web.ts";
 import { NoticeBoard } from "./NoticeBoard.tsx";
 import { StageAvatar } from "./StageAvatar.tsx";
 import { ScriptView } from "./ScriptView.tsx";
@@ -47,12 +47,7 @@ export function StagePanel({
 	}
 
 	/** 剧本定义段:演员 id → 角色名(修订表单演员下拉用;perActor 同键)。 */
-	const castNames: Record<string, string> = {};
-	if (script) {
-		for (const [actorId, chars] of Object.entries(script.definition.cast)) {
-			castNames[actorId] = chars[0] ?? actorId;
-		}
-	}
+	const castNames: Record<string, string> = script ? castNameMap(script.definition.cast) : {};
 
 	function submit() {
 		onRevise(buildRevisePatch(form));

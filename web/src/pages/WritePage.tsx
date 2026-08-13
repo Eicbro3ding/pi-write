@@ -17,7 +17,7 @@ import type {
 import { BranchBar } from "../components/BranchBar.tsx";
 import { ChapterSidebar } from "../components/ChapterSidebar.tsx";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
-import { DraftWorkspace, type DraftWorkspaceHandle } from "../components/DraftWorkspace.tsx";
+import { DraftWorkspace } from "../components/DraftWorkspace.tsx";
 import { FullScreenEditor } from "../components/FullScreenEditor.tsx";
 import { InputBar, type InputBarHandle } from "../components/InputBar.tsx";
 import { MessageList } from "../components/MessageList.tsx";
@@ -27,6 +27,7 @@ import { createEditCapture } from "../edit-capture.ts";
 import type { Library } from "../library.ts";
 import { DUR, EASE } from "../motion.ts";
 import { useMediaQuery } from "../useMediaQuery.ts";
+import { useDragResize } from "../use-drag-resize.ts";
 
 /** 顶栏信息(由 App 顶栏展示)。 */
 export interface HeaderInfo {
@@ -163,8 +164,6 @@ export function WritePage({
 	const [mobileDrawer, setMobileDrawer] = useState<"chapters" | "companion" | null>(null);
 	/** 窄屏(<900px)判定:书库/伙伴栏变抽屉。 */
 	const isNarrow = useMediaQuery("(max-width: 900px)");
-	/** 正文编辑器命令句柄(选区定位等)。 */
-	const draftRef = useRef<DraftWorkspaceHandle>(null);
 	/**
 	 * 会话水合串行队列:openBook 与 SSE onopen 对齐都会「RESET + 逐条追加」整体
 	 * 替换聊天,串行执行可避免并发水合重复追加(先 RESET 再追加使整体替换幂等)。
@@ -568,9 +567,13 @@ export function WritePage({
 					const ev = start.event;
 					if (ev.type === "message_start" && ev.message?.role === "user") {
 						// 编剧回合开始:预取编辑前基线(工具执行快于 SSE+fetch 时,
-						// start 的即时抓取会拿到编辑后内容——预取规避该竞态)
+						// start 的即时抓取会拿到编辑后内容——预取规避该竞态);
+						// 按当前书解析,防跨书同名文件取错书
 						const curCh = currentChapterRef.current;
-						writerCapture.prefetchBaseline(curCh ? `draft/${curCh.file.replace(/\.jsonl$/, ".md")}` : null);
+						writerCapture.prefetchBaseline(
+							curCh ? `draft/${curCh.file.replace(/\.jsonl$/, ".md")}` : null,
+							bookDetailRef.current?.slug ?? null,
+						);
 					} else if (ev.type === "tool_execution_start") {
 						handleWriterToolStart(ev);
 					} else if (ev.type === "tool_execution_end") {
@@ -863,33 +866,12 @@ export function WritePage({
 		await openBook(slug);
 	}
 
-	/** 导出书:fetch blob → Android 壳有分享桥时经桥走系统分享面板,否则回退 a[download] 下载;失败显示错误。 */
+	/** 导出书:与书库栏共用实现(blob → Android 分享桥 → a[download] 回退),失败显示错误。 */
 	async function exportBook(slug: string) {
-		setBusySlug(slug);
 		try {
-			const blob = await client.exportBook(slug);
-			// Android 外壳(pi-writer-android,Task 1.6):桥存在时把 zip 以 data URL 交给
-			// Kotlin 侧(系统分享面板);桌面无桥,走既有浏览器下载
-			if (window.PiWriterBridge?.shareZip) {
-				const dataUrl = await new Promise<string>((resolve, reject) => {
-					const r = new FileReader();
-					r.onload = () => resolve(r.result as string);
-					r.onerror = () => reject(r.error);
-					r.readAsDataURL(blob);
-				});
-				window.PiWriterBridge.shareZip(`${slug}.zip`, dataUrl);
-				return;
-			}
-			const url = URL.createObjectURL(blob);
-			const a = document.createElement("a");
-			a.href = url;
-			a.download = `${slug}.zip`;
-			a.click();
-			URL.revokeObjectURL(url);
+			await library.exportBook(slug);
 		} catch (e) {
 			setError(`导出失败: ${friendlyError(e)}`);
-		} finally {
-			setBusySlug(null);
 		}
 	}
 
@@ -976,9 +958,17 @@ export function WritePage({
 		writerCapture.handleStart(e.toolCallId, e.toolName, e.args);
 	}
 
+	/**
+	 * 编剧编辑工具 end:经共享捕获器(writerCapture)组装 diff 出确认卡。
+	 * scope 守卫:handleEnd 是异步的(await 取数),期间切书/切章时丢弃旧 scope 的
+	 * 卡片——否则旧书/旧章卡片会 append 进新 scope 的确认队列并被持久化
+	 * (2026-08 修复,与恢复路径的 confirmScopeRef 归属同规则)。
+	 */
 	async function handleWriterToolEnd(e: Extract<AgentEventDto, { type: "tool_execution_end" }>) {
+		const scope = `${bookDetailRef.current?.slug ?? ""}:${currentChapterRef.current?.file ?? ""}`;
 		const edit = await writerCapture.handleEnd(e.toolCallId, e.isError);
 		if (!edit) return; // 失败/非编辑工具/无实质变化:不弹卡
+		if (`${bookDetailRef.current?.slug ?? ""}:${currentChapterRef.current?.file ?? ""}` !== scope) return; // 期间切书/切章:丢弃
 		// 锚点:触发编辑的那条 assistant(工具必在其回合内执行,消息已 start)
 		const anchorId = writerLastAssistantIdRef.current ?? null;
 		const card: ConfirmCardItem = {
@@ -1038,24 +1028,14 @@ export function WritePage({
 		}
 	}
 
-	/** AI 伙伴栏左缘拖拽调宽:鼠标左移变宽(伙伴栏在右侧,手柄贴左缘),受限于 [300, 520]。 */
-	function startCompanionResize(e: React.MouseEvent) {
-		e.preventDefault();
-		const startX = e.clientX;
-		const startW = companionWidth;
-		const move = (ev: MouseEvent) => {
-			const w = Math.max(300, Math.min(520, startW - (ev.clientX - startX)));
-			setCompanionWidth(w);
-		};
-		const up = () => {
-			window.removeEventListener("mousemove", move);
-			window.removeEventListener("mouseup", up);
-			document.body.style.cursor = "";
-		};
-		window.addEventListener("mousemove", move);
-		window.addEventListener("mouseup", up);
-		document.body.style.cursor = "col-resize";
-	}
+	/** AI 伙伴栏左缘拖拽调宽:鼠标左移变宽(伙伴栏在右侧,手柄贴左缘),受限于 [300, 520](useDragResize)。 */
+	const onCompanionResizeStart = useDragResize({
+		min: 300,
+		max: 520,
+		dir: -1,
+		getValue: () => companionWidth,
+		onChange: setCompanionWidth,
+	});
 
 	/** 打开全屏编辑器(默认当前章节草稿)。 */
 	function openEditor() {
@@ -1191,11 +1171,9 @@ export function WritePage({
 								</button>
 							)}
 						</div>
-						{/* 纸张:正文编辑器常驻挂载(不再 hidden),文字/选区/保存状态/自动保存定时器全部保留,
-						    draftRef 恒可用,批注的替换/插入/撤回始终作用于可见编辑器 */}
+						{/* 纸张:正文编辑器常驻挂载(不再 hidden),文字/选区/保存状态/自动保存定时器全部保留 */}
 						<div className="paper-surface">
 							<DraftWorkspace
-								ref={draftRef}
 								client={client}
 								slug={bookDetail?.slug ?? null}
 								file={draftFile}
@@ -1238,7 +1216,7 @@ export function WritePage({
 					transition={{ duration: DUR.slow, ease: EASE.out }}
 				>
 					{/* 左缘拖拽调宽手柄(窄屏抽屉模式隐藏) */}
-					{!isNarrow && <div className="comp-resize" onMouseDown={startCompanionResize} title="拖拽调整宽度" />}
+					{!isNarrow && <div className="comp-resize" onMouseDown={onCompanionResizeStart} title="拖拽调整宽度" />}
 					<div className="companion-head">
 						<span className="companion-label">AI 伙伴</span>
 						{/* 标签:编剧对话 | 备忘录(全局 Notice 待办板,2026-08-12 从书库栏移来);
@@ -1276,7 +1254,6 @@ export function WritePage({
 								messages={writerSession.messages}
 								streaming={writerSession.isStreaming}
 								simplifiedTools={simplifiedTools}
-								compacting={false}
 								confirmCards={confirmCards}
 								onConfirmCard={confirmCard}
 								onRevertCard={(id) => void revertCard(id)}

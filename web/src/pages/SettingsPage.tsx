@@ -255,21 +255,23 @@ export function SettingsPage({
 		return `${USER_THEME_PREFIX}${file.replace(/\.css$/, "")}` as ThemeId;
 	}
 
-	/** 选择主题:应用 + 更新 state;用户主题顺带打开编辑器。 */
-	function selectTheme(id: ThemeId) {
+	/** 选择主题:应用 + 更新 state;用户主题顺带打开编辑器。
+	 *  cssOverride 供「刚写入文件、列表尚未刷新」的场景(如新建主题)显式传入内容,
+	 *  否则 userThemes 闭包仍是旧渲染快照,取不到新文件会打开空编辑器(2026-08 修复)。 */
+	function selectTheme(id: ThemeId, cssOverride?: string) {
 		setTheme(id);
 		applyTheme(id);
 		const file = userThemeFile(id);
 		if (file) {
 			const ut = userThemes.find((x) => x.file === file);
 			setEditingFile(file);
-			setEditCss(ut?.css ?? "");
+			setEditCss(cssOverride ?? ut?.css ?? "");
 		} else {
 			setEditingFile(null);
 		}
 	}
 
-	/** 新建用户主题:写 26 色骨架 → 刷新列表 → 选中并打开编辑器。 */
+	/** 新建用户主题:写 26 色骨架 → 刷新列表 → 选中并打开编辑器(编辑器预填刚写入的骨架)。 */
 	async function createTheme() {
 		const name = newThemeName.trim();
 		if (!/^[A-Za-z0-9._-]+$/.test(name)) {
@@ -283,7 +285,7 @@ export function SettingsPage({
 			await client.putUserTheme(file, themeStarterCss());
 			await refreshThemes();
 			setNewThemeName("");
-			selectTheme(`user:${name}`);
+			selectTheme(`user:${name}`, themeStarterCss());
 		} catch (e) {
 			setThemeErr(`新建主题失败: ${friendlyError(e)}`);
 		} finally {

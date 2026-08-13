@@ -89,7 +89,7 @@ export function App() {
 					<button
 						type="button"
 						className={view === "stage" ? "top-entry active" : "top-entry"}
-						onClick={() => setView(view === "stage" ? "edit" : "stage")}
+						onClick={() => setView("stage")}
 					>
 						<IconStage size={15} />
 						<span className="top-entry-label">舞台</span>
@@ -97,7 +97,7 @@ export function App() {
 					<button
 						type="button"
 						className={view === "edit" ? "top-entry active" : "top-entry"}
-						onClick={() => setView(view === "edit" ? "stage" : "edit")}
+						onClick={() => setView("edit")}
 					>
 						<IconEdit size={15} />
 						<span className="top-entry-label">编辑</span>
@@ -105,7 +105,7 @@ export function App() {
 					<button
 						type="button"
 						className={view === "world" ? "top-entry active" : "top-entry"}
-						onClick={() => setView(view === "world" ? "edit" : "world")}
+						onClick={() => setView("world")}
 					>
 						<IconGlobe size={15} />
 						<span className="top-entry-label">世界书</span>
@@ -113,7 +113,7 @@ export function App() {
 					<button
 						type="button"
 						className={view === "settings" ? "top-entry active" : "top-entry"}
-						onClick={() => setView(view === "settings" ? "edit" : "settings")}
+						onClick={() => setView("settings")}
 					>
 						<IconGear size={15} />
 						<span className="top-entry-label">设置</span>

@@ -67,27 +67,6 @@ function ToolStatusIndicator({ label }: { label: string }) {
 	);
 }
 
-/**
- * 上下文压缩提示(「正在压缩上下文」):压缩可能发生在流式回合内或回合之间,
- * 独立于 isStreaming 显示——compacting 为真即展示,compaction_end 后消失。
- */
-function CompactionIndicator() {
-	const [tick, setTick] = useState(0);
-	useEffect(() => {
-		const t = setInterval(() => setTick((v) => v + 1), 150);
-		return () => clearInterval(t);
-	}, []);
-	const dots = ".".repeat((Math.floor(tick / 6) % 3) + 1);
-	return (
-		<div className="thinking compacting">
-			<span className="thinking-spin">{SPINNER_FRAMES[tick % SPINNER_FRAMES.length]}</span>
-			<span className="thinking-face">📦</span>
-			<span className="thinking-label">正在压缩上下文</span>
-			<span className="thinking-dots">{dots}</span>
-		</div>
-	);
-}
-
 /** 工具调用卡片:名称 + 参数 + 运行中/完成/失败状态。 */
 function ToolCard({ t }: { t: ToolCallInfo }) {
 	return (
@@ -283,7 +262,6 @@ export function MessageList({
 	messages,
 	streaming,
 	simplifiedTools,
-	compacting,
 	confirmCards,
 	onConfirmCard,
 	onRevertCard,
@@ -294,8 +272,6 @@ export function MessageList({
 	/** AI 输出中:列表末尾显示动态状态提示(转圈 + 文案/颜文字轮换)。 */
 	streaming: boolean;
 	simplifiedTools: boolean;
-	/** 上下文压缩中(compaction_start 置位):显示「正在压缩上下文」提示。 */
-	compacting: boolean;
 	/** 编剧编辑确认卡列表:与预览卡同锚定规则(触发编辑的 assistant 消息下)。
 	 *  与预览卡并存时各自独立渲染(确认卡不是回合汇总,一编辑一张)。 */
 	confirmCards?: ReadonlyArray<ConfirmCardItem>;
@@ -432,9 +408,8 @@ export function MessageList({
 							onRevert={() => onRevertCard?.(c.id)}
 						/>
 					))}
-						{/* 状态提示:压缩中 > 工具执行中(简化输出)> 思考轮换;自动滚底会把它带进视野 */}
-						{compacting && <CompactionIndicator />}
-						{!compacting && streaming && (simplifiedTools && toolToShow ? (
+						{/* 状态提示:工具执行中(简化输出)> 思考轮换;自动滚底会把它带进视野 */}
+						{streaming && (simplifiedTools && toolToShow ? (
 							<ToolStatusIndicator label={TOOL_STATUS[toolToShow] ?? DEFAULT_TOOL_STATUS} />
 						) : (
 							<ThinkingIndicator />

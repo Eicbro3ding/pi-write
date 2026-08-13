@@ -169,3 +169,13 @@ export function buildRevisePatch(form: ReviseFormState): ScriptPatchDto {
 	}
 	return patch;
 }
+
+/** 演员 id → 角色名(definition.cast 首名;perActor 同键)——仅展示/表单用。
+ *  ScriptView 与 StagePanel 共用,避免两处重复计算(2026-08 收敛)。 */
+export function castNameMap(cast: Record<string, string[]>): Record<string, string> {
+	const m: Record<string, string> = {};
+	for (const [actorId, chars] of Object.entries(cast)) {
+		m[actorId] = chars[0] ?? actorId;
+	}
+	return m;
+}

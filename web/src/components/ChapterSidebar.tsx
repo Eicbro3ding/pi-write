@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { DUR, EASE } from "../motion.ts";
 import { useMediaQuery } from "../useMediaQuery.ts";
+import { useDragResize } from "../use-drag-resize.ts";
 import type { BookMeta, ChapterRef } from "../types.ts";
 
 interface ChapterSidebarProps {
@@ -133,26 +134,15 @@ export function ChapterSidebar({
 	/** 拖拽中:禁用宽度 transition,保持拖拽跟手(折叠/展开动画走 transition)。 */
 	const [resizing, setResizing] = useState(false);
 
-	/** 拖拽手柄:按下后在 window 上监听移动,宽度随鼠标横向位移受限于 [MIN, MAX]。 */
-	function startResize(e: React.MouseEvent) {
-		e.preventDefault();
-		setResizing(true);
-		const startX = e.clientX;
-		const startW = width ?? 240;
-		const move = (ev: MouseEvent) => {
-			const w = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, startW + ev.clientX - startX));
-			onResize?.(w);
-		};
-		const up = () => {
-			window.removeEventListener("mousemove", move);
-			window.removeEventListener("mouseup", up);
-			document.body.style.cursor = "";
-			setResizing(false);
-		};
-		window.addEventListener("mousemove", move);
-		window.addEventListener("mouseup", up);
-		document.body.style.cursor = "col-resize";
-	}
+	/** 拖拽手柄:按下后在 window 上监听移动,宽度随鼠标横向位移受限于 [MIN, MAX](useDragResize)。 */
+	const onResizeStart = useDragResize({
+		min: MIN_WIDTH,
+		max: MAX_WIDTH,
+		getValue: () => width ?? 240,
+		onChange: (w) => onResize?.(w),
+		onStart: () => setResizing(true),
+		onEnd: () => setResizing(false),
+	});
 
 	return (
 		<>
@@ -445,7 +435,7 @@ export function ChapterSidebar({
 						<span className="c-collapse-text">{collapsed ? "展开" : "收起"}</span>
 					</button>
 				)}
-				{!collapsed && onResize && <div className="c-resize" onMouseDown={startResize} title="拖拽调整宽度" />}
+				{!collapsed && onResize && <div className="c-resize" onMouseDown={onResizeStart} title="拖拽调整宽度" />}
 			</motion.aside>
 		</>
 	);

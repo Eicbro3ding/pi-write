@@ -9,11 +9,9 @@ interface InputBarProps {
 	placeholder?: string;
 	/** textarea 的可访问名称;缺省为「消息输入」。 */
 	ariaLabel?: string;
-	/** 紧凑布局(批注面板等窄容器内使用)。 */
-	compact?: boolean;
 }
 
-/** 输入框暴露的命令句柄:供外部按钮触发同一发送路径(如批注面板的「继续追问」)。 */
+/** 输入框暴露的命令句柄:供外部按钮触发同一发送路径(如编剧「选中文本自动填入」)。 */
 export interface InputBarHandle {
 	/** 提交当前输入文本(trim 后为空则忽略);成功发送后清空输入框。 */
 	submit: () => void;
@@ -28,8 +26,7 @@ const MAX_HEIGHT = 160;
 /**
  * 输入框:单行自动增高的 textarea,Ctrl+Enter 发送、Enter 换行;
  * 流式中输入保持可用(可插话),按钮切换为「中断」。
- * 可选 placeholder / ariaLabel / compact 供批注面板等场景复用;
- * ref 暴露 submit 句柄,供外部按钮触发同一发送路径。
+ * 可选 placeholder / ariaLabel;ref 暴露 submit 句柄,供外部按钮触发同一发送路径。
  */
 export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function InputBar(
 	{
@@ -38,7 +35,6 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 		onAbort,
 		placeholder = "向 pi 发一句话(Ctrl+Enter 发送,Enter 换行,流式中可插话)",
 		ariaLabel = "消息输入",
-		compact = false,
 	},
 	ref,
 ) {
@@ -95,7 +91,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 	}
 
 	return (
-		<div className={compact ? "inputbar compact" : "inputbar"}>
+		<div className="inputbar">
 			<div className="inputbar-inner">
 				<textarea
 					ref={taRef}

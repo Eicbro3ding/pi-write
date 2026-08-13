@@ -3,6 +3,7 @@ import type { ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
 import type { Library } from "../library.ts";
 import { useMediaQuery } from "../useMediaQuery.ts";
+import { useDragResize } from "../use-drag-resize.ts";
 import { initialSessionState, messagesToEvents, processAgentEvent, RESET, sessionReducer } from "../store.ts";
 import type { AgentEventDto, ChapterRef, ScriptPatchDto, StageModeDto, StagePhaseDto, StageScriptDto, StageSnapshotDto } from "../types.ts";
 import { formatCounts, initialStageState, reduceStage, stageEntryText } from "../stage-web.ts";
@@ -74,24 +75,14 @@ export function StagePage({
 	/** 右侧面板宽度(px,左缘拖拽手柄调整,280–520)。 */
 	const [panelWidth, setPanelWidth] = useState(360);
 
-	/** 面板拖拽调宽:按下后在 window 上监听移动,宽度随鼠标横向位移受限于 [280, 520]。 */
-	function startPanelResize(e: React.MouseEvent) {
-		e.preventDefault();
-		const startX = e.clientX;
-		const startW = panelWidth;
-		const move = (ev: MouseEvent) => {
-			const w = Math.max(280, Math.min(520, startW - (ev.clientX - startX)));
-			setPanelWidth(w);
-		};
-		const up = () => {
-			window.removeEventListener("mousemove", move);
-			window.removeEventListener("mouseup", up);
-			document.body.style.cursor = "";
-		};
-		window.addEventListener("mousemove", move);
-		window.addEventListener("mouseup", up);
-		document.body.style.cursor = "col-resize";
-	}
+	/** 面板拖拽调宽:按下后在 window 上监听移动,宽度随鼠标横向位移受限于 [280, 520](useDragResize)。 */
+	const onPanelResizeStart = useDragResize({
+		min: 280,
+		max: 520,
+		dir: -1,
+		getValue: () => panelWidth,
+		onChange: setPanelWidth,
+	});
 
 	// ---- 快照拉取(书/章节切换、页面激活、SSE 重连时对齐) ----
 	// 失败自动重试一次(1.2s 后):网络瞬断/服务刚重启时,首次拉取失败会导致
@@ -618,7 +609,6 @@ export function StagePage({
 							messages={directorSession.messages}
 							streaming={directorSession.isStreaming}
 							simplifiedTools={simplifiedTools === true}
-							compacting={false}
 							emptyText="向导演发一句话,讨论剧情、人物与悬念——导演会边聊边维护世界书"
 						/>
 					)}
@@ -679,7 +669,7 @@ export function StagePage({
 			</div>
 			<aside className="stage-panel">
 				{/* 左缘拖拽调宽手柄(窄屏面板收起时隐藏) */}
-				{!isNarrow && <div className="sp-resize" onMouseDown={startPanelResize} title="拖拽调整宽度" />}
+				{!isNarrow && <div className="sp-resize" onMouseDown={onPanelResizeStart} title="拖拽调整宽度" />}
 				<StagePanel client={client} slug={slug ?? ""} snapshot={snap} tab={tab} onTab={setTab} onRevise={submitRevise} />
 			</aside>
 		</div>

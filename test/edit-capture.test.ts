@@ -110,4 +110,44 @@ describe("createEditCapture", () => {
 		capture.clear();
 		expect(await capture.handleEnd("t6", false)).toBeNull();
 	});
+
+	it("draft 取数携带发起回合的书 slug(切书后不按新书读旧草稿)", async () => {
+		const drafts = new Map<string, string>([["draft/ch01.md", "旧文"]]);
+		const calls: Array<[string, string | undefined]> = [];
+		const client = {
+			async getWorld() {
+				return { world: makeWorld([]) };
+			},
+			async getDraft(path: string, slug?: string) {
+				calls.push([path, slug]);
+				return { text: drafts.get(path) ?? "" };
+			},
+		} as never;
+		const capture = createEditCapture(client, () => "book-1");
+		capture.handleStart("t7", "write", { path: "draft/ch01.md" });
+		drafts.set("draft/ch01.md", "新文");
+		const edit = await capture.handleEnd("t7", false);
+		expect(edit).not.toBeNull();
+		// start 兜底取数与 end 的 after 取数都带发起回合的 slug
+		expect(calls.length).toBe(2);
+		expect(calls.every(([, slug]) => slug === "book-1")).toBe(true);
+		expect(edit!.before).toBe("旧文");
+	});
+
+	it("prefetchBaseline 的草稿取数携带书 slug", async () => {
+		const calls: Array<[string, string | undefined]> = [];
+		const client = {
+			async getWorld() {
+				return { world: makeWorld([]) };
+			},
+			async getDraft(path: string, slug?: string) {
+				calls.push([path, slug]);
+				return { text: "基线" };
+			},
+		} as never;
+		const capture = createEditCapture(client, () => null);
+		capture.prefetchBaseline("draft/ch01.md", "book-9");
+		await capture.handleStart("t8", "write", { path: "draft/ch01.md" });
+		expect(calls).toEqual([["draft/ch01.md", "book-9"]]);
+	});
 });
