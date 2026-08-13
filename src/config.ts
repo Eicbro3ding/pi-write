@@ -58,6 +58,16 @@ export function getBooksDir(): string {
 	return join(getWriterDir(), "books");
 }
 
+/**
+ * 用户自定义主题目录:放置 *.css 即成为可选主题(经 /api/themes 伺服)。
+ * PI_WRITER_THEMES_DIR 覆盖(Android 壳注入路径用);缺省 ~/.pi/writer/themes。
+ */
+export function getThemesDir(): string {
+	const override = process.env.PI_WRITER_THEMES_DIR;
+	if (override && override.trim().length > 0) return override;
+	return join(getWriterDir(), "themes");
+}
+
 /** Path to a book directory: <booksDir>/<slug>. */
 export function getBookDir(slug: string): string {
 	return join(getBooksDir(), slug);

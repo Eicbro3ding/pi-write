@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, type ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
-import type { WorldDataDto } from "../types.ts";
-import { THEMES, type ThemeId } from "../themes.ts";
+import type { UserThemeInfo, WorldDataDto } from "../types.ts";
+import { NIGHT_THEME, themeLabelFromCss, themeStarterCss, USER_THEME_PREFIX, userThemeFile, type ThemeId } from "../themes.ts";
 import { applyTheme, currentTheme } from "../theme.ts";
 import { ProviderList } from "../components/ProviderList.tsx";
 import { McpServerList } from "../components/McpServerList.tsx";
@@ -61,6 +61,15 @@ function extractModels(models: readonly unknown[]): ModelInfo[] {
 	return out;
 }
 
+/** 从用户主题 CSS 抽取 [背景, 强调, 文字] 三色做卡片预览;缺失回退中性色。 */
+function swatchFromCss(css: string): [string, string, string] {
+	const pick = (name: string): string => {
+		const m = css.match(new RegExp(`${name}\\s*:\\s*([^;]+);`));
+		return m ? m[1]!.trim() : "";
+	};
+	return [pick("--bg") || "#141414", pick("--amber") || "#d9a84e", pick("--ink") || "#e8e6e1"];
+}
+
 /**
  * 设置页(2026-08-12 分类导航布局):左侧分类栏(模型/界面/世界书/集成)+
  * 右侧分组设置项。数据源为 GET /api/models、GET /api/providers 与 GET /api/world;
@@ -106,6 +115,20 @@ export function SettingsPage({
 	const [customBusy, setCustomBusy] = useState(false);
 	const [customErr, setCustomErr] = useState<string | null>(null);
 	const [theme, setTheme] = useState<ThemeId>(() => currentTheme());
+	/** 内置主题列表(资产文件自动发现,零 ts 注册;night 无文件,单独用 NIGHT_THEME)。 */
+	const [builtinThemes, setBuiltinThemes] = useState<UserThemeInfo[]>([]);
+	/** 用户自定义主题列表(文件 + 全文)。 */
+	const [userThemes, setUserThemes] = useState<UserThemeInfo[]>([]);
+	/** 正在编辑的用户主题文件名(含 .css);null = 关闭编辑器。 */
+	const [editingFile, setEditingFile] = useState<string | null>(null);
+	/** 编辑器的用户主题 CSS 文本。 */
+	const [editCss, setEditCss] = useState("");
+	/** 新建主题名输入。 */
+	const [newThemeName, setNewThemeName] = useState("");
+	/** 主题新建/保存/删除进行中。 */
+	const [themeBusy, setThemeBusy] = useState(false);
+	/** 主题操作错误文案。 */
+	const [themeErr, setThemeErr] = useState<string | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
 	/** 世界书注入分组:null = 未加载成功(加载中/失败);worldErr 为分组加载错误;noBook = 无打开书(404)。 */
 	const [world, setWorld] = useState<WorldDataDto | null>(null);
@@ -199,6 +222,108 @@ export function SettingsPage({
 			setActErr(`世界书注入设置失败: ${friendlyError(e)}`);
 		} finally {
 			setWorldBusy(false);
+		}
+	}
+
+	/** 拉取主题清单(内置资产 + 用户自定义)。 */
+	const refreshThemes = useCallback(async () => {
+		const m = await client.getThemes();
+		setBuiltinThemes(m.builtin);
+		setUserThemes(m.user);
+	}, [client]);
+
+	/** 挂载时加载主题清单。 */
+	useEffect(() => {
+		let cancelled = false;
+		void client
+			.getThemes()
+			.then((m) => {
+				if (cancelled) return;
+				setBuiltinThemes(m.builtin);
+				setUserThemes(m.user);
+			})
+			.catch(() => {
+				/* 拉取失败:保持空列表,主题不显示 */
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [client]);
+
+	/** 用户主题文件名 → id。 */
+	function userIdOf(file: string): ThemeId {
+		return `${USER_THEME_PREFIX}${file.replace(/\.css$/, "")}` as ThemeId;
+	}
+
+	/** 选择主题:应用 + 更新 state;用户主题顺带打开编辑器。 */
+	function selectTheme(id: ThemeId) {
+		setTheme(id);
+		applyTheme(id);
+		const file = userThemeFile(id);
+		if (file) {
+			const ut = userThemes.find((x) => x.file === file);
+			setEditingFile(file);
+			setEditCss(ut?.css ?? "");
+		} else {
+			setEditingFile(null);
+		}
+	}
+
+	/** 新建用户主题:写 26 色骨架 → 刷新列表 → 选中并打开编辑器。 */
+	async function createTheme() {
+		const name = newThemeName.trim();
+		if (!/^[A-Za-z0-9._-]+$/.test(name)) {
+			setThemeErr("主题名只能含字母、数字、点、下划线、连字符");
+			return;
+		}
+		setThemeBusy(true);
+		setThemeErr(null);
+		try {
+			const file = `${name}.css`;
+			await client.putUserTheme(file, themeStarterCss());
+			await refreshThemes();
+			setNewThemeName("");
+			selectTheme(`user:${name}`);
+		} catch (e) {
+			setThemeErr(`新建主题失败: ${friendlyError(e)}`);
+		} finally {
+			setThemeBusy(false);
+		}
+	}
+
+	/** 保存当前编辑的用户主题。 */
+	async function saveTheme() {
+		if (!editingFile) return;
+		setThemeBusy(true);
+		setThemeErr(null);
+		try {
+		await client.putUserTheme(editingFile, editCss);
+		await refreshThemes();
+		} catch (e) {
+			setThemeErr(`保存主题失败: ${friendlyError(e)}`);
+		} finally {
+			setThemeBusy(false);
+		}
+	}
+
+	/** 删除当前编辑的用户主题;若正被使用则回退 night。 */
+	async function deleteTheme() {
+		if (!editingFile) return;
+		setThemeBusy(true);
+		setThemeErr(null);
+		try {
+			await client.deleteUserTheme(editingFile);
+			if (theme === userIdOf(editingFile)) {
+				setTheme("night");
+				applyTheme("night");
+			}
+			setEditingFile(null);
+			setEditCss("");
+			await refreshThemes();
+		} catch (e) {
+			setThemeErr(`删除主题失败: ${friendlyError(e)}`);
+		} finally {
+			setThemeBusy(false);
 		}
 	}
 
@@ -468,29 +593,119 @@ export function SettingsPage({
 
 					{cat === "ui" && (
 						<>
-							<div className="s-head">主题</div>
-							<div className="theme-cards">
-								{THEMES.map((t) => (
-									<button
-										key={t.id}
-										className={`theme-card${theme === t.id ? " active" : ""}`}
-										onClick={() => {
-											setTheme(t.id);
-											applyTheme(t.id);
-										}}
-									>
-										<span className="theme-swatch">
-											{t.swatch.map((c) => (
-												<i key={c} style={{ background: c }} />
-											))}
-										</span>
-										<span className="theme-label">{t.label}</span>
-										<span className="theme-desc">{t.desc}</span>
-									</button>
-								))}
-							</div>
+									<div className="s-head">主题</div>
+									<div className="theme-cards">
+										{/* night:默认内置,无资产文件(token 收敛在 styles.css :root 防闪) */}
+										<button
+											key={NIGHT_THEME.id}
+											className={`theme-card${theme === NIGHT_THEME.id ? " active" : ""}`}
+											onClick={() => selectTheme(NIGHT_THEME.id)}
+										>
+											<span className="theme-swatch">
+												{NIGHT_THEME.swatch.map((c) => (
+													<i key={c} style={{ background: c }} />
+												))}
+											</span>
+											<span className="theme-label">{NIGHT_THEME.label}</span>
+											<span className="theme-desc">内置 · 默认</span>
+										</button>
+										{/* 内置主题:资产文件自动发现(id = 文件名,名字取首行注释,色板取 token) */}
+										{builtinThemes.map((bt) => {
+											const id = bt.file.replace(/\.css$/, "");
+											const swatch = swatchFromCss(bt.css);
+											return (
+												<button
+													key={bt.file}
+													className={`theme-card${theme === id ? " active" : ""}`}
+													onClick={() => selectTheme(id)}
+												>
+													<span className="theme-swatch">
+														{swatch.map((c) => (
+															<i key={c} style={{ background: c }} />
+														))}
+													</span>
+													<span className="theme-label">{themeLabelFromCss(bt.css, bt.file)}</span>
+													<span className="theme-desc">内置</span>
+												</button>
+											);
+										})}
+										{userThemes.map((ut) => {
+											const id = userIdOf(ut.file);
+											const swatch = swatchFromCss(ut.css);
+											return (
+												<button
+													key={ut.file}
+													className={`theme-card${theme === id ? " active" : ""}`}
+													onClick={() => selectTheme(id)}
+												>
+													<span className="theme-swatch">
+														{swatch.map((c) => (
+															<i key={c} style={{ background: c }} />
+														))}
+													</span>
+													<span className="theme-label">{ut.file.replace(/\.css$/, "")}</span>
+													<span className="theme-desc">自定义</span>
+												</button>
+											);
+										})}
+									</div>
+									<div className="s-note">主题即 CSS 文件:内置为 web/public/themes/*.css,自定义为 ~/.pi/writer/themes/*.css,放入即自动出现在列表。</div>
 
-							<div className="s-head">界面偏好</div>
+								<div className="s-head">自定义主题</div>
+								<div className="s-row">
+									<input
+										className="s-select"
+										placeholder="主题名(如 moon,仅字母数字._-)"
+										value={newThemeName}
+										onChange={(e) => setNewThemeName(e.target.value)}
+									/>
+									<button type="button" className="btn-ghost" disabled={themeBusy || !newThemeName.trim()} onClick={() => void createTheme()}>
+										新建
+									</button>
+									{userThemes.length > 0 && (
+										<select
+											className="s-select"
+											value={editingFile ?? ""}
+											onChange={(e) => {
+												const f = e.target.value;
+												if (f) selectTheme(userIdOf(f));
+												else setEditingFile(null);
+											}}
+										>
+											<option value="">编辑已有主题…</option>
+											{userThemes.map((ut) => (
+												<option key={ut.file} value={ut.file}>
+													{ut.file.replace(/\.css$/, "")}
+												</option>
+											))}
+										</select>
+									)}
+								</div>
+								{themeErr && <div className="notice err">{themeErr}</div>}
+								{editingFile && (
+									<>
+										<div className="s-row">
+											<span className="s-key">编辑 {editingFile}</span>
+											<span className="s-val muted">保存后生效</span>
+										</div>
+										<textarea
+											className="theme-css-editor"
+											value={editCss}
+											spellCheck={false}
+											onChange={(e) => setEditCss(e.target.value)}
+										/>
+										<div className="s-row">
+											<button type="button" className="btn-ghost" disabled={themeBusy} onClick={() => void saveTheme()}>
+												{themeBusy ? "保存中…" : "保存"}
+											</button>
+											<button type="button" className="btn-ghost" disabled={themeBusy} onClick={() => void deleteTheme()}>
+												删除
+											</button>
+										</div>
+									</>
+								)}
+
+								<div className="s-head">界面偏好</div>
 							<div className="s-row">
 								<span className="s-key">简化输出</span>
 								<span className="s-val">

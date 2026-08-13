@@ -1,6 +1,5 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { THEMES } from "../web/src/themes.ts";
 
 /** 单通道 sRGB → 线性。 */
 function linearize(c: number): number {
@@ -25,12 +24,16 @@ function contrast(a: string, b: string): number {
 	return (hi + 0.05) / (lo + 0.05);
 }
 
-/** 从 styles.css :root 读 ink 默认值(替代硬编码回退表)。 */
-function rootVar(name: string): string {
-	const css = readFileSync("web/src/styles.css", "utf-8");
+/** 从 CSS 文本读取某个 token 值(主题 CSS 均为 :root 单行 token)。 */
+function varOf(css: string, name: string): string {
 	const m = css.match(new RegExp(`${name}\\s*:\\s*([^;]+);`));
-	if (!m) throw new Error(`:root 缺少 ${name}`);
+	if (!m) throw new Error(`主题 CSS 缺少 ${name}`);
 	return m[1]!.trim();
+}
+
+/** 内置主题资产文件清单(零 ts 注册;night 无资产文件,单独测 styles.css 基底)。 */
+function builtinThemeFiles(): string[] {
+	return readdirSync("web/public/themes").filter((f) => /^[A-Za-z0-9._-]+\.css$/.test(f)).sort();
 }
 
 describe("主题对比度(WCAG)", () => {
@@ -39,30 +42,29 @@ describe("主题对比度(WCAG)", () => {
 		["--muted", 4.5],
 		["--faint", 4],
 	] as const;
-	for (const theme of THEMES) {
-		const bg = theme.vars["--bg"] ?? rootVar("--bg"); // ink 的 vars 为空,回退 :root 默认
+	for (const file of builtinThemeFiles()) {
+		const css = readFileSync(`web/public/themes/${file}`, "utf-8");
+		const bg = varOf(css, "--bg");
 		for (const [token, min] of pairs) {
-			it(`${theme.id}: ${token} 对比度 ≥ ${min}:1`, () => {
-				const fg =
-					theme.vars[token] ??
-					{ "--ink": rootVar("--ink"), "--muted": rootVar("--muted"), "--faint": rootVar("--faint") }[token]!;
-				expect(contrast(fg, bg)).toBeGreaterThanOrEqual(min);
+			it(`${file}: ${token} 对比度 ≥ ${min}:1`, () => {
+				expect(contrast(varOf(css, token), bg)).toBeGreaterThanOrEqual(min);
 			});
 		}
+		/** 全屏编辑器主按钮实底对 --bg 须 ≥4.5:1。文件内带 .fs-confirm .fs-btn-primary
+		 *  覆盖(paper/parchment)取其值,否则取 --amber(基础规则 background: var(--amber))。 */
+		it(`${file}: fs-btn-primary 实底对 --bg 对比度 ≥ 4.5:1`, () => {
+			const m = css.match(/\.fs-confirm \.fs-btn-primary\s*{[^}]*?background:\s*(#[0-9a-fA-F]{6}|#[0-9a-fA-F]{3})\s*;/);
+			const primary = m ? m[1]! : varOf(css, "--amber");
+			expect(contrast(primary, bg)).toBeGreaterThanOrEqual(4.5);
+		});
 	}
 
-	/** 全屏编辑器「保存并退出」主按钮:琥珀实底 + --bg 文字,浅色主题下也须 ≥4.5:1。
-	 *  值与 styles.css 的 [data-theme] .fs-confirm .fs-btn-primary 覆盖一致。 */
-	const FS_PRIMARY: Record<string, string> = {
-		paper: "#8a5518",
-		parchment: "#7d4f16",
-	};
-	for (const theme of THEMES) {
-		const bg = theme.vars["--bg"];
-		if (theme.id !== "ink" && bg && FS_PRIMARY[theme.id]) {
-			it(`${theme.id}: fs-btn-primary 实底对 --bg 对比度 ≥ 4.5:1`, () => {
-				expect(contrast(FS_PRIMARY[theme.id]!, bg)).toBeGreaterThanOrEqual(4.5);
-			});
-		}
+	/** night 基底(styles.css :root)。 */
+	const night = readFileSync("web/src/styles.css", "utf-8");
+	const nightBg = varOf(night, "--bg");
+	for (const [token, min] of pairs) {
+		it(`night(styles.css): ${token} 对比度 ≥ ${min}:1`, () => {
+			expect(contrast(varOf(night, token), nightBg)).toBeGreaterThanOrEqual(min);
+		});
 	}
 });

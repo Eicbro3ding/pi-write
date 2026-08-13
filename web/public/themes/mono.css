@@ -1,0 +1,77 @@
+/* pi-writer 主题 · 黑白浅色(mono) */
+:root {
+  --bg: #f5f5f4; --bg-elev: #ffffff; --bg-elev-2: #eaeaea;
+  --ink: #1a1a1a; --ink-2: #3d3d3d; --muted: #565656; --faint: #757575;
+  --line: #e3e3e3; --line-strong: #c6c6c6;
+  --amber: #171717; --green: #4e7d53; --red: #b03a2f; --err-soft: #c85c50;
+  --amber-tint: rgba(23, 23, 23, 0.08); --amber-tint-strong: rgba(23, 23, 23, 0.2);
+  --red-tint: rgba(176, 58, 47, 0.07); --red-tint-strong: rgba(176, 58, 47, 0.28);
+  --green-tint: rgba(78, 125, 83, 0.09); --green-tint-strong: rgba(78, 125, 83, 0.3);
+  --hover-tint: rgba(0, 0, 0, 0.05); --hover-tint-strong: rgba(0, 0, 0, 0.09);
+  --scrollbar: #cccccc; --mask: rgba(0, 0, 0, 0.42);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.06), 0 1px 4px rgba(0, 0, 0, 0.04);
+  --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.06);
+  --shadow-3: 0 16px 44px rgba(0, 0, 0, 0.16), 0 4px 12px rgba(0, 0, 0, 0.09);
+}
+/* —— 亚克力毛玻璃(浅色白玻)—— */
+[data-theme="mono"] {
+  --glass-bg: rgba(248, 248, 248, 0.52);
+  --glass-bg-bright: rgba(255, 255, 255, 0.66);
+  --glass-bg-elev: rgba(255, 255, 255, 0.6);
+  --glass-bg-strong: rgba(255, 255, 255, 0.82);
+  --glass-bg-float: rgba(255, 255, 255, 0.78);
+  --glass-bg-chip: rgba(255, 255, 255, 0.52);
+  --glass-blur: blur(18px) saturate(1.35);
+  --glass-blur-lg: blur(22px) saturate(1.5);
+  --glass-blur-sm: blur(12px) saturate(1.25);
+}
+/* 环境色:毛玻璃背后的柔和冷灰渐变(blur 取样来源) */
+[data-theme="mono"] body {
+  background:
+    radial-gradient(820px 560px at 12% 4%, rgba(80, 80, 90, 0.13), transparent 66%),
+    radial-gradient(700px 500px at 88% 16%, rgba(60, 60, 70, 0.09), transparent 62%),
+    radial-gradient(900px 620px at 50% 112%, rgba(45, 45, 55, 0.11), transparent 60%),
+    linear-gradient(180deg, #fafafa 0%, #e9e9eb 100%);
+}
+/* 面板主面:顶栏 / 书库栏 / 伙伴栏 / 舞台面板 / 设置侧栏 / 世界书树 */
+[data-theme="mono"] .topbar, [data-theme="mono"] .chapters, [data-theme="mono"] .companion,
+[data-theme="mono"] .stage-panel, [data-theme="mono"] .settings-side, [data-theme="mono"] .world-tree {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+/* 纸面容器让位(环境色透出);场景头/输入条整条毛玻璃,比主面亮一档(承载文字) */
+[data-theme="mono"] .paper-zone { background: transparent; }
+[data-theme="mono"] .stage-head, [data-theme="mono"] .inputbar {
+  background: var(--glass-bg-bright);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+[data-theme="mono"] .paper-surface, [data-theme="mono"] .inputbar-inner, [data-theme="mono"] .stage-controls {
+  background: var(--glass-bg-elev);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+}
+[data-theme="mono"] .paper-surface { background: var(--glass-bg-strong); }
+/* 浮层:书操作菜单 / 关系图缩放条与右键菜单 / 关系表单 */
+[data-theme="mono"] .c-book-menu, [data-theme="mono"] .graph-zoom-bar, [data-theme="mono"] .graph-ctx, [data-theme="mono"] .rel-form {
+  background: var(--glass-bg-float);
+  backdrop-filter: var(--glass-blur-lg);
+  -webkit-backdrop-filter: var(--glass-blur-lg);
+}
+/* 消息流小卡片:工具卡 / 预览卡 / 编辑确认卡 / 对话气泡 / 用户记录 / 词条面板 */
+[data-theme="mono"] .tool, [data-theme="mono"] .preview-card, [data-theme="mono"] .confirm-card,
+[data-theme="mono"] .chat-bubble .body, [data-theme="mono"] .record.user, [data-theme="mono"] .entry-card {
+  background: var(--glass-bg-chip);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+}
+[data-theme="mono"] .stage-done-bar { backdrop-filter: var(--glass-blur-sm); -webkit-backdrop-filter: var(--glass-blur-sm); }
+/* 语义态保持原有淡底 */
+[data-theme="mono"] .tool.err { background: var(--red-tint); }
+[data-theme="mono"] .chat-bubble.user .body { background: var(--amber-tint); }
+/* 浅色代码块/diff */
+[data-theme="mono"] .record-md pre { background: #f1f1f0; }
+[data-theme="mono"] .preview-diff { background: #f1f1f0; }
+[data-theme="mono"] .preview-diff .diff-add { color: #3c6b3c; }
+[data-theme="mono"] .preview-diff .diff-remove { color: #9c3a3a; }

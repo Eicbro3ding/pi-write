@@ -1,0 +1,81 @@
+/* pi-writer 主题 · 黑白深色(mono-dark)——冷烟灰 */
+:root {
+  --bg: #0c0c0e; --bg-elev: #131316; --bg-elev-2: #1a1a1e;
+  --ink: #d4d4d8; --ink-2: #a9a9af; --muted: #8e8e93; --faint: #73737b;
+  --line: rgba(212, 212, 216, 0.06); --line-strong: rgba(212, 212, 216, 0.16);
+  --amber: #9ca3af; --green: #96a79a; --red: #c09090; --err-soft: #d0a3a3;
+  --amber-tint: rgba(156, 163, 175, 0.09); --amber-tint-strong: rgba(156, 163, 175, 0.22);
+  --red-tint: rgba(192, 144, 144, 0.08); --red-tint-strong: rgba(192, 144, 144, 0.28);
+  --green-tint: rgba(150, 167, 154, 0.09); --green-tint-strong: rgba(150, 167, 154, 0.3);
+  --hover-tint: rgba(212, 212, 216, 0.04); --hover-tint-strong: rgba(212, 212, 216, 0.08);
+  --scrollbar: #33333a; --mask: rgba(0, 0, 0, 0.6);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 0 24px rgba(212, 212, 216, 0.02);
+  --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.42), 0 0 36px rgba(212, 212, 216, 0.035);
+  --shadow-3: 0 16px 44px rgba(0, 0, 0, 0.52), 0 0 64px rgba(212, 212, 216, 0.055);
+}
+/* 「淡雅」结构:小圆角(克制裁切)+ 细字(雾里呼吸感) */
+[data-theme="mono-dark"] { --r-sm: 2px; --r-md: 4px; --r-lg: 6px; }
+[data-theme="mono-dark"] body { font-weight: 350; letter-spacing: 0.01em; }
+/* —— 亚克力毛玻璃(冷烟:雾黑面板)—— */
+[data-theme="mono-dark"] {
+  --glass-bg: rgba(24, 24, 28, 0.5);
+  --glass-bg-bright: rgba(42, 42, 50, 0.62);
+  --glass-bg-elev: rgba(32, 32, 38, 0.55);
+  --glass-bg-strong: rgba(20, 20, 24, 0.82);
+  --glass-bg-float: rgba(34, 34, 40, 0.8);
+  --glass-bg-chip: rgba(27, 27, 32, 0.5);
+  --glass-blur: blur(18px) saturate(1.2);
+  --glass-blur-lg: blur(22px) saturate(1.3);
+  --glass-blur-sm: blur(12px) saturate(1.15);
+}
+/* 环境色:钢青/雾蓝冷光(blur 取样来源) */
+[data-theme="mono-dark"] body {
+  background:
+    radial-gradient(840px 580px at 12% 4%, rgba(120, 145, 185, 0.18), transparent 66%),
+    radial-gradient(720px 520px at 90% 14%, rgba(170, 178, 192, 0.12), transparent 62%),
+    radial-gradient(660px 480px at 84% 88%, rgba(105, 150, 160, 0.14), transparent 64%),
+    radial-gradient(780px 560px at 6% 94%, rgba(150, 160, 190, 0.1), transparent 66%),
+    linear-gradient(180deg, #15151b 0%, #0b0b0f 100%);
+}
+/* 面板主面 */
+[data-theme="mono-dark"] .topbar, [data-theme="mono-dark"] .chapters, [data-theme="mono-dark"] .companion,
+[data-theme="mono-dark"] .stage-panel, [data-theme="mono-dark"] .settings-side, [data-theme="mono-dark"] .world-tree {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+/* 纸面容器让位;场景头/输入条整条毛玻璃,比主面亮一档(承载文字) */
+[data-theme="mono-dark"] .paper-zone { background: transparent; }
+[data-theme="mono-dark"] .stage-head, [data-theme="mono-dark"] .inputbar {
+  background: var(--glass-bg-bright);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+[data-theme="mono-dark"] .paper-surface, [data-theme="mono-dark"] .inputbar-inner, [data-theme="mono-dark"] .stage-controls {
+  background: var(--glass-bg-elev);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+}
+[data-theme="mono-dark"] .paper-surface { background: var(--glass-bg-strong); }
+/* 浮层 */
+[data-theme="mono-dark"] .c-book-menu, [data-theme="mono-dark"] .graph-zoom-bar, [data-theme="mono-dark"] .graph-ctx, [data-theme="mono-dark"] .rel-form {
+  background: var(--glass-bg-float);
+  backdrop-filter: var(--glass-blur-lg);
+  -webkit-backdrop-filter: var(--glass-blur-lg);
+}
+/* 消息流小卡片 */
+[data-theme="mono-dark"] .tool, [data-theme="mono-dark"] .preview-card, [data-theme="mono-dark"] .confirm-card,
+[data-theme="mono-dark"] .chat-bubble .body, [data-theme="mono-dark"] .record.user, [data-theme="mono-dark"] .entry-card {
+  background: var(--glass-bg-chip);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+}
+[data-theme="mono-dark"] .stage-done-bar { backdrop-filter: var(--glass-blur-sm); -webkit-backdrop-filter: var(--glass-blur-sm); }
+/* 语义态保持原有淡底 */
+[data-theme="mono-dark"] .tool.err { background: var(--red-tint); }
+[data-theme="mono-dark"] .chat-bubble.user .body { background: var(--amber-tint); }
+/* 冷烟代码块/diff */
+[data-theme="mono-dark"] .record-md pre { background: #16161a; }
+[data-theme="mono-dark"] .preview-diff { background: #16161a; }
+[data-theme="mono-dark"] .preview-diff .diff-add { color: #a3b5ac; }
+[data-theme="mono-dark"] .preview-diff .diff-remove { color: #d4a5a5; }

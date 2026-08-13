@@ -365,6 +365,20 @@ export interface WriterStateDto {
 	messages: Array<{ role: "user" | "assistant"; text: string; thinking?: string; timestamp?: string; id?: string }>;
 }
 
+/** 用户自定义主题(资产文件:主题目录下的 *.css)。 */
+export interface UserThemeInfo {
+	/** 文件名(含 .css)。 */
+	file: string;
+	/** CSS 原文。 */
+	css: string;
+}
+
+/** 主题清单:内置(web/public|dist/themes 资产,零 ts 注册)与用户(~/.pi/writer/themes)。 */
+export interface ThemeManifest {
+	user: UserThemeInfo[];
+	builtin: UserThemeInfo[];
+}
+
 // —— 专注写作台 workspace 类型(前端本地模型,不与后端字段对齐)——
 
 /** CodeMirror 选区快照:编剧「选中文本自动填入」与正文安全编辑所需的纯文本信息。 */

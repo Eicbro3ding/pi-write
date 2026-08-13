@@ -13,8 +13,8 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, unlinkSync, type Stats } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, extname, join, resolve, sep } from "node:path";
+import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
+import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import busboy from "busboy";
 import {
@@ -29,7 +29,7 @@ import {
 	setCurrentChapter,
 	updateChapter,
 } from "../book-manager.ts";
-import { getAgentDir, getBookDir, getWriterDir } from "../config.ts";
+import { getAgentDir, getBookDir, getThemesDir, getWriterDir } from "../config.ts";
 import { atomicWriteFile } from "../atomic-write.ts";
 import { MAX_ZIP_BYTES, exportBookZip, readImportZip, type BookZipImport } from "./book-zip.ts";
 import { ensureWorld, newId, readWorldEditRecord, saveWorld, WorldValidationError, type WorldData } from "../world-data.ts";
@@ -130,6 +130,27 @@ function resolveWebDistDir(env: Record<string, string | undefined> = process.env
 	const here = dirname(fileURLToPath(import.meta.url));
 	const srcDist = join(here, "..", "..", "web", "dist");
 	if (isDirectory(srcDist)) return srcDist;
+	return null;
+}
+
+/** 主题清单条目(内置/用户共用)。 */
+interface UserThemeEntry {
+	file: string;
+	css: string;
+}
+
+/**
+ * 探测内置主题资产目录:优先 web/public/themes(源码树——真理源,dev 下 vite
+ * 直接伺服、测试可枚举;构建会把它们原样拷入 dist),退回 web/dist/themes
+ * (打包产物,web/public 不存在时——如裁剪后的分发包/Electron)。均不存在返回 null。
+ */
+function resolveBuiltinThemesDir(): string | null {
+	const here = dirname(fileURLToPath(import.meta.url));
+	const candidates = [
+		join(here, "..", "..", "web", "public", "themes"),
+		join(here, "..", "..", "web", "dist", "themes"),
+	];
+	for (const c of candidates) if (isDirectory(c)) return c;
 	return null;
 }
 
@@ -478,6 +499,11 @@ export class WriterServer {
 			{ method: "POST", segments: ["writer", ":slug", "retract"], handler: (ctx) => this.handlePostWriterRetract(ctx) },
 			{ method: "GET", segments: ["writer", ":slug", "tree"], handler: (ctx) => this.handleGetWriterTree(ctx) },
 			{ method: "POST", segments: ["writer", ":slug", "navigate"], handler: (ctx) => this.handlePostWriterNavigate(ctx) },
+			// themes(用户自定义主题资产文件)
+			{ method: "GET", segments: ["themes"], handler: (ctx) => this.handleGetThemes(ctx) },
+			{ method: "GET", segments: ["themes", ":file"], handler: (ctx) => this.handleGetThemeFile(ctx) },
+			{ method: "PUT", segments: ["themes", ":file"], handler: (ctx) => this.handlePutThemeFile(ctx) },
+			{ method: "DELETE", segments: ["themes", ":file"], handler: (ctx) => this.handleDeleteThemeFile(ctx) },
 		];
 	}
 
@@ -1524,6 +1550,78 @@ export class WriterServer {
 			throw new HttpError(400, "bad_request", err instanceof Error ? err.message : String(err));
 		}
 		this.broadcast({ type: "messages_retracted" });
+		this.send(ctx.res, 200, { ok: true });
+	}
+
+	// ---- themes 路由(用户自定义主题资产文件) ----
+
+	/** 解析用户主题文件绝对路径:限 themes 目录 + 单文件 .css 名,防越界/写任意文件。 */
+	private resolveThemeFile(file: string): string {
+		const name = basename(file);
+		if (!/^[A-Za-z0-9._-]+\.css$/.test(name)) {
+			throw new HttpError(400, "bad_request", "非法主题文件名(仅允许 *.css)");
+		}
+		return join(getThemesDir(), name);
+	}
+
+	/** GET /api/themes:主题清单——内置(web/public|dist/themes 资产,零 ts 注册)
+	 *  与用户自定义(~/.pi/writer/themes)各自的文件 + 全文,供设置页 swatch 预览、
+	 *  编辑器预填与内置主题自动发现。 */
+	private async handleGetThemes(ctx: RouteContext): Promise<void> {
+		const readThemes = async (dir: string | null): Promise<UserThemeEntry[]> => {
+			if (!dir) return [];
+			let files: string[] = [];
+			try {
+				files = (await readdir(dir)).filter((f) => /^[A-Za-z0-9._-]+\.css$/.test(f)).sort();
+			} catch {
+				return []; // 目录不存在:该源无主题
+			}
+			return Promise.all(
+				files.map(async (file) => {
+					try {
+						return { file, css: await readFile(join(dir, file), "utf-8") };
+					} catch {
+						return { file, css: "" };
+					}
+				}),
+			);
+		};
+		const user = await readThemes(getThemesDir());
+		const builtin = await readThemes(resolveBuiltinThemesDir());
+		this.send(ctx.res, 200, { user, builtin });
+	}
+
+	/** GET /api/themes/:file:用户主题 CSS 原文(text/css),供 <link id="pi-theme"> 加载。 */
+	private async handleGetThemeFile(ctx: RouteContext): Promise<void> {
+		const abs = this.resolveThemeFile(ctx.params.file!);
+		let css = "";
+		try {
+			css = await readFile(abs, "utf-8");
+		} catch {
+			css = ""; // 文件不存在:空 CSS,浏览器忽略
+		}
+		ctx.res.writeHead(200, { "content-type": "text/css; charset=utf-8" });
+		ctx.res.end(css);
+	}
+
+	/** PUT /api/themes/:file {css}:保存用户主题(原子写)。 */
+	private async handlePutThemeFile(ctx: RouteContext): Promise<void> {
+		const abs = this.resolveThemeFile(ctx.params.file!);
+		const body = await readJsonBody(ctx.req);
+		const css = requireString(body, "css", true);
+		await mkdir(dirname(abs), { recursive: true });
+		await atomicWriteFile(abs, css);
+		this.send(ctx.res, 200, { ok: true });
+	}
+
+	/** DELETE /api/themes/:file:删除用户主题。 */
+	private async handleDeleteThemeFile(ctx: RouteContext): Promise<void> {
+		const abs = this.resolveThemeFile(ctx.params.file!);
+		try {
+			await unlink(abs);
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+		}
 		this.send(ctx.res, 200, { ok: true });
 	}
 

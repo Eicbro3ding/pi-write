@@ -5,7 +5,7 @@
  * 注意:本文件不得在 import 时触碰 DOM 专属 API(EventSource 只在 subscribeEvents 内使用),
  * 以兼容 node 环境的 vitest 单测。
  */
-import type { AgentEventDto, BookDetail, BookMeta, ChapterRef, McpServerInfo, McpServerStatus, ProviderInfo, SessionState, SessionTreeDto, StageSnapshotDto, StageWorldEditRecordDto, WorldDataDto, WriterStateDto } from "../types.ts";
+import type { AgentEventDto, BookDetail, BookMeta, ChapterRef, McpServerInfo, McpServerStatus, ProviderInfo, SessionState, SessionTreeDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, WorldDataDto, WriterStateDto } from "../types.ts";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
 
 /** 图片访问 URL(同源相对路径;生产/Electron 同源,vite dev 经代理)。 */
@@ -366,6 +366,24 @@ export class ApiClient {
 			method: "PUT",
 			body: JSON.stringify({ slug, chapterFile, cards }),
 		});
+	}
+
+	/** 主题清单(内置资产 + 用户自定义;文件 + 全文,设置页自动发现与编辑器用)。 */
+	async getThemes(): Promise<ThemeManifest> {
+		return this.request<ThemeManifest>("/api/themes");
+	}
+
+	/** 保存用户主题 CSS(新建或覆盖;file 含 .css)。 */
+	async putUserTheme(file: string, css: string): Promise<void> {
+		await this.request<{ ok: boolean }>(`/api/themes/${encodeURIComponent(file)}`, {
+			method: "PUT",
+			body: JSON.stringify({ css }),
+		});
+	}
+
+	/** 删除用户主题文件。 */
+	async deleteUserTheme(file: string): Promise<void> {
+		await this.request<{ ok: boolean }>(`/api/themes/${encodeURIComponent(file)}`, { method: "DELETE" });
 	}
 
 	/** 舞台快照(纯读不创建编排器;未启用舞台区 404)。chapterFile 可选:舞台按章节隔离。 */

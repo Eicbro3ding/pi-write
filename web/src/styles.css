@@ -1,7 +1,10 @@
 /* ════════════════════════════════════════════════════════════════
    pi-writer · 深夜书房(night studio)设计系统
    「书库 | 纸张 | AI 伙伴」三栏并存 · 现代暗色工艺 · 无衬线排版
-   单一主题:所有颜色 token 收敛进 :root;data-theme="night" 为唯一取值
+   主题完全资产化:本文件 = night 默认基底(token 收敛在 :root 防闪)
+   + 主题无关的通用规则;各主题(paper/parchment/mono/mono-dark/morandi/
+   morandi-dark)为 web/public/themes/<id>.css 自包含文件——token + 全部
+   结构规则(毛玻璃/圆角/浅色代码块等),经 <link id="pi-theme"> 动态加载。
    ════════════════════════════════════════════════════════════════ */
 
 /* —— 字体:Inter(拉丁/数字可变字重)+ HarmonyOS Sans SC(CJK,本地打包) —— */
@@ -60,38 +63,6 @@
   --ui-font: "Inter", "HarmonyOS Sans SC", -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   --prose: "Inter", "HarmonyOS Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
   --mono: ui-monospace, "Cascadia Code", Consolas, "Inter", "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei", monospace;
-}
-
-/* —— 亮色主题「纸上书房」:全量覆盖 THEME_TOKENS(测试保证键集一致) —— */
-[data-theme="paper"] {
-  --bg: #f4f0e8; --bg-elev: #fdfaf4; --bg-elev-2: #efe9de;
-  --ink: #26221c; --ink-2: #4a443a; --muted: #6f6759; --faint: #7a7162;
-  --line: #dcd4c4; --line-strong: #b9af9c;
-  --amber: #9a6524; --green: #5f7d4e; --red: #ad5038; --err-soft: #c26a55;
-  --amber-tint: rgba(154, 101, 36, 0.1); --amber-tint-strong: rgba(154, 101, 36, 0.24);
-  --red-tint: rgba(173, 80, 56, 0.07); --red-tint-strong: rgba(173, 80, 56, 0.28);
-  --green-tint: rgba(95, 125, 78, 0.08); --green-tint-strong: rgba(95, 125, 78, 0.3);
-  --hover-tint: rgba(0, 0, 0, 0.045); --hover-tint-strong: rgba(0, 0, 0, 0.07);
-  --scrollbar: #c4b9a4; --mask: rgba(60, 52, 40, 0.35);
-  --shadow-1: 0 1px 2px rgba(60, 52, 40, 0.08), 0 1px 4px rgba(60, 52, 40, 0.05);
-  --shadow-2: 0 4px 14px rgba(60, 52, 40, 0.14), 0 1px 3px rgba(60, 52, 40, 0.08);
-  --shadow-3: 0 16px 44px rgba(60, 52, 40, 0.24), 0 4px 12px rgba(60, 52, 40, 0.14);
-}
-
-/* —— 暖色主题「羊皮灯下」 —— */
-[data-theme="parchment"] {
-  --bg: #efe6d2; --bg-elev: #f7f0e0; --bg-elev-2: #e8dcc2;
-  --ink: #3a3226; --ink-2: #554b3a; --muted: #6d6248; --faint: #7a6d52;
-  --line: #d6c9a8; --line-strong: #b3a47e;
-  --amber: #965f1f; --green: #6d8a58; --red: #a85038; --err-soft: #c2705c;
-  --amber-tint: rgba(150, 95, 31, 0.12); --amber-tint-strong: rgba(150, 95, 31, 0.26);
-  --red-tint: rgba(168, 80, 56, 0.08); --red-tint-strong: rgba(168, 80, 56, 0.3);
-  --green-tint: rgba(109, 138, 88, 0.08); --green-tint-strong: rgba(109, 138, 88, 0.3);
-  --hover-tint: rgba(80, 60, 20, 0.05); --hover-tint-strong: rgba(80, 60, 20, 0.08);
-  --scrollbar: #bfb088; --mask: rgba(70, 55, 30, 0.4);
-  --shadow-1: 0 1px 2px rgba(70, 55, 30, 0.09), 0 1px 4px rgba(70, 55, 30, 0.06);
-  --shadow-2: 0 4px 14px rgba(70, 55, 30, 0.15), 0 1px 3px rgba(70, 55, 30, 0.09);
-  --shadow-3: 0 16px 44px rgba(70, 55, 30, 0.26), 0 4px 12px rgba(70, 55, 30, 0.15);
 }
 
 /* —— 基础 —— */
@@ -483,7 +454,6 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .record-md a { color: var(--amber); text-decoration: underline; text-underline-offset: 3px; }
 .record-md code { font-family: var(--mono); font-size: 12.5px; background: var(--hover-tint-strong); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
 .record-md pre { background: #121110; border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; margin: 0 0 10px; overflow-x: auto; }
-[data-theme="paper"] .record-md pre, [data-theme="parchment"] .record-md pre { background: #f3eee2; }
 .record-md pre code { background: none; border: none; padding: 0; font-size: 12.5px; line-height: 1.6; }
 .record-md blockquote { margin: 0 0 10px; padding: 2px 0 2px 12px; border-left: 2px solid var(--amber); color: var(--muted); }
 .record-md table { border-collapse: collapse; margin: 0 0 10px; font-size: 13px; }
@@ -632,11 +602,6 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .fs-confirm-text { font-size: 13px; color: var(--amber); margin-right: 8px; }
 .fs-confirm .fs-btn-primary { background: var(--amber); color: var(--bg); font-weight: 500; border-radius: var(--r-sm); padding: 6px 16px; }
 .fs-confirm .fs-btn-primary:hover:not(:disabled) { background: var(--amber-tint-strong); color: var(--bg); }
-/* 浅色主题:amber 实底对 --bg 文字对比度不足,按主题加深到 ≥4.5:1 */
-[data-theme="paper"] .fs-confirm .fs-btn-primary { background: #8a5518; }
-[data-theme="paper"] .fs-confirm .fs-btn-primary:hover:not(:disabled) { background: #774816; }
-[data-theme="parchment"] .fs-confirm .fs-btn-primary { background: #7d4f16; }
-[data-theme="parchment"] .fs-confirm .fs-btn-primary:hover:not(:disabled) { background: #6b4212; }
 .fs-confirm .fs-btn-danger { color: var(--red); }
 .fs-confirm .fs-btn-danger:hover { color: var(--err-soft); }
 
@@ -1049,6 +1014,15 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .theme-swatch i { width: 16px; height: 16px; border: 1px solid var(--line); border-radius: 4px; display: block; }
 .theme-label { font-size: 13px; color: var(--ink); }
 .theme-desc { font-size: 11px; color: var(--faint); }
+/* 自定义主题 CSS 编辑器(等宽、可垂直拉伸) */
+.theme-css-editor {
+  display: block; width: 100%; min-height: 180px; margin: 4px 0;
+  padding: 10px 12px; font-family: var(--mono); font-size: 12px; line-height: 1.6;
+  background: var(--bg-elev-2); color: var(--ink);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  outline: none; resize: vertical; white-space: pre;
+}
+.theme-css-editor:focus { border-color: var(--amber); }
 
 /* —— 预览卡片(AI 编辑结果,消息流内嵌) —— */
 .preview-card { margin: 6px 0; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; background: var(--bg-elev); box-shadow: var(--shadow-1); flex: none; }
@@ -1058,11 +1032,8 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .preview-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .preview-body { border-top: 1px solid var(--line); overflow: hidden; }
 .preview-diff { max-height: 240px; overflow: auto; font-family: var(--mono); font-size: 11.5px; line-height: 1.55; background: #121110; }
-[data-theme="paper"] .preview-diff, [data-theme="parchment"] .preview-diff { background: #f3eee2; }
 .preview-diff .diff-add { background: rgba(110, 190, 120, 0.14); color: #b9d8ae; }
 .preview-diff .diff-remove { background: rgba(210, 100, 90, 0.14); color: #e5b3a9; }
-[data-theme="paper"] .preview-diff .diff-add, [data-theme="parchment"] .preview-diff .diff-add { color: #3f6f3f; }
-[data-theme="paper"] .preview-diff .diff-remove, [data-theme="parchment"] .preview-diff .diff-remove { color: #9c4a3a; }
 .preview-diff .diff-context { color: var(--faint); }
 .preview-error { padding: 10px 12px; color: var(--faint); font-size: 12px; }
 .preview-summary { padding: 6px 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
@@ -1469,3 +1440,4 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 }
 .notice-add button:hover:not(:disabled) { border-color: var(--amber); background: var(--amber-tint); }
 .notice-add button:disabled { color: var(--faint); cursor: default; }
+

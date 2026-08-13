@@ -1,0 +1,23 @@
+/* pi-writer 主题 · 纸上书房(paper) */
+:root {
+  --bg: #f4f0e8; --bg-elev: #fdfaf4; --bg-elev-2: #efe9de;
+  --ink: #26221c; --ink-2: #4a443a; --muted: #6f6759; --faint: #7a7162;
+  --line: #dcd4c4; --line-strong: #b9af9c;
+  --amber: #9a6524; --green: #5f7d4e; --red: #ad5038; --err-soft: #c26a55;
+  --amber-tint: rgba(154, 101, 36, 0.1); --amber-tint-strong: rgba(154, 101, 36, 0.24);
+  --red-tint: rgba(173, 80, 56, 0.07); --red-tint-strong: rgba(173, 80, 56, 0.28);
+  --green-tint: rgba(95, 125, 78, 0.08); --green-tint-strong: rgba(95, 125, 78, 0.3);
+  --hover-tint: rgba(0, 0, 0, 0.045); --hover-tint-strong: rgba(0, 0, 0, 0.07);
+  --scrollbar: #c4b9a4; --mask: rgba(60, 52, 40, 0.35);
+  --shadow-1: 0 1px 2px rgba(60, 52, 40, 0.08), 0 1px 4px rgba(60, 52, 40, 0.05);
+  --shadow-2: 0 4px 14px rgba(60, 52, 40, 0.14), 0 1px 3px rgba(60, 52, 40, 0.08);
+  --shadow-3: 0 16px 44px rgba(60, 52, 40, 0.24), 0 4px 12px rgba(60, 52, 40, 0.14);
+}
+/* 浅色代码块/diff(默认 night 深色块在亮底上过重) */
+[data-theme="paper"] .record-md pre { background: #f3eee2; }
+[data-theme="paper"] .preview-diff { background: #f3eee2; }
+[data-theme="paper"] .preview-diff .diff-add { color: #3f6f3f; }
+[data-theme="paper"] .preview-diff .diff-remove { color: #9c4a3a; }
+/* 全屏编辑器主按钮:amber 实底在亮底上对比度不足,加深 */
+[data-theme="paper"] .fs-confirm .fs-btn-primary { background: #8a5518; }
+[data-theme="paper"] .fs-confirm .fs-btn-primary:hover:not(:disabled) { background: #774816; }

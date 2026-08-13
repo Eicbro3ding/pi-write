@@ -932,6 +932,48 @@ describe("WriterServer 静态服务(webDistDir)", () => {
 		const body = await res.json();
 		expect(Array.isArray(body.books)).toBe(true);
 	});
+	it("GET /api/themes 无用户主题,内置主题从资产文件自动发现", async () => {
+		const res = await fetch(`${base}/api/themes`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { user: unknown[]; builtin: Array<{ file: string; css: string }> };
+		expect(body.user).toEqual([]);
+		// 内置清单来自 web/public|dist/themes 枚举(零 ts 注册),测试树里应发现全部资产
+		expect(body.builtin.length).toBeGreaterThanOrEqual(6);
+		const files = body.builtin.map((b) => b.file);
+		expect(files).toContain("paper.css");
+		expect(files).toContain("mono-dark.css");
+		for (const b of body.builtin) expect(typeof b.css).toBe("string");
+	});
+	it("PUT/GET/DELETE 用户主题:落盘、列表、raw text/css、删除", async () => {
+		const put = await fetch(`${base}/api/themes/moon.css`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ css: ":root { --bg: #000; }" }),
+		});
+		expect(put.status).toBe(200);
+		// 列表含全文
+		const list = (await (await fetch(`${base}/api/themes`)).json()) as { user: Array<{ file: string; css: string }> };
+		expect(list.user.map((u) => u.file)).toEqual(["moon.css"]);
+		expect(list.user[0]!.css).toBe(":root { --bg: #000; }");
+		// raw 端点 content-type 为 text/css
+		const raw = await fetch(`${base}/api/themes/moon.css`);
+		expect(raw.status).toBe(200);
+		expect(raw.headers.get("content-type")).toContain("text/css");
+		expect(await raw.text()).toBe(":root { --bg: #000; }");
+		// 删除
+		const del = await fetch(`${base}/api/themes/moon.css`, { method: "DELETE" });
+		expect(del.status).toBe(200);
+		const after = (await (await fetch(`${base}/api/themes`)).json()) as { user: unknown[] };
+		expect(after.user).toEqual([]);
+	});
+	it("PUT /api/themes 非 .css 文件名返回 400(仅允许 *.css)", async () => {
+		const res = await fetch(`${base}/api/themes/evil.txt`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ css: ":root{}" }),
+		});
+		expect(res.status).toBe(400);
+	});
 });
 
 describe("书管理", () => {

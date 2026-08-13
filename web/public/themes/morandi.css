@@ -1,0 +1,78 @@
+/* pi-writer 主题 · 莫兰迪色系(morandi) */
+:root {
+  --bg: #e9e5dd; --bg-elev: #f3efe7; --bg-elev-2: #dfdad1;
+  --ink: #2d2b28; --ink-2: #4b4741; --muted: #5e5951; --faint: #6d675e;
+  --line: #d6d1c7; --line-strong: #beb8ac;
+  --amber: #8a524b; --green: #57724f; --red: #a0523f; --err-soft: #b56b5b;
+  --amber-tint: rgba(138, 82, 75, 0.1); --amber-tint-strong: rgba(138, 82, 75, 0.24);
+  --red-tint: rgba(160, 82, 63, 0.08); --red-tint-strong: rgba(160, 82, 63, 0.28);
+  --green-tint: rgba(87, 114, 79, 0.1); --green-tint-strong: rgba(87, 114, 79, 0.3);
+  --hover-tint: rgba(45, 42, 36, 0.05); --hover-tint-strong: rgba(45, 42, 36, 0.09);
+  --scrollbar: #c8c2b6; --mask: rgba(45, 42, 36, 0.42);
+  --shadow-1: 0 1px 2px rgba(80, 70, 55, 0.09), 0 1px 4px rgba(80, 70, 55, 0.05);
+  --shadow-2: 0 4px 14px rgba(80, 70, 55, 0.13), 0 1px 3px rgba(80, 70, 55, 0.08);
+  --shadow-3: 0 16px 44px rgba(80, 70, 55, 0.2), 0 4px 12px rgba(80, 70, 55, 0.11);
+}
+/* —— 亚克力毛玻璃(浅色暖陶玻)—— */
+[data-theme="morandi"] {
+  --glass-bg: rgba(243, 240, 233, 0.5);
+  --glass-bg-bright: rgba(255, 252, 246, 0.64);
+  --glass-bg-elev: rgba(251, 248, 242, 0.6);
+  --glass-bg-strong: rgba(250, 247, 241, 0.82);
+  --glass-bg-float: rgba(250, 247, 241, 0.78);
+  --glass-bg-chip: rgba(250, 247, 241, 0.52);
+  --glass-blur: blur(18px) saturate(1.4);
+  --glass-blur-lg: blur(24px) saturate(1.5);
+  --glass-blur-sm: blur(12px) saturate(1.3);
+}
+/* 环境色:尘玫瑰/陶土灰/灰绿/雾蓝(blur 取样来源) */
+[data-theme="morandi"] body {
+  background:
+    radial-gradient(820px 560px at 12% 4%, rgba(176, 132, 120, 0.3), transparent 66%),
+    radial-gradient(700px 500px at 90% 14%, rgba(146, 140, 120, 0.26), transparent 62%),
+    radial-gradient(640px 460px at 82% 88%, rgba(120, 140, 128, 0.24), transparent 64%),
+    radial-gradient(760px 540px at 8% 92%, rgba(120, 132, 152, 0.26), transparent 66%),
+    linear-gradient(180deg, #ece7df 0%, #e0dbd0 100%);
+}
+/* 面板主面 */
+[data-theme="morandi"] .topbar, [data-theme="morandi"] .chapters, [data-theme="morandi"] .companion,
+[data-theme="morandi"] .stage-panel, [data-theme="morandi"] .settings-side, [data-theme="morandi"] .world-tree {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+/* 纸面容器让位;场景头/输入条整条毛玻璃,比主面亮一档(承载文字) */
+[data-theme="morandi"] .paper-zone { background: transparent; }
+[data-theme="morandi"] .stage-head, [data-theme="morandi"] .inputbar {
+  background: var(--glass-bg-bright);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+[data-theme="morandi"] .paper-surface, [data-theme="morandi"] .inputbar-inner, [data-theme="morandi"] .stage-controls {
+  background: var(--glass-bg-elev);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+}
+[data-theme="morandi"] .paper-surface { background: var(--glass-bg-strong); }
+/* 浮层 */
+[data-theme="morandi"] .c-book-menu, [data-theme="morandi"] .graph-zoom-bar, [data-theme="morandi"] .graph-ctx, [data-theme="morandi"] .rel-form {
+  background: var(--glass-bg-float);
+  backdrop-filter: var(--glass-blur-lg);
+  -webkit-backdrop-filter: var(--glass-blur-lg);
+}
+/* 消息流小卡片 */
+[data-theme="morandi"] .tool, [data-theme="morandi"] .preview-card, [data-theme="morandi"] .confirm-card,
+[data-theme="morandi"] .chat-bubble .body, [data-theme="morandi"] .record.user, [data-theme="morandi"] .entry-card {
+  background: var(--glass-bg-chip);
+  backdrop-filter: var(--glass-blur-sm);
+  -webkit-backdrop-filter: var(--glass-blur-sm);
+}
+[data-theme="morandi"] .stage-done-bar { backdrop-filter: var(--glass-blur-sm); -webkit-backdrop-filter: var(--glass-blur-sm); }
+/* 语义态保持原有淡底 */
+[data-theme="morandi"] .tool.err { background: var(--red-tint); }
+[data-theme="morandi"] .chat-bubble.user .body { background: var(--amber-tint); }
+/* 浅色代码块/diff */
+[data-theme="morandi"] .record-md pre { background: #ede7da; }
+[data-theme="morandi"] .preview-diff { background: #ede7da; }
+[data-theme="morandi"] .preview-diff .diff-add { color: #47654a; }
+[data-theme="morandi"] .preview-diff .diff-remove { color: #96504a; }
