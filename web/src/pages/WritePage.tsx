@@ -191,6 +191,10 @@ export function WritePage({
 	/** 确认卡恢复/写回按「书+章节」归属(confirmScopeRef),恢复完成前跳过持久化写,
 	 *  防空数组覆盖;书/章节变化时先清本地卡再恢复,防止旧书卡片串入新书。 */
 	const confirmScopeRef = useRef<string | null>(null);
+	/** 确认卡恢复进行中标记:scope 变化触发 GET 恢复,恢复完成前跳过 PUT——
+	 *  否则 setConfirmCards([]) 触发的重渲染会让 effect 走 PUT 分支,空数组先于
+	 *  GET 完成落盘,覆盖服务端已持久化卡片(慢网络丢卡,2026-08-13)。 */
+	const confirmRestoringRef = useRef(false);
 	/** 已对齐过编剧会话的书 slug(切书/重连后重拉对齐;null = 未对齐)。 */
 	const writerAlignedRef = useRef<string | null>(null);
 	/** 编剧会话分支树(编辑重发产生新分支后,分支栏切换旧分支);空 = 无分支历史。 */
@@ -239,13 +243,21 @@ export function WritePage({
 	}, [writerSession.messages]);
 
 	/**
-	 * 整体替换聊天前的统一清理:清乐观气泡待确认队列(旧气泡随 RESET 消失,
-	 * 残留条目会误判后续回显),再 RESET。
+	 * 仅重置主会话(写作 agent)视图。主会话在编辑页已无 UI,但水合/对齐仍走这条
+	 * reducer;其副作用不得波及编剧会话(编剧由 resetChat/alignWriter 单独管理)。
+	 * 2026-08-13 根因修复:refreshChapterCache/alignWithServer 等只替换主会话视图
+	 * 的路径此前误调 resetChat,把编剧对话一并清空且不再重对齐(空白)。
+	 */
+	function resetMainChat() {
+		dispatch(RESET);
+	}
+
+	/**
+	 * 书/章节切换的统一清理:主会话 + 编剧会话 + 确认队列(编辑上下文已变;
+	 * 会话本体在服务端,确认卡由服务端持久化,恢复标记置位后在章节就位时重新拉取)。
 	 */
 	function resetChat() {
-		dispatch(RESET);
-		// 编剧会话与确认队列随书/章节切换清空(编辑上下文已变;会话本体在服务端,
-		// 确认卡由服务端持久化,恢复标记置位后在章节就位时重新拉取)
+		resetMainChat();
 		writerDispatch(RESET);
 		setConfirmCards([]);
 		setWriterTree(null);
@@ -265,6 +277,7 @@ export function WritePage({
 		const scope = `${bookDetail.slug}:${currentChapter.file}`;
 		if (confirmScopeRef.current !== scope) {
 			confirmScopeRef.current = scope;
+			confirmRestoringRef.current = true;
 			setConfirmCards([]);
 			void client
 				.getConfirmCards(bookDetail.slug, currentChapter.file)
@@ -277,9 +290,15 @@ export function WritePage({
 				})
 				.catch(() => {
 					/* 恢复失败静默:确认卡从空开始 */
+				})
+				.finally(() => {
+					if (confirmScopeRef.current === scope) confirmRestoringRef.current = false;
 				});
 			return;
 		}
+		// 恢复进行中:跳过写回——setConfirmCards([]) 已触发重渲染,此时 PUT 空数组
+		// 会先于 GET 完成覆盖服务端已持久化卡片(慢网络丢卡)
+		if (confirmRestoringRef.current) return;
 		const t = window.setTimeout(() => {
 			void client
 				.putConfirmCards(bookDetail.slug, currentChapter.file, confirmCards)
@@ -437,7 +456,7 @@ export function WritePage({
 		const prev = hydrateQueueRef.current;
 		hydrateQueueRef.current = prev
 			.then(() => {
-				resetChat();
+				resetMainChat();
 				for (const ev of messagesToEvents(messages)) dispatch(ev);
 			})
 			.catch(() => {
@@ -478,7 +497,7 @@ export function WritePage({
 					alignPendingRef.current = true;
 					return;
 				}
-				resetChat();
+				resetMainChat();
 				for (const ev of messagesToEvents(st.messages)) dispatch(ev);
 			})
 			.catch(() => {
@@ -543,6 +562,9 @@ export function WritePage({
 				// 会话事件复用主 reducer(writerDispatch),不触碰主会话 dispatch
 				if (start.type === "writer_event") {
 					if (start.slug !== bookDetailRef.current?.slug) return;
+					// 编剧会话按章节隔离:只消费当前章节事件(切章后其他章节编剧
+					// 流式不再串进本页;writer_event 携带 chapterFile 供过滤)
+					if ((start.chapterFile ?? null) !== (currentChapterRef.current?.file ?? null)) return;
 					const ev = start.event;
 					if (ev.type === "message_start" && ev.message?.role === "user") {
 						// 编剧回合开始:预取编辑前基线(工具执行快于 SSE+fetch 时,
@@ -655,6 +677,7 @@ export function WritePage({
 			// 以服务端实际会话为准(事件后可能又有切换);章节不存在时退回第一章
 			const ch = detail.chapters.find((c) => c.file === (st.chapterFile ?? chapterFile)) ?? detail.chapters[0] ?? null;
 			setCurrentChapter(ch);
+			resetChat();
 			applyMessages(st.messages);
 		} catch (err) {
 			if (gen !== sessionGenRef.current) return; // 过期失败:静默放弃(较新切换已接管)
@@ -1235,9 +1258,9 @@ export function WritePage({
 						{memoTab === "chat" && writerSession.isStreaming && <span className="companion-live" title="生成中" aria-label="生成中" />}
 					</div>
 					<div className="companion-body">
-						{memoTab === "memo" ? (
-							<NoticeBoard slug={bookDetail?.slug ?? null} />
-						) : (
+							{memoTab === "memo" ? (
+								<NoticeBoard client={client} slug={bookDetail?.slug ?? null} />
+							) : (
 						<div className="chat active">
 							{/* 编剧(常驻编辑 agent)对话:会话状态经 processAgentEvent 维护,
 							   MessageList/InputBar 原样复用;确认卡锚定在触发编辑的 assistant 消息下;

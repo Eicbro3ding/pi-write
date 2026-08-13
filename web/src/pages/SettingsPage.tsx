@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, type ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
 import type { WorldDataDto } from "../types.ts";
@@ -68,6 +68,7 @@ function extractModels(models: readonly unknown[]): ModelInfo[] {
  */
 export function SettingsPage({
 	client,
+	slug,
 	simplifiedTools,
 	onSimplifiedToolsChange,
 	autoExpandThinking,
@@ -76,6 +77,8 @@ export function SettingsPage({
 	onAutoConfirmEditsChange,
 }: {
 	client: ApiClient;
+	/** 当前打开的书 slug(世界书注入分组随打开书重拉;null = 未打开书)。 */
+	slug: string | null;
 	/** 简化输出开关状态(工具调用卡片隐藏;缺省开启)。 */
 	simplifiedTools: boolean;
 	onSimplifiedToolsChange: (enabled: boolean) => void;
@@ -110,6 +113,8 @@ export function SettingsPage({
 	const [noBook, setNoBook] = useState(false);
 	const [worldBusy, setWorldBusy] = useState(false);
 	const [worldReloadKey, setWorldReloadKey] = useState(0);
+	/** 最近一次加载/保存成功时磁盘 world.json mtime(If-Match 条件写;0 = 未知)。 */
+	const lastWorldMtimeRef = useRef(0);
 
 	/** 拉取模型列表/当前模型/思考等级并归一;返回解析结果供调用方直接使用。 */
 	const load = useCallback(async (): Promise<{ models: ModelInfo[]; current: string | null; thinking: string | null }> => {
@@ -137,8 +142,16 @@ export function SettingsPage({
 		};
 	}, [load]);
 
-	// 世界书注入:挂载时读取 world.json(无会话 404 → 分组提示未打开书,非 404 走分组错误 + 重试)
+	// 世界书注入:打开书(slug)变化或重试时读取 world.json(无打开书直接 noBook;
+	// 无会话 404 同样走 noBook,非 404 走分组错误 + 重试)。此前只在挂载加载一次,
+	// 四页常驻下启动时无书 → 404 noBook 后不再重拉,打开书也看不到开关(2026-08-13)。
 	useEffect(() => {
+		if (!slug) {
+			setWorld(null);
+			setNoBook(true);
+			setWorldErr(null);
+			return;
+		}
 		let cancelled = false;
 		void client
 			.getWorld()
@@ -147,6 +160,7 @@ export function SettingsPage({
 				setWorld(r.world);
 				setNoBook(false);
 				setWorldErr(null);
+				lastWorldMtimeRef.current = r.mtime; // 磁盘版本,保存时作 If-Match
 			})
 			.catch((e) => {
 				if (cancelled) return;
@@ -162,7 +176,7 @@ export function SettingsPage({
 		return () => {
 			cancelled = true;
 		};
-	}, [client, worldReloadKey]);
+	}, [client, slug, worldReloadKey]);
 
 	/** 切换注入开关:改本地 world → putWorld 整体保存;失败回滚并显示错误。 */
 	async function toggleInjection(key: "notice" | "storyline", checked: boolean) {
@@ -177,7 +191,9 @@ export function SettingsPage({
 		setWorld(next);
 		setWorldBusy(true);
 		try {
-			await client.putWorld(next);
+			// If-Match 条件写:磁盘 mtime 已变(其他窗口/AI 改过)→ 409,回滚并提示
+			const mtime = await client.putWorld(next, lastWorldMtimeRef.current || undefined);
+			if (mtime > 0) lastWorldMtimeRef.current = mtime;
 		} catch (e) {
 			setWorld(before); // 回滚:恢复上次成功状态
 			setActErr(`世界书注入设置失败: ${friendlyError(e)}`);

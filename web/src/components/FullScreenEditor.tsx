@@ -95,17 +95,23 @@ export function FullScreenEditor({ client, slug, initialFile, title, onClose }: 
 	}, [file, retryKey]);
 
 	async function save(): Promise<boolean> {
+		// 快照发起时的 file/text/mtime:保存期间用户可能改路径触发重载,await 之后文件
+		// 已切——不能用新文件的 text 去写旧 mtime(错写/409),也不更新新文件状态。
+		const startedFile = fileRef.current;
+		const startedText = textRef.current;
+		const startedMtime = lastMtimeRef.current;
 		try {
-			const mtime = await client.putDraft(fileRef.current, textRef.current, slug ?? undefined, lastMtimeRef.current || undefined);
+			const mtime = await client.putDraft(startedFile, startedText, slug ?? undefined, startedMtime || undefined);
+			if (fileRef.current !== startedFile) return false; // 保存期间切换了文件:丢弃本次结果
 			setDirty(false);
-			initialRef.current = textRef.current; // 保存后快照前移
+			initialRef.current = startedText; // 保存后快照前移
 			if (mtime > 0) lastMtimeRef.current = mtime;
-			setWords(countWriting(textRef.current));
+			setWords(countWriting(startedText));
 			setError(null);
 			markSaved(); // 记录保存时间:自己的回显(1s 内)跳过
 			return true;
 		} catch (e) {
-			setError(`保存失败: ${friendlyError(e)}`);
+			if (fileRef.current === startedFile) setError(`保存失败: ${friendlyError(e)}`);
 			return false;
 		}
 	}

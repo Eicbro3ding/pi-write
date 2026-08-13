@@ -142,6 +142,7 @@ export function App() {
 					<section className={`view ${view === "settings" ? "" : "hidden"}`}>
 						<SettingsPage
 							client={client}
+							slug={currentSlug}
 							simplifiedTools={simplifiedTools}
 							onSimplifiedToolsChange={setSimplifiedTools}
 							autoExpandThinking={autoExpandThinking}

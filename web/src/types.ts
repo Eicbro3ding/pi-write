@@ -216,8 +216,10 @@ export type AgentEventDto =
 	// 收幕导演整理回合结束(2026-08-11):前端撤「导演正在编辑消息」提示条
 	| { type: "stage_director_done"; slug: string; chapterFile: string | null }
 	// 常驻编剧事件(server 广播 writer_event,内层是主会话同款会话事件——
-	// 前端复用 processAgentEvent 归约,消息/思考/工具卡片零新逻辑)
-	| { type: "writer_event"; slug: string; event: WriterSessionEventDto };
+	// 前端复用 processAgentEvent 归约,消息/思考/工具卡片零新逻辑)。
+	// chapterFile 标记归属章节:编剧会话按章节隔离(WriterHost 键 = 书+章节),
+	// 前端必须按 slug+chapterFile 过滤,否则切章后其他章节编剧的流式会串进本页(2026-08-13)。
+	| { type: "writer_event"; slug: string; chapterFile: string | null; event: WriterSessionEventDto };
 
 /** 常驻编剧会话事件(主会话事件的子集,全部可被 processAgentEvent 处理)。 */
 export type WriterSessionEventDto =

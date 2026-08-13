@@ -88,15 +88,16 @@ export class WriterHost {
 	private readonly hosts = new Map<string, SessionHost>();
 	/** 每书最近一次对话声明的章节文件(无 chapterFile 参数的端点兜底定位)。 */
 	private readonly currentChapter = new Map<string, string | null>();
-	/** 事件转发(server 构造时注入 → broadcast 为 writer_event);注入前静默丢弃。 */
-	private eventSink: (slug: string, event: AgentSessionEvent) => void = () => {};
+	/** 事件转发(server 构造时注入 → broadcast 为 writer_event);注入前静默丢弃。
+	 *  chapterFile 随事件透传(编剧会话按章节隔离,前端据此过滤,2026-08-13)。 */
+	private eventSink: (slug: string, chapterFile: string | null, event: AgentSessionEvent) => void = () => {};
 
 	constructor(options: WriterHostOptions) {
 		this.options = options;
 	}
 
 	/** server 构造时注入事件转发(WriterHost 在 web.ts 先于 server 创建)。 */
-	setEventSink(sink: (slug: string, event: AgentSessionEvent) => void): void {
+	setEventSink(sink: (slug: string, chapterFile: string | null, event: AgentSessionEvent) => void): void {
 		this.eventSink = sink;
 	}
 
@@ -113,7 +114,7 @@ export class WriterHost {
 		const host = this.options.createHost
 			? await this.options.createHost(`${key}`)
 			: await this.createHost(slug, chapterFile);
-		host.subscribe((event) => this.eventSink(slug, event));
+		host.subscribe((event) => this.eventSink(slug, chapterFile, event));
 		this.hosts.set(key, host);
 		return host;
 	}

@@ -99,16 +99,23 @@ export function StagePage({
 	/** 当前章节 ref(SSE 闭包取最新值;舞台按章节隔离,事件按 slug+chapter 过滤)。 */
 	const currentChapterRef = useRef(currentChapter);
 	currentChapterRef.current = currentChapter;
+	/** 快照响应代数:并发 refresh(切章/激活/重连/开演)后发先至时,旧快照覆盖新快照。
+	 *  每次 refresh 自增,过期响应丢弃(2026-08-13)。 */
+	const stageGenRef = useRef(0);
 	const refresh = useCallback(async () => {
 		if (!slug) return;
+		const gen = ++stageGenRef.current;
+		const apply = (snap: StageSnapshotDto) => {
+			if (stageGenRef.current === gen) applyStageSnapshot(snap);
+		};
 		try {
-			applyStageSnapshot(await client.getStage(slug, currentChapterRef.current?.file ?? null));
+			apply(await client.getStage(slug, currentChapterRef.current?.file ?? null));
 		} catch (e) {
 			try {
 				await new Promise((r) => setTimeout(r, 1200));
-				applyStageSnapshot(await client.getStage(slug, currentChapterRef.current?.file ?? null));
+				apply(await client.getStage(slug, currentChapterRef.current?.file ?? null));
 			} catch (e2) {
-				dispatch({ type: "system", text: `舞台快照拉取失败: ${friendlyError(e2)}`, err: true });
+				if (stageGenRef.current === gen) dispatch({ type: "system", text: `舞台快照拉取失败: ${friendlyError(e2)}`, err: true });
 			}
 		}
 	}, [slug, client]);
@@ -536,7 +543,9 @@ export function StagePage({
 				{/* 舞台流:演出前 = 讨论室(引导卡居上 + 导演对话);演出中 = 条目 + 系统行
 				    (导演对话隐藏,主区让给演员);收幕后 = 条目归档、导演对话恢复 */}
 				<div className="stage-scroll">
-					{noScene && (
+					{/* 引导卡只在「无场景 + 导演对话为空」时显示:发出第一条消息后(导演对话
+					    有水合/回显内容)即隐藏,让主区让给对话流 */}
+					{noScene && directorSession.messages.length === 0 && (
 						<div className="guide-card">
 							<div className="g-title">◇ 与导演共谋一幕</div>
 							<div className="g-line">
@@ -601,21 +610,7 @@ export function StagePage({
 						}
 						return null;
 					})}
-					{/* 收幕完成引导卡(2026-08-11):成文已写入草稿——引导去编辑页,或切新章节 */}
-					{snap?.phase === "closed" && (
-						<div className="stage-done">
-							<div className="sd-title">一幕完成</div>
-							<div className="sd-line">
-								舞台记录已由编剧成文写入章节草稿。去编辑页看成文,或切到新章节开始下一幕(每章一幕)。
-							</div>
-							<div className="sd-actions">
-								<button type="button" className="btn primary" onClick={() => onGoEdit?.()}>
-									去编辑页看成文
-								</button>
-							</div>
-						</div>
-					)}
-					{/* 导演对话(2026-08-11 统一重构):与编剧/主会话同款 MessageList——
+						{/* 导演对话(2026-08-11 统一重构):与编剧/主会话同款 MessageList——
 					    思考折叠/流式/工具卡片复用同一套渲染,零新逻辑。
 					    演出中(running/wrapping)隐藏,主区让给舞台流;收幕后恢复 */}
 					{snap?.phase !== "running" && snap?.phase !== "wrapping" && (
@@ -660,7 +655,20 @@ export function StagePage({
 					)}
 				</div>
 
-				{/* 导演输入条(演出前后都是唯一活跃交互;InputBar 自带容器样式) */}
+					{/* 收幕完成提示条:固定底部、一眼可见(不随滚动流淹没,2026-08-13)——
+					   成文已写入草稿,主操作「去编辑页看成文」始终在视野内 */}
+					{snap?.phase === "closed" && (
+						<div className="stage-done-bar">
+							<span className="sd-bar-icon">✓</span>
+							<span className="sd-bar-text">一幕完成 · 舞台记录已由编剧成文写入章节草稿</span>
+							<span className="sd-bar-spacer" />
+							<button type="button" className="btn primary" onClick={() => onGoEdit?.()}>
+								去编辑页看成文
+							</button>
+						</div>
+					)}
+
+					{/* 导演输入条(演出前后都是唯一活跃交互;InputBar 自带容器样式) */}
 				<InputBar
 					streaming={false}
 					onSend={sendDirector}
@@ -672,7 +680,7 @@ export function StagePage({
 			<aside className="stage-panel">
 				{/* 左缘拖拽调宽手柄(窄屏面板收起时隐藏) */}
 				{!isNarrow && <div className="sp-resize" onMouseDown={startPanelResize} title="拖拽调整宽度" />}
-				<StagePanel slug={slug ?? ""} snapshot={snap} tab={tab} onTab={setTab} onRevise={submitRevise} />
+				<StagePanel client={client} slug={slug ?? ""} snapshot={snap} tab={tab} onTab={setTab} onRevise={submitRevise} />
 			</aside>
 		</div>
 	);

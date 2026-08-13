@@ -7,11 +7,14 @@
  * 取舍:不做多窗口冲突检测(useCrossWindowReload 的脏检测)——板子是轻量辅助,
  * 多窗口同时编辑备忘录罕见,刷新即与服务端收敛。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiClient } from "../api/client.ts";
 import type { WorldDataDto } from "../types.ts";
+import { newId } from "./id.ts";
 
 interface NoticeBoardProps {
+	/** 共享 API 客户端(App 注入,与其余组件同单例;不再自建实例)。 */
+	client: ApiClient;
 	/** 当前打开的书 slug;null = 未打开书。 */
 	slug: string | null;
 }
@@ -19,8 +22,7 @@ interface NoticeBoardProps {
 const SAVE_DELAY_MS = 800;
 
 /** 侧栏备忘录板:待办清单(勾选/编辑/删除/添加)+ 注入开关。 */
-export function NoticeBoard({ slug }: NoticeBoardProps) {
-	const client = useMemo(() => new ApiClient(), []);
+export function NoticeBoard({ client, slug }: NoticeBoardProps) {
 	/** 完整 world(改 notice 后整体保存);null = 无书/加载失败。 */
 	const [world, setWorld] = useState<WorldDataDto | null>(null);
 	const [draft, setDraft] = useState("");
@@ -74,7 +76,7 @@ export function NoticeBoard({ slug }: NoticeBoardProps) {
 		if (!text || !world) return;
 		updateNotice({
 			...world.notice,
-			items: [...world.notice.items, { id: `ntc-${Date.now().toString(36)}`, text, done: false, updatedAt: Date.now() }],
+			items: [...world.notice.items, { id: newId("ntc"), text, done: false, updatedAt: Date.now() }],
 		});
 		setDraft("");
 	};

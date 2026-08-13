@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { ApiClient } from "../api/client.ts";
 import type { ScriptPatchDto, StageSnapshotDto } from "../types.ts";
 import { buildRevisePatch, emptyReviseForm, type ReviseFormState } from "../stage-web.ts";
 import { NoticeBoard } from "./NoticeBoard.tsx";
@@ -16,12 +17,14 @@ export type StagePanelTab = "script" | "cast" | "revise" | "memo";
 const TAB_INDEX: Record<StagePanelTab, number> = { script: 0, cast: 1, revise: 2, memo: 3 };
 
 export function StagePanel({
+	client,
 	slug,
 	snapshot,
 	tab,
 	onTab,
 	onRevise,
 }: {
+	client: ApiClient;
 	slug: string;
 	snapshot: StageSnapshotDto | null;
 	tab: StagePanelTab;
@@ -187,7 +190,7 @@ export function StagePanel({
 						) : (
 							<div className="st-empty">开演后才可修订(修订 = 下一轮生效,版本 +1)</div>
 						))}
-				{tab === "memo" && <NoticeBoard slug={slug} />}
+				{tab === "memo" && <NoticeBoard client={client} slug={slug} />}
 				</div>
 			</div>
 		</>

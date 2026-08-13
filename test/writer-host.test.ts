@@ -45,12 +45,12 @@ describe("WriterHost", () => {
 		const fake = makeFakeHost();
 		const host = new WriterHost({ createHost: async () => fake as never });
 		const seen: unknown[] = [];
-		host.setEventSink((slug, event) => seen.push({ slug, event }));
+		host.setEventSink((slug, chapterFile, event) => seen.push({ slug, chapterFile, event }));
 		await host.chat("fog-harbor", "把结尾改含蓄点", "ch01.jsonl");
 		expect(fake.sendMessage).toHaveBeenCalledWith("把结尾改含蓄点");
 		// 模拟会话事件扇出:订阅在 chat 建会话时已挂上
 		for (const l of fake.listeners) l({ type: "turn_start" });
-		expect(seen).toEqual([{ slug: "fog-harbor", event: { type: "turn_start" } }]);
+		expect(seen).toEqual([{ slug: "fog-harbor", chapterFile: "ch01.jsonl", event: { type: "turn_start" } }]);
 	});
 	it("chat 声明章节后 state 反映 chapterFile 与会话内容", async () => {
 		const fake = makeFakeHost();

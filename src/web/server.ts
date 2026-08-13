@@ -393,10 +393,10 @@ export class WriterServer {
 			});
 		}
 		// 常驻编剧事件 → SSE 广播(writer_event:前端复用 processAgentEvent 归约,
-		// 消息/思考/工具卡片与主会话同款逻辑)
+		// 消息/思考/工具卡片与主会话同款逻辑;chapterFile 透传供前端按章节过滤)
 		if (options.writerHost) {
-			options.writerHost.setEventSink((slug, event) => {
-				this.broadcast({ type: "writer_event", slug, event });
+			options.writerHost.setEventSink((slug, chapterFile, event) => {
+				this.broadcast({ type: "writer_event", slug, chapterFile, event });
 			});
 		}
 		// watchdog 重连成功后重建会话:新工具快照注入(与配置变更的 handleMcpReload 一致)
@@ -1463,7 +1463,7 @@ export class WriterServer {
 		this.send(ctx.res, 202, { ok: true });
 		void writer.chat(ctx.params.slug!, text, chapterFile).catch((err) => {
 			const message = err instanceof Error ? err.message : String(err);
-			this.broadcast({ type: "writer_event", slug: ctx.params.slug!, event: { type: "chat_error", message } });
+			this.broadcast({ type: "writer_event", slug: ctx.params.slug!, chapterFile: chapterFile ?? null, event: { type: "chat_error", message } });
 		});
 	}
 

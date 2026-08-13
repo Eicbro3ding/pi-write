@@ -396,10 +396,15 @@ export class ApiClient {
 		args: Record<string, unknown>,
 		chapterFile?: string | null,
 	): Promise<{ async: true } | { async: false; text: string }> {
+		// confirm_script 同步阻塞(服务端内部跑一个导演回合,runTurn 兜底 10 分钟),
+		// 需长超时;其余同步命令(next/auto/force/retry/revise/wrap/thoughts/mode)
+		// 即时返回、长命令(director/fix/cut)202 即时返回,统一短超时防死连接挂起。
+		const timeoutMs = cmd === "confirm_script" ? 600_000 : ApiClient.REQUEST_TIMEOUT_MS;
 		const res = await fetch(`${this.baseUrl}/api/stage/${encodeURIComponent(slug)}/command`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ cmd, ...args, ...(chapterFile ? { chapterFile } : {}) }),
+			signal: AbortSignal.timeout(timeoutMs),
 		});
 		if (!res.ok) throw await apiErrorFrom(res);
 		if (res.status === 202) return { async: true };
