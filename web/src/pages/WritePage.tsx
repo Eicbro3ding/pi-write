@@ -202,13 +202,7 @@ export function WritePage({
 	/** 编剧编辑捕获器(与舞台导演预览卡共用同一套 before/after 捕获与 diff 组装)。 */
 	const writerCapture = useMemo(() => createEditCapture(client, () => bookDetailRef.current?.slug ?? null), [client]);
 
-	/**
-	 * 查看模式(方案 D):章节消息内存缓存,key = `<slug>:<chapterFile>`(跨书同名
-	 * 文件必须区分)。打开书时异步预取该书全部章节;查看优先走缓存/只读拉取,
-	 * 不碰服务端会话,切换章节因此不中断后端流式。
-	 */
-	const chapterMessagesCacheRef = useRef<Map<string, SessionState["messages"]>>(new Map());
-	/** 服务端当前会话位置(写操作前校验;与当前查看章节不一致即查看模式)。 */
+	/** 服务端当前会话位置(写操作前校验;与当前显示章节不一致即查看模式)。 */
 	const serverSessionRef = useRef<{ slug: string; chapterFile: string } | null>(null);
 	/** 查看模式标记:服务端会话 ≠ 当前查看章节(渲染顶部提示;写操作前切换)。 */
 	const [viewingOther, setViewingOther] = useState(false);
@@ -356,44 +350,6 @@ export function WritePage({
 		}
 	}
 
-	/** 预取该书全部章节的消息缓存(只读,不切换服务端会话,不中断流式)。 */
-	function prefetchChapters(slug: string, chapters: ChapterRef[]) {
-		for (const ch of chapters) {
-			const key = `${slug}:${ch.file}`;
-			if (chapterMessagesCacheRef.current.has(key)) continue;
-			void client
-				.getSession(slug, ch.file)
-				.then((st) => {
-					chapterMessagesCacheRef.current.set(key, st.messages);
-				})
-				.catch(() => {
-					/* 预取失败静默:查看该章节时再拉 */
-				});
-		}
-	}
-
-	/** 后台刷新查看章节的缓存(查看模式下服务端仍在写该章节时,缓存可能落后)。 */
-	async function refreshChapterCache(slug: string, file: string, gen: number) {
-		try {
-			const st = await client.getSession(slug, file);
-			if (gen !== sessionGenRef.current) return;
-			chapterMessagesCacheRef.current.set(`${slug}:${file}`, st.messages);
-			// 仍处于查看模式(服务端会话 != 该章节)且正在查看它:刷新视图;
-			// 服务端会话已切到该章节(实时模式)时以 SSE/水合为准,不覆盖
-			const srv = serverSessionRef.current;
-			if (
-				srv &&
-				(srv.slug !== slug || srv.chapterFile !== file) &&
-				currentChapterRef.current?.file === file &&
-				bookDetailRef.current?.slug === slug
-			) {
-				applyMessages(st.messages);
-			}
-		} catch {
-			/* 刷新失败静默:下次查看/对齐时再拉 */
-		}
-	}
-
 	/** SSE 连接(onopen,含断线重连)后与服务端对齐:重拉会话状态,更新会话位置与诊断。
 	 *  C 档(2026-08):主会话消息已无 UI,不再水合消息(dispatch 循环已删);
 	 *  保留会话定位——查看模式(服务端流式中在别处)提示,与空闲时切回当前显示章节。 */
@@ -425,11 +381,9 @@ export function WritePage({
 	}
 
 	/**
-	 * 写操作(发送/编辑/分支/批注)前确保服务端会话 == 当前查看章节:查看模式下
-	 * 第一次写操作才切换(会中断服务端其他章节的流式——用户主动操作,可接受);
-	 * 切换后水合新会话历史并等待队列执行完(调用方随后的乐观气泡/操作排在其后,
-	 * 不会被水合的 RESET 清掉),清掉缓存,后续以实时事件为准。代数防过期:
-	 * 切换期间用户又切了章节(代数自增)则放弃,消息不落到旧章节。
+	 * 写操作/对齐前确保服务端会话 == 当前显示章节(C 档简化:主会话消息无 UI,
+	 * 不再水合历史/清缓存,只做会话定位)。代数防过期:切换期间用户又切了章节
+	 * (代数自增)则放弃。
 	 */
 	async function ensureServerSession(): Promise<boolean> {
 		// 全部经 ref 读取:本函数会被「只订阅一次」的 SSE effect(闭包停留在挂载渲染)
@@ -445,15 +399,9 @@ export function WritePage({
 			if (gen !== sessionGenRef.current) return false;
 			serverSessionRef.current = { slug: book.slug, chapterFile: chapter.file };
 			setViewingOther(false);
-			chapterMessagesCacheRef.current.delete(`${book.slug}:${chapter.file}`);
-			// 会话已切换:水合新会话历史(切回实时模式;同一会话文件,entryId 稳定,
-			// 批注/编辑/分支的定位基线在切换前后一致)
-			const st = await client.getSession();
-			if (gen !== sessionGenRef.current) return false;
-			chapterMessagesCacheRef.current.set(`${book.slug}:${chapter.file}`, st.messages);
-			applyMessages(st.messages);
-			await hydrateQueueRef.current; // 等水合队列执行完(RESET + 逐条 dispatch)
-			if (gen !== sessionGenRef.current) return false;
+			// 等水合/对齐队列执行完(C 档:队列仍承载 alignWithServer 的会话定位
+			// 对齐,无消息水合;保留骨架——messages_retracted 的编剧重对齐依赖其时序)
+			await hydrateQueueRef.current;
 			return true;
 		} catch (e) {
 			if (gen !== sessionGenRef.current) return false;
@@ -612,7 +560,6 @@ export function WritePage({
 			const cur = currentChapterRef.current;
 			if (cur !== null && st.isStreaming && (st.bookSlug !== bookDetailRef.current?.slug || st.chapterFile !== cur.file)) {
 				setViewingOther(true);
-				if (st.chapterFile) chapterMessagesCacheRef.current.set(`${st.bookSlug ?? ""}:${st.chapterFile}`, st.messages);
 				return;
 			}
 			setViewingOther(false);
@@ -634,7 +581,6 @@ export function WritePage({
 			const ch = detail.chapters.find((c) => c.file === (st.chapterFile ?? chapterFile)) ?? detail.chapters[0] ?? null;
 			setCurrentChapter(ch);
 			resetChat();
-			applyMessages(st.messages);
 		} catch (err) {
 			if (gen !== sessionGenRef.current) return; // 过期失败:静默放弃(较新切换已接管)
 			setError(`会话同步失败: ${friendlyError(err)}`);
@@ -671,14 +617,11 @@ export function WritePage({
 				await client.switchSession(slug, ch.file);
 				if (gen !== sessionGenRef.current) return;
 			}
-			// 会话就位后以其历史水合聊天(发生切换时旧快照已过期,必须重拉)
+			// 会话就位后以其位置更新服务端会话标记(发生切换时旧快照已过期,必须重拉)
 			const fresh = needSwitch ? await client.getSession() : st;
 			if (gen !== sessionGenRef.current) return;
 			serverSessionRef.current = { slug, chapterFile: fresh.chapterFile ?? ch?.file ?? "" };
 			setViewingOther(false);
-			// 查看缓存预取(方案 D):异步只读拉取该书全部章节消息,切章查看秒开
-			prefetchChapters(slug, detail.chapters);
-			applyMessages(fresh.messages);
 		} catch (e) {
 			if (gen !== sessionGenRef.current) return; // 过期失败:静默放弃(较新切换已接管)
 			setError(`打开书失败: ${friendlyError(e)}`);
@@ -688,11 +631,10 @@ export function WritePage({
 	}
 
 	/**
-	 * 切换章节(查看本地化,方案 D):不切换服务端会话(后端流式不中断),优先显示
-	 * 本地缓存,无缓存时只读拉取;发送/编辑等写操作前再按需切换(ensureServerSession)。
-	 * 目标章节 == 服务端会话章节时回到实时模式:拉最新快照而非缓存(服务端可能正在
-	 * 流式/已有新消息,增量事件随后照常拼接)。代数防过期:快速连续切换时,先发起的
-	 * 只读拉取若慢于后发起的则放弃。
+	 * 切换章节(C 档简化,2026-08):主会话消息已无 UI,缓存/水合链已删——只保留
+	 * 会话定位:目标 != 服务端会话且服务端空闲 → 直接切服务端会话到本章;
+	 * 服务端流式中在别处 → 查看模式提示(不打断流式),流式结束(agent_settled)
+	 * 自动切回。代数防过期:快速连续切换时,先发起的只读拉取若慢于后发起的则放弃。
 	 */
 	async function selectChapter(ch: ChapterRef) {
 		if (!bookDetail || ch.file === currentChapter?.file) return;
@@ -701,7 +643,7 @@ export function WritePage({
 		const isServerSession = srv !== null && srv.slug === bookDetail.slug && srv.chapterFile === ch.file;
 		setCurrentChapter(ch);
 		resetChat();
-		// 查看模式标记:目标章节 != 服务端会话则只读查看(不切服务端);相等即实时模式。
+		// 查看模式标记:目标章节 != 服务端会话则提示(不切服务端);相等即实时模式。
 		// 服务端空闲(无 stream)时不进查看模式——查看 = 不打断流式,空闲时直接切
 		// 服务端会话(实时),避免「正在查看」提示滞留(agent_settled 已发过、无事件
 		// 触发自动切回,2026-08-10 根因:「没有 stream 却有提示」)。
@@ -711,10 +653,8 @@ export function WritePage({
 				if (gen !== sessionGenRef.current) return;
 				serverSessionRef.current = { slug: st.bookSlug ?? "", chapterFile: st.chapterFile ?? "" };
 				if (st.bookSlug === bookDetail.slug && st.chapterFile === ch.file) {
-					// 等待期间服务端已切到本章:实时模式(拉最新快照,增量随后照常)
+					// 等待期间服务端已切到本章:实时模式,无需再切
 					setViewingOther(false);
-					chapterMessagesCacheRef.current.set(`${bookDetail.slug}:${ch.file}`, st.messages);
-					applyMessages(st.messages);
 					return;
 				}
 				if (!st.isStreaming) {
@@ -726,6 +666,7 @@ export function WritePage({
 					alignWriter();
 					return;
 				}
+				// 服务端正在流式:查看模式(不打断;流式结束后 agent_settled 自动切回)
 				setViewingOther(true);
 			} catch (e) {
 				if (gen !== sessionGenRef.current) return;
@@ -734,47 +675,6 @@ export function WritePage({
 			}
 		} else {
 			setViewingOther(false);
-		}
-		// 实时模式(目标 == 服务端会话):拉最新快照而非缓存(服务端可能正在流式/
-		// 已有新消息,增量事件随后照常拼接)
-		if (isServerSession) {
-			try {
-				const st = await client.getSession();
-				if (gen !== sessionGenRef.current) return;
-				if (st.bookSlug !== bookDetail.slug || st.chapterFile !== ch.file) {
-					// 等待期间服务端会话被其他窗口切走:更新位置,退回查看本章节
-					serverSessionRef.current = { slug: st.bookSlug ?? "", chapterFile: st.chapterFile ?? "" };
-					setViewingOther(true);
-					const cached = chapterMessagesCacheRef.current.get(`${bookDetail.slug}:${ch.file}`);
-					if (cached !== undefined) {
-						applyMessages(cached);
-						void refreshChapterCache(bookDetail.slug, ch.file, gen);
-					}
-					return;
-				}
-				chapterMessagesCacheRef.current.set(`${bookDetail.slug}:${ch.file}`, st.messages);
-				applyMessages(st.messages);
-			} catch (e) {
-				if (gen !== sessionGenRef.current) return;
-				setError(`章节加载失败: ${friendlyError(e)}`);
-			}
-			return;
-		}
-		// 查看模式:优先本地缓存(秒开),无缓存时只读拉取;随后后台刷新缓存
-		const cached = chapterMessagesCacheRef.current.get(`${bookDetail.slug}:${ch.file}`);
-		if (cached !== undefined) {
-			applyMessages(cached);
-			void refreshChapterCache(bookDetail.slug, ch.file, gen);
-			return;
-		}
-		try {
-			const st = await client.getSession(bookDetail.slug, ch.file);
-			if (gen !== sessionGenRef.current) return;
-			chapterMessagesCacheRef.current.set(`${bookDetail.slug}:${ch.file}`, st.messages);
-			applyMessages(st.messages);
-		} catch (e) {
-			if (gen !== sessionGenRef.current) return; // 过期失败:静默放弃(较新切换已接管)
-			setError(`章节加载失败: ${friendlyError(e)}`);
 		}
 	}
 
@@ -792,10 +692,9 @@ export function WritePage({
 			if (gen !== sessionGenRef.current) return;
 			setBookDetail(detail);
 			setCurrentChapter(ch);
-			// 主动切换:服务端会话已就位,更新位置标记;旧缓存(如残留)已过期
+			// 主动切换:服务端会话已就位,更新位置标记
 			serverSessionRef.current = { slug: bookDetail.slug, chapterFile: ch.file };
 			setViewingOther(false);
-			chapterMessagesCacheRef.current.delete(`${bookDetail.slug}:${ch.file}`);
 		} catch (e) {
 			if (gen !== sessionGenRef.current) return; // 过期失败:静默放弃
 			setError(`新建章节失败: ${friendlyError(e)}`);
