@@ -46,22 +46,6 @@ export interface HeaderInfo {
 /** 主会话与编剧会话共用的 reducer 包装(RESET → 重置,其余 processAgentEvent)。
  *  2026-08-11 起与导演会话共用,统一导出自 store.ts(sessionReducer)。 */
 
-/**
- * 会话消息类事件(查看模式下整体过滤;session_changed/messages_retracted 等
- * 对齐类事件不在内——它们更新服务端会话位置与缓存,查看模式也要处理)。
- */
-function isSessionMessageEvent(type: string): boolean {
-	return (
-		type === "message_start" ||
-		type === "message_update" ||
-		type === "message_end" ||
-		type === "tool_execution_start" ||
-		type === "tool_execution_end" ||
-		type === "turn_start" ||
-		type === "agent_settled"
-	);
-}
-
 /** 保存状态 → 顶栏文案(DraftStatus 联合穷举,tsc 校验缺项)。 */
 const SAVE_LABELS: Record<DraftStatus, string> = {
 	loading: "加载中",
@@ -193,8 +177,6 @@ export function WritePage({
 	 * session_changed 对齐也自增——过期的异步对齐(期间又发生了更新的操作)放弃应用。
 	 */
 	const sessionGenRef = useRef(0);
-	/** 流式中对齐被跳过时置位,agent_settled 后补一次对齐(另一窗口流式中打开页面的场景)。 */
-	const alignPendingRef = useRef(false);
 	/** 编剧(常驻编辑 agent)会话:与主会话同款 reducer(processAgentEvent 复用),
 	 *  事件经 writer_event SSE 到达,消息/思考/工具卡片渲染零新逻辑。 */
 	const [writerSession, writerDispatch] = useReducer(sessionReducer, undefined, initialSessionState);
@@ -412,16 +394,34 @@ export function WritePage({
 		}
 	}
 
-	/** 服务端会话流式结束(agent_settled)后刷新其缓存:查看模式下切回该章节时直接看最新。 */
-	async function refreshServerSessionCache() {
-		const srv = serverSessionRef.current;
-		if (!srv?.slug || !srv.chapterFile) return;
-		try {
-			const st = await client.getSession(srv.slug, srv.chapterFile);
-			chapterMessagesCacheRef.current.set(`${srv.slug}:${srv.chapterFile}`, st.messages);
-		} catch {
-			/* 静默 */
-		}
+	/** SSE 连接(onopen,含断线重连)后与服务端对齐:重拉会话状态,更新会话位置与诊断。
+	 *  C 档(2026-08):主会话消息已无 UI,不再水合消息(dispatch 循环已删);
+	 *  保留会话定位——查看模式(服务端流式中在别处)提示,与空闲时切回当前显示章节。 */
+	function alignWithServer() {
+		const prev = hydrateQueueRef.current;
+		hydrateQueueRef.current = prev
+			.then(async () => {
+				const st = await client.getSession();
+				setDiags(st.diagnostics.filter((d) => d.type === "error" || d.type === "warning"));
+				serverSessionRef.current = { slug: st.bookSlug ?? "", chapterFile: st.chapterFile ?? "" };
+				// 查看模式(服务端会话 != 当前查看章节):仅当服务端正在流式时查看
+				// 才有意义(查看 = 不打断流式);服务端空闲时提示会滞留——agent_settled
+				// 已发过、无事件触发自动切回(2026-08-10 根因:「没有 stream 却有提示」),
+				// 直接切回当前显示章节。
+				const cur = currentChapterRef.current;
+				const serverOther = cur !== null && (st.bookSlug !== bookDetailRef.current?.slug || st.chapterFile !== cur.file);
+				const viewingOther = serverOther && st.isStreaming === true;
+				setViewingOther(viewingOther);
+				if (viewingOther) return;
+				// 服务端空闲但会话在别处:立即切回当前显示章节(会话定位,写操作前同款)
+				if (serverOther) {
+					await ensureServerSession();
+					return;
+				}
+			})
+			.catch(() => {
+				/* 对齐失败(服务暂不可用):保持本地状态 */
+			});
 	}
 
 	/**
@@ -477,102 +477,40 @@ export function WritePage({
 			});
 	}
 
-	/** SSE 连接(onopen,含断线重连)后与服务端对齐:重拉会话状态,以其 messages 整体替换本地。 */
-	function alignWithServer() {
-		const prev = hydrateQueueRef.current;
-		hydrateQueueRef.current = prev
-			.then(async () => {
-				const st = await client.getSession();
-				setDiags(st.diagnostics.filter((d) => d.type === "error" || d.type === "warning"));
-				serverSessionRef.current = { slug: st.bookSlug ?? "", chapterFile: st.chapterFile ?? "" };
-				// 查看模式(服务端会话 != 当前查看章节):不替换视图,只更新服务端章节的缓存
-				// —— 整体替换会打断查看,也让其他章节的流式增量失去拼接起点。
-				// 仅当服务端正在流式时查看模式才有意义(查看 = 不打断流式);服务端
-				// 空闲时提示会滞留——agent_settled 已发过、无事件触发自动切回
-				// (2026-08-10 根因:「没有正在进行的 stream 却有提示」),直接切回。
-				const cur = currentChapterRef.current;
-				const serverOther = cur !== null && (st.bookSlug !== bookDetailRef.current?.slug || st.chapterFile !== cur.file);
-				const viewingOther = serverOther && st.isStreaming === true;
-				setViewingOther(viewingOther);
-				if (viewingOther) {
-					if (st.chapterFile) chapterMessagesCacheRef.current.set(`${st.bookSlug ?? ""}:${st.chapterFile}`, st.messages);
-					return;
-				}
-				// 服务端空闲但会话在别处:立即切回当前查看章节(写操作前同款 ensureServerSession)
-				if (serverOther) {
-					await ensureServerSession();
-					return;
-				}
-				// 服务端正在流式:整体替换会丢掉进行中的增量事件(本地已收到部分),
-				// 跳过并记标记,agent_settled 后补一次对齐——否则流式中打开/重连的
-				// 窗口会永久缺失该轮消息(message_start 已错过,后续增量无从拼接)。
-				if (st.isStreaming) {
-					alignPendingRef.current = true;
-					return;
-				}
-				resetMainChat();
-				for (const ev of messagesToEvents(st.messages)) dispatch(ev);
-			})
-			.catch(() => {
-				/* 对齐失败(服务暂不可用):保持本地状态 */
-			});
-	}
-
-	// SSE 订阅(EventSource 自带断线重连;onopen 时与服务端对齐聊天历史)
+	// SSE 订阅(EventSource 自带断线重连;onopen 时与服务端对齐会话位置与编剧会话)
 	useEffect(() => {
 		const unsub = client.subscribeEvents(
 			(e) => {
 				const start = e;
-				// 查看模式(方案 D):服务端会话 != 当前查看章节时,忽略会话消息类事件
-				// (流式增量/工具卡片属于其他章节,渲染会串对话);对齐类事件
-				// (session_changed/messages_retracted)仍走原逻辑——它们经
-				// handleRemoteSessionChange/alignWithServer 内部判断,不打断查看
-				const cur = currentChapterRef.current;
-				const srv = serverSessionRef.current;
-				const viewingOther = cur !== null && srv !== null && (srv.slug !== bookDetailRef.current?.slug || srv.chapterFile !== cur.file);
-				if (viewingOther && isSessionMessageEvent(start.type)) {
-					// 服务端会话流式结束:只刷新其缓存(切回该章节时直接看最新)
-					if (start.type === "agent_settled") void refreshServerSessionCache();
-					return;
-				}
-				// 其他浏览器切换章节:与当前显示章节不一致时,以服务端为准整体对齐
+				// 其他浏览器切换章节:与当前显示章节不一致时,以服务端为准跟随/提示
+				// (空闲跟随仅限同书,见 handleRemoteSessionChange 的 M18 守卫)
 				if (start.type === "session_changed") {
 					void handleRemoteSessionChange(start.bookSlug, start.chapterFile);
 					return;
 				}
-				// 消息分支/编辑(本窗口或他窗口):消息列表已变,整体对齐刷新
+				// 消息分支/编辑(本窗口或他窗口):编剧会话也可能被编辑(编辑重发),
+				// 等主会话对齐完成后重新对齐编剧会话
 				if (start.type === "messages_retracted") {
 					alignWithServer();
-					// 编剧会话也可能被编辑(编辑重发):等主会话水合完成(含 resetChat
-					// 清编剧本地态)后重新对齐编剧会话
 					void hydrateQueueRef.current.then(() => {
 						writerAlignedRef.current = null;
 						alignWriter();
 					});
 					return;
 				}
-				// 流式中对齐被跳过:流式结束(agent_settled)后补一次对齐
+				// 服务端主会话流式结束:查看模式的唯一意义是「不打断流式」,流式已结束
+				// 则自动把服务端会话切回当前显示章节,退出查看模式(顶部提示消失)
 				if (start.type === "agent_settled") {
-					if (alignPendingRef.current) {
-						alignPendingRef.current = false;
-						alignWithServer();
-					}
-					// 流式结束:查看模式的唯一意义是「不打断流式」,流式已结束则
-					// 自动把服务端会话切回当前查看章节,退出查看模式(顶部提示消失),
-					// 用户可直接在查看章节发送消息
 					const srv = serverSessionRef.current;
 					const cur = currentChapterRef.current;
 					const bookSlug = bookDetailRef.current?.slug;
 					if (cur && srv && (srv.slug !== bookSlug || srv.chapterFile !== cur.file)) {
 						void ensureServerSession();
 					}
-					// 必须进 reducer:agent_settled 置 isStreaming=false,
-					// 否则思考指示器不停、输入框一直显示「中断」按钮
-					dispatch(e);
 					return;
 				}
-				// 编剧事件(常驻编辑 agent):按当前书过滤;工具 start/end 额外喂确认队列;
-				// 会话事件复用主 reducer(writerDispatch),不触碰主会话 dispatch
+				// 编剧事件(常驻编辑 agent):按当前书+章节过滤;工具 start/end 额外喂确认队列;
+				// 会话事件复用主 reducer(writerDispatch),不触碰主会话(无 UI,C 档已删其水合)
 				if (start.type === "writer_event") {
 					if (start.slug !== bookDetailRef.current?.slug) return;
 					// 编剧会话按章节隔离:只消费当前章节事件(切章后其他章节编剧
@@ -598,7 +536,8 @@ export function WritePage({
 					writerDispatch(ev);
 					return;
 				}
-				dispatch(e);
+				// 主会话其余事件(message_start/update/end、tool_* 等)不再消费:
+				// 编辑页对话渲染编剧会话,主会话消息无 UI(2026-08 C 档删 reducer 水合)
 			},
 			() => {
 				alignWithServer();
