@@ -179,10 +179,11 @@ export function StagePage({
 	 * 舞台命令。同步命令结果不进舞台流(服务端同步命令都 emit stage_system,
 	 * 再展示会重复);next/retry 触发回合 → 置 turnPending(「下一步」置灰,
 	 * 回合结束信号 stage_entry/stage_system 到达后恢复)。
+	 * 返回是否成功(乐观状态切换方据此回滚,见 autoMode/thoughts)。
 	 */
 		const runCommand = useCallback(
-			async (cmd: string, args: Record<string, unknown> = {}) => {
-				if (!slug) return;
+			async (cmd: string, args: Record<string, unknown> = {}): Promise<boolean> => {
+				if (!slug) return false;
 				try {
 					const res = await client.stageCommand(slug, cmd, args, currentChapterRef.current?.file ?? null);
 					if (res.async) {
@@ -193,8 +194,10 @@ export function StagePage({
 					} else if (cmd === "next" || cmd === "retry") {
 						dispatch({ type: "wake" });
 					}
+					return true;
 				} catch (e) {
 					dispatch({ type: "system", text: `命令失败: ${friendlyError(e)}`, err: true });
+					return false;
 				}
 			},
 			[slug, client],
@@ -228,10 +231,31 @@ export function StagePage({
 	/** 快照落地:舞台流(条目/系统行)+ 导演对话水合 + 剧本确认态同步。
 	 *  pendingScript 同步有竞态:SSE stage_script_confirm 事件先于后端写入,
 	 *  期间快照可能仍是 null——只在「快照有 pendingScript」或「已开演/收幕
-	 *  (phase 非 idle,确认门已清)」时更新,快照滞后的 null 不清本地卡。 */
+	 *  (phase 非 idle,确认门已清)」时更新,快照滞后的 null 不清本地卡。
+	 *
+	 *  M16 修复(2026-08):导演流式中触发快照刷新(页面激活切换 / SSE 重连 /
+	 *  stage_phase)时不再无条件 alignDirector——RESET + 全量水合会把「进行中」
+	 *  的导演消息标成 done,store 的 message_update 增量只拼到「最后一条未 done
+	 *  assistant」,失去拼接起点 → 当前回合文本截断、流式指示消失。判定:快照
+	 *  directorChat 尾条与本地最后一条消息做「同一进行中回合」幂等比对(角色一致
+	 *  + 文本/思考双向前缀——服务端状态随 delta 实时更新,快照抓取与本地增量
+	 *  交错,谁长谁短都可能;不用脆弱的流式标记),是则跳过对齐、增量继续拼接;
+	 *  流式结束(agent_settled 置 isStreaming=false)后照常对齐收敛。 */
 	function applyStageSnapshot(snapshot: StageSnapshotDto) {
 		dispatch({ type: "snapshot", snapshot });
-		alignDirector(snapshot);
+		const chat = snapshot.directorChat ?? [];
+		const local = directorSession.messages;
+		const localLast = local[local.length - 1];
+		const snapLast = chat[chat.length - 1];
+		const sameOngoingTurn =
+			directorSession.isStreaming &&
+			localLast !== undefined &&
+			snapLast !== undefined &&
+			localLast.role === snapLast.role &&
+			(localLast.text.startsWith(snapLast.text) || snapLast.text.startsWith(localLast.text)) &&
+			((localLast.thinking ?? "").startsWith(snapLast.thinking ?? "") ||
+				(snapLast.thinking ?? "").startsWith(localLast.thinking ?? ""));
+		if (!sameOngoingTurn) alignDirector(snapshot);
 		if (snapshot.pendingScript) {
 			setScriptConfirm(snapshot.pendingScript);
 		} else if (snapshot.phase !== "idle") {
@@ -476,8 +500,13 @@ export function StagePage({
 							className={autoMode ? "btn st-auto on" : "btn st-auto"}
 							disabled={busy}
 							onClick={() => {
-								setAutoMode((v) => !v);
-								void runCommand("auto");
+								// 乐观切换 + 失败回滚(2026-08 B 档):auto 是本地镜像,
+								// 命令失败必须回滚,否则按钮显示「自动演中」而服务端未切换
+								const next = !autoMode;
+								setAutoMode(next);
+								void runCommand("auto").then((ok) => {
+									if (!ok) setAutoMode(!next);
+								});
 							}}
 						>
 							自动演
@@ -512,8 +541,13 @@ export function StagePage({
 									className={thoughts === l ? "active" : ""}
 									disabled={busy}
 									onClick={() => {
+										// 失败回滚(2026-08 B 档):档位是本地镜像,命令失败回滚,
+										// 避免显示档位与服务端不一致
+										const prev = thoughts;
 										setThoughts(l);
-										void runCommand("thoughts", { level: l });
+										void runCommand("thoughts", { level: l }).then((ok) => {
+											if (!ok) setThoughts(prev);
+										});
 									}}
 								>
 									档{l}

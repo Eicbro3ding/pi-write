@@ -8,7 +8,7 @@
  * 多窗口同时编辑备忘录罕见,刷新即与服务端收敛。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiClient } from "../api/client.ts";
+import { ApiClient, ApiError } from "../api/client.ts";
 import type { WorldDataDto } from "../types.ts";
 import { newId } from "./id.ts";
 
@@ -26,6 +26,9 @@ export function NoticeBoard({ client, slug }: NoticeBoardProps) {
 	/** 完整 world(改 notice 后整体保存);null = 无书/加载失败。 */
 	const [world, setWorld] = useState<WorldDataDto | null>(null);
 	const [draft, setDraft] = useState("");
+	/** 409 冲突提示(2026-08 B 档):磁盘 world.json 已被 AI/其他窗口修改,保存被拒。
+	 *  显示提示并重载,不再静默失败(静默会让板子显示「已保存」而磁盘是旧值)。 */
+	const [saveConflict, setSaveConflict] = useState(false);
 	const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 	const worldRef = useRef(world);
 	worldRef.current = world;
@@ -62,9 +65,17 @@ export function NoticeBoard({ client, slug }: NoticeBoardProps) {
 					.putWorld(w, mtimeRef.current)
 					.then((m) => {
 						mtimeRef.current = m;
+						setSaveConflict(false);
 					})
-					.catch(() => {
-						/* 保存失败:板子显示旧值,用户下次编辑会再触发 */
+					.catch((err: unknown) => {
+						// 409 = 磁盘已被 AI/其他窗口改动:提示 + 重载以磁盘为准收敛
+						// (继续用旧 mtime 会反复 409,板子静默失效;B 档 2026-08)
+						if (err instanceof ApiError && err.status === 409) {
+							setSaveConflict(true);
+							void reload();
+							return;
+						}
+						/* 其他失败(网络瞬断等):板子显示旧值,用户下次编辑会再触发 */
 					});
 			}, SAVE_DELAY_MS);
 		},
@@ -100,6 +111,11 @@ export function NoticeBoard({ client, slug }: NoticeBoardProps) {
 	const { notice } = world;
 	return (
 		<div className="notice-board">
+			{saveConflict && (
+				<div className="notice err">
+					保存失败:世界书已被其他窗口或 AI 修改,已重新加载最新版本
+				</div>
+			)}
 			<label className="notice-enable">
 				<input type="checkbox" checked={notice.enabled} onChange={(e) => updateNotice({ ...notice, enabled: e.target.checked })} />
 				<span>注入全部 agent 上下文</span>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
@@ -156,6 +156,20 @@ export function WritePage({
 	/** 服务端会话诊断(认证缺失等),type=error/warning 渲染为工作区顶部提示(设计 §4.3)。 */
 	const [diags, setDiags] = useState<Array<{ type: string; message: string }>>([]);
 	const [words, setWords] = useState(0);
+	/** 顶栏字数节流(500ms 尾部合并,P1,2026-08):字数不是关键反馈,每键上报会让
+	 *  App setHeader(新对象)触发四页全量重渲染;保存状态/书/章节变化不经此节流,
+	 *  仍即时上报(下方 onHeader effect 依赖 saveLabel/bookDetail 等)。编辑器内
+	 *  字数显示(DraftWorkspace 页脚)走自身 state,不受节流影响。 */
+	const wordsTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	const pendingWordsRef = useRef(0);
+	const throttledSetWords = useCallback((n: number) => {
+		pendingWordsRef.current = n;
+		if (wordsTimerRef.current) return; // 已有待发节流:仅更新末值
+		wordsTimerRef.current = setTimeout(() => {
+			wordsTimerRef.current = undefined;
+			setWords(pendingWordsRef.current);
+		}, 500);
+	}, []);
 	/** 正文保存状态(来自 DraftWorkspace 上报,映射为顶栏保存文案)。 */
 	const [draftStatus, setDraftStatus] = useState<DraftStatus>("loading");
 	/** 顶栏连通性:与 error(瞬时/交互错误)分离,仅初始化阶段失败时置 false。 */
@@ -1180,7 +1194,7 @@ export function WritePage({
 								chapterFile={currentChapter?.file ?? ""}
 								title={currentChapter?.title ?? "草稿"}
 								headerless
-								onWordCount={setWords}
+								onWordCount={throttledSetWords}
 								onStatusChange={setDraftStatus}
 								onSelectionChange={handleSelectionChange}
 							/>

@@ -802,6 +802,8 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .graph-canvas { position: relative; flex: 1; min-height: 0; }
 .graph-cytoscape { position: absolute; inset: 0; }
 .graph-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--faint); font-size: 13px; letter-spacing: 0.06em; }
+/* 关系图空态提示覆盖画布(画布恒挂载——类型过滤走 show()/hide() 不重建实例,2026-08) */
+.graph-canvas > .graph-empty { position: absolute; inset: 0; background: var(--bg); z-index: 5; }
 /* 图操作条:一键排列 + 缩放横条,浮在画布右上角(独立于 cytoscape 渲染层) */
 .graph-zoom-bar {
   position: absolute; z-index: 15; top: 12px; right: 14px;

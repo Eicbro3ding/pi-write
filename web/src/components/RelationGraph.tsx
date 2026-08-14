@@ -262,11 +262,14 @@ export function RelationGraph({
 		[entries, relations],
 	);
 
-	// 图初始化/重建(数据、过滤、slug 变化时)
+	// 图初始化/重建(数据、slug 变化时;类型过滤不在此处理——见下方 show()/hide() effect)
 	useEffect(() => {
 		const container = containerRef.current;
 		if (!container) return;
-		const visible = entries.filter((e) => typesOn[e.type]);
+		// 全量建图(不过滤):类型过滤经下方 show()/hide() effect 增量切换,不在构建期
+		// 过滤——否则每次过滤切换都销毁重建整个实例(丢连线起点/右键菜单态 + 重跑
+		// 布局/补位,P7,2026-08)
+		const visible = entries;
 		const visIds = new Set(visible.map((e) => e.id));
 		const visRels = relations.filter((r) => visIds.has(r.from) && visIds.has(r.to));
 
@@ -486,7 +489,25 @@ export function RelationGraph({
 			cy.destroy();
 			cyRef.current = null;
 		};
-	}, [graphSignature, typesOn, slug]);
+	}, [graphSignature, slug]);
+
+	// 类型过滤:show()/hide() 增量切换,不重建 cytoscape 实例(P7,2026-08)。
+	// 隐藏节点连带隐藏其关系边;再次显示时位置从 localStorage 恢复(全量建图已
+	// 保存全部节点位置)。重建 effect 之后执行(声明顺序保证 cyRef 已就位)。
+	// 用 display style 而非 ele.show()/hide() 简写(cytoscape 类型未声明,行为等价)。
+	useEffect(() => {
+		const cy = cyRef.current;
+		if (!cy) return;
+		const visIds = new Set(entries.filter((e) => typesOn[e.type]).map((e) => e.id));
+		for (const n of cy.nodes()) {
+			n.style("display", visIds.has(n.id()) ? "element" : "none");
+		}
+		for (const ed of cy.edges()) {
+			const s = ed.data("source") as string;
+			const t = ed.data("target") as string;
+			ed.style("display", visIds.has(s) && visIds.has(t) ? "element" : "none");
+		}
+	}, [typesOn, entries, graphSignature, slug]);
 
 	// 重建后 epoch+1,驱动 focus 联动重选
 	useEffect(() => {
@@ -629,11 +650,10 @@ export function RelationGraph({
 						: "单击节点查看词条 · 右键节点/连线快捷操作 · 拖拽节点调整布局"}
 				</span>
 			</div>
-			{visibleCount === 0 ? (
-				<div className="graph-empty">没有符合条件的条目,请先在列表视图添加条目或调整类型过滤</div>
-			) : (
-					<div className="graph-canvas">
-						<div className="graph-cytoscape" ref={containerRef} />
+			{/* 画布恒挂载(过滤走 show()/hide() 不重建实例,P7);无可见条目时覆盖空态提示 */}
+			<div className="graph-canvas">
+				<div className="graph-cytoscape" ref={containerRef} />
+				{visibleCount === 0 && <div className="graph-empty">没有符合条件的条目,请先在列表视图添加条目或调整类型过滤</div>}
 						{/* 图操作条:一键排列 + 缩放横条(放缩/百分比/适应);滚轮缩放灵敏度随倍率自适应。
 						    mousedown 阻断冒泡:cytoscape 容器空白 tap 会清选中/菜单 */}
 						<div className="graph-zoom-bar" onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
@@ -800,8 +820,7 @@ export function RelationGraph({
 								</div>
 							</div>
 						)}
-							</div>
-						)}
+						</div>
 					</div>
 			);
 

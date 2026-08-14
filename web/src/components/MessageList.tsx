@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { ChatMessage, ToolCallInfo } from "../types.ts";
 import { DUR, EASE, EDGE_IN, STAGGER } from "../motion.ts";
@@ -238,6 +238,37 @@ function Message({
 }
 
 /**
+ * Message 渲染相等性(memo 比较器,P2,2026-08):流式对话每 delta 触发列表重渲染,
+ * 已结束消息重复 marked.parse 是主要成本——memo 后流式 delta 只重渲染「进行中的
+ * 消息」。注意 toolCalls 数组每次 reducer 更新都是新身份(tool_execution_end 会
+ * map 整列表),不能做引用比较,必须逐字段比内容;onEdit 是经 ref 调用的稳定包装
+ * (editWriterMessage 内部只读 refs),身份变化不影响渲染结果,忽略。
+ * 比较器返回 true = 跳过重渲染;任何渲染字段(role/text/thinking/done/toolCalls/
+ * simplifiedTools/streaming)变化都返回 false 照常重渲染。 */
+function messagePropsEqual(
+	prev: { m: ChatMessage; simplifiedTools: boolean; streaming: boolean },
+	next: { m: ChatMessage; simplifiedTools: boolean; streaming: boolean },
+): boolean {
+	if (prev.simplifiedTools !== next.simplifiedTools || prev.streaming !== next.streaming) return false;
+	const a = prev.m;
+	const b = next.m;
+	if (a === b) return true;
+	if (a.id !== b.id || a.entryId !== b.entryId || a.role !== b.role) return false;
+	if (a.text !== b.text || a.thinking !== b.thinking || a.done !== b.done) return false;
+	const ca = a.toolCalls;
+	const cb = b.toolCalls;
+	if (ca.length !== cb.length) return false;
+	for (let i = 0; i < ca.length; i++) {
+		const x = ca[i]!;
+		const y = cb[i]!;
+		if (x.id !== y.id || x.name !== y.name || x.args !== y.args || x.result !== y.result || x.isError !== y.isError) return false;
+	}
+	return true;
+}
+
+const MessageMemo = memo(Message, messagePropsEqual);
+
+/**
  * 预览卡片锚点匹配:anchorId 可能是内存随机 id(实时回合)或会话 entryId
  * (message_end 稳定化后/水合恢复);消息的 id 实时为随机 id、水合后为 entryId,
  * entryId 作为附加字段存在——双通道匹配保证卡片不落孤儿区。
@@ -380,7 +411,7 @@ export function MessageList({
 											delay: idx >= 0 ? Math.min(idx * STAGGER, 0.32) : 0,
 										}}
 									>
-									<Message
+									<MessageMemo
 										m={m}
 										simplifiedTools={simplifiedTools}
 										streaming={streaming}

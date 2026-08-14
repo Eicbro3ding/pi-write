@@ -48,6 +48,10 @@ export function WorldPage({
 	const [createTitle, setCreateTitle] = useState("");
 	/** 视图切换:列表(分类树 + 表单)⇄ 关系图(cytoscape + 词条面板)。 */
 	const [view, setView] = useState<"list" | "graph">("list");
+	/** 关系图视图懒挂载(P7,2026-08):首次切到关系图才构建 cytoscape——大世界书
+	 *  只开列表页时省去建图 + 布局成本。已挂载后保持常驻(切走再切回不丢图内
+	 *  选中/连线/右键态;缩放平移另有 localStorage 持久化,见 graph-persistence)。 */
+	const [graphMounted, setGraphMounted] = useState(false);
 	/** 简要世界观面板折叠态(localStorage 持久化;折叠时整块隐藏,开关在顶栏)。 */
 	const [summaryCollapsed, setSummaryCollapsed] = useState(() => localStorage.getItem("pi-writer:world-summary-collapsed") === "1");
 	useEffect(() => {
@@ -55,9 +59,10 @@ export function WorldPage({
 	}, [summaryCollapsed]);
 	/** 正在滑出的旧视图(切换动画期间置位,240ms 后清理;内容双常驻保留状态)。 */
 	const [leaving, setLeaving] = useState<"list" | "graph" | null>(null);
-	/** 视图切换:旧视图播放向左滑出,新视图自右滑入。 */
+	/** 视图切换:旧视图播放向左滑出,新视图自右滑入。首次切到关系图时挂载图视图。 */
 	function switchView(v: "list" | "graph") {
 		if (v === view || leaving !== null) return;
+		if (v === "graph") setGraphMounted(true);
 		setLeaving(view);
 		setView(v);
 		setTimeout(() => setLeaving(null), DUR.base * 1000 + 40);
@@ -432,6 +437,7 @@ export function WorldPage({
 									/>
 								</>
 						</div>
+						{graphMounted && (
 						<div
 							className={
 								view === "graph"
@@ -471,6 +477,7 @@ export function WorldPage({
 							</aside>
 						)}
 						</div>
+					)}
 					</div>
 				)}
 			</section>
