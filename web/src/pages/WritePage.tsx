@@ -463,9 +463,9 @@ export function WritePage({
 			() => {
 				alignWithServer();
 				// 断线重连(含服务端重启)强制重新对齐编剧会话:alignWriter 的对齐守卫
-				// 会拦截重复对齐,而 alignWithServer 内部 resetChat 是异步的,同步调用时
-				// 守卫仍命中——不重置则重连后编剧状态永远停在旧快照(isStreaming 卡死、
-				// 消息不回显,2026-08-10 根因)
+				// (writerAlignedRef === scope 即跳过)会拦截重复对齐——必须先同步重置
+				// 再对齐,否则重连后编剧状态永远停在旧快照(isStreaming 卡死、消息
+				// 不回显,2026-08-10 根因)
 				writerAlignedRef.current = null;
 				alignWriter();
 			},
