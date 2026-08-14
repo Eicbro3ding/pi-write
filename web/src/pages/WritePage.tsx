@@ -2,16 +2,13 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import { AnimatePresence, motion } from "framer-motion";
 import type { ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
-import { initialSessionState, messagesToEvents, processAgentEvent, RESET, sessionReducer } from "../store.ts";
+import { initialSessionState, messagesToEvents, RESET, sessionReducer } from "../store.ts";
 import type {
 	AgentEventDto,
 	BookDetail,
-	BookMeta,
 	ChapterRef,
 	DraftStatus,
-	SessionState,
 	SessionTreeDto,
-	SessionViewState,
 	TextSelectionSnapshot,
 } from "../types.ts";
 import { BranchBar } from "../components/BranchBar.tsx";
@@ -42,9 +39,6 @@ export interface HeaderInfo {
 	/** 服务是否可连(仅初始化阶段拉书/开书失败时置 false,顶栏显示连接失败;发送等瞬时错误不影响)。 */
 	connected: boolean;
 }
-
-/** 主会话与编剧会话共用的 reducer 包装(RESET → 重置,其余 processAgentEvent)。
- *  2026-08-11 起与导演会话共用,统一导出自 store.ts(sessionReducer)。 */
 
 /** 保存状态 → 顶栏文案(DraftStatus 联合穷举,tsc 校验缺项)。 */
 const SAVE_LABELS: Record<DraftStatus, string> = {
@@ -131,7 +125,6 @@ export function WritePage({
 	const setBusySlug = applyBusy;
 	const setImporting = applyImporting;
 	const onBookChange = reportBookChange;
-	const [session, dispatch] = useReducer(sessionReducer, undefined, initialSessionState);
 	const [error, setError] = useState<string | null>(null);
 	/** AI 伙伴栏宽度(px,默认 380),左缘拖拽手柄调整(300–520)。 */
 	const [companionWidth, setCompanionWidth] = useState(380);
@@ -156,6 +149,10 @@ export function WritePage({
 	}, []);
 	/** 正文保存状态(来自 DraftWorkspace 上报,映射为顶栏保存文案)。 */
 	const [draftStatus, setDraftStatus] = useState<DraftStatus>("loading");
+	/** 正文保存状态 ref(M18 脏守卫:handleRemoteSessionChange 经「只订阅一次」的
+	 *  SSE 闭包调用,读 state 恒为首帧值,必须经 ref 取最新)。 */
+	const draftStatusRef = useRef<DraftStatus>("loading");
+	draftStatusRef.current = draftStatus;
 	/** 顶栏连通性:与 error(瞬时/交互错误)分离,仅初始化阶段失败时置 false。 */
 	const [connected, setConnected] = useState(true);
 	/** 窄屏抽屉:书库栏 / AI 伙伴栏;只影响侧栏展示。 */
@@ -163,8 +160,9 @@ export function WritePage({
 	/** 窄屏(<900px)判定:书库/伙伴栏变抽屉。 */
 	const isNarrow = useMediaQuery("(max-width: 900px)");
 	/**
-	 * 会话水合串行队列:openBook 与 SSE onopen 对齐都会「RESET + 逐条追加」整体
-	 * 替换聊天,串行执行可避免并发水合重复追加(先 RESET 再追加使整体替换幂等)。
+	 * 对齐串行队列(C 档保留骨架,2026-08):原为「RESET + 逐条追加」主会话水合串行
+	 * 队列;主会话消息已无 UI、水合已删,现只承载 alignWithServer 的会话定位对齐,
+	 * 且 messages_retracted 的编剧重对齐依赖其链尾时序(等主会话对齐完成后执行)。
 	 */
 	const hydrateQueueRef = useRef<Promise<void>>(Promise.resolve());
 	/** 当前显示书/章节(供 session_changed 事件比对「是否自己发起的切换」)。 */
@@ -232,21 +230,11 @@ export function WritePage({
 	}, [writerSession.messages]);
 
 	/**
-	 * 仅重置主会话(写作 agent)视图。主会话在编辑页已无 UI,但水合/对齐仍走这条
-	 * reducer;其副作用不得波及编剧会话(编剧由 resetChat/alignWriter 单独管理)。
-	 * 2026-08-13 根因修复:refreshChapterCache/alignWithServer 等只替换主会话视图
-	 * 的路径此前误调 resetChat,把编剧对话一并清空且不再重对齐(空白)。
-	 */
-	function resetMainChat() {
-		dispatch(RESET);
-	}
-
-	/**
-	 * 书/章节切换的统一清理:主会话 + 编剧会话 + 确认队列(编辑上下文已变;
-	 * 会话本体在服务端,确认卡由服务端持久化,恢复标记置位后在章节就位时重新拉取)。
+	 * 书/章节切换的统一清理:编剧会话 + 确认队列(编辑上下文已变;会话本体在
+	 * 服务端,确认卡由服务端持久化,恢复标记置位后在章节就位时重新拉取)。
+	 * 主会话无 UI,无需清理(C 档已删其 reducer 水合,2026-08)。
 	 */
 	function resetChat() {
-		resetMainChat();
 		writerDispatch(RESET);
 		setConfirmCards([]);
 		setWriterTree(null);
@@ -410,21 +398,6 @@ export function WritePage({
 		}
 	}
 
-	/** 以给定消息整体替换聊天:先 RESET 再逐条 dispatch message_start(与 SSE 同一 reducer 路径)。
-	 *  水合完成后刷新分支树(openBook/selectChapter/newChapter 等切书/切章路径都走这里,
-	 *  与 alignWithServer 的 SSE 对齐路径保持一致,避免分支栏残留上一本书/章节的数据)。 */
-	function applyMessages(messages: SessionState["messages"]) {
-		const prev = hydrateQueueRef.current;
-		hydrateQueueRef.current = prev
-			.then(() => {
-				resetMainChat();
-				for (const ev of messagesToEvents(messages)) dispatch(ev);
-			})
-			.catch(() => {
-				/* 前置水合异常不阻塞后续水合 */
-			});
-	}
-
 	// SSE 订阅(EventSource 自带断线重连;onopen 时与服务端对齐会话位置与编剧会话)
 	useEffect(() => {
 		const unsub = client.subscribeEvents(
@@ -563,6 +536,11 @@ export function WritePage({
 				return;
 			}
 			setViewingOther(false);
+			// M18 最小分支(2026-08 C 档):空闲跟随仅限同书——其他窗口把服务端会话
+			// 切到别书时本窗口不跟随(避免劫持当前显示书、正文被切换覆盖);
+			// 本窗口正文有未保存修改也不跟随(避免加载覆盖本地编辑)
+			if (st.bookSlug !== bookDetailRef.current?.slug) return;
+			if (draftStatusRef.current === "dirty") return;
 			const detail = slug ? await client.getBook(slug) : null;
 			if (gen !== sessionGenRef.current) return;
 			setDiags(st.diagnostics.filter((d) => d.type === "error" || d.type === "warning"));
