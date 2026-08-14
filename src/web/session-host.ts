@@ -107,8 +107,11 @@ export class SessionHost {
 		this.unsubscribeSession = runtime.session.subscribe((event) => {
 			// message_end 事件附加会话 entry id(vendor 的 AgentMessage 无 id 字段,
 			// id 在 SessionEntry 层;前端实时消息据此获得稳定 id,撤回按钮才能定位)。
-			// 注意:appendMessage 在 vendor _handleAgentEvent 的持久化段先于 _emit,
-			// 因此这里 leaf 链上已包含刚落盘的消息 entry。
+			// 注意:vendor 的 _handleAgentEvent 是先 emit 再 appendMessage(2026-08 实测),
+			// 因此 emit 时「当前这条消息」尚未落盘,getBranch 找不到——尤其会话第一条
+			// 消息必失败(前端编辑按钮依赖 entryId)。同步查不到时,append 在 emit 后
+			// 同步完成,setTimeout(0) 后补查并补发带 entryId 的 message_end(前端 reducer
+			// 重复处理幂等:entryId 只附加给无 entryId 的消息、done 标记已 done 跳过)。
 			let enriched: AgentSessionEvent & { entryId?: string } = event;
 			if (event.type === "message_end") {
 				const branch = runtime.session.sessionManager.getBranch();
@@ -118,6 +121,23 @@ export class SessionHost {
 						enriched = { ...event, entryId: entry.id };
 						break;
 					}
+				}
+				if (!enriched.entryId) {
+					const role = event.message.role;
+					const rt = runtime;
+					setTimeout(() => {
+						// runtime 可能已被切书/重建(switchSession/reloadRuntime):放弃补发
+						if (this.runtime !== rt) return;
+						const branch2 = rt.session.sessionManager.getBranch();
+						for (let i = branch2.length - 1; i >= 0; i--) {
+							const entry = branch2[i]!;
+							if (entry.type === "message" && (entry as { message?: { role?: string } }).message?.role === role) {
+								const late = { ...event, entryId: entry.id } as AgentSessionEvent & { entryId?: string };
+								for (const l of this.listeners) l(late);
+								break;
+							}
+						}
+					}, 0);
 				}
 			}
 			for (const l of this.listeners) l(enriched);
