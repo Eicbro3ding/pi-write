@@ -10,6 +10,13 @@
 - 备忘录待办板、约束面板改版(可折叠 + 规则包导入)、提示词外置与自定义模型
 - 前端水合 / 事件 / 数据拉取缺陷修复(编剧按章节过滤、切章串对话、确认卡串书、舞台快照代数守卫等)
 
+### 0.0.2 修订(2026-08-13,审阅整改报告 docs/code-review-fullstack.md)
+
+- **A 档**:编剧确认卡切章守卫(append 前校验 scope)、edit-capture 取数带 slug、死代码清理(5 个 client 死方法、DraftWorkspace 死句柄、workspace.ts 孤儿逻辑)、App 导航 toggle、新建主题 stale closure、exportBook 复用
+- **B 档**:导演流式快照守卫(切页/重连不打断流式,幂等比对)、顶栏字数节流(保存状态即时)、MessageList memo(内容级比较器,toolCalls 逐字段)、世界书关系图懒挂载 + 类型过滤改 show()/hide() 增量切换、备忘录板 409 冲突提示、舞台 auto/thoughts 命令失败回滚
+- **C 档**:删主会话只写状态死代码 + 查看模式缓存链(主会话消息无 UI 不再进入 reducer;保留 ensureServerSession/hydrateQueueRef 骨架)、跨窗口 session_changed 空闲跟随仅限同书 + 脏编辑不跟随(M18)
+- **会话 entryId 修复**:message_end 的 entryId 附加(vendor 先 emit 后 appendMessage,第一条消息无 entryId、后续错位一条——编辑/撤回定位错误的根因;session-host 补发带正确 entryId 的 message_end)
+
 ## [0.0.1] - 2026-08-11
 
 首个公开版本(独立版本线,与旧仓库断开)。
