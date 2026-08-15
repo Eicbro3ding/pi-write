@@ -19,6 +19,8 @@ files:
   - dist/electron/main.cjs
   - dist/electron/preload.js
   - web/dist/**
+  - prompts/**/*
+  - skills/**/*
   - ico.png
   - package.json
   - "!node_modules/**/*"
