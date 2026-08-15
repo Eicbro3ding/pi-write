@@ -177,7 +177,7 @@ export function SettingsPage({
 		}
 		let cancelled = false;
 		void client
-			.getWorld()
+			.getWorld(slug)
 			.then((r) => {
 				if (cancelled) return;
 				setWorld(r.world);
@@ -215,7 +215,7 @@ export function SettingsPage({
 		setWorldBusy(true);
 		try {
 			// If-Match 条件写:磁盘 mtime 已变(其他窗口/AI 改过)→ 409,回滚并提示
-			const mtime = await client.putWorld(next, lastWorldMtimeRef.current || undefined);
+			const mtime = await client.putWorld(next, lastWorldMtimeRef.current || undefined, slug ?? undefined);
 			if (mtime > 0) lastWorldMtimeRef.current = mtime;
 		} catch (e) {
 			setWorld(before); // 回滚:恢复上次成功状态

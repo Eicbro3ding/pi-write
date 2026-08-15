@@ -643,7 +643,7 @@ export class WriterServer {
 			throw new HttpError(400, "bad_path", "章节文件路径越界");
 		}
 		await initChapterFile(absPath, getBookDir(slug));
-		await this.options.sessionHost.switchSession(absPath);
+		await this.options.sessionHost.switchSession(absPath, getBookDir(slug));
 		await setCurrentChapter(slug, chapterFile);
 		// 广播会话切换:另一浏览器据此对齐(刷新书详情/聊天/草稿);自己的切换由前端比对跳过
 		this.broadcast({ type: "session_changed", bookSlug: slug, chapterFile });
@@ -835,9 +835,11 @@ export class WriterServer {
 		// 释放该书的内存会话(每书惰性创建;删除后不释放会继续写文件)
 		await this.options.writerHost?.dispose(slug);
 		await this.options.stageHost?.dispose(slug);
-		// 当前会话书被删:中止生成、让 watcher 脱离(会话运行时由下次 switchSession 重建)
+		// 当前会话书被删:中止生成并释放运行时(会话文件随后删除;下次切章时
+		// SessionHost.switchSession 会按新书目录重新启动,避免悬空 runtime 继续写旧文件)
 		if (this.options.sessionHost.getState().bookSlug === slug) {
 			await this.options.sessionHost.abort();
+			await this.options.sessionHost.dispose();
 			await this.watcher.setBook(null);
 		}
 		rmSyncRetry(getBookDir(slug));
@@ -1230,8 +1232,11 @@ export class WriterServer {
 	 * mtime 一并返回:前端保存时作为 If-Match 条件写,防旧文本覆盖新修改。
 	 */
 	private async handleGetWorld(ctx: RouteContext): Promise<void> {
-		const slug = this.options.sessionHost.getState().bookSlug;
+		// 显式 slug 优先:前端世界书页/设置页/备忘录显示的书可能与会话书不同
+		// (如舞台页只做数据层开书,不切换主会话)。缺省才回退当前会话书。
+		const slug = ctx.url.searchParams.get("slug") ?? this.options.sessionHost.getState().bookSlug;
 		if (!slug) throw new HttpError(404, "not_found", "当前没有打开的书");
+		if (!(await loadBook(slug))) throw new HttpError(404, "not_found", `书不存在: ${slug}`);
 		const world = await ensureWorld(slug);
 		const st = safeStat(join(getBookDir(slug), "world.json"));
 		this.send(ctx.res, 200, { world, mtime: st?.mtimeMs ?? 0 });
@@ -1242,10 +1247,15 @@ export class WriterServer {
 	 * If-Match 条件写:磁盘 mtime 已变(其他窗口/AI 已改)时 409,前端提示后重载。
 	 */
 	private async handlePutWorld(ctx: RouteContext): Promise<void> {
-		const slug = this.options.sessionHost.getState().bookSlug;
-		if (!slug) throw new HttpError(404, "not_found", "当前没有打开的书");
 		const body = await readJsonBody(ctx.req);
-		const raw = (body as Record<string, unknown> | null)?.["world"];
+		const bodyObj = body as Record<string, unknown> | null;
+		// 显式 slug 优先(与 GET 同语义);缺省回退当前会话书。
+		const slug =
+			(typeof bodyObj?.slug === "string" && bodyObj.slug.trim().length > 0 ? bodyObj.slug.trim() : undefined) ??
+			this.options.sessionHost.getState().bookSlug;
+		if (!slug) throw new HttpError(404, "not_found", "当前没有打开的书");
+		if (!(await loadBook(slug))) throw new HttpError(404, "not_found", `书不存在: ${slug}`);
+		const raw = bodyObj?.["world"];
 		if (!raw) throw new HttpError(400, "bad_request", "缺少 world 字段");
 		if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
 			throw new HttpError(400, "bad_request", "world 字段必须是对象");

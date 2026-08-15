@@ -22,12 +22,12 @@ cd web && npx vite dev                    # vite 代理 /api → 8811,前端热�
 ## 测试与检查
 
 ```bash
-# 测试:必须用临时配置(默认 vitest.config.ts 缺 monorepo 的 ../../vitest.base.ts)
-npx vitest run --config vitest.tmp.config.ts
-npx vitest run --config vitest.tmp.config.ts test/server.test.ts   # 单个文件
+# 测试(仓库已补本地 vitest.base.ts,默认配置可用)
+npm test
+npx vitest run test/server.test.ts   # 单个文件
 
 # 类型检查
-npx tsc -p tsconfig.tmp.json              # src+vendor;vendor 有既有错误,过滤 vendor/
+npx tsc -p tsconfig.build.json --noEmit   # src+vendor;vendor 有既有错误,过滤 vendor/
 cd web && npx tsc --noEmit -p tsconfig.json   # 前端
 ```
 

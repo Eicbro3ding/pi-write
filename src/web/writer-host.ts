@@ -131,11 +131,13 @@ export class WriterHost {
 		await initChapterFile(abs, bookDir);
 		const runtimeFactory = this.roleFactory(slug, chapterFile);
 		const sessionManager = SessionManager.open(abs, sessionsDir, bookDir);
+		const draftFile = chapterFile ? chapterFile.replace(/\.jsonl$/, ".md") : undefined;
 		const host = new SessionHost({
 			createRuntime: runtimeFactory,
 			cwd: bookDir,
 			agentDir,
 			sessionManager,
+			toolGuard: { readOnlyDirs: [resolveSkillsDir()], draftFile },
 		});
 		await host.start();
 		return host;
@@ -294,9 +296,16 @@ export class WriterHost {
 		if (chapterFile) this.currentChapter.set(slug, chapterFile);
 		const file = chapterFile ?? this.currentChapter.get(slug) ?? null;
 		const host = await this.getOrCreate(slug, file);
-		const timer = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), timeoutMs));
-		const result = await Promise.race([host.sendMessage(text).then(() => "sent" as const), timer]);
-		return result === "sent";
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const timeout = new Promise<"timeout">((resolve) => {
+			timer = setTimeout(() => resolve("timeout"), timeoutMs);
+		});
+		try {
+			const result = await Promise.race([host.sendMessage(text).then(() => "sent" as const), timeout]);
+			return result === "sent";
+		} finally {
+			clearTimeout(timer);
+		}
 	}
 
 	/** 中止编剧当前生成(无会话时静默)。 */

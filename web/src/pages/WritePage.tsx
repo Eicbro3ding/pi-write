@@ -824,10 +824,12 @@ export function WritePage({
 		const card = confirmCards.find((c) => c.id === id);
 		if (!card) return;
 		try {
+			// 回退按发起书 slug 写入,避免写到当前会话书。
+			const slug = bookDetailRef.current?.slug ?? undefined;
 			if (card.kind === "draft" && card.path && typeof card.before === "string") {
-				await client.putDraft(card.path, card.before);
+				await client.putDraft(card.path, card.before, slug);
 			} else if (card.kind === "world" && typeof card.before !== "string") {
-				await client.putWorld(card.before);
+				await client.putWorld(card.before, undefined, slug);
 			}
 			setConfirmCards((prev) => prev.filter((c) => c.id !== id));
 		} catch (err) {

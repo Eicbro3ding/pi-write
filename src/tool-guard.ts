@@ -10,7 +10,23 @@
  */
 
 import { relative, resolve, sep } from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { clearToolPathGuard, setToolPathGuard } from "../vendor/pi-coding-agent/src/core/tools/path-utils.ts";
+
+/** 工具路径守卫的会话上下文:SessionHost 在 prompt 调用期间写入。 */
+export interface ToolGuardContext {
+	bookDir: string;
+	readOnlyDirs: string[];
+	draftFile?: string;
+}
+
+/**
+ * 当前会话的工具守卫上下文。
+ * 进程内同时存在多个会话(主会话/编剧/舞台)时,不能再用模块级全局变量
+ * 保存「当前书目录」;SessionHost 每次 sendMessage 前把书目录/只读目录/
+ * 正文白名单写入 ALS,自定义工具与路径守卫从这里读取。
+ */
+export const toolGuardContext = new AsyncLocalStorage<ToolGuardContext>();
 
 /** 判定绝对路径是否落在 root 内(root 本身与 root/ 前缀均放行)。 */
 export function pathWithinRoot(absPath: string, root: string): boolean {
@@ -43,9 +59,15 @@ export function assertPathWithinRoot(absPath: string, root: string): void {
  * 读 draft/ch01.md 读到空(2026-08-11,编剧正文乱写文件名根因)。
  */
 export function installToolPathGuard(bookDir: string, readOnlyDirs: string[] = [], draftFile?: string): void {
-	const root = resolve(bookDir);
-	const readOnly = readOnlyDirs.map((d) => resolve(d));
+	const fallbackRoot = resolve(bookDir);
+	const fallbackReadOnly = readOnlyDirs.map((d) => resolve(d));
 	setToolPathGuard((absPath, mode) => {
+		// 优先取 SessionHost 写入的会话上下文;TUI/CLI 等未写 ALS 的路径回退到
+		// 最近一次 installToolPathGuard 传入的目录。
+		const ctx = toolGuardContext.getStore();
+		const root = ctx ? resolve(ctx.bookDir) : fallbackRoot;
+		const readOnly = ctx ? ctx.readOnlyDirs.map((d) => resolve(d)) : fallbackReadOnly;
+		const currentDraftFile = ctx?.draftFile ?? draftFile;
 		// 世界书文件禁直写(write/edit):world_update 是唯一变更通道(校验 + 原子写 +
 		// 视图生成 + 回滚保护),AI 工具直写会绕过全部保护(2026-08-11,编剧统一方案)
 		if (mode === "write") {
@@ -55,8 +77,8 @@ export function installToolPathGuard(bookDir: string, readOnlyDirs: string[] = [
 			}
 			// 正文目录白名单:只允许当前章节文件(agent 无章节上下文时按约定路径创建,
 			// 而不是自创文件名——自由发挥会把正文写到前端读不到的路径)
-			if (draftFile && rel.startsWith(`draft${sep}`) && rel !== `draft${sep}${draftFile}`) {
-				throw new Error(`正文目录只允许写当前章节文件 draft/${draftFile}`);
+			if (currentDraftFile && rel.startsWith(`draft${sep}`) && rel !== `draft${sep}${currentDraftFile}`) {
+				throw new Error(`正文目录只允许写当前章节文件 draft/${currentDraftFile}`);
 			}
 		}
 		// 书目录内:读写均放行

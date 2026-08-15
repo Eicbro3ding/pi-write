@@ -7,7 +7,7 @@
  * writerExtension、隐藏 skill 命令、tools 列表),本类不自行构造 services。
  */
 
-import { basename, dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { ThinkingLevel } from "../../vendor/pi-agent-core/src/index.ts";
 import {
 	type AgentSessionEvent,
@@ -18,6 +18,8 @@ import {
 	SessionManager,
 } from "../../vendor/pi-coding-agent/src/index.ts";
 import type { AuthInteraction } from "../../vendor/pi-ai/src/index.ts";
+import { getBooksDir } from "../config.ts";
+import { toolGuardContext } from "../tool-guard.ts";
 import { chatTextOfMessage, chatThinkingOfMessage } from "../session-text.ts";
 import { createKeyInteraction, deriveAuthKind, sortProviders, type ProviderListItem } from "./provider-auth.ts";
 
@@ -27,6 +29,9 @@ export interface SessionHostOptions {
 	cwd: string; // 书目录
 	agentDir: string;
 	sessionManager: SessionManager;
+	/** 工具路径守卫与 world_update/word_count 所需的会话上下文(readOnlyDirs/draftFile)。
+	 *  缺省时仅使用 cwd 作为书目录,不额外放行只读目录、不限制正文白名单。 */
+	toolGuard?: { readOnlyDirs?: string[]; draftFile?: string };
 }
 
 /** getState() 返回的会话状态快照。 */
@@ -67,7 +72,9 @@ export class SessionHost {
 		// 经 createAgentSessionRuntime 包装成 AgentSessionRuntime(含 session/switchSession/dispose)后持有,
 		// 与 cli.ts 的装配路径一致。
 		this.runtime = await createAgentSessionRuntime(this.options.createRuntime, {
-			cwd: this.options.cwd,
+			cwd:
+				(typeof this.sessionManager.getCwd === "function" && this.sessionManager.getCwd()) ||
+				this.options.cwd,
 			agentDir: this.options.agentDir,
 			sessionManager: this.sessionManager,
 			sessionStartEvent: undefined,
@@ -87,10 +94,11 @@ export class SessionHost {
 		const rt = this.runtime;
 		const sessionFile = rt?.session.sessionManager.getSessionFile() ?? null;
 		const prevLeafId = rt?.session.sessionManager.getLeafId() ?? null;
+		const prevCwd = rt?.session.sessionManager.getCwd() ?? this.options.cwd;
 		await this.dispose();
 		if (sessionFile) {
-			// 会话文件在 sessions/<slug>/<file>.jsonl:父目录即 sessionsDir,cwd 不变
-			this.sessionManager = SessionManager.open(sessionFile, dirname(sessionFile), this.options.cwd);
+			// 会话文件在 sessions/<slug>/<file>.jsonl:父目录即 sessionsDir,cwd 保持不变
+			this.sessionManager = SessionManager.open(sessionFile, dirname(sessionFile), prevCwd);
 			if (prevLeafId && this.sessionManager.getEntry(prevLeafId)) {
 				this.sessionManager.branch(prevLeafId);
 			}
@@ -108,22 +116,31 @@ export class SessionHost {
 			// message_end 事件附加会话 entry id(vendor 的 AgentMessage 无 id 字段,
 			// id 在 SessionEntry 层;前端实时消息据此获得稳定 id,撤回按钮才能定位)。
 			// 注意:vendor 的 _handleAgentEvent 是先 emit 再 appendMessage(2026-08 实测),
-			// 因此 emit 时「当前这条消息」尚未落盘,getBranch 找不到——尤其会话第一条
-			// 消息必失败(前端编辑按钮依赖 entryId)。同步查不到时,append 在 emit 后
-			// 同步完成,setTimeout(0) 后补查并补发带 entryId 的 message_end(前端 reducer
-			// 重复处理幂等:entryId 只附加给无 entryId 的消息、done 标记已 done 跳过)。
+			// emit 时「当前这条消息」通常尚未落盘;只按 role 同步反查会命中上一条
+			// 同角色消息。因此先按 role + 文本精确匹配,匹配不到再等 append 完成后
+			// 补发带 entryId 的 message_end(前端 reducer 重复处理幂等)。
 			let enriched: AgentSessionEvent & { entryId?: string } = event;
 			if (event.type === "message_end") {
-				const branch = runtime.session.sessionManager.getBranch();
-				for (let i = branch.length - 1; i >= 0; i--) {
-					const entry = branch[i]!;
-					if (entry.type === "message" && (entry as { message?: { role?: string } }).message?.role === event.message.role) {
-						enriched = { ...event, entryId: entry.id };
-						break;
+				// vendor 先 emit 后 appendMessage;同步反查 branch 若只按 role 匹配会命中
+				// 上一条同角色消息。这里先按 role + 文本精确匹配(测试与已落盘场景),
+				// 匹配不到再延迟到 append 完成后补发带 entryId 的 message_end。
+				const role = event.message.role;
+				const eventText = chatTextOfMessage(event.message as { role?: string; content?: unknown });
+				let matched = false;
+				if (eventText !== undefined) {
+					const branch = runtime.session.sessionManager.getBranch();
+					for (let i = branch.length - 1; i >= 0; i--) {
+						const entry = branch[i]!;
+						if (entry.type !== "message") continue;
+						const message = (entry as { message?: { role?: string; content?: unknown } }).message;
+						if (message?.role === role && chatTextOfMessage(message) === eventText) {
+							enriched = { ...event, entryId: entry.id };
+							matched = true;
+							break;
+						}
 					}
 				}
-				if (!enriched.entryId) {
-					const role = event.message.role;
+				if (!matched) {
 					const rt = runtime;
 					setTimeout(() => {
 						// runtime 可能已被切书/重建(switchSession/reloadRuntime):放弃补发
@@ -154,8 +171,25 @@ export class SessionHost {
 		return this.runtime;
 	}
 
+	/** 在工具路径守卫上下文中执行(fn 内 session 工具调用的 cwd 由此确定)。 */
+	private runInToolGuardContext<T>(fn: () => Promise<T>): Promise<T> {
+		const rt = this.requireRuntime();
+		const sm = (rt.session as { sessionManager?: { getCwd?: () => string } }).sessionManager;
+		const cwd =
+			(typeof sm?.getCwd === "function" && sm.getCwd()) ||
+			this.options.cwd;
+		return toolGuardContext.run(
+			{
+				bookDir: cwd,
+				readOnlyDirs: this.options.toolGuard?.readOnlyDirs ?? [],
+				draftFile: this.options.toolGuard?.draftFile,
+			},
+			fn,
+		);
+	}
+
 	async sendMessage(text: string): Promise<void> {
-		await this.requireRuntime().session.prompt(text);
+		await this.runInToolGuardContext(() => this.requireRuntime().session.prompt(text));
 	}
 	/**
 	 * 以 nextTurn 模式注入一段上下文(custom 消息,随下个用户 prompt 进入,不触发独立回复)。
@@ -163,11 +197,13 @@ export class SessionHost {
 	 * 但 web 路径经 extractMessages 只提取 user/assistant 文本,该 custom 消息对界面不可见。
 	 */
 	async injectContext(text: string): Promise<void> {
-		const rt = this.requireRuntime();
-		await rt.session.sendCustomMessage(
-			{ customType: "world-context", content: [{ type: "text", text }], display: true },
-			{ deliverAs: "nextTurn" },
-		);
+		await this.runInToolGuardContext(async () => {
+			const rt = this.requireRuntime();
+			await rt.session.sendCustomMessage(
+				{ customType: "world-context", content: [{ type: "text", text }], display: true },
+				{ deliverAs: "nextTurn" },
+			);
+		});
 	}
 	async abort(): Promise<void> {
 		await this.requireRuntime().session.abort();
@@ -177,9 +213,17 @@ export class SessionHost {
 	 * vendor 的 switchSession 会经工厂创建全新 session 并替换内部 _session,
 	 * 旧 session 上的事件订阅随之失效,因此切换后必须重新绑定。
 	 */
-	async switchSession(chapterAbsPath: string): Promise<void> {
+	async switchSession(chapterAbsPath: string, cwd?: string): Promise<void> {
+		if (!this.runtime) {
+			// 服务端删除当前书后 runtime 已释放:下次切章时按新书目录重新启动。
+			const sessionsDir = dirname(chapterAbsPath);
+			const bookDir = cwd ?? join(getBooksDir(), basename(sessionsDir));
+			this.sessionManager = SessionManager.open(chapterAbsPath, sessionsDir, bookDir);
+			await this.start();
+			return;
+		}
 		const rt = this.requireRuntime();
-		await rt.switchSession(chapterAbsPath);
+		await rt.switchSession(chapterAbsPath, ...(cwd ? [{ cwdOverride: cwd }] : []));
 		this.bindSession();
 	}
 	async setModel(model: string): Promise<void> {
@@ -269,7 +313,8 @@ export class SessionHost {
 			tail: string;
 		}>;
 	}> {
-		const rt = this.requireRuntime();
+		const rt = this.runtime;
+		if (!rt) return { currentLeafId: null, branches: [] };
 		const sm = rt.session.sessionManager;
 		const roots = sm.getTree() as unknown as Array<{
 			entry: { id: string };
@@ -353,7 +398,10 @@ export class SessionHost {
 	}
 
 	getState(): SessionStateSnapshot {
-		const rt = this.requireRuntime();
+		const rt = this.runtime;
+		if (!rt) {
+			return { sessionFile: null, bookSlug: null, chapterFile: null, isStreaming: false, messages: [], diagnostics: [] };
+		}
 		const sessionFile = rt.session.sessionManager.getSessionFile() ?? null;
 		return {
 			sessionFile,

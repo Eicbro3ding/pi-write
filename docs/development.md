@@ -37,11 +37,14 @@ web 模式与 TUI 共存:共用 `~/.pi/writer` 数据,可开不同端口并行�
 ## 测试与类型检查
 
 ```bash
-# 单测(vitest;仓库缺 monorepo base 配置,必须用临时配置)
-npx vitest run --config vitest.tmp.config.ts
+# 单测(vitest;仓库已补本地 vitest.base.ts,直接运行默认配置)
+npm test
 
-# 类型检查(tsconfig.tmp.json 覆盖 src+vendor+electron;vendor 有既有类型错误,忽略)
-npx tsc -p tsconfig.tmp.json
+# 单测指定文件
+npx vitest run test/server.test.ts
+
+# 后端类型检查(本地 tsconfig.base.json 已补;vendor 有既有类型错误,过滤 vendor/)
+npx tsc -p tsconfig.build.json --noEmit
 
 # 前端类型检查
 cd web && npx tsc --noEmit -p tsconfig.json

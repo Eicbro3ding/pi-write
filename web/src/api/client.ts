@@ -271,21 +271,24 @@ export class ApiClient {
 		});
 	}
 
-	/** 读取世界书(world.json);mtime 为磁盘文件时间戳(保存时作为 If-Match 条件写依据)。 */
-	async getWorld(): Promise<{ world: WorldDataDto; mtime: number }> {
-		const data = await this.request<{ world: WorldDataDto; mtime?: number }>("/api/world");
+	/** 读取世界书(world.json);mtime 为磁盘文件时间戳(保存时作为 If-Match 条件写依据)。
+	 *  slug 显式传入时按指定书读写,避免会话书与显示书不一致(舞台页数据层开书不切主会话)。 */
+	async getWorld(slug?: string): Promise<{ world: WorldDataDto; mtime: number }> {
+		const q = slug ? `?slug=${encodeURIComponent(slug)}` : "";
+		const data = await this.request<{ world: WorldDataDto; mtime?: number }>(`/api/world${q}`);
 		return { world: data.world, mtime: data.mtime ?? 0 };
 	}
 
 	/**
 	 * 整体保存世界书(校验由服务端执行);ifMatch 提供时做条件写:
 	 * 磁盘 mtime 已变(其他窗口/AI 已改)→ 409 conflict。返回保存后的 mtime。
+	 *  slug 显式传入时写入指定书;缺省回退服务端当前会话书。
 	 */
-	async putWorld(world: WorldDataDto, ifMatch?: number): Promise<number> {
+	async putWorld(world: WorldDataDto, ifMatch?: number, slug?: string): Promise<number> {
 		const r = await this.request<{ ok: boolean; mtime?: number }>("/api/world", {
 			method: "PUT",
 			...(ifMatch !== undefined ? { headers: { "if-match": String(ifMatch) } } : {}),
-			body: JSON.stringify({ world }),
+			body: JSON.stringify({ world, ...(slug ? { slug } : {}) }),
 		});
 		return r.mtime ?? 0;
 	}

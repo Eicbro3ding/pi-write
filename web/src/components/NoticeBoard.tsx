@@ -40,7 +40,7 @@ export function NoticeBoard({ client, slug }: NoticeBoardProps) {
 			return;
 		}
 		try {
-			const { world: w, mtime } = await client.getWorld();
+			const { world: w, mtime } = await client.getWorld(slug ?? undefined);
 			mtimeRef.current = mtime;
 			setWorld(w);
 		} catch {
@@ -62,7 +62,7 @@ export function NoticeBoard({ client, slug }: NoticeBoardProps) {
 				const w = worldRef.current;
 				if (!w) return;
 				void client
-					.putWorld(w, mtimeRef.current)
+					.putWorld(w, mtimeRef.current, slug ?? undefined)
 					.then((m) => {
 						mtimeRef.current = m;
 						setSaveConflict(false);

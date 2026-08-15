@@ -88,7 +88,7 @@ export function WorldPage({
 		let cancelled = false;
 		setLoadErr(null);
 		void client
-			.getWorld()
+			.getWorld(slug)
 				.then((r) => {
 					if (cancelled) return;
 					// 重载 GET 返回时用户已开始编辑(脏):保留本地修改,放弃重载
@@ -131,7 +131,7 @@ export function WorldPage({
 		setSaving(true);
 		setSaveErr(null);
 		try {
-			const mtime = await client.putWorld(worldRef.current, lastWorldMtimeRef.current || undefined);
+			const mtime = await client.putWorld(worldRef.current, lastWorldMtimeRef.current || undefined, slug ?? undefined);
 			setDirty(false);
 			if (mtime > 0) lastWorldMtimeRef.current = mtime;
 			markSaved(); // 记录保存时间:自己的回显(1s 内)跳过

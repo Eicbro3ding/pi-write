@@ -218,7 +218,13 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 		customTools: mcpManager.getTools(),
 	});
 
-	const host = new SessionHost({ createRuntime, cwd: bookDir, agentDir, sessionManager });
+	const host = new SessionHost({
+		createRuntime,
+		cwd: bookDir,
+		agentDir,
+		sessionManager,
+		toolGuard: { readOnlyDirs: [skillsDir] },
+	});
 	await host.start();
 	// 常驻编剧宿主:每本书一个 writer 会话,惰性创建;model/thinking 同 stage
 	// (writer 端点未装配时由 server 侧 404,与 MCP/stage 同款)

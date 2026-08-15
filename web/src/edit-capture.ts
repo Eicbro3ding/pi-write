@@ -46,7 +46,7 @@ export function createEditCapture(client: ApiClient, slugFn: () => string | null
 		/** 回合开始预取基线(用户消息到达时调用):草稿按路径+书解析、世界书整体。 */
 		prefetchBaseline(draftPath: string | null | undefined, slug?: string | null): void {
 			if (draftPath) turnBaseline.draft.set(draftPath, client.getDraft(draftPath, slug ?? undefined).then((r) => r.text));
-			turnBaseline.world = client.getWorld().then((r) => r.world);
+			turnBaseline.world = client.getWorld(slug ?? undefined).then((r) => r.world);
 		},
 
 		/** 工具 start:命中编辑类工具(write/edit 写 draft·world.json、world_update)时抓编辑前基线;
@@ -62,7 +62,7 @@ export function createEditCapture(client: ApiClient, slugFn: () => string | null
 			if (kind === "draft" && path) {
 				before = turnBaseline.draft.get(path) ?? client.getDraft(path, slug ?? undefined).then((r) => r.text);
 			} else {
-				before = turnBaseline.world ?? client.getWorld().then((r) => r.world);
+				before = turnBaseline.world ?? client.getWorld(slug ?? undefined).then((r) => r.world);
 			}
 			pending.set(toolCallId, { kind, path: path ?? null, toolName, before, slug });
 			return kind;
@@ -96,7 +96,7 @@ export function createEditCapture(client: ApiClient, slugFn: () => string | null
 				}
 				if (p.kind === "world") {
 					if (typeof before === "string") return null;
-					const after = await client.getWorld();
+					const after = await client.getWorld(p.slug ?? undefined);
 					const diff = buildWorldDiff(before, after.world);
 					const cls = classifyWorldChange(diff);
 					if (cls === null) return null; // 非词条/结构变更(Notice 等):不弹卡

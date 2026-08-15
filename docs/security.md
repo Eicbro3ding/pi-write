@@ -21,7 +21,7 @@ pi-writer 是本地创作工具:web 服务默认绑定 `127.0.0.1`,agent 拥有�
 ## 世界书写保护
 
 - **`world_update` 是唯一变更通道**:提示词 + 守卫双重约束禁止 edit/write 直改 world.json;结构化校验(重复 id、悬空引用、多个 in-progress、自环关系等)由程序执行;
-- **读-改-写整体持锁**(`withWorldLock`):并行 world_update 串行化,消除丢失更新与共享 tmp 竞态;
+- **读-改-写整体持锁**(`withWorldLock`):并行 world_update 串行化,消除丢失更新与共享 tmp 竞态(**进程内锁**;TUI / Web / Electron 跨进程并行时仍需外部文件锁);
 - **原子写**(`saveWorld`):校验 → 备份 → 唯一 tmp + rename 重试(Windows EPERM 兜底)→ 写后校验失败回滚;
 - **If-Match 条件写**:web 端 `PUT /api/world` / `PUT /api/draft` 支持 `If-Match`(mtime 比较,不符 → 409),防本地旧文本覆盖 AI / 其他窗口的新修改。
 
@@ -44,7 +44,7 @@ pi-writer 是本地创作工具:web 服务默认绑定 `127.0.0.1`,agent 拥有�
 ## 数据与密钥
 
 - API 密钥只存在于本地文件(`auth.json` / `models.json` / `mcp.json`,均被 gitignore);
-- 删除书:`handleDeleteBook` 先释放内存会话(防 AI 继续写 draft/world.json 导致目录「复活」),rmSync 带 EPERM 重试;
+- 删除书:`handleDeleteBook` 先释放内存会话(防 AI 继续写 draft/world.json 导致目录「复活」),并 dispose 主 `SessionHost`(删除当前书后 `/api/session` 返回空态,下次切书按需重建),rmSync 带 EPERM 重试;
 - 世界书 md 视图是导出(头部注明「编辑请走界面」),手动编辑会被下一次保存覆盖。
 
 ## 已知边界(注意)

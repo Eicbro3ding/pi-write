@@ -230,9 +230,16 @@ export function parseReviseArgs(tokens: string[]): ScriptPatch {
  * 直接 throw 上抛），false 表示超时（调用方优雅跳过，不崩进程）。
  */
 async function runTurn(host: SessionHost, send: () => Promise<void>, timeoutMs: number): Promise<boolean> {
-	const timer = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), timeoutMs));
-	const result = await Promise.race([send().then(() => "sent" as const), timer]);
-	return result === "sent";
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<"timeout">((resolve) => {
+		timer = setTimeout(() => resolve("timeout"), timeoutMs);
+	});
+	try {
+		const result = await Promise.race([send().then(() => "sent" as const), timeout]);
+		return result === "sent";
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 /** 编剧建议文件(书目录,常驻编剧维护;导演「讨论/剧本」模式注入)。 */
@@ -424,6 +431,7 @@ export class StageOrchestrator {
 			cwd: this.bookDir,
 			agentDir: this.agentDir,
 			sessionManager,
+			toolGuard: { readOnlyDirs: [resolveSkillsDir()] },
 		});
 		await host.start();
 		return host;

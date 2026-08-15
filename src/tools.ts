@@ -5,7 +5,7 @@ import { defineTool, type ToolDefinition } from "../vendor/pi-coding-agent/src/i
 import { Type } from "typebox";
 import { cjkCount } from "./cjk.ts";
 import { ensureWorld, newId, saveWorld, validateWorld, writeWorldEditRecord, WorldValidationError, type ConstraintTarget, type EntryStatus, type EntryType, type RelationArrow, type StoryNodeStatus, type WorldData, type WorldEntry } from "./world-data.ts";
-import { pathWithinRoot } from "./tool-guard.ts";
+import { pathWithinRoot, toolGuardContext } from "./tool-guard.ts";
 import { withWorldLock } from "./world-lock.ts";
 
 /**
@@ -27,9 +27,9 @@ export function setWordCountCwd(dir: string | null): void {
 	wordCountCwd = dir;
 }
 
-/** 当前路径基准:注入值优先,未注入时回退进程 cwd(与旧行为一致)。 */
+/** 当前路径基准:SessionHost 的 ALS 上下文优先,其次工厂注入值,最后进程 cwd(与旧行为一致)。 */
 function cwdBase(): string {
-	return wordCountCwd ?? process.cwd();
+	return toolGuardContext.getStore()?.bookDir ?? wordCountCwd ?? process.cwd();
 }
 
 const COUNT_METRICS = ["cn_chars", "en_words", "sentences", "paragraphs"] as const;
@@ -542,6 +542,11 @@ export function applyWorldUpdate(data: WorldData, update: WorldUpdateOp): WorldD
 let worldUpdateBookDir: string | null = null;
 export function setWorldUpdateBookDir(dir: string | null): void { worldUpdateBookDir = dir; }
 
+/** 当前 world_update/world_find 的书目录:SessionHost ALS 上下文优先,其次工厂注入值。 */
+function worldBookDir(): string | null {
+	return toolGuardContext.getStore()?.bookDir ?? worldUpdateBookDir;
+}
+
 /**
  * world_find —— 只读检索世界书条目(不改数据)。
  *
@@ -561,7 +566,7 @@ export const worldFindTool: ToolDefinition = defineTool({
 		limit: Type.Optional(Type.Number({ description: "返回条数上限(1-100,默认 20)" })),
 	}),
 	async execute(_callId, params) {
-		const dir = worldUpdateBookDir;
+		const dir = worldBookDir();
 		if (!dir) throw new Error("world_find 未配置书目录");
 		const world = await ensureWorld(dir);
 		let entries = world.entries;
@@ -624,7 +629,7 @@ export const worldUpdateTool: ToolDefinition = defineTool({
 		]),
 	}),
 	async execute(_callId, params) {
-		const dir = worldUpdateBookDir;
+		const dir = worldBookDir();
 		if (!dir) throw new Error("world_update 未配置书目录");
 		// 读-改-写整体持锁:并行 world_update(agent 多工具调用)串行执行,
 		// 消除丢失更新与共享 tmp 竞态(saveWorld 另以唯一 tmp + 备份兜底)
