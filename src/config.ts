@@ -98,12 +98,18 @@ export function slugify(input: string): string {
 
 /**
  * 定位 skills 目录:PI_WRITER_SKILLS_DIR 优先(Android 壳注入,烘焙的
- * import.meta.url 路径在 Android 上不可用);其次 bun 单文件 exe 旁的 skills;
+ * import.meta.url 路径在 Android 上不可用);其次 Electron resources/app.asar/skills
+ * (package.json files 含 skills,打包进 asar,2026-08-15);其次 bun 单文件 exe 旁的 skills;
  * 回退源码树 ../skills(TUI/web/stage 三处共用,原各自实现的收敛点)。
  */
 export function resolveSkillsDir(env: Record<string, string | undefined> = process.env): string {
 	const override = env.PI_WRITER_SKILLS_DIR;
 	if (override) return override;
+	const resPath = (process as { resourcesPath?: string }).resourcesPath;
+	if (resPath) {
+		const asarSkills = join(resPath, "app.asar", "skills");
+		if (existsSync(asarSkills)) return asarSkills;
+	}
 	const exeSkills = join(dirname(process.execPath), "skills");
 	if (existsSync(exeSkills)) return exeSkills;
 	const here = dirname(fileURLToPath(import.meta.url));
