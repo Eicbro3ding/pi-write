@@ -117,7 +117,7 @@ describe("renderTextFor（结构化渲染）", () => {
 		const lines = renderTextFor(baseScript(), "actor-1");
 		expect(lines.join("\n")).toContain("【角色任务】证明自己还清了债");
 		expect(lines.join("\n")).toContain("【内心状态】愧疚又恼怒");
-		expect(lines.join("\n")).toContain("【风格示例·仅参考语气，禁止复述】\n王五: 三年了。\n李四: ……嗯。");
+		expect(lines.join("\n")).toContain("【风格示例·只学语气/句式/用词，禁止复述情节与具体台词】\n王五: 三年了。\n李四: ……嗯。");
 	});
 
 	it("未定向的演员只拿 shared（含空字段省略）", () => {

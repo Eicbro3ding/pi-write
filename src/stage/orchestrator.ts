@@ -102,6 +102,13 @@ export function decideTurnAction(
 	return "speak";
 }
 
+/**
+ * 重演/续演通用提示(借鉴 SillyTavern Continue Nudge):只补新内容,不复读上一轮。
+ * /retry 与 /fix 截断转录后都会注入,防止演员把刚被删掉的旧台词原样再说一遍。
+ */
+const CONTINUE_WITHOUT_REPEAT_NUDGE =
+	"从被截断/要求修正的位置继续演出:只输出新的动作、神态与台词;不要复述上一轮已经写过的内容,也不要复述舞台提示本身";
+
 /** 导演模式切换事件（三模式状态机的输入，只剩硬信号——文本意图检测已移除）。 */
 export type DirectorModeEvent =
 	| "tool-script-confirm"
@@ -180,7 +187,7 @@ export function buildWriterMessage(opts: {
 	let msg = `【舞台转录】\n${opts.transcript}\n\n【剧本·角色内心（state，导演声明）】\n${opts.stateText}\n\n【世界书（导演已更新，含角色内心）】\n${opts.worldText}`;
 	if (opts.styleSample) {
 		// 文风采样：0.01 版机制（导演维护的标志性文本）——编剧的风格基准
-		msg += `\n\n【文风采样】(来源: 导演维护的风格基准)\n${opts.styleSample}`;
+		msg += `\n\n【文风采样】(来源: 导演维护的风格基准；只模仿语感与句式，不复用原文)\n${opts.styleSample}`;
 	}
 	msg += `\n\n你是编剧。请把以上舞台记录整理成正文小说：去掉对白标签与舞台指示，叙述化、连贯成文；参考角色内心与世界书，把潜台词与心理矛盾写进正文；遵循文风采样锁定语言风格。用 write 工具把正文写入 draft/${opts.chapter}.md。`;
 	if (opts.thoughtAccess === 3 && opts.thoughts) {
@@ -665,7 +672,7 @@ export class StageOrchestrator {
 		await truncateStage(this.bookDir, this.sceneId, entries.length - 1);
 		this.resetActorSession(last.actor);
 		this.forcedNextActor = last.actor;
-		this.replayNote = note ?? "用户要求重演这一条";
+		this.replayNote = [note ?? "用户要求重演这一条", CONTINUE_WITHOUT_REPEAT_NUDGE].join("；");
 		this.emit(`重演第 ${entries.length} 条（${last.character}）`);
 		this.nextTurnWaiter?.();
 		this.nextTurnWaiter = null;
@@ -688,6 +695,7 @@ export class StageOrchestrator {
 			await truncateStage(this.bookDir, this.sceneId, entryIndex - 1);
 			this.resetActorSession(target.actor);
 			this.forcedNextActor = target.actor;
+			this.replayNote = `导演已按用户反馈修订剧本。${CONTINUE_WITHOUT_REPEAT_NUDGE}`;
 			this.emit(`剧本已修订 v${this.script.version}，从第 ${entryIndex - 1} 条处续演`);
 			this.nextTurnWaiter?.();
 			this.nextTurnWaiter = null;

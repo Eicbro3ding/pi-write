@@ -213,7 +213,7 @@ export class WriterHost {
 			const style = world.styleSample?.text;
 			if (style && style.trim().length > 0) {
 				const body = style.length > STYLE_LIMIT ? `${style.slice(0, STYLE_LIMIT)}…(截断)` : style;
-				blocks.push(`【文风采样】\n${body}`);
+				blocks.push(`【文风采样】（作者文风基准：模仿语感与句式，不抄写、不复用具体内容）\n${body}`);
 			}
 			// 发展线视图(当前目标 + 已完成列表)——编剧成文/讨论时不重复推进已完成
 			// 目标(借鉴 AI-Novel completedMilestones 守卫,2026-08-12)

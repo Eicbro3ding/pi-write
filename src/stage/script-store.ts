@@ -85,7 +85,7 @@ export function renderTextFor(script: SceneScript, actorId: string): string[] {
 		if (actor.voice) lines.push(`【说话方式】${actor.voice}`);
 		if (actor.boundary) lines.push(`【演出边界】${actor.boundary}`);
 		if (actor.examples.length > 0) {
-			lines.push(`【风格示例·仅参考语气，禁止复述】\n${actor.examples.join("\n")}`);
+			lines.push(`【风格示例·只学语气/句式/用词，禁止复述情节与具体台词】\n${actor.examples.join("\n")}`);
 		}
 	}
 	return lines;

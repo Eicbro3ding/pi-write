@@ -222,7 +222,7 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 		}
 	}
 	if (data.styleSample && data.styleSample.text.length > 0) {
-		resident += `【文风采样】(来源: ${data.styleSample.source || "未知"})\n${data.styleSample.text}\n`;
+		resident += `【文风采样】(来源: ${data.styleSample.source || "未知"}；只模仿语感与句式，不复用原文)\n${data.styleSample.text}\n`;
 		result.included.hasSample = true;
 	}
 	let overview = "";
