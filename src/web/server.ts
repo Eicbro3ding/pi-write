@@ -140,16 +140,29 @@ interface UserThemeEntry {
 }
 
 /**
- * 探测内置主题资产目录:优先 web/public/themes(源码树——真理源,dev 下 vite
- * 直接伺服、测试可枚举;构建会把它们原样拷入 dist),退回 web/dist/themes
- * (打包产物,web/public 不存在时——如裁剪后的分发包/Electron)。均不存在返回 null。
+ * 探测内置主题资产目录。优先级:
+ * 1. 已解析的静态目录(WriterServer.staticRoot)/themes——Electron 主进程显式传入
+ *    app.asar/web/dist,直接从这里取最可靠;
+ * 2. PI_WRITER_WEB_DIR/themes(与 resolveWebDistDir 的环境覆盖同源);
+ * 3. Electron resources/app.asar/web/dist/themes(打包产物);
+ * 4. bun 单文件 exe 旁 web/dist/themes;
+ * 5. 源码树 web/public/themes(dev 真理源)与 web/dist/themes。
+ * 均不存在返回 null(此时前端只剩 night 基底主题)。
  */
-function resolveBuiltinThemesDir(): string | null {
+export function resolveBuiltinThemesDir(
+	env: Record<string, string | undefined> = process.env,
+	webDistDir?: string | null,
+): string | null {
+	const candidates: string[] = [];
+	if (webDistDir) candidates.push(join(webDistDir, "themes"));
+	const envDist = env.PI_WRITER_WEB_DIR;
+	if (envDist) candidates.push(join(envDist, "themes"));
+	const resPath = (process as { resourcesPath?: string }).resourcesPath;
+	if (resPath) candidates.push(join(resPath, "app.asar", "web", "dist", "themes"));
+	candidates.push(join(dirname(process.execPath), "web", "dist", "themes"));
 	const here = dirname(fileURLToPath(import.meta.url));
-	const candidates = [
-		join(here, "..", "..", "web", "public", "themes"),
-		join(here, "..", "..", "web", "dist", "themes"),
-	];
+	candidates.push(join(here, "..", "..", "web", "public", "themes"));
+	candidates.push(join(here, "..", "..", "web", "dist", "themes"));
 	for (const c of candidates) if (isDirectory(c)) return c;
 	return null;
 }
@@ -1597,7 +1610,7 @@ export class WriterServer {
 			);
 		};
 		const user = await readThemes(getThemesDir());
-		const builtin = await readThemes(resolveBuiltinThemesDir());
+		const builtin = await readThemes(resolveBuiltinThemesDir(process.env, this.staticRoot));
 		this.send(ctx.res, 200, { user, builtin });
 	}
 

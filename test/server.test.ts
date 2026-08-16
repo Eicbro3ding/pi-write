@@ -12,7 +12,7 @@ import { PassThrough } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import yazl from "yazl";
-import { WriterServer } from "../src/web/server.ts";
+import { resolveBuiltinThemesDir, WriterServer } from "../src/web/server.ts";
 import { getBookDir, getWriterDir } from "../src/config.ts";
 import { getBookSessionsDir, getChapterSessionsPath, loadBook } from "../src/book-manager.ts";
 import { readImportZip } from "../src/web/book-zip.ts";
@@ -931,6 +931,32 @@ describe("WriterServer 静态服务(webDistDir)", () => {
 		expect(res.status).toBe(200);
 		const body = await res.json();
 		expect(Array.isArray(body.books)).toBe(true);
+	});
+	it("resolveBuiltinThemesDir 优先使用显式 webDistDir(打包机 web/dist 在 asar 内)", () => {
+		const fakeDist = mkdtempSync(join(tmpdir(), "piw-themes-"));
+		try {
+			mkdirSync(join(fakeDist, "themes"), { recursive: true });
+			writeFileSync(join(fakeDist, "themes", "paper.css"), ":root {}");
+			expect(resolveBuiltinThemesDir({}, fakeDist)).toBe(join(fakeDist, "themes"));
+		} finally {
+			rmSync(fakeDist, { recursive: true, force: true });
+		}
+	});
+	it("resolveBuiltinThemesDir 兼容 Electron resources/app.asar 探测", () => {
+		const resDir = mkdtempSync(join(tmpdir(), "piw-res-"));
+		const fakeAsar = join(resDir, "app.asar", "web", "dist");
+		mkdirSync(join(fakeAsar, "themes"), { recursive: true });
+		writeFileSync(join(fakeAsar, "themes", "mono.css"), ":root {}");
+		const proc = process as { resourcesPath?: string };
+		const prev = proc.resourcesPath;
+		try {
+			proc.resourcesPath = resDir;
+			expect(resolveBuiltinThemesDir({}, null)).toBe(join(fakeAsar, "themes"));
+		} finally {
+			if (prev === undefined) delete proc.resourcesPath;
+			else proc.resourcesPath = prev;
+			rmSync(resDir, { recursive: true, force: true });
+		}
 	});
 	it("GET /api/themes 无用户主题,内置主题从资产文件自动发现", async () => {
 		const res = await fetch(`${base}/api/themes`);
