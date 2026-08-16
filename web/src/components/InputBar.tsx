@@ -34,6 +34,8 @@ interface SlashMenuState {
 	index: number;
 	loading: boolean;
 	notice: string | null;
+	/** true = 正在选择命令(`/` 或前缀命中多条),候选项是命令本身。 */
+	picker: boolean;
 }
 
 /** 输入框暴露的命令句柄:供外部按钮触发同一发送路径(如编剧「选中文本自动填入」)。 */
@@ -107,6 +109,16 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 		};
 	}
 
+	/** 选择命令阶段(只输入 `/` 或前缀命中多条)的候选项:选中插入 `/trigger ` 继续输入。 */
+	function commandPickerItems(commands: ReadonlyArray<SlashCommand>): SlashSuggestion[] {
+		return commands.map((c) => ({
+			id: `command:${c.trigger}`,
+			label: `/${c.trigger}`,
+			hint: c.hint,
+			insertText: `/${c.trigger} `,
+		}));
+	}
+
 	/** 按当前文本与光标重建/关闭命令面板。 */
 	function refreshMenu(ta: HTMLTextAreaElement) {
 		const q = parseSlashQuery(ta.value, ta.selectionStart ?? ta.value.length);
@@ -114,18 +126,35 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 			setMenu(null);
 			return;
 		}
-		const command = (commandsRef.current ?? []).find((c) => slashCommandMatches(c, q.trigger));
-		if (!command) {
+		const matches = (commandsRef.current ?? []).filter((c) => slashCommandMatches(c, q.trigger));
+		if (matches.length === 0) {
 			setMenu(null);
 			return;
 		}
+		const exact = matches.find((c) => c.trigger === q.trigger || (c.aliases ?? []).includes(q.trigger));
 		const seq = ++menuSeqRef.current;
-		// action 命令(有 run、无 search)不需要远程搜索,直接给一条固定候选
-		if (command.run && !command.search) {
-			setMenu({ seq, query: q, command, items: [actionSuggestion(command, q.term)], index: 0, loading: false, notice: null });
+		// `/`(无触发名)或前缀命中多条且尚无精确命中:先让用户选命令
+		if (q.trigger.length === 0 || (matches.length > 1 && !exact)) {
+			const command = exact ?? matches[0]!;
+			setMenu({
+				seq,
+				query: q,
+				command,
+				items: commandPickerItems(matches),
+				index: 0,
+				loading: false,
+				notice: null,
+				picker: true,
+			});
 			return;
 		}
-		setMenu({ seq, query: q, command, items: [], index: 0, loading: true, notice: null });
+		const command = exact ?? matches[0]!;
+		// action 命令(有 run、无 search)不需要远程搜索,直接给一条固定候选
+		if (command.run && !command.search) {
+			setMenu({ seq, query: q, command, items: [actionSuggestion(command, q.term)], index: 0, loading: false, notice: null, picker: false });
+			return;
+		}
+		setMenu({ seq, query: q, command, items: [], index: 0, loading: true, notice: null, picker: false });
 		const ctx = contextRef.current;
 		void (async () => {
 			try {
@@ -245,10 +274,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 	return (
 		<div className="inputbar">
 			{menu && (
-				<div className="slash-menu" role="listbox" aria-label={`/${menu.command.trigger} 命令候选项`}>
+				<div className="slash-menu" role="listbox" aria-label={menu.picker ? "命令选择" : `/${menu.command.trigger} 命令候选项`}>
 					<div className="slash-menu-head">
-						<span className="slash-menu-command">/{menu.command.trigger}</span>
-						<span className="slash-menu-hint">{menu.command.hint}</span>
+						<span className="slash-menu-command">{menu.picker ? "/" : `/${menu.command.trigger}`}</span>
+						<span className="slash-menu-hint">{menu.picker ? "选择命令" : menu.command.hint}</span>
 					</div>
 					{menu.loading && menu.items.length === 0 ? (
 						<div className="slash-item muted">正在查找…</div>
