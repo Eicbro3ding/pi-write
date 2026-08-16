@@ -3,7 +3,7 @@ import { basename, join } from "node:path";
 import { getBookSessionsDir, initChapterFile } from "../book-manager.ts";
 import { resolveSkillsDir } from "../config.ts";
 import { createSessionRuntimeFactory } from "../session-factory.ts";
-import { SessionHost } from "../web/session-host.ts";
+import { SessionHost, type SessionContextUsage } from "../web/session-host.ts";
 import type { WriterHost } from "../web/writer-host.ts";
 import {
 	type CreateAgentSessionRuntimeFactory,
@@ -514,6 +514,18 @@ export class StageOrchestrator {
 			}
 		}
 		return chat;
+	}
+
+	/** 导演会话上下文占用(纯读;无活跃导演会话返回 null)。 */
+	getDirectorUsage(): SessionContextUsage | null {
+		return this.director?.getContextUsage() ?? null;
+	}
+
+	/** 手动压缩导演会话上下文(失败抛出;stage-host 经 runLong 转成 done 事件回报)。 */
+	async directorCompact(customInstructions?: string): Promise<string> {
+		if (!this.director) return "导演会话尚未开始，暂无上下文可压缩";
+		const result = await this.director.compact(customInstructions);
+		return `上下文已压缩：${result.tokensBefore} → ${result.estimatedTokensAfter ?? "?"} tokens`;
 	}
 
 	/** 导演的 "context" 事件处理器：按模式注入（scripting → 写作方法；directing → 舞台视图）。 */

@@ -5,8 +5,16 @@ import type { Library } from "../library.ts";
 import { useMediaQuery } from "../useMediaQuery.ts";
 import { useDragResize } from "../use-drag-resize.ts";
 import { initialSessionState, messagesToEvents, processAgentEvent, RESET, sessionReducer } from "../store.ts";
-import type { AgentEventDto, ChapterRef, ScriptPatchDto, StageModeDto, StagePhaseDto, StageScriptDto, StageSnapshotDto } from "../types.ts";
+import type { AgentEventDto, ChapterRef, ScriptPatchDto, StageModeDto, StagePhaseDto, StageScriptDto, StageSnapshotDto, WorldDataDto } from "../types.ts";
 import { formatCounts, initialStageState, reduceStage, stageEntryText } from "../stage-web.ts";
+import { contextUsageHint } from "../context-usage.ts";
+import {
+	makeChapterCommand,
+	makeCompactCommand,
+	makeNodeCommand,
+	type SlashCommand,
+	type SlashContext,
+} from "../slash-commands.ts";
 import { ChapterSidebar } from "../components/ChapterSidebar.tsx";
 import { InputBar } from "../components/InputBar.tsx";
 import { MessageList } from "../components/MessageList.tsx";
@@ -55,6 +63,9 @@ export function StagePage({
 	} = library;
 	const slug = bookDetail?.slug ?? null;
 	const [stage, dispatch] = useReducer(reduceStage, undefined, initialStageState);
+	/** `/node` 世界书缓存(按 slug;收到 world_changed 失效)。 */
+	const worldCacheRef = useRef<{ slug: string; world: WorldDataDto } | null>(null);
+	const worldLoadingRef = useRef<Promise<WorldDataDto | null> | null>(null);
 	/** 导演对话长命令进行中(导演回合可能很长,输入条/按钮据此禁用)。 */
 	const busy = stage.busy !== null;
 	/** 当前长命令名(null = 空闲;收幕/反馈等命令全程置 busy)。 */
@@ -140,10 +151,15 @@ export function StagePage({
 		const unsub = client.subscribeEvents(
 			(e) => {
 				const sameChapter = (cf: string | null | undefined) => cf === (currentChapterRef.current?.file ?? null);
-				if (e.type === "stage_entry" && e.slug === slug && sameChapter(e.chapterFile)) dispatch({ type: "entry", entry: e.entry });
+				if (e.type === "world_changed" && e.slug === slug) {
+				// 世界书被修改:/node 命令缓存失效,下次打开命令面板重拉
+				worldCacheRef.current = null;
+			} else if (e.type === "stage_entry" && e.slug === slug && sameChapter(e.chapterFile)) dispatch({ type: "entry", entry: e.entry });
 				else if (e.type === "stage_system" && e.slug === slug && sameChapter(e.chapterFile)) dispatch({ type: "system", text: e.text });
 				else if (e.type === "stage_done" && e.slug === slug && sameChapter(e.chapterFile)) {
 					dispatch({ type: "done", cmd: e.cmd, ok: e.ok });
+				// 压缩/导演回合完成后快照里的 directorUsage 已变化,刷新一次让提示条跟随
+				if (e.cmd === "compact" || e.cmd === "director") void refresh();
 				} else if (e.type === "stage_director_event" && e.slug === slug && sameChapter(e.chapterFile)) {
 					// 导演会话事件(与 writer_event 同款):走 processAgentEvent 归约
 					// (消息/思考/流式/工具卡与编剧同款);回合结束(agent_settled,含
@@ -206,6 +222,33 @@ export function StagePage({
 	// ---- 导演世界书编辑预览卡(舞台流内):world_update 工具把 before/after 快照
 	// 写进记录文件(stage/last-world-edit.json),信号置 pending、回合结束(agent_settled)
 	// 读文件渲染——diff 由工具在应用时刻算好,无工具事件竞态捕获(2026-08-11 简化)。
+	/** `/node` 世界书懒加载 + 按书缓存(SSE world_changed 时失效)。 */
+	function loadWorldForSlash(): Promise<WorldDataDto | null> {
+		const curSlug = bookDetail?.slug ?? null;
+		if (!curSlug) return Promise.resolve(null);
+		const cached = worldCacheRef.current;
+		if (cached?.slug === curSlug) return Promise.resolve(cached.world);
+		if (worldLoadingRef.current) return worldLoadingRef.current;
+		const p = client
+			.getWorld(curSlug)
+			.then(({ world }) => {
+				worldCacheRef.current = { slug: curSlug, world };
+				return world;
+			})
+			.catch(() => null)
+			.finally(() => {
+				worldLoadingRef.current = null;
+			});
+		worldLoadingRef.current = p;
+		return p;
+	}
+
+	/** `/compact` 动作:走既有长命令管线(202 + stage_done,输入条禁用由 busy 承担)。 */
+	async function runDirectorCompact(instructions: string) {
+		if (busy) return;
+		await runCommand("compact", { instructions });
+	}
+
 	const [worldPreview, setWorldPreview] = useState<PreviewData | null>(null);
 	const worldEditPendingRef = useRef(false);
 	/** 收幕导演回合是否已结束(agent_settled 置位;收幕提示条据此撤下,不等编剧成文)。 */
@@ -434,6 +477,21 @@ export function StagePage({
 		void runCommand("revise", { patch });
 	}
 
+	/** 导演输入框 `/` 命令集(与编剧同一条注册缝,执行器 = 既有舞台命令管线)。 */
+	const directorSlashContext: SlashContext = {
+		client,
+		slug,
+		bookDetail,
+		currentChapterFile: currentChapter?.file ?? null,
+	};
+	const directorSlashCommands: SlashCommand[] = [
+		makeNodeCommand({ loadWorld: loadWorldForSlash }),
+		makeChapterCommand(),
+		makeCompactCommand({ run: runDirectorCompact }),
+	];
+	/** 导演会话上下文占用达到阈值时的「建议 /compact」提示。 */
+	const directorUsageHint = contextUsageHint(stage.snapshot?.directorUsage ?? null);
+
 	let entryNo = 0;
 	return (
 		<div className="stage-grid" style={{ "--stage-panel-w": `${panelWidth}px` } as React.CSSProperties}>
@@ -642,6 +700,7 @@ export function StagePage({
 						<MessageList
 							messages={directorSession.messages}
 							streaming={directorSession.isStreaming}
+							compacting={directorSession.compacting}
 							simplifiedTools={simplifiedTools === true}
 							emptyText="向导演发一句话,讨论剧情、人物与悬念——导演会边聊边维护世界书"
 						/>
@@ -693,11 +752,19 @@ export function StagePage({
 					)}
 
 					{/* 导演输入条(演出前后都是唯一活跃交互;InputBar 自带容器样式) */}
+				{directorUsageHint && (
+					<div className={`notice ${directorUsageHint.tone}`} role="status">
+						{directorUsageHint.text}
+					</div>
+				)}
 				<InputBar
 					streaming={false}
 					onSend={sendDirector}
 					onAbort={() => {}}
-					placeholder="向导演说话…(Ctrl+Enter 发送,Enter 换行;演出前聊剧情,演出中可插话/反馈)"
+				commands={directorSlashCommands}
+				context={directorSlashContext}
+				onCommandError={(msg) => dispatch({ type: "system", text: `命令失败: ${msg}`, err: true })}
+					placeholder="向导演说话…(/ 命令面板;Ctrl+Enter 发送,Enter 换行;演出前聊剧情,演出中可插话/反馈)"
 					ariaLabel="向导演说话"
 				/>
 			</div>

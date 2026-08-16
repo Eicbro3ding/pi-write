@@ -1,4 +1,12 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import {
+	parseSlashQuery,
+	slashCommandMatches,
+	type SlashCommand,
+	type SlashContext,
+	type SlashQuery,
+	type SlashSuggestion,
+} from "../slash-commands.ts";
 
 interface InputBarProps {
 	/** 是否正在流式生成;为 true 时按钮变为「中断」。 */
@@ -9,6 +17,23 @@ interface InputBarProps {
 	placeholder?: string;
 	/** textarea 的可访问名称;缺省为「消息输入」。 */
 	ariaLabel?: string;
+	/** 可选 `/` 命令集(内置 /node、/chapter、/compact 由页面按场景注册)。 */
+	commands?: ReadonlyArray<SlashCommand>;
+	/** 命令搜索/动作的上下文(当前书、章节、ApiClient)。 */
+	context?: SlashContext;
+	/** 命令异步加载/动作失败时的提示回调(页面映射为自己的错误条)。 */
+	onCommandError?: (message: string) => void;
+}
+
+/** 命令面板内部状态。 */
+interface SlashMenuState {
+	seq: number;
+	query: SlashQuery;
+	command: SlashCommand;
+	items: SlashSuggestion[];
+	index: number;
+	loading: boolean;
+	notice: string | null;
 }
 
 /** 输入框暴露的命令句柄:供外部按钮触发同一发送路径(如编剧「选中文本自动填入」)。 */
@@ -35,11 +60,24 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 		onAbort,
 		placeholder = "向 pi 发一句话(Ctrl+Enter 发送,Enter 换行,流式中可插话)",
 		ariaLabel = "消息输入",
+		commands,
+		context,
+		onCommandError,
 	},
 	ref,
 ) {
 	const [text, setText] = useState("");
+	const [menu, setMenu] = useState<SlashMenuState | null>(null);
 	const taRef = useRef<HTMLTextAreaElement>(null);
+	/** 最新 props(命令/上下文)经 ref 读取,搜索回调无需随每次渲染重挂。 */
+	const commandsRef = useRef(commands);
+	commandsRef.current = commands;
+	const contextRef = useRef(context);
+	contextRef.current = context;
+	const onCommandErrorRef = useRef(onCommandError);
+	onCommandErrorRef.current = onCommandError;
+	/** 搜索请求代数:慢响应不得覆盖新查询结果。 */
+	const menuSeqRef = useRef(0);
 
 	// textarea 自动增高(受 MAX_HEIGHT 约束)。
 	// 注意:双常驻标签(伙伴栏对话/批注)下,隐藏标签内的输入条在 display:none 容器中
@@ -59,7 +97,98 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 		return () => ro.disconnect();
 	}, [text]);
 
+	/** action 命令的固定候选项(只有一个,展示附加要求)。 */
+	function actionSuggestion(command: SlashCommand, term: string): SlashSuggestion {
+		return {
+			id: `action:${command.trigger}`,
+			label: `/${command.trigger}`,
+			hint: command.hint,
+			meta: term.length > 0 ? `附加要求:${term}` : undefined,
+		};
+	}
+
+	/** 按当前文本与光标重建/关闭命令面板。 */
+	function refreshMenu(ta: HTMLTextAreaElement) {
+		const q = parseSlashQuery(ta.value, ta.selectionStart ?? ta.value.length);
+		if (!q) {
+			setMenu(null);
+			return;
+		}
+		const command = (commandsRef.current ?? []).find((c) => slashCommandMatches(c, q.trigger));
+		if (!command) {
+			setMenu(null);
+			return;
+		}
+		const seq = ++menuSeqRef.current;
+		// action 命令(有 run、无 search)不需要远程搜索,直接给一条固定候选
+		if (command.run && !command.search) {
+			setMenu({ seq, query: q, command, items: [actionSuggestion(command, q.term)], index: 0, loading: false, notice: null });
+			return;
+		}
+		setMenu({ seq, query: q, command, items: [], index: 0, loading: true, notice: null });
+		const ctx = contextRef.current;
+		void (async () => {
+			try {
+				const items = (await command.search?.(q.term, ctx ?? ({} as SlashContext))) ?? [];
+				if (seq !== menuSeqRef.current) return;
+				setMenu((prev) => (prev && prev.seq === seq ? { ...prev, items, loading: false, index: 0 } : prev));
+			} catch (err) {
+				if (seq !== menuSeqRef.current) return;
+				setMenu((prev) =>
+					prev && prev.seq === seq
+						? { ...prev, loading: false, items: [], notice: err instanceof Error ? err.message : String(err) }
+						: prev,
+				);
+			}
+		})();
+	}
+
+	/** 把 [start, end) 替换为 insertion,并把光标放到插入文本之后。 */
+	function insertRange(start: number, end: number, insertion: string) {
+		const ta = taRef.current;
+		if (!ta) {
+			setText((prev) => prev.slice(0, start) + insertion + prev.slice(end));
+			return;
+		}
+		const next = ta.value.slice(0, start) + insertion + ta.value.slice(end);
+		setText(next);
+		requestAnimationFrame(() => {
+			const t = taRef.current;
+			if (!t) return;
+			t.focus();
+			const pos = start + insertion.length;
+			t.setSelectionRange(pos, pos);
+		});
+	}
+
+	/** 移除查询区间(供 action 命令:执行后不留 `/compact` 原文)。 */
+	function removeRange(start: number, end: number) {
+		insertRange(start, end, "");
+	}
+
+	/** 选中菜单候选项:插入文本 / 异步读取后插入 / 执行动作。 */
+	async function pick(item: SlashSuggestion | undefined, m: SlashMenuState) {
+		if (!item) return;
+		setMenu({ ...m, loading: true, notice: m.command.run ? "正在执行…" : item.loadText ? "正在读取原文…" : null, items: m.items });
+		try {
+			if (m.command.run && item.insertText === undefined && item.loadText === undefined) {
+				await m.command.run(m.query.term, contextRef.current ?? ({} as SlashContext));
+				removeRange(m.query.start, m.query.end);
+			} else if (item.loadText) {
+				const insertion = await item.loadText(contextRef.current ?? ({} as SlashContext));
+				insertRange(m.query.start, m.query.end, insertion);
+			} else if (item.insertText !== undefined) {
+				insertRange(m.query.start, m.query.end, item.insertText);
+			}
+			setMenu(null);
+		} catch (err) {
+			setMenu(null);
+			onCommandErrorRef.current?.(err instanceof Error ? err.message : String(err));
+		}
+	}
+
 	function send() {
+		setMenu(null);
 		const t = text.trim();
 		if (t.length === 0) return;
 		setText("");
@@ -84,6 +213,29 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 	}));
 
 	function handleKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+		if (menu) {
+			// 命令面板打开时:方向键/回车/Tab 作用于面板,不发送;Esc 关闭
+			if (e.key === "ArrowDown" && menu.items.length > 0) {
+				e.preventDefault();
+				setMenu({ ...menu, index: (menu.index + 1) % menu.items.length });
+				return;
+			}
+			if (e.key === "ArrowUp" && menu.items.length > 0) {
+				e.preventDefault();
+				setMenu({ ...menu, index: (menu.index - 1 + menu.items.length) % menu.items.length });
+				return;
+			}
+			if (e.key === "Escape") {
+				e.preventDefault();
+				setMenu(null);
+				return;
+			}
+			if ((e.key === "Enter" || e.key === "Tab") && !e.ctrlKey && !e.metaKey && menu.items.length > 0) {
+				e.preventDefault();
+				void pick(menu.items[menu.index], menu);
+				return;
+			}
+		}
 		if (e.ctrlKey && e.key === "Enter") {
 			e.preventDefault();
 			send();
@@ -92,6 +244,38 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 
 	return (
 		<div className="inputbar">
+			{menu && (
+				<div className="slash-menu" role="listbox" aria-label={`/${menu.command.trigger} 命令候选项`}>
+					<div className="slash-menu-head">
+						<span className="slash-menu-command">/{menu.command.trigger}</span>
+						<span className="slash-menu-hint">{menu.command.hint}</span>
+					</div>
+					{menu.loading && menu.items.length === 0 ? (
+						<div className="slash-item muted">正在查找…</div>
+					) : menu.items.length === 0 ? (
+						<div className="slash-item muted">{menu.notice ?? "没有匹配项"}</div>
+					) : (
+						menu.items.map((item, i) => (
+							<button
+								key={item.id}
+								type="button"
+								role="option"
+								aria-selected={i === menu.index}
+								className={i === menu.index ? "slash-item active" : "slash-item"}
+								// 保持 textarea 焦点,click 才能先于 blur 触发
+								onMouseDown={(e) => e.preventDefault()}
+								onMouseEnter={() => menu.index !== i && setMenu({ ...menu, index: i })}
+								onClick={() => void pick(item, menu)}
+							>
+								<span className="slash-item-label">{item.label}</span>
+								{item.hint && <span className="slash-item-hint">{item.hint}</span>}
+								{item.meta && <span className="slash-item-meta">{item.meta}</span>}
+							</button>
+						))
+					)}
+					{menu.loading && menu.items.length > 0 && menu.notice && <div className="slash-menu-note">{menu.notice}</div>}
+				</div>
+			)}
 			<div className="inputbar-inner">
 				<textarea
 					ref={taRef}
@@ -99,8 +283,13 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 					value={text}
 					placeholder={placeholder}
 					aria-label={ariaLabel}
-					onChange={(e) => setText(e.target.value)}
+					onChange={(e) => {
+						setText(e.target.value);
+						refreshMenu(e.target);
+					}}
 					onKeyDown={handleKey}
+					onKeyUp={(e) => refreshMenu(e.currentTarget)}
+					onClick={(e) => refreshMenu(e.currentTarget)}
 				/>
 				{streaming ? (
 					<button className="btn-abort" aria-label="停止生成" onClick={onAbort}>

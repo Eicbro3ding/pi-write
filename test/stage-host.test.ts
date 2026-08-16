@@ -78,6 +78,13 @@ class FakeOrchestrator {
 		this.calls.push("cut");
 		return "已收幕";
 	}
+	getDirectorUsage(): null {
+		return null;
+	}
+	async directorCompact(): Promise<string> {
+		this.calls.push("compact");
+		return "上下文已压缩";
+	}
 	getDirectorMode(): "discussion" {
 		return "discussion";
 	}
@@ -162,6 +169,18 @@ describe("StageHost 命令分发", () => {
 		expect(orchs[0].calls).toContain("cut");
 	});
 
+	it("compact 长命令：转发附加要求并经 done 回报", async () => {
+		const events: { slug: string; event: unknown }[] = [];
+		const { host, orchs } = makeHost(events);
+		expect(await host.command("b1", "compact", { instructions: "保留冲突" })).toEqual({ text: "", async: true });
+		await vi.waitFor(() => expect(events.filter((e) => e.event.type === "done")).toHaveLength(1));
+		expect(events[0]).toEqual({
+			slug: "b1",
+			event: { type: "done", slug: "b1", chapterFile: null, cmd: "compact", ok: true, text: "上下文已压缩" },
+		});
+		expect(orchs[0].calls).toContain("compact");
+	});
+
 	it("长命令异常：done 事件带 ok:false，不抛到调用方", async () => {
 		const events: { slug: string; event: unknown }[] = [];
 		const { host, orchs } = makeHost(events);
@@ -221,6 +240,7 @@ describe("StageHost 快照", () => {
 		expect(snap).toMatchObject({ slug: "b1", sceneId: null, phase: "idle", mode: "discussion", script: null, pendingScript: null });
 		expect(snap.transcript).toEqual([]);
 		expect(snap.counts).toEqual({ lines: 0, perActor: {}, perCharacter: {}, cnChars: 0, turn: 0 });
+		expect(snap.directorUsage).toBeNull();
 	});
 
 	it("有编排器：含场景/剧本/编制/转录/计数/导演最后回复", async () => {

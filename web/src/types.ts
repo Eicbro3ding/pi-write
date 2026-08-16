@@ -153,6 +153,15 @@ export interface ToolCallInfo {
 	isError: boolean;
 }
 
+/** 上下文占用(vendor AgentSession.getContextUsage 投影)。 */
+export interface ContextUsageDto {
+	/** 估算 token 数;压缩后尚无新的模型响应时为 null。 */
+	tokens: number | null;
+	contextWindow: number;
+	/** 占用百分比(0-100);tokens 为 null 时也为 null。 */
+	percent: number | null;
+}
+
 /** 会话视图状态(由 SSE 事件 reducer 纯函数维护)。 */
 export interface SessionViewState {
 	messages: ChatMessage[];
@@ -221,13 +230,15 @@ export type AgentEventDto =
 	// 前端必须按 slug+chapterFile 过滤,否则切章后其他章节编剧的流式会串进本页(2026-08-13)。
 	| { type: "writer_event"; slug: string; chapterFile: string | null; event: WriterSessionEventDto };
 
-/** 常驻编剧会话事件(主会话事件的子集,全部可被 processAgentEvent 处理)。 */
+/** 常驻编剧/导演会话事件(主会话事件的子集,全部可被 processAgentEvent 处理)。 */
 export type WriterSessionEventDto =
 	| Extract<AgentEventDto, { type: "message_start" }>
 	| Extract<AgentEventDto, { type: "message_update" }>
 	| Extract<AgentEventDto, { type: "message_end" }>
 	| Extract<AgentEventDto, { type: "tool_execution_start" }>
 	| Extract<AgentEventDto, { type: "tool_execution_end" }>
+	| Extract<AgentEventDto, { type: "compaction_start" }>
+	| Extract<AgentEventDto, { type: "compaction_end" }>
 	| Extract<AgentEventDto, { type: "agent_settled" }>
 	| Extract<AgentEventDto, { type: "chat_error" }>;
 
@@ -349,6 +360,8 @@ export interface StageSnapshotDto {
 	directorChat: Array<{ role: "user" | "assistant"; text: string; thinking?: string }>;
 	/** 角色名 → 世界书条目头像文件(无头像角色前端走首字+角色色兜底)。 */
 	avatars: Record<string, string>;
+	/** 导演会话上下文占用(供「建议 /compact」提示;无活跃会话/未知时为 null)。 */
+	directorUsage: ContextUsageDto | null;
 	/** 剧本确认门(2026-08-11):导演已提交待确认的剧本;null = 无待确认。
 	 *  confirmed: false 待确认 / true 已确认待开演(短暂态,导演 stage_script 后清空)。 */
 	pendingScript: { sceneId: string; script: StageScriptDto; confirmed: boolean } | null;

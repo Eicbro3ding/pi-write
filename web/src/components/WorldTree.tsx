@@ -1,15 +1,7 @@
 import type { WorldEntryDto } from "../types.ts";
-
-/** 条目类型;顺序即左侧分组展示顺序。 */
-export const ENTRY_TYPES: ReadonlyArray<WorldEntryDto["type"]> = ["character", "world", "timeline", "outline"];
-
-/** 条目类型 → 显示名。 */
-export const ENTRY_TYPE_LABELS: Record<WorldEntryDto["type"], string> = {
-	character: "人物",
-	world: "世界",
-	timeline: "时间线",
-	outline: "大纲",
-};
+// 条目类型与标签是命令面板/世界书页/关系图共用的唯一真相源(2026-08 收敛到 world-entry.ts)
+import { ENTRY_TYPES, ENTRY_TYPE_LABELS } from "../world-entry.ts";
+export { ENTRY_TYPES, ENTRY_TYPE_LABELS };
 
 interface WorldTreeProps {
 	/** null 表示尚未加载成功(树区留白,错误文案由页面呈现)。 */

@@ -1269,3 +1269,65 @@ describe("书管理", () => {
 		expect(await empty.json()).toMatchObject({ error: { code: "bad_request" } });
 	});
 });
+
+describe("WriterServer · 编剧上下文与插件路由预留", () => {
+	let server: WriterServer;
+	let base = "";
+
+	beforeAll(async () => {
+		const fake = fakeHost();
+		const writer = {
+			setEventSink: () => {},
+			disposeAll: async () => {},
+			contextUsage: async (slug: string, chapterFile?: string | null) =>
+				slug === "fog-harbor" ? { tokens: 1600, contextWindow: 2000, percent: 80 } : null,
+			compact: async (slug: string, chapterFile?: string | null, instructions?: string) => {
+				if (slug === "fail") throw new Error("Nothing to compact (session too small)");
+				return { summary: "摘要", tokensBefore: 1600, estimatedTokensAfter: 600, instructions };
+			},
+		};
+		server = new WriterServer({
+			host: "127.0.0.1",
+			port: 0,
+			sessionHost: fake.host,
+			webDistDir: join(tmp, "no-such-dist"),
+			writerHost: writer as never,
+			extraRoutes: [
+				{ method: "GET", segments: ["plugin-ping"], handler: async (ctx) => {
+					ctx.res.writeHead(200, { "content-type": "application/json" });
+					ctx.res.end(JSON.stringify({ pong: true }));
+				} },
+			],
+		});
+		const { port } = await server.start();
+		base = `http://127.0.0.1:${port}`;
+	});
+
+	afterAll(async () => {
+		await server.stop();
+	});
+
+	it("GET /api/writer/:slug/context 返回占用快照", async () => {
+		const res = await fetch(`${base}/api/writer/fog-harbor/context?chapterFile=${encodeURIComponent("ch01.jsonl")}`);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ usage: { tokens: 1600, contextWindow: 2000, percent: 80 } });
+	});
+	it("POST /api/writer/:slug/compact 返回压缩结果", async () => {
+		const res = await fetch(`${base}/api/writer/fog-harbor/compact`, {
+			method: "POST",
+			headers: json,
+			body: JSON.stringify({ chapterFile: "ch01.jsonl", instructions: "保留冲突" }),
+		});
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({ ok: true, summary: "摘要", tokensBefore: 1600, estimatedTokensAfter: 600 });
+	});
+	it("压缩业务失败映射 400", async () => {
+		const res = await fetch(`${base}/api/writer/fail/compact`, { method: "POST", headers: json, body: JSON.stringify({}) });
+		expect(res.status).toBe(400);
+	});
+	it("extraRoutes 插件路由被追加到内置路由表", async () => {
+		const res = await fetch(`${base}/api/plugin-ping`);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ pong: true });
+	});
+});

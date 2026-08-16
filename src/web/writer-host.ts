@@ -23,7 +23,11 @@ import { getBookSessionsDir, initChapterFile } from "../book-manager.ts";
 import { getAgentDir, getBookDir, resolveSkillsDir } from "../config.ts";
 import { createSessionRuntimeFactory } from "../session-factory.ts";
 import { chatTextOfMessage } from "../session-text.ts";
-import { extractMessagesFromManager } from "./session-host.ts";
+import {
+	extractMessagesFromManager,
+	type SessionCompactionResult,
+	type SessionContextUsage,
+} from "./session-host.ts";
 import type { AgentMessage, ThinkingLevel } from "../../vendor/pi-agent-core/src/index.ts";
 import type { ToolDefinition } from "../../vendor/pi-coding-agent/src/index.ts";
 import {
@@ -275,6 +279,20 @@ export class WriterHost {
 			isStreaming: st.isStreaming,
 			messages: st.messages,
 		};
+	}
+
+	/** 编剧会话上下文占用(纯读,不创建会话;无活跃会话返回 null)。 */
+	async contextUsage(slug: string, chapterFile?: string | null): Promise<SessionContextUsage | null> {
+		const file = chapterFile ?? this.currentChapter.get(slug) ?? null;
+		const host = this.hosts.get(WriterHost.key(slug, file));
+		return host?.getContextUsage() ?? null;
+	}
+
+	/** 手动压缩编剧会话上下文(惰性建会话后执行;失败抛出由 server 映射为错误体)。 */
+	async compact(slug: string, chapterFile?: string | null, instructions?: string): Promise<SessionCompactionResult> {
+		const file = chapterFile ?? this.currentChapter.get(slug) ?? null;
+		const host = await this.getOrCreate(slug, file);
+		return await host.compact(instructions);
 	}
 
 	/** 发消息给编剧(惰性建会话;失败抛出,由 server 广播 chat_error)。

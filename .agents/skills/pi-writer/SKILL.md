@@ -14,8 +14,9 @@ description: pi-writer 写作 agent 项目(独立仓库, vendor 化 pi 核心包
 | `src/cli.ts` | CLI 入口:TUI/print/web/stage 分支、HELP、Electron 拉起 |
 | `src/web.ts` | web 子命令装配:parseWebArgs/startWebServer,web 工具子集(MCP 注入) |
 | `src/session-factory.ts` | **会话装配唯一入口**:`createSessionRuntimeFactory` 统一 cli/web/stage 三处的 createRuntime 样板(路径基准注入、工具守卫、隐藏 skill 命令、模型解析、工具集);新增装配点必须用它,禁止再复制样板 |
-| `src/web/server.ts` | `WriterServer`:Node 原生 http,**路由表驱动**(method + 路径段模式,40 个 REST 端点按域分组为独立 handler)+ SSE 广播 + watcher 集成;multipart 用 busboy |
-| `src/web/session-host.ts` | `SessionHost`:agent 会话 headless 封装(事件扇出、prompt/abort/switchSession、getState、撤回/分支/导航/树) |
+| `src/web/server.ts` | `WriterServer`:Node 原生 http,**路由表驱动**(method + 路径段模式,40+ REST 端点按域分组为独立 handler)+ SSE 广播 + watcher 集成;`extraRoutes` 插件路由缝;multipart 用 busboy |
+| `src/web/session-host.ts` | `SessionHost`:agent 会话 headless 封装(事件扇出、prompt/abort/switchSession、getState、撤回/分支/导航/树、getContextUsage/compact) |
+| `src/plugins.ts` | 插件预留类型:`PluginManifest`(后端 ExtensionFactory / 前端声明式斜杠命令) |
 | `src/web/file-watcher.ts` | `WorldWatcher`:world.json + draft/*.md 外部变更轮询(无缝同步核心) |
 | `src/web/stage-host.ts` | 舞台区 web 宿主(每书一个 StageOrchestrator 惰性创建,命令面 → SSE) |
 | `src/web/book-zip.ts` | 书 zip 导出/导入(yazl/yauzl,50MB/2000 条目/路径安全校验) |
@@ -43,7 +44,8 @@ description: pi-writer 写作 agent 项目(独立仓库, vendor 化 pi 核心包
 - **状态机**:WritePage 的 `view`("draft"/"conversation"/"annotations" 互斥)→ `rightTab: CompanionTab`("chat"/"annotations");WorkspaceTabs 组件为 2 标签。
 - **主题**:三套(night 深夜书房暗默认 / paper 纸上书房亮 / parchment 羊皮灯下暖),26 色 token(`THEME_TOKENS`);默认主题颜色收敛进 styles.css `:root`,非默认经 `[data-theme]` 覆盖块(测试强制键集一致);`theme.ts` 的 `sanitizeTheme` 合法值透传。
 - **预览卡片**:`preview.ts` 的 `PreviewCardItem { id, anchorId, data }`——稳定 `id`(项目 `newId`)定位更新,不依赖数组下标;anchorId 缺省 `pending:<kind>` 占位,消息 entryId 到手后按 id 稳定化;**持久化在服务端**(`GET/PUT /api/cards`,文件 `sessions/<slug>/<id>.cards.json`),开书时异步预读(恢复完成前禁止持久化写入,防空数组覆盖)。
-- **组件要点**:ChapterSidebar(collapsed/onToggleCollapse)、DraftWorkspace(headerless + `.d-error` CSS 类)、AnnotationPanel(embedded 内嵌模式禁自身抽屉)、InputBar(ResizeObserver 重算 textarea 高度)、MessageList(空态条件含卡片存在性,key 用 card.id)、世界书列表/关系图双视图滑动切换(双常驻叠放 + active/leaving 动画)。
+- **组件要点**:ChapterSidebar(collapsed/onToggleCollapse)、DraftWorkspace(headerless + `.d-error` CSS 类)、AnnotationPanel(embedded 内嵌模式禁自身抽屉)、InputBar(ResizeObserver 重算 textarea 高度 + `/` 命令面板,commands/context 由页面注入)、MessageList(空态条件含卡片存在性,key 用 card.id;`compacting` 显示「正在压缩上下文」)、世界书列表/关系图双视图滑动切换(双常驻叠放 + active/leaving 动画)。
+- **`/` 命令**:`web/src/slash-commands.ts` 是唯一注册表;内置 `/node`(world.json 节点原文)、`/chapter`(某章草稿原文)、`/compact`(手动压缩上下文)。这是前端插件预留缝,新命令只加定义、不改 InputBar/页面装配。`web/src/context-usage.ts` 在占用 ≥80% 时给出提示。
 
 ## 关键数据流
 
@@ -63,6 +65,9 @@ description: pi-writer 写作 agent 项目(独立仓库, vendor 化 pi 核心包
 - **会话重建**:`SessionHost.reloadRuntime()`(MCP 配置变更后;**保留 prevLeafId 恢复分支**)
 - **预览卡片**:`preview.ts` 纯逻辑(classifyToolCall/buildDraftDiff/buildWorldDiff)+ WritePage `upsertPreviewCard`(稳定 id 定位,`turnDraftCardRef`/`turnWorldCardRef` 存 string id)+ `handledToolEndRef`(toolCallId 去重防 SSE 重放)→ `GET|PUT /api/cards`(server.ts,书/章节校验 + 路径防穿越,空数组删文件)
 - **主题**:`themes.ts`(THEMES/THEME_TOKENS/sanitizeTheme)+ `theme.ts`(data-theme 应用)+ styles.css `:root` 与 `[data-theme]` 覆盖块;测试 `test/themes.test.ts`(键集一致)+ `test/contrast.test.ts`(WCAG 对比度,--faint ≥4:1,亮色 fs-btn-primary 加深 ≥4.5:1)
+- **斜杠命令**:`web/src/slash-commands.ts`(parseSlashQuery/SlashCommand/SlashSuggestion + node/chapter/compact 工厂)→ `InputBar.tsx`(commands/context props,↑/↓+Enter/Tab 选择)→ `WritePage`/`StagePage` 注册;测试 `test/slash-commands.test.ts`
+- **上下文压缩**:`SessionHost.getContextUsage/compact`(vendor getContextUsage/compact)→ writer 端点 `GET /api/writer/:slug/context` + `POST /api/writer/:slug/compact`;导演走 `stage command compact` + 快照 `directorUsage`;前端 compaction_start/end → MessageList 压缩提示 + context-usage 80% 提示
+- **插件预留**:`src/plugins.ts` 类型 + `WriterServerOptions.extraRoutes` + `broadcastEvent()`;后端执行式插件未来注入 `extensionFactories`,前端只接受声明式清单(不在 renderer 跑用户 JS)
 
 ## 约定(改代码前必读)
 

@@ -73,6 +73,12 @@ export interface WriterServerOptions {
 	stageHost?: StageHost;
 	/** 常驻编剧宿主(web.ts 装配);未配置时 /api/writer 端点保持 404(编辑 agent 未启用)。 */
 	writerHost?: WriterHost;
+	/**
+	 * 插件预留缝(2026-08):附加 HTTP 路由,在构造时追加到内置路由表之后。
+	 * 路由匹配规则见 Route 注释(静态段先于参数段);插件 handler 与内置 handler
+	 * 同等受鉴权、回环 Host 校验与统一错误体约束。
+	 */
+	extraRoutes?: Route[];
 }
 
 /** 静态文件 MIME 表(按扩展名);未列出的默认 text/plain;charset=utf-8。 */
@@ -330,14 +336,14 @@ function normalizeImportBookJson(raw: Buffer, slug: string): Buffer {
 // ---- 路由表 ----
 
 /** 路由条目:method + 路径段模式(":name" 为参数占位,匹配任意单段)。 */
-interface Route {
+export interface Route {
 	method: string;
 	segments: readonly string[];
 	handler: (ctx: RouteContext) => Promise<void>;
 }
 
 /** handler 上下文:请求/响应/URL 与路径参数段。 */
-interface RouteContext {
+export interface RouteContext {
 	req: IncomingMessage;
 	res: ServerResponse;
 	url: URL;
@@ -512,11 +518,15 @@ export class WriterServer {
 			{ method: "POST", segments: ["writer", ":slug", "retract"], handler: (ctx) => this.handlePostWriterRetract(ctx) },
 			{ method: "GET", segments: ["writer", ":slug", "tree"], handler: (ctx) => this.handleGetWriterTree(ctx) },
 			{ method: "POST", segments: ["writer", ":slug", "navigate"], handler: (ctx) => this.handlePostWriterNavigate(ctx) },
+			{ method: "GET", segments: ["writer", ":slug", "context"], handler: (ctx) => this.handleGetWriterContext(ctx) },
+			{ method: "POST", segments: ["writer", ":slug", "compact"], handler: (ctx) => this.handlePostWriterCompact(ctx) },
 			// themes(用户自定义主题资产文件)
 			{ method: "GET", segments: ["themes"], handler: (ctx) => this.handleGetThemes(ctx) },
 			{ method: "GET", segments: ["themes", ":file"], handler: (ctx) => this.handleGetThemeFile(ctx) },
 			{ method: "PUT", segments: ["themes", ":file"], handler: (ctx) => this.handlePutThemeFile(ctx) },
 			{ method: "DELETE", segments: ["themes", ":file"], handler: (ctx) => this.handleDeleteThemeFile(ctx) },
+			// 插件路由预留(构造参数;追加在内置路由之后)
+			...(this.options.extraRoutes ?? []),
 		];
 	}
 
@@ -576,6 +586,11 @@ export class WriterServer {
 	private broadcast(event: unknown): void {
 		const frame = `data: ${JSON.stringify(event)}\n\n`;
 		for (const client of this.sseClients) this.writeSse(client, frame);
+	}
+
+	/** 插件预留缝:向所有 SSE 客户端广播自定义事件(前端按未知事件忽略,不会破坏既有 reducer)。 */
+	broadcastEvent(event: unknown): void {
+		this.broadcast(event);
 	}
 
 	/**
@@ -1574,6 +1589,39 @@ export class WriterServer {
 		}
 		this.broadcast({ type: "messages_retracted" });
 		this.send(ctx.res, 200, { ok: true });
+	}
+
+	/**
+	 * GET /api/writer/:slug/context?chapterFile=:编剧会话上下文占用(纯读;
+	 * 无活跃会话/压缩后尚无新的模型响应时 usage 为 null)。
+	 */
+	private async handleGetWriterContext(ctx: RouteContext): Promise<void> {
+		const writer = this.options.writerHost;
+		if (!writer) throw new HttpError(404, "not_found", "常驻编剧未启用");
+		const chapterFile = ctx.url.searchParams.get("chapterFile");
+		const usage = await writer.contextUsage(ctx.params.slug!, chapterFile);
+		this.send(ctx.res, 200, { usage });
+	}
+
+	/**
+	 * POST /api/writer/:slug/compact {chapterFile?, instructions?}:手动压缩编剧会话
+	 * 上下文。压缩是模型总结回合(可能耗时 1-10 分钟),compaction_start/end 经
+	 * writer_event SSE 驱动前端「正在压缩上下文」提示;本端点等压缩完成才响应。
+	 */
+	private async handlePostWriterCompact(ctx: RouteContext): Promise<void> {
+		const writer = this.options.writerHost;
+		if (!writer) throw new HttpError(404, "not_found", "常驻编剧未启用");
+		const body = await readJsonBody(ctx.req);
+		const args = body as Record<string, unknown>;
+		const chapterFile = args.chapterFile === undefined ? undefined : requireString(body, "chapterFile");
+		const instructions = optionalString(body, "instructions");
+		try {
+			const result = await writer.compact(ctx.params.slug!, chapterFile, instructions);
+			this.send(ctx.res, 200, { ok: true, ...result });
+		} catch (err) {
+			// "Nothing to compact"/模型未配置等业务性失败映射 400,避免 500
+			throw new HttpError(400, "bad_request", err instanceof Error ? err.message : String(err));
+		}
 	}
 
 	// ---- themes 路由(用户自定义主题资产文件) ----

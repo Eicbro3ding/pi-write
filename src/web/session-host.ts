@@ -50,6 +50,20 @@ export interface SessionStateSnapshot {
 	diagnostics: Array<{ type: "error" | "warning" | "info"; message: string }>;
 }
 
+/** 会话上下文占用(与 vendor AgentSession.getContextUsage 对齐;前端 /compact 提示用)。 */
+export interface SessionContextUsage {
+	tokens: number | null;
+	contextWindow: number;
+	percent: number | null;
+}
+
+/** 手动压缩返回摘要(与 vendor CompactionResult 对齐)。 */
+export interface SessionCompactionResult {
+	summary: string;
+	tokensBefore: number;
+	estimatedTokensAfter?: number;
+}
+
 export class SessionHost {
 	private runtime: AgentSessionRuntime | undefined;
 	private unsubscribeSession: (() => void) | undefined;
@@ -207,6 +221,30 @@ export class SessionHost {
 	}
 	async abort(): Promise<void> {
 		await this.requireRuntime().session.abort();
+	}
+
+	/** 上下文占用快照(纯读;runtime 未启动时 null)。 */
+	getContextUsage(): SessionContextUsage | null {
+		const rt = this.runtime;
+		if (!rt) return null;
+		const usage = rt.session.getContextUsage();
+		return usage ? { tokens: usage.tokens, contextWindow: usage.contextWindow, percent: usage.percent } : null;
+	}
+
+	/**
+	 * 手动压缩当前会话上下文。vendor compact() 会先 abort 当前流式回合,
+	 * 然后调用模型生成摘要并 append 到会话;compaction_start/end 事件经本类
+	 * 的事件扇出走到 SSE(前端显示「正在压缩上下文」)。
+	 */
+	async compact(customInstructions?: string): Promise<SessionCompactionResult> {
+		const result = await this.runInToolGuardContext(() =>
+			this.requireRuntime().session.compact(customInstructions),
+		);
+		return {
+			summary: result.summary,
+			tokensBefore: result.tokensBefore,
+			...(result.estimatedTokensAfter !== undefined ? { estimatedTokensAfter: result.estimatedTokensAfter } : {}),
+		};
 	}
 	/**
 	 * 仅切换运行时会话;book.json 的 currentChapterFile 由服务端路由层维护。

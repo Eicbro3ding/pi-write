@@ -16,6 +16,12 @@ function makeFakeRuntime(modelRuntime: Record<string, unknown> = {}) {
 		setModel: vi.fn(async () => {}),
 		setThinkingLevel: vi.fn(() => {}),
 		sendCustomMessage: vi.fn(async () => {}),
+		getContextUsage: vi.fn(() => ({ tokens: 1200, contextWindow: 2000, percent: 60 })),
+		compact: vi.fn(async () => ({
+			summary: "已压缩",
+			tokensBefore: 1000,
+			estimatedTokensAfter: 400,
+		})),
 		isStreaming: false,
 	};
 	return {
@@ -77,6 +83,23 @@ describe("SessionHost", () => {
 			{ customType: "world-context", content: [{ type: "text", text: "背景包文本" }], display: true },
 			{ deliverAs: "nextTurn" },
 		);
+	});
+	it("getContextUsage 转发 vendor 上下文占用", async () => {
+		const fake = makeFakeRuntime();
+		const host = makeHost(fake);
+		await host.start();
+		expect(host.getContextUsage()).toEqual({ tokens: 1200, contextWindow: 2000, percent: 60 });
+	});
+	it("compact 转发 vendor compact 并裁剪返回字段", async () => {
+		const fake = makeFakeRuntime();
+		const host = makeHost(fake);
+		await host.start();
+		await expect(host.compact("保留冲突")).resolves.toEqual({
+			summary: "已压缩",
+			tokensBefore: 1000,
+			estimatedTokensAfter: 400,
+		});
+		expect(fake.session.compact).toHaveBeenCalledWith("保留冲突");
 	});
 	it("switchSession 转发绝对路径", async () => {
 		const fake = makeFakeRuntime();

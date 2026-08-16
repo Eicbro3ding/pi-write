@@ -15,6 +15,8 @@ interface FakeHostLike {
 	sendMessage: ReturnType<typeof vi.fn>;
 	abort: ReturnType<typeof vi.fn>;
 	getState(): { isStreaming: boolean; messages: Array<{ role: string; text: string }> };
+	getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | null;
+	compact: ReturnType<typeof vi.fn>;
 	dispose: ReturnType<typeof vi.fn>;
 }
 
@@ -29,6 +31,8 @@ function makeFakeHost(): FakeHostLike & { listeners: Set<(e: unknown) => void> }
 		sendMessage: vi.fn(async () => {}),
 		abort: vi.fn(async () => {}),
 		getState: () => ({ isStreaming: false, messages: [{ role: "assistant", text: "嗨" }] }),
+		getContextUsage: () => ({ tokens: 800, contextWindow: 4000, percent: 20 }),
+		compact: vi.fn(async () => ({ summary: "已压缩", tokensBefore: 800, estimatedTokensAfter: 300 })),
 		dispose: vi.fn(async () => {}),
 	};
 }
@@ -40,6 +44,23 @@ describe("WriterHost", () => {
 		const st = await host.state("fog-harbor");
 		expect(st).toEqual({ bookSlug: "fog-harbor", chapterFile: null, exists: false, isStreaming: false, messages: [] });
 		expect(createHost).not.toHaveBeenCalled();
+	});
+	it("contextUsage 纯读:无会话 null,有会话转发占用", async () => {
+		const fake = makeFakeHost();
+		const host = new WriterHost({ createHost: async () => fake as never });
+		expect(await host.contextUsage("fog-harbor")).toBeNull();
+		await host.chat("fog-harbor", "hi", "ch01.jsonl");
+		expect(await host.contextUsage("fog-harbor", "ch01.jsonl")).toEqual({ tokens: 800, contextWindow: 4000, percent: 20 });
+	});
+	it("compact 惰性建会话并转发附加要求", async () => {
+		const fake = makeFakeHost();
+		const host = new WriterHost({ createHost: async () => fake as never });
+		await expect(host.compact("fog-harbor", "ch01.jsonl", "保留冲突")).resolves.toEqual({
+			summary: "已压缩",
+			tokensBefore: 800,
+			estimatedTokensAfter: 300,
+		});
+		expect(fake.compact).toHaveBeenCalledWith("保留冲突");
 	});
 	it("chat 惰性创建会话、转发消息、事件经 eventSink 流出", async () => {
 		const fake = makeFakeHost();

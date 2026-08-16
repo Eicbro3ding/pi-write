@@ -11,9 +11,10 @@
 | `src/config.ts` | 路径解析(getWriterDir / getBooksDir)、slugify(保留 CJK)、`resolveSkillsDir` 三态探测、`VERSION` |
 | `src/web.ts` | web 子命令装配:`parseWebArgs` / `startWebServer` |
 | `src/web/server.ts` | `WriterServer`:Node 原生 http,**路由表驱动**(method + 路径段模式)+ SSE 事件流 + 静态服务;`/api/world` 支持按 `slug` 读写 |
-| `src/web/session-host.ts` | `SessionHost`:agent 会话 headless 封装(事件扇出、prompt/abort、撤回/分支/导航/树;工具路径守卫用 AsyncLocalStorage 按会话隔离;删除当前书后支持空态并按需重建) |
-| `src/web/writer-host.ts` | 常驻编剧会话(每书每章一个;收幕成文与编辑页「编剧」标签同一份记忆) |
-| `src/web/stage-host.ts` | 舞台区 web 宿主(每书每章一个编排器,惰性创建) |
+| `src/web/session-host.ts` | `SessionHost`:agent 会话 headless 封装(事件扇出、prompt/abort、撤回/分支/导航/树、上下文占用与手动压缩;工具路径守卫用 AsyncLocalStorage 按会话隔离;删除当前书后支持空态并按需重建) |
+| `src/web/writer-host.ts` | 常驻编剧会话(每书每章一个;收幕成文与编辑页「编剧」标签同一份记忆;`/api/writer/:slug/context|compact`) |
+| `src/web/stage-host.ts` | 舞台区 web 宿主(每书每章一个编排器,惰性创建;快照带导演上下文占用,`compact` 舞台命令) |
+| `src/plugins.ts` | 插件系统预留类型:前端声明式斜杠命令 + 后端 ExtensionFactory / HTTP 路由缝 |
 | `src/web/file-watcher.ts` | `WorldWatcher`:world.json / draft 外部变更轮询(无缝同步) |
 | `src/book-manager.ts` | book / chapter 文件系统层 |
 | `src/world-data.ts` | `world.json` 唯一真相源:校验 / 规范化 / 原子写 / md 视图导出;`WORLD_FILES` 文件布局表 |
@@ -94,6 +95,22 @@ agent 会话事件(pi vendor AgentSessionEvent)
 
 舞台对话与编剧 / 主会话同款归约(2026-08-11 统一重构):导演回复经 `stage_director_event`(内层主会话同款事件)→ `processAgentEvent` + MessageList;舞台流(feed,`StageFeedItem`)只剩舞台条目与系统行,不再含对话气泡。
 
+### 7.1 `/` 命令(前端插件预留缝)
+
+`web/src/slash-commands.ts` 是命令注册表;`InputBar` 接受 `commands + context`,输入 `/` 弹出候选面板(`↑/↓` + `Enter/Tab` 选择,`Esc` 关闭),页面按场景注册内置命令:
+
+- `/node <搜索>`:读 `world.json`(与世界书页树同源)注入某个世界树节点的完整 body;
+- `/chapter <搜索>`:章节列表来自 `bookDetail.chapters`,选中后按需 `GET /api/draft` 注入某一章原文;
+- `/compact [附加要求]`:调用后端手动压缩当前会话上下文。
+
+命令是前端声明 + 受信任执行器,渲染进程不执行用户任意 JS。未来用户插件先以 `src/plugins.ts` 的 `PluginManifest`(声明式 `slashCommands`)接入;后端插件使用 vendor `ExtensionAPI`(注入 `createSessionRuntimeFactory.extensionFactories`),HTTP 扩展用 `WriterServerOptions.extraRoutes` + `broadcastEvent()`。
+
+### 7.2 上下文占用与压缩
+
+- 后端:`SessionHost.getContextUsage()`(vendor `getContextUsage`)与 `SessionHost.compact()`(vendor `compact`,自动 abort 当前回合 → 模型总结 → append 压缩条目)。
+- 端点:`GET /api/writer/:slug/context`;`POST /api/writer/:slug/compact`;舞台侧走 `POST /api/stage/:slug/command { cmd: "compact" }`,快照携带 `directorUsage`。
+- 前端:`compaction_start/end` 经 writer/director 事件流到达,MessageList 显示「正在压缩上下文」;占用 ≥80% 时输入框上方提示「建议 /compact」(`web/src/context-usage.ts`)。
+
 ## 8. 关键机制索引
 
 | 机制 | 位置 |
@@ -105,3 +122,6 @@ agent 会话事件(pi vendor AgentSessionEvent)
 | 分支 / 撤回 / 导航 | `src/web/session-host.ts` |
 | 预览卡纯逻辑 | `web/src/preview.ts` |
 | 跨窗口同步 | `web/src/cross-window-sync.ts` |
+| `/` 命令注册表 | `web/src/slash-commands.ts`(InputBar 消费) |
+| 上下文占用提示 | `web/src/context-usage.ts`(阈值 80%) |
+| 手动压缩 | `src/web/session-host.ts` → vendor `AgentSession.compact` |

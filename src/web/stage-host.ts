@@ -10,6 +10,7 @@ import { StageOrchestrator, type StageEvent } from "../stage/orchestrator.ts";
 import type { CastConfig, DirectorMode, ScenePhase, SceneScript, ScriptPatch, StageEntry, StageStatus } from "../stage/types.ts";
 import type { ToolDefinition } from "../../vendor/pi-coding-agent/src/index.ts";
 import { ensureWorld } from "../world-data.ts";
+import type { SessionContextUsage } from "./session-host.ts";
 import type { WriterHost } from "./writer-host.ts";
 import type { AgentSessionEvent } from "../../vendor/pi-coding-agent/src/index.ts";
 
@@ -83,6 +84,8 @@ export interface StageSnapshot {
 	directorChat: Array<{ role: "user" | "assistant"; text: string; thinking?: string }>;
 	/** 角色名 → 世界书条目头像文件(world.json entries 中 avatar 非空者,按 title 匹配;前端无头像走首字兜底)。 */
 	avatars: Record<string, string>;
+	/** 导演会话上下文占用(供前端「建议 /compact」提示;无活跃会话/未知时为 null)。 */
+	directorUsage: SessionContextUsage | null;
 }
 
 /** 从世界书收集角色头像:仅取 avatar 非空的条目(title → avatar 文件引用)。 */
@@ -245,6 +248,7 @@ export class StageHost {
 				directorLast: chat.filter((m) => m.role === "assistant").at(-1)?.text,
 				directorChat: chat,
 				avatars: await collectAvatars(bookDir),
+				directorUsage: null,
 			};
 		}
 			const entries = orch.sceneId ? await readStage(bookDir, orch.sceneId) : [];
@@ -264,6 +268,7 @@ export class StageHost {
 				directorLast: orch.getDirectorLast(),
 				directorChat: orch.getDirectorChat(),
 				avatars: await collectAvatars(bookDir),
+				directorUsage: orch.getDirectorUsage(),
 			};
 		}
 
@@ -325,11 +330,18 @@ export class StageHost {
 			case "cut":
 				void this.runLong(slug, chapterFile ?? null, cmdName, async () => orch.userCut());
 				return { text: "", async: true };
+			case "compact": {
+				// 手动压缩导演会话上下文(模型总结回合):compaction_start/end 经
+				// director_event 驱动前端「正在压缩上下文」提示,完成经 done 回报。
+				const instructions = optionalString(args, "instructions");
+				void this.runLong(slug, chapterFile ?? null, cmdName, async () => orch.directorCompact(instructions));
+				return { text: "", async: true };
+			}
 			case "confirm_script":
 				// 用户确认剧本（前端卡片确认按钮）→ 置 confirmed + 提示导演开演；同步返回
 				return { text: await orch.confirmScript(), async: false };
 			default:
-				throw new StageCommandError(`未知命令：${cmdName}（next/auto/force/retry/revise/wrap/thoughts/mode/director/fix/cut/confirm_script）`);
+				throw new StageCommandError(`未知命令：${cmdName}（next/auto/force/retry/revise/wrap/thoughts/mode/director/fix/cut/compact/confirm_script）`);
 		}
 	}
 

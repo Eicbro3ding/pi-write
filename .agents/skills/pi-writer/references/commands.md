@@ -76,6 +76,16 @@ await fetch(B + "/api/draft", { method: "PUT", headers: { "content-type":"applic
 
 `/chapters` `/new-chapter` `/rename-chapter` `/rename-book` `/book` `/new-book` `/world` `/notice` `/storyline` `/constraints` `/relations` `/edit [path]` `/adopt-draft <file.md>`(共 13 个);技能经 `/skill:name`(outline/critique/revise/stage-scripting)。
 
+## Web 输入框 `/` 命令(2026-08 起)
+
+编辑页「编剧」与舞台页「导演」输入框共用 `web/src/slash-commands.ts` 注册表;输入 `/` 弹出面板,`↑/↓` + `Enter/Tab` 选择,`Esc` 关闭。
+
+- `/node <搜索>`:从 `world.json`(与世界书页树同源)注入某个世界树节点完整 body;
+- `/chapter <搜索>`:从 `bookDetail.chapters` 选章,选中后按需读草稿注入某一章原文;
+- `/compact [附加要求]`:手动压缩当前编剧/导演会话上下文(占用 ≥80% 时输入框上方有提示);压缩中 MessageList 显示「正在压缩上下文」。
+
+后端对应端点:`GET /api/writer/:slug/context`、`POST /api/writer/:slug/compact`;导演侧走 `POST /api/stage/:slug/command { cmd: "compact" }`。
+
 ## 环境变量
 
 | 变量 | 作用 |

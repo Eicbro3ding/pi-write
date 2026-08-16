@@ -5,7 +5,7 @@
  * 注意:本文件不得在 import 时触碰 DOM 专属 API(EventSource 只在 subscribeEvents 内使用),
  * 以兼容 node 环境的 vitest 单测。
  */
-import type { AgentEventDto, BookDetail, BookMeta, ChapterRef, McpServerInfo, McpServerStatus, ProviderInfo, SessionState, SessionTreeDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, WorldDataDto, WriterStateDto } from "../types.ts";
+import type { AgentEventDto, BookDetail, BookMeta, ChapterRef, ContextUsageDto, McpServerInfo, McpServerStatus, ProviderInfo, SessionState, SessionTreeDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, WorldDataDto, WriterStateDto } from "../types.ts";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
 
 /** 图片访问 URL(同源相对路径;生产/Electron 同源,vite dev 经代理)。 */
@@ -463,6 +463,36 @@ export class ApiClient {
 	/** 中止编剧当前生成。 */
 	async writerAbort(slug: string): Promise<void> {
 		await this.request<{ ok: boolean }>(`/api/writer/${encodeURIComponent(slug)}/abort`, { method: "POST" });
+	}
+
+	/** 编剧会话上下文占用(无会话/未知 → null;供「建议 /compact」提示)。 */
+	async writerContext(slug: string, chapterFile?: string | null): Promise<ContextUsageDto | null> {
+		const q = new URLSearchParams();
+		if (chapterFile) q.set("chapterFile", chapterFile);
+		const qs = q.toString();
+		const r = await this.request<{ usage: ContextUsageDto | null }>(
+			`/api/writer/${encodeURIComponent(slug)}/context${qs ? `?${qs}` : ""}`,
+		);
+		return r.usage;
+	}
+
+	/** 手动压缩编剧会话上下文(内部有模型总结回合,可耗时 1-10 分钟,用长超时)。 */
+	async writerCompact(
+		slug: string,
+		chapterFile?: string | null,
+		instructions?: string,
+	): Promise<{ summary: string; tokensBefore: number; estimatedTokensAfter?: number }> {
+		const res = await fetch(`${this.baseUrl}/api/writer/${encodeURIComponent(slug)}/compact`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				...(chapterFile ? { chapterFile } : {}),
+				...(instructions ? { instructions } : {}),
+			}),
+			signal: AbortSignal.timeout(600_000),
+		});
+		if (!res.ok) throw await apiErrorFrom(res);
+		return (await res.json()) as { summary: string; tokensBefore: number; estimatedTokensAfter?: number };
 	}
 
 	/** 编剧会话「编辑重发」:撤回最新用户消息(及之后),replacement 非空时撤回后重发。

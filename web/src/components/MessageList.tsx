@@ -45,6 +45,24 @@ function ThinkingIndicator() {
 );
 }
 
+/** 上下文压缩中提示(手动 /compact 或阈值/溢出自动压缩;样式与思考提示区分)。 */
+function CompactingIndicator() {
+	const [tick, setTick] = useState(0);
+	useEffect(() => {
+		const t = setInterval(() => setTick((v) => v + 1), 150);
+		return () => clearInterval(t);
+	}, []);
+	const dots = ".".repeat((Math.floor(tick / 6) % 3) + 1);
+	return (
+		<div className="thinking compacting">
+			<span className="thinking-spin">{SPINNER_FRAMES[tick % SPINNER_FRAMES.length]}</span>
+			<span className="thinking-face">🗜️</span>
+			<span className="thinking-label">正在压缩上下文</span>
+			<span className="thinking-dots">{dots}</span>
+		</div>
+	);
+}
+
 /**
  * 简化输出下的工具状态提示:spinner + 「正在编辑/正在阅读…」。
  * 工具执行期间取代轮换的思考文案,让用户知道模型此刻在做什么
@@ -292,6 +310,7 @@ function confirmAnchorLost(messages: ChatMessage[], c: ConfirmCardItem): boolean
 export function MessageList({
 	messages,
 	streaming,
+	compacting,
 	simplifiedTools,
 	confirmCards,
 	onConfirmCard,
@@ -302,6 +321,8 @@ export function MessageList({
 	messages: ChatMessage[];
 	/** AI 输出中:列表末尾显示动态状态提示(转圈 + 文案/颜文字轮换)。 */
 	streaming: boolean;
+	/** 上下文压缩中:列表末尾显示「正在压缩上下文」。 */
+	compacting?: boolean;
 	simplifiedTools: boolean;
 	/** 编剧编辑确认卡列表:与预览卡同锚定规则(触发编辑的 assistant 消息下)。
 	 *  与预览卡并存时各自独立渲染(确认卡不是回合汇总,一编辑一张)。 */
@@ -439,12 +460,16 @@ export function MessageList({
 							onRevert={() => onRevertCard?.(c.id)}
 						/>
 					))}
-						{/* 状态提示:工具执行中(简化输出)> 思考轮换;自动滚底会把它带进视野 */}
-						{streaming && (simplifiedTools && toolToShow ? (
-							<ToolStatusIndicator label={TOOL_STATUS[toolToShow] ?? DEFAULT_TOOL_STATUS} />
-						) : (
-							<ThinkingIndicator />
-						))}
+						{/* 状态提示:压缩中 > 工具执行中(简化输出)> 思考轮换;自动滚底会把它带进视野 */}
+						{compacting ? (
+							<CompactingIndicator />
+						) : streaming ? (
+							simplifiedTools && toolToShow ? (
+								<ToolStatusIndicator label={TOOL_STATUS[toolToShow] ?? DEFAULT_TOOL_STATUS} />
+							) : (
+								<ThinkingIndicator />
+							)
+						) : null}
 					</div>
 				)}
 		</div>

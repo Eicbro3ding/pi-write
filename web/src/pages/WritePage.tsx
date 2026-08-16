@@ -7,10 +7,20 @@ import type {
 	AgentEventDto,
 	BookDetail,
 	ChapterRef,
+	ContextUsageDto,
 	DraftStatus,
 	SessionTreeDto,
 	TextSelectionSnapshot,
+	WorldDataDto,
 } from "../types.ts";
+import { contextUsageHint } from "../context-usage.ts";
+import {
+	makeChapterCommand,
+	makeCompactCommand,
+	makeNodeCommand,
+	type SlashCommand,
+	type SlashContext,
+} from "../slash-commands.ts";
 import { BranchBar } from "../components/BranchBar.tsx";
 import { ChapterSidebar } from "../components/ChapterSidebar.tsx";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
@@ -178,6 +188,13 @@ export function WritePage({
 	/** 编剧(常驻编辑 agent)会话:与主会话同款 reducer(processAgentEvent 复用),
 	 *  事件经 writer_event SSE 到达,消息/思考/工具卡片渲染零新逻辑。 */
 	const [writerSession, writerDispatch] = useReducer(sessionReducer, undefined, initialSessionState);
+	/** 编剧会话上下文占用(「建议 /compact」提示;agent_settled / 压缩结束 / 对齐时刷新)。 */
+	const [writerUsage, setWriterUsage] = useState<ContextUsageDto | null>(null);
+	const writerCompactingRef = useRef(false);
+	writerCompactingRef.current = writerSession.compacting;
+	/** `/node` 世界书缓存(按 slug;收到 world_changed 失效)。 */
+	const worldCacheRef = useRef<{ slug: string; world: WorldDataDto } | null>(null);
+	const worldLoadingRef = useRef<Promise<WorldDataDto | null> | null>(null);
 	/** 编剧编辑确认队列(编剧对话流内):按书+章节持久化(刷新/切章不丢——
 	 *  before 基线随卡保存,回退能力跨会话保留;免确认模式卡片为只读「已应用」)。 */
 	const [confirmCards, setConfirmCards] = useState<ConfirmCardItem[]>([]);
@@ -302,6 +319,7 @@ export function WritePage({
 				if (writerAlignedRef.current !== scope) return; // 对齐期间又切书/切章:放弃
 				writerDispatch(RESET);
 				for (const ev of messagesToEvents(st.messages)) writerDispatch(ev);
+				refreshWriterUsage();
 			})
 			.catch(() => {
 				/* 对齐失败(服务暂不可用):保持本地状态 */
@@ -419,6 +437,11 @@ export function WritePage({
 					});
 					return;
 				}
+				// 世界书被 AI/他窗口修改:/node 命令缓存失效(下次打开命令面板重拉)
+				if (start.type === "world_changed" && start.slug === bookDetailRef.current?.slug) {
+					worldCacheRef.current = null;
+					return;
+				}
 				// 服务端主会话流式结束:查看模式的唯一意义是「不打断流式」,流式已结束
 				// 则自动把服务端会话切回当前显示章节,退出查看模式(顶部提示消失)
 				if (start.type === "agent_settled") {
@@ -455,6 +478,8 @@ export function WritePage({
 						setError(`编剧出错: ${friendlyError(ev.message)}`);
 					}
 					writerDispatch(ev);
+					// 回合结束 / 压缩结束后刷新上下文占用,「建议 /compact」提示才有依据
+					if (ev.type === "agent_settled" || ev.type === "compaction_end") refreshWriterUsage();
 					return;
 				}
 				// 主会话其余事件(message_start/update/end、tool_* 等)不再消费:
@@ -468,6 +493,7 @@ export function WritePage({
 				// 不回显,2026-08-10 根因)
 				writerAlignedRef.current = null;
 				alignWriter();
+				refreshWriterUsage();
 			},
 		);
 		return unsub;
@@ -837,11 +863,74 @@ export function WritePage({
 		}
 	}
 
+	/** `/node` 世界书懒加载 + 按书缓存(SSE world_changed 时失效)。 */
+	function loadWorldForSlash(): Promise<WorldDataDto | null> {
+		const slug = bookDetailRef.current?.slug;
+		if (!slug) return Promise.resolve(null);
+		const cached = worldCacheRef.current;
+		if (cached?.slug === slug) return Promise.resolve(cached.world);
+		if (worldLoadingRef.current) return worldLoadingRef.current;
+		const p = client
+			.getWorld(slug)
+			.then(({ world }) => {
+				worldCacheRef.current = { slug, world };
+				return world;
+			})
+			.catch(() => null)
+			.finally(() => {
+				worldLoadingRef.current = null;
+			});
+		worldLoadingRef.current = p;
+		return p;
+	}
+
+	/** 拉取编剧会话上下文占用(静默失败:提示是优化,不打断使用)。 */
+	function refreshWriterUsage() {
+		const slug = bookDetailRef.current?.slug;
+		if (!slug) return;
+		const ch = currentChapterRef.current;
+		void client
+			.writerContext(slug, ch?.file ?? null)
+			.then((usage) => {
+				// 期间切书/切章:丢弃过期快照
+				if (bookDetailRef.current?.slug === slug && currentChapterRef.current?.file === ch?.file) {
+					setWriterUsage(usage);
+				}
+			})
+			.catch(() => {});
+	}
+
+	/** `/compact` 动作:手动压缩编剧当前章节上下文(压缩事件经 writer_event 驱动 UI)。 */
+	async function runWriterCompact(instructions: string) {
+		const slug = bookDetailRef.current?.slug;
+		if (!slug) return;
+		if (writerCompactingRef.current) return;
+		try {
+			await client.writerCompact(slug, currentChapterRef.current?.file ?? null, instructions || undefined);
+			refreshWriterUsage();
+		} catch (err) {
+			setError(`压缩上下文失败: ${friendlyError(err)}`);
+		}
+	}
+
+	/** 编剧输入框的 `/` 命令集(插件注册缝的初始内置实现)。 */
+	const writerSlashContext: SlashContext = {
+		client,
+		slug: bookDetail?.slug ?? null,
+		bookDetail,
+		currentChapterFile: currentChapter?.file ?? null,
+	};
+	const writerSlashCommands: SlashCommand[] = [
+		makeNodeCommand({ loadWorld: loadWorldForSlash }),
+		makeChapterCommand(),
+		makeCompactCommand({ run: runWriterCompact }),
+	];
+
 	/** 发送给编剧(常驻编辑 agent):202 即返回,流式/工具事件走 writer_event SSE;
 	 *  用户消息回显经 SSE 到达,无需乐观气泡。 */
 	function sendWriter(text: string) {
 		const slug = bookDetailRef.current?.slug;
-		if (!slug || writerSession.isStreaming) return;
+		if (!slug || writerSession.isStreaming || writerSession.compacting) return;
 		void client
 			.writerChat(slug, text, currentChapterRef.current?.file ?? undefined)
 			.catch((err) => setError(`发送失败: ${friendlyError(err)}`));
@@ -908,6 +997,8 @@ export function WritePage({
 
 	const draftFile = currentChapter ? `draft/${currentChapter.file.replace(/\.jsonl$/, ".md")}` : "draft/ch01.md";
 	const saveLabel = SAVE_LABELS[draftStatus];
+	/** 上下文占用达到阈值时,输入框上方的「建议 /compact」提示。 */
+	const writerUsageHint = contextUsageHint(writerUsage);
 	// 临时诊断:渲染时反映 previewCards/confirmCards 长度(读 title 即可观察 state)
 
 	// 顶栏信息上报
@@ -1085,6 +1176,7 @@ export function WritePage({
 							<MessageList
 								messages={writerSession.messages}
 								streaming={writerSession.isStreaming}
+								compacting={writerSession.compacting}
 								simplifiedTools={simplifiedTools}
 								confirmCards={confirmCards}
 								onConfirmCard={confirmCard}
@@ -1092,6 +1184,11 @@ export function WritePage({
 								onEdit={(m, newText) => void editWriterMessage(m, newText)}
 								emptyText="向编剧发一句话,讨论行文、取舍与节奏——修改正文会生成待确认卡,可随时回退;选中正文会自动填入选区"
 							/>
+							{writerUsageHint && (
+								<div className={`notice ${writerUsageHint.tone}`} role="status">
+									{writerUsageHint.text}
+								</div>
+							)}
 							<InputBar
 								ref={writerInputRef}
 								streaming={writerSession.isStreaming}
@@ -1100,8 +1197,11 @@ export function WritePage({
 									const s = bookDetailRef.current?.slug;
 									if (s) void client.writerAbort(s);
 								}}
-								placeholder="向编剧说话…(选中正文自动填入,Ctrl+Enter 发送,Enter 换行)"
+								placeholder="向编剧说话…(/ 命令面板;选中正文自动填入,Ctrl+Enter 发送,Enter 换行)"
 								ariaLabel="向编剧说话"
+								commands={writerSlashCommands}
+								context={writerSlashContext}
+								onCommandError={(msg) => setError(`命令失败: ${msg}`)}
 							/>
 						</div>
 						)}

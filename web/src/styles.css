@@ -490,8 +490,34 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .tool.err { color: var(--red); border-color: var(--red-tint-strong); background: var(--red-tint); }
 .tool.err .tool-result { color: var(--red); }
 
-/* 输入条:圆角容器 + focus 暖金描边 */
-.inputbar { flex: none; border-top: 1px solid var(--line); padding: 10px 14px 14px; background: var(--bg); }
+/* 输入条:圆角容器 + focus 暖金描边;命令面板以 inputbar 为定位上下文向上弹出 */
+.inputbar { position: relative; flex: none; border-top: 1px solid var(--line); padding: 10px 14px 14px; background: var(--bg); }
+/* `/` 命令面板:紧贴输入框上方,最大高度可滚动;按钮 mousedown 不抢焦点,
+   点击与键盘(↑/↓ + Enter/Tab)共用同一条选中路径 */
+.slash-menu {
+  position: absolute; left: 14px; right: 14px; bottom: calc(100% - 6px); z-index: 20;
+  max-height: 264px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;
+  padding: 6px; background: var(--bg-elev-2); border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg); box-shadow: var(--shadow-3);
+  animation: card-in-bottom 120ms var(--ease-out);
+}
+.slash-menu-head {
+  display: flex; align-items: baseline; gap: 8px; padding: 4px 8px 6px;
+  border-bottom: 1px solid var(--line); font-size: 11.5px;
+}
+.slash-menu-command { color: var(--amber); font-family: var(--mono); letter-spacing: 0.04em; }
+.slash-menu-hint { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slash-item {
+  display: flex; align-items: center; gap: 8px; min-width: 0; width: 100%;
+  padding: 7px 8px; text-align: left; font-size: 12.5px; color: var(--ink-2);
+  background: transparent; border: 0; border-radius: var(--r-sm); cursor: pointer;
+}
+.slash-item:hover, .slash-item.active { color: var(--ink); background: var(--amber-tint); }
+.slash-item.muted { color: var(--faint); cursor: default; }
+.slash-item-label { flex: none; font-weight: 500; }
+.slash-item-hint { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11.5px; }
+.slash-item-meta { flex: none; color: var(--faint); font-size: 10.5px; font-family: var(--mono); }
+.slash-menu-note { padding: 6px 8px; color: var(--amber); font-size: 11.5px; border-top: 1px solid var(--line); }
 .inputbar-inner {
   display: flex; align-items: flex-end; gap: 8px;
   background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-lg);
