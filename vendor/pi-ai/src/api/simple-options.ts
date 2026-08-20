@@ -26,6 +26,7 @@ export function buildBaseOptions(
 ): StreamOptions {
 	return {
 		temperature: options?.temperature,
+		topP: options?.topP,
 		maxTokens: clampMaxTokensToContext(model, context, options?.maxTokens ?? model.maxTokens),
 		signal: options?.signal,
 		apiKey: apiKey || options?.apiKey,

@@ -40,6 +40,8 @@ export interface WebCliOptions {
 	book: string | undefined; // --book <slug>:打开指定书(不存在则创建)
 	model: string | undefined; // --model <pattern>:模型指定
 	thinking: string | undefined; // --thinking <level>:思考等级
+	temperature: number | undefined; // --temperature <number>:采样温度
+	topP: number | undefined; // --top-p <number>:核采样概率
 	/**
 	 * 前端静态目录(web/dist)显式路径。缺省时服务端按 resolveWebDistDir 探测
 	 * (exe 旁 / import.meta.url 烘焙路径)——CI 构建的产物在用户机器上探测会
@@ -79,6 +81,8 @@ export function parseWebArgs(argv: string[]): WebCliOptions {
 		book: undefined,
 		model: undefined,
 		thinking: undefined,
+		temperature: undefined,
+		topP: undefined,
 	};
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
@@ -110,6 +114,18 @@ export function parseWebArgs(argv: string[]): WebCliOptions {
 			case "--thinking":
 				opts.thinking = next();
 				break;
+			case "--temperature": {
+				const v = Number(next());
+				if (Number.isNaN(v)) throw new Error(`Invalid temperature: ${argv[i]}`);
+				opts.temperature = v;
+				break;
+			}
+			case "--top-p": {
+				const v = Number(next());
+				if (Number.isNaN(v)) throw new Error(`Invalid top-p: ${argv[i]}`);
+				opts.topP = v;
+				break;
+			}
 			default:
 				throw new Error(`Unknown web option: ${arg}`);
 		}
@@ -211,6 +227,8 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 		extensionFactories: [writerExtension],
 		model: opts.model,
 		thinkingLevel: opts.thinking as ThinkingLevel | undefined,
+		temperature: opts.temperature,
+		topP: opts.topP,
 		// 黑名单禁 bash(web 子集),显式激活内置工具;白名单会滤掉 MCP customTools
 		excludeTools: webExcludeTools(process.env),
 		initialActiveToolNames: webActiveTools(process.env),
@@ -228,11 +246,11 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 	await host.start();
 	// 常驻编剧宿主:每本书一个 writer 会话,惰性创建;model/thinking 同 stage
 	// (writer 端点未装配时由 server 侧 404,与 MCP/stage 同款)
-	const writerHost = new WriterHost({ model: opts.model, thinkingLevel: opts.thinking, getMcpTools: () => mcpManager.getTools() });
+	const writerHost = new WriterHost({ model: opts.model, thinkingLevel: opts.thinking, temperature: opts.temperature, topP: opts.topP, getMcpTools: () => mcpManager.getTools() });
 	// 舞台区宿主:每本书每个章节一个编排器,惰性创建;model/thinking 复用 web 的 CLI 选项
 	// (stage 端点未装配时由 server 侧 404,与 MCP 同款);writerHost 注入用于收幕委托
 	// (常驻编剧 === 收幕编剧,2026-08-11)
-	const stageHost = new StageHost({ model: opts.model, thinkingLevel: opts.thinking, writerHost, getMcpTools: () => mcpManager.getTools() });
+	const stageHost = new StageHost({ model: opts.model, thinkingLevel: opts.thinking, temperature: opts.temperature, topP: opts.topP, writerHost, getMcpTools: () => mcpManager.getTools() });
 	// PI_WRITER_TOKEN:可选 Bearer token(Android 壳注入);未设置时与桌面版行为完全一致
 	const server = new WriterServer({
 		host: "127.0.0.1",

@@ -719,6 +719,10 @@ function buildParams(
 		params.temperature = options.temperature;
 	}
 
+	if (options?.topP !== undefined) {
+		params.top_p = options.topP;
+	}
+
 	const deferredToolNames =
 		compat.deferredToolsMode === "kimi" ? getDeferredToolNames(context.messages) : new Set<string>();
 	const activeTools = context.tools?.filter((tool) => !deferredToolNames.has(tool.name));

@@ -56,6 +56,8 @@ export interface CreateAgentSessionFromServicesOptions {
 	sessionStartEvent?: SessionStartEvent;
 	model?: Model<any>;
 	thinkingLevel?: ThinkingLevel;
+	temperature?: number;
+	topP?: number;
 	scopedModels?: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
 	tools?: string[];
 	excludeTools?: CreateAgentSessionOptions["excludeTools"];
@@ -211,6 +213,8 @@ export async function createAgentSessionFromServices(
 		sessionManager: options.sessionManager,
 		model: options.model,
 		thinkingLevel: options.thinkingLevel,
+		temperature: options.temperature,
+		topP: options.topP,
 		scopedModels: options.scopedModels,
 		tools: options.tools,
 		excludeTools: options.excludeTools,

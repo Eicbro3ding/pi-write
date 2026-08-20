@@ -180,9 +180,9 @@ export class ApiClient {
 		return this.request<SessionState>(`/api/session${q}`);
 	}
 
-	/** 模型列表、当前模型与思考等级(vendor 模型元素最小形状见 SettingsPage)。 */
-	async getModels(): Promise<{ models: unknown[]; current: unknown; thinking: unknown }> {
-		return this.request<{ models: unknown[]; current: unknown; thinking: unknown }>("/api/models");
+	/** 模型列表、当前模型、思考等级与采样参数(vendor 模型元素最小形状见 SettingsPage)。 */
+	async getModels(): Promise<{ models: unknown[]; current: unknown; thinking: unknown; temperature: unknown; topP: unknown }> {
+		return this.request<{ models: unknown[]; current: unknown; thinking: unknown; temperature: unknown; topP: unknown }>("/api/models");
 	}
 
 	/** 切换模型。 */
@@ -208,6 +208,11 @@ export class ApiClient {
 	/** 设置思考等级。 */
 	async setThinking(level: string): Promise<void> {
 		await this.request<{ ok: boolean }>("/api/thinking", { method: "POST", body: JSON.stringify({ level }) });
+	}
+
+	/** 设置采样参数(temperature/topP 至少一个;undefined 不更新, null 恢复模型默认)。 */
+	async setSampling(opts: { temperature?: number | null; topP?: number | null }): Promise<void> {
+		await this.request<{ ok: boolean }>("/api/sampling", { method: "POST", body: JSON.stringify(opts) });
 	}
 
 	/** 全部 provider + 认证状态。 */

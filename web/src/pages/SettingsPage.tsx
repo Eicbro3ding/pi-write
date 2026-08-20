@@ -6,6 +6,7 @@ import { NIGHT_THEME, themeLabelFromCss, themeStarterCss, USER_THEME_PREFIX, use
 import { applyTheme, currentTheme } from "../theme.ts";
 import { ProviderList } from "../components/ProviderList.tsx";
 import { McpServerList } from "../components/McpServerList.tsx";
+import { ToggleSwitch } from "../components/ToggleSwitch.tsx";
 import { IconBook, IconDoc, IconGear, IconGlobe } from "../components/Icons.tsx";
 
 /** 思考级别选项(与后端 session-host 的 ThinkingLevel 对齐)。 */
@@ -104,6 +105,8 @@ export function SettingsPage({
 	const [models, setModels] = useState<ModelInfo[] | null>(null);
 	const [current, setCurrent] = useState<string | null>(null);
 	const [thinking, setThinking] = useState<string | null>(null);
+	const [temperature, setTemperature] = useState<string>("");
+	const [topP, setTopP] = useState<string>("");
 	const [loadErr, setLoadErr] = useState<string | null>(null);
 	const [actErr, setActErr] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
@@ -114,6 +117,9 @@ export function SettingsPage({
 	const [customApiKey, setCustomApiKey] = useState("");
 	const [customBusy, setCustomBusy] = useState(false);
 	const [customErr, setCustomErr] = useState<string | null>(null);
+	/** 折叠状态 */
+	const [customOpen, setCustomOpen] = useState(false);
+	const [providersOpen, setProvidersOpen] = useState(false);
 	const [theme, setTheme] = useState<ThemeId>(() => currentTheme());
 	/** 内置主题列表(资产文件自动发现,零 ts 注册;night 无文件,单独用 NIGHT_THEME)。 */
 	const [builtinThemes, setBuiltinThemes] = useState<UserThemeInfo[]>([]);
@@ -139,16 +145,26 @@ export function SettingsPage({
 	/** 最近一次加载/保存成功时磁盘 world.json mtime(If-Match 条件写;0 = 未知)。 */
 	const lastWorldMtimeRef = useRef(0);
 
-	/** 拉取模型列表/当前模型/思考等级并归一;返回解析结果供调用方直接使用。 */
-	const load = useCallback(async (): Promise<{ models: ModelInfo[]; current: string | null; thinking: string | null }> => {
+	/** 拉取模型列表/当前模型/思考等级/采样参数并归一;返回解析结果供调用方直接使用。 */
+	const load = useCallback(async (): Promise<{
+		models: ModelInfo[];
+		current: string | null;
+		thinking: string | null;
+		temperature: number | null;
+		topP: number | null;
+	}> => {
 		const r = await client.getModels();
 		const models = extractModels(r.models);
 		const current = modelRef(r.current);
 		const thinking = typeof r.thinking === "string" ? r.thinking : null;
+		const temperature = typeof r.temperature === "number" ? r.temperature : null;
+		const topP = typeof r.topP === "number" ? r.topP : null;
 		setModels(models);
 		setCurrent(current);
 		setThinking(thinking);
-		return { models, current, thinking };
+		setTemperature(temperature === null ? "" : String(temperature));
+		setTopP(topP === null ? "" : String(topP));
+		return { models, current, thinking, temperature, topP };
 	}, [client]);
 
 	// 挂载时加载
@@ -361,6 +377,52 @@ export function SettingsPage({
 		}
 	}
 
+	/** 一键恢复模型默认温度:清除全局与所有演员(含当前舞台 cast.json)的 temperature 覆盖。 */
+	async function resetTemperature() {
+		if (busy) return;
+		setBusy(true);
+		setActErr(null);
+		try {
+			await client.setSampling({ temperature: null });
+			await load();
+			setNotice("已恢复模型默认温度：所有 agent（含演员）不再修改 temperature");
+		} catch (e) {
+			setActErr(`恢复默认温度失败: ${friendlyError(e)}`);
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	/** 设置采样参数:温度/top_p 至少填一个(留空=不修改)。 */
+	async function changeSampling() {
+		if (busy) return;
+		const t = temperature.trim() === "" ? undefined : Number(temperature);
+		const p = topP.trim() === "" ? undefined : Number(topP);
+		if ((t === undefined || Number.isNaN(t)) && (p === undefined || Number.isNaN(p))) {
+			setActErr("请至少填写 temperature 或 topP 之一");
+			return;
+		}
+		if (t !== undefined && Number.isNaN(t)) {
+			setActErr("temperature 必须是数字");
+			return;
+		}
+		if (p !== undefined && Number.isNaN(p)) {
+			setActErr("topP 必须是数字");
+			return;
+		}
+		setBusy(true);
+		setActErr(null);
+		try {
+			await client.setSampling({ ...(t !== undefined ? { temperature: t } : {}), ...(p !== undefined ? { topP: p } : {}) });
+			await load();
+			setNotice("采样参数已保存");
+		} catch (e) {
+			setActErr(`采样参数设置失败: ${friendlyError(e)}`);
+		} finally {
+			setBusy(false);
+		}
+	}
+
 	/** 添加自定义模型(写 models.json + 服务端热重载)→ 刷新列表并自动切换到新模型。 */
 	async function addCustomModel() {
 		if (customBusy) return;
@@ -468,195 +530,278 @@ export function SettingsPage({
 
 					{cat === "model" && (
 						<>
-							<div className="s-head">当前模型</div>
-							<div className="s-row">
-								<span className="s-key">当前提供商</span>
-								<span className="s-val">{current ? current.split("/")[0] : "未设置"}</span>
+							{/* 模型选择(含当前模型信息行) */}
+							<div className="s-card">
+								<div className="s-card-head">模型</div>
+								<div className="s-current-model-row">
+									<span className="s-key">当前</span>
+									<span className="s-current-model-name">{current ? current.split("/")[1] ?? current : "未设置"}</span>
+									<span className="s-current-model-provider">
+										{current && <span className="s-badge">{current.split("/")[0]}</span>}
+									</span>
+								</div>
+								<div className="s-field" style={{ marginBottom: 0 }}>
+									<label className="s-field-label">切换模型</label>
+									<div className="s-field-row">
+										<select
+											className="s-select s-select-full"
+											value={current ?? ""}
+											onChange={(e) => {
+												setNotice(null);
+												void changeModel(e.target.value);
+											}}
+											disabled={busy || models === null}
+											title="按 provider 分组选择模型"
+										>
+											<option value="" disabled>
+												{models === null ? "加载中…" : "请选择模型"}
+											</option>
+											{groups.map(([provider, list]) => (
+												<optgroup key={provider} label={provider}>
+													{list.map((m) => (
+														<option key={`${m.provider}/${m.id}`} value={`${m.provider}/${m.id}`}>
+															{m.provider} · {m.id}
+														</option>
+													))}
+												</optgroup>
+											))}
+										</select>
+										{busy && <span className="s-busy">设置中…</span>}
+									</div>
+								</div>
 							</div>
-							<div className="s-row">
-								<span className="s-key">当前模型</span>
-								<span className="s-val">{current ?? "未设置"}</span>
-							</div>
-							<div className="s-row">
-								<span className="s-key">切换模型</span>
-								<select
-									className="s-select"
-									value={current ?? ""}
-									onChange={(e) => {
-										setNotice(null);
-										void changeModel(e.target.value);
-									}}
-									disabled={busy || models === null}
-									title="按 provider 分组选择模型"
-								>
-									<option value="" disabled>
-										{models === null ? "加载中…" : "请选择模型"}
-									</option>
-									{groups.map(([provider, list]) => (
-										<optgroup key={provider} label={provider}>
-											{list.map((m) => (
-												<option key={`${m.provider}/${m.id}`} value={`${m.provider}/${m.id}`}>
-													{m.provider} · {m.id}
+
+							{/* 思考级别 */}
+							<div className="s-card">
+								<div className="s-card-head">思考级别</div>
+								<div className="s-field" style={{ marginBottom: 0 }}>
+									<label className="s-field-label">强度</label>
+									<div className="s-field-row">
+										<select
+											className="s-select s-select-full"
+											value={thinking ?? ""}
+											onChange={(e) => {
+												setNotice(null);
+												void changeThinking(e.target.value);
+											}}
+											disabled={busy || thinking === null}
+											title="思考强度(off 关闭;max 最强)"
+										>
+											<option value="" disabled>
+												{thinking === null ? "未设置" : "请选择"}
+											</option>
+											{THINKING_LEVELS.map((l) => (
+												<option key={l} value={l}>
+													{l}
 												</option>
 											))}
-										</optgroup>
-									))}
-								</select>
-								{busy && <span className="s-busy">设置中…</span>}
+										</select>
+										{busy && <span className="s-busy">设置中…</span>}
+									</div>
+									<div className="s-field-desc">off = 关闭思考; max = 最强思考深度</div>
+								</div>
 							</div>
 
-							<div className="s-head">思考级别</div>
-							<div className="s-row">
-								<span className="s-key">思考级别</span>
-								<select
-									className="s-select"
-									value={thinking ?? ""}
-									onChange={(e) => {
-										setNotice(null);
-										void changeThinking(e.target.value);
-									}}
-									disabled={busy || thinking === null}
-									title="思考强度(off 关闭;max 最强)"
+							{/* 采样参数 */}
+							<div className="s-card">
+								<div className="s-card-head">采样参数</div>
+								<div className="s-field-grid">
+									<div className="s-field">
+										<label className="s-field-label">temperature</label>
+										<input
+											className="s-input s-input-short"
+											placeholder="默认"
+											type="number"
+											min="0"
+											max="2"
+											step="0.1"
+											value={temperature}
+											disabled={busy}
+											onChange={(e) => setTemperature(e.target.value)}
+										/>
+									</div>
+									<div className="s-field">
+										<label className="s-field-label">top_p</label>
+										<input
+											className="s-input s-input-short"
+											placeholder="默认"
+											type="number"
+											min="0"
+											max="1"
+											step="0.05"
+											value={topP}
+											disabled={busy}
+											onChange={(e) => setTopP(e.target.value)}
+										/>
+									</div>
+								</div>
+								<div className="s-field-row" style={{ marginTop: 10 }}>
+									<button type="button" className="btn-ghost" disabled={busy} onClick={() => void changeSampling()}>
+										{busy ? "设置中…" : "应用"}
+									</button>
+									<button type="button" className="btn-ghost" disabled={busy} onClick={() => void resetTemperature()}>
+										{busy ? "处理中…" : "恢复默认温度"}
+									</button>
+								</div>
+								<div className="s-card-desc" style={{ marginTop: 8 }}>
+									「恢复默认温度」会清除全局与所有演员的 temperature 覆盖，所有 agent 恢复 provider 默认；top_p 不受影响。留空表示不修改对应项。
+								</div>
+							</div>
+
+							{/* 自定义模型 — 可折叠 */}
+							<div className="s-card s-collapsible">
+								<button
+									type="button"
+									className="s-collapsible-head"
+									onClick={() => setCustomOpen((v) => !v)}
 								>
-									<option value="" disabled>
-										{thinking === null ? "未设置" : "请选择"}
-									</option>
-									{THINKING_LEVELS.map((l) => (
-										<option key={l} value={l}>
-											{l}
-										</option>
-									))}
-								</select>
-								{busy && <span className="s-busy">设置中…</span>}
-							</div>
-
-							<div className="s-head">自定义模型</div>
-							<div className="s-row">
-								<span className="s-key">provider id</span>
-								<input
-									className="s-select"
-									style={{ marginLeft: "auto" }}
-									placeholder="如 mock"
-									value={customProvider}
-									disabled={customBusy}
-									onChange={(e) => setCustomProvider(e.target.value)}
-								/>
-							</div>
-							<div className="s-row">
-								<span className="s-key">模型 id</span>
-								<input
-									className="s-select"
-									style={{ marginLeft: "auto" }}
-									placeholder="如 mock-1"
-									value={customModel}
-									disabled={customBusy}
-									onChange={(e) => setCustomModel(e.target.value)}
-								/>
-							</div>
-							<div className="s-row">
-								<span className="s-key">baseUrl</span>
-								<input
-									className="s-select"
-									style={{ marginLeft: "auto" }}
-									placeholder="http://127.0.0.1:8787/v1"
-									value={customBaseUrl}
-									disabled={customBusy}
-									onChange={(e) => setCustomBaseUrl(e.target.value)}
-								/>
-							</div>
-							<div className="s-row">
-								<span className="s-key">apiKey(可选)</span>
-								<input
-									className="s-select"
-									style={{ marginLeft: "auto" }}
-									placeholder="留空则无鉴权"
-									value={customApiKey}
-									disabled={customBusy}
-									onChange={(e) => setCustomApiKey(e.target.value)}
-								/>
-							</div>
-							<div className="s-note">
-								添加 OpenAI 兼容的自定义模型(如本地 mock LLM 服务器),保存后自动切换。模型引用为 provider id / 模型 id。
-							</div>
-							<div className="s-row">
-								<button className="btn-ghost" type="button" disabled={customBusy} onClick={() => void addCustomModel()}>
-									{customBusy ? "添加中…" : "添加并切换"}
+									<span>自定义模型</span>
+									<span className={`s-collapsible-arrow${customOpen ? " open" : ""}`}>▸</span>
 								</button>
-								{customErr && <span className="s-busy" style={{ color: "#e08a8a" }}>{customErr}</span>}
+								{customOpen && (
+									<div className="s-collapsible-body">
+										<div className="s-card-desc">添加 OpenAI 兼容的自定义模型(如本地 mock 服务器)。模型引用为 provider id / 模型 id。</div>
+										<div className="s-field-grid">
+											<div className="s-field">
+												<label className="s-field-label">provider id</label>
+												<input
+													className="s-input"
+													placeholder="如 mock"
+													value={customProvider}
+													disabled={customBusy}
+													onChange={(e) => setCustomProvider(e.target.value)}
+												/>
+											</div>
+											<div className="s-field">
+												<label className="s-field-label">模型 id</label>
+												<input
+													className="s-input"
+													placeholder="如 mock-1"
+													value={customModel}
+													disabled={customBusy}
+													onChange={(e) => setCustomModel(e.target.value)}
+												/>
+											</div>
+											<div className="s-field">
+												<label className="s-field-label">baseUrl</label>
+												<input
+													className="s-input"
+													placeholder="http://127.0.0.1:8787/v1"
+													value={customBaseUrl}
+													disabled={customBusy}
+													onChange={(e) => setCustomBaseUrl(e.target.value)}
+												/>
+											</div>
+											<div className="s-field">
+												<label className="s-field-label">apiKey(可选)</label>
+												<input
+													className="s-input"
+													placeholder="留空则无鉴权"
+													value={customApiKey}
+													disabled={customBusy}
+													onChange={(e) => setCustomApiKey(e.target.value)}
+												/>
+											</div>
+										</div>
+										<div className="s-field-row" style={{ marginTop: 10 }}>
+											<button className="btn-ghost" type="button" disabled={customBusy} onClick={() => void addCustomModel()}>
+												{customBusy ? "添加中…" : "添加并切换"}
+											</button>
+											{customErr && <span className="s-busy" style={{ color: "#e08a8a" }}>{customErr}</span>}
+										</div>
+									</div>
+								)}
 							</div>
 
-							<div className="s-head">模型提供商</div>
-							<div className="s-note">
-								为 provider 添加 API key 后其模型即可在「切换模型」中使用;key 存储在 ~/.pi/writer/agent/auth.json。
+							{/* 模型提供商 — 可折叠 */}
+							<div className="s-card s-collapsible">
+								<button
+									type="button"
+									className="s-collapsible-head"
+									onClick={() => setProvidersOpen((v) => !v)}
+								>
+									<span>模型提供商</span>
+									<span className={`s-collapsible-arrow${providersOpen ? " open" : ""}`}>▸</span>
+								</button>
+								{providersOpen && (
+									<div className="s-collapsible-body">
+										<div className="s-card-desc">
+											为 provider 添加 API key 后其模型即可在「切换模型」中使用;key 存储在 ~/.pi/writer/agent/auth.json。
+										</div>
+										<ProviderList client={client} onAuthChanged={() => void handleAuthChanged()} />
+									</div>
+								)}
 							</div>
-							<ProviderList client={client} onAuthChanged={() => void handleAuthChanged()} />
 						</>
 					)}
 
 					{cat === "ui" && (
 						<>
-									<div className="s-head">主题</div>
-									<div className="theme-cards">
-										{/* night:默认内置,无资产文件(token 收敛在 styles.css :root 防闪) */}
-										<button
-											key={NIGHT_THEME.id}
-											className={`theme-card${theme === NIGHT_THEME.id ? " active" : ""}`}
-											onClick={() => selectTheme(NIGHT_THEME.id)}
-										>
-											<span className="theme-swatch">
-												{NIGHT_THEME.swatch.map((c) => (
-													<i key={c} style={{ background: c }} />
-												))}
-											</span>
-											<span className="theme-label">{NIGHT_THEME.label}</span>
-											<span className="theme-desc">内置 · 默认</span>
-										</button>
-										{/* 内置主题:资产文件自动发现(id = 文件名,名字取首行注释,色板取 token) */}
-										{builtinThemes.map((bt) => {
-											const id = bt.file.replace(/\.css$/, "");
-											const swatch = swatchFromCss(bt.css);
-											return (
-												<button
-													key={bt.file}
-													className={`theme-card${theme === id ? " active" : ""}`}
-													onClick={() => selectTheme(id)}
-												>
-													<span className="theme-swatch">
-														{swatch.map((c) => (
-															<i key={c} style={{ background: c }} />
-														))}
-													</span>
-													<span className="theme-label">{themeLabelFromCss(bt.css, bt.file)}</span>
-													<span className="theme-desc">内置</span>
-												</button>
+							<div className="s-card">
+								<div className="s-card-head">主题</div>
+								<div className="theme-cards">
+									{/* night:默认内置,无资产文件(token 收敛在 styles.css :root 防闪) */}
+									<button
+										key={NIGHT_THEME.id}
+										className={`theme-card${theme === NIGHT_THEME.id ? " active" : ""}`}
+										onClick={() => selectTheme(NIGHT_THEME.id)}
+									>
+										<span className="theme-swatch">
+											{NIGHT_THEME.swatch.map((c) => (
+												<i key={c} style={{ background: c }} />
+											))}
+										</span>
+										<span className="theme-label">{NIGHT_THEME.label}</span>
+										<span className="theme-desc">内置 · 默认</span>
+									</button>
+									{/* 内置主题:资产文件自动发现(id = 文件名,名字取首行注释,色板取 token) */}
+									{builtinThemes.map((bt) => {
+										const id = bt.file.replace(/\.css$/, "");
+										const swatch = swatchFromCss(bt.css);
+										return (
+											<button
+												key={bt.file}
+												className={`theme-card${theme === id ? " active" : ""}`}
+												onClick={() => selectTheme(id)}
+											>
+												<span className="theme-swatch">
+													{swatch.map((c) => (
+														<i key={c} style={{ background: c }} />
+													))}
+												</span>
+												<span className="theme-label">{themeLabelFromCss(bt.css, bt.file)}</span>
+												<span className="theme-desc">内置</span>
+											</button>
 											);
 										})}
-										{userThemes.map((ut) => {
-											const id = userIdOf(ut.file);
-											const swatch = swatchFromCss(ut.css);
-											return (
-												<button
-													key={ut.file}
-													className={`theme-card${theme === id ? " active" : ""}`}
-													onClick={() => selectTheme(id)}
-												>
-													<span className="theme-swatch">
-														{swatch.map((c) => (
-															<i key={c} style={{ background: c }} />
-														))}
-													</span>
-													<span className="theme-label">{ut.file.replace(/\.css$/, "")}</span>
-													<span className="theme-desc">自定义</span>
-												</button>
+									{userThemes.map((ut) => {
+										const id = userIdOf(ut.file);
+										const swatch = swatchFromCss(ut.css);
+										return (
+											<button
+												key={ut.file}
+												className={`theme-card${theme === id ? " active" : ""}`}
+												onClick={() => selectTheme(id)}
+											>
+												<span className="theme-swatch">
+													{swatch.map((c) => (
+														<i key={c} style={{ background: c }} />
+													))}
+												</span>
+												<span className="theme-label">{ut.file.replace(/\.css$/, "")}</span>
+												<span className="theme-desc">自定义</span>
+											</button>
 											);
 										})}
 									</div>
-									<div className="s-note">主题即 CSS 文件:内置为 web/public/themes/*.css,自定义为 ~/.pi/writer/themes/*.css,放入即自动出现在列表。</div>
+									<div className="s-card-desc">主题即 CSS 文件:内置为 web/public/themes/*.css,自定义为 ~/.pi/writer/themes/*.css,放入即自动出现在列表。</div>
+								</div>
 
-								<div className="s-head">自定义主题</div>
-								<div className="s-row">
+							<div className="s-card">
+								<div className="s-card-head">自定义主题</div>
+								<div className="s-field-row">
 									<input
-										className="s-select"
+										className="s-input"
 										placeholder="主题名(如 moon,仅字母数字._-)"
 										value={newThemeName}
 										onChange={(e) => setNewThemeName(e.target.value)}
@@ -686,7 +831,7 @@ export function SettingsPage({
 								{themeErr && <div className="notice err">{themeErr}</div>}
 								{editingFile && (
 									<>
-										<div className="s-row">
+										<div className="s-field-row" style={{ marginTop: 8 }}>
 											<span className="s-key">编辑 {editingFile}</span>
 											<span className="s-val muted">保存后生效</span>
 										</div>
@@ -696,7 +841,7 @@ export function SettingsPage({
 											spellCheck={false}
 											onChange={(e) => setEditCss(e.target.value)}
 										/>
-										<div className="s-row">
+										<div className="s-field-row">
 											<button type="button" className="btn-ghost" disabled={themeBusy} onClick={() => void saveTheme()}>
 												{themeBusy ? "保存中…" : "保存"}
 											</button>
@@ -706,58 +851,40 @@ export function SettingsPage({
 										</div>
 									</>
 								)}
-
-								<div className="s-head">界面偏好</div>
-							<div className="s-row">
-								<span className="s-key">简化输出</span>
-								<span className="s-val">
-									<label className="w-switch">
-										<input
-											type="checkbox"
-											checked={simplifiedTools}
-											onChange={(e) => onSimplifiedToolsChange(e.target.checked)}
-										/>
-										<span>{simplifiedTools ? "已开启" : "已关闭"}</span>
-									</label>
-								</span>
 							</div>
-							<div className="s-note">开启后对话中不显示工具调用卡片,以「正在阅读 / 正在编辑」等动态提示代替(默认开启)。</div>
 
-							<div className="s-row">
-								<span className="s-key">自动展开思考</span>
-								<span className="s-val">
-									<label className="w-switch">
-										<input
-											type="checkbox"
-											checked={autoExpandThinking}
-											onChange={(e) => onAutoExpandThinkingChange(e.target.checked)}
-										/>
-										<span>{autoExpandThinking ? "已开启" : "已关闭"}</span>
-									</label>
-								</span>
+							<div className="s-card">
+								<div className="s-card-head">界面偏好</div>
+								<div className="s-pref-list">
+									<div className="s-pref-item">
+										<div className="s-pref-text">
+											<div className="s-pref-title">简化输出</div>
+											<div className="s-pref-desc">开启后对话中不显示工具调用卡片,以「正在阅读 / 正在编辑」等动态提示代替。</div>
+										</div>
+										<ToggleSwitch checked={simplifiedTools} onChange={onSimplifiedToolsChange} />
+									</div>
+									<div className="s-pref-item">
+										<div className="s-pref-text">
+											<div className="s-pref-title">自动展开思考</div>
+											<div className="s-pref-desc">开启后思考块默认展开,无需逐条点击;关闭后回到手动展开。</div>
+										</div>
+										<ToggleSwitch checked={autoExpandThinking} onChange={onAutoExpandThinkingChange} />
+									</div>
+									<div className="s-pref-item">
+										<div className="s-pref-text">
+											<div className="s-pref-title">编辑免确认</div>
+											<div className="s-pref-desc">开启后编剧的修改落盘即生效,不再弹「待确认」卡。</div>
+										</div>
+										<ToggleSwitch checked={autoConfirmEdits} onChange={onAutoConfirmEditsChange} />
+									</div>
+								</div>
 							</div>
-							<div className="s-note">开启后思考块默认展开,无需逐条点击;关闭后回到手动展开(默认开启)。</div>
-
-							<div className="s-row">
-								<span className="s-key">编辑免确认</span>
-								<span className="s-val">
-									<label className="w-switch">
-										<input
-											type="checkbox"
-											checked={autoConfirmEdits}
-											onChange={(e) => onAutoConfirmEditsChange(e.target.checked)}
-										/>
-										<span>{autoConfirmEdits ? "已开启" : "已关闭"}</span>
-									</label>
-								</span>
-							</div>
-							<div className="s-note">开启后编剧(编辑 agent)的修改落盘即生效,不再弹「待确认」卡;关闭则每次编辑需手动确认/回退(默认关闭)。</div>
 						</>
 					)}
 
 					{cat === "world" && (
-						<>
-							<div className="s-head">世界书注入</div>
+						<div className="s-card">
+							<div className="s-card-head">世界书注入</div>
 							{worldErr ? (
 								<div className="notice err">
 									{worldErr}
@@ -766,48 +893,48 @@ export function SettingsPage({
 									</button>
 								</div>
 							) : noBook ? (
-								<div className="s-note">
+								<div className="s-card-desc">
 									未打开书,无法读取世界书注入设置。请先在写作页打开一本书,再到此页切换开关。
 								</div>
 							) : world === null ? (
-								<div className="s-note">世界书注入设置加载中…</div>
+								<div className="s-card-desc">世界书注入设置加载中…</div>
 							) : (
-								<>
-									<label className="s-row w-switch">
-										<input
-											type="checkbox"
+								<div className="s-pref-list">
+									<div className="s-pref-item">
+										<div className="s-pref-text">
+											<div className="s-pref-title">Notice 注入</div>
+											<div className="s-pref-desc">背景包包含当前剧情指引</div>
+										</div>
+										<ToggleSwitch
 											checked={world.notice.enabled}
+											onChange={(v) => void toggleInjection("notice", v)}
 											disabled={worldBusy}
-											onChange={(e) => void toggleInjection("notice", e.target.checked)}
 										/>
-										<span className="s-key">Notice 注入</span>
-										<span className="s-val muted">背景包包含当前剧情指引</span>
-										{worldBusy && <span className="s-busy">设置中…</span>}
-									</label>
-									<label className="s-row w-switch">
-										<input
-											type="checkbox"
+									</div>
+									<div className="s-pref-item">
+										<div className="s-pref-text">
+											<div className="s-pref-title">发展线注入</div>
+											<div className="s-pref-desc">背景包包含剧情进度与下一步</div>
+										</div>
+										<ToggleSwitch
 											checked={world.storyline.enabled}
+											onChange={(v) => void toggleInjection("storyline", v)}
 											disabled={worldBusy}
-											onChange={(e) => void toggleInjection("storyline", e.target.checked)}
 										/>
-										<span className="s-key">发展线注入</span>
-										<span className="s-val muted">背景包包含剧情进度与下一步</span>
-										{worldBusy && <span className="s-busy">设置中…</span>}
-									</label>
-								</>
+									</div>
+								</div>
 							)}
-						</>
+						</div>
 					)}
 
 					{cat === "integrations" && (
-						<>
-							<div className="s-head">MCP 服务器</div>
-							<div className="s-note">
+						<div className="s-card">
+							<div className="s-card-head">MCP 服务器</div>
+							<div className="s-card-desc">
 								为 AI 接入外部工具(如文件系统、资料库、计算器)。配置存 ~/.pi/writer/agent/mcp.json。
 							</div>
 							<McpServerList client={client} />
-						</>
+						</div>
 					)}
 				</div>
 			</main>

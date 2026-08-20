@@ -6,7 +6,7 @@ import { loadPromptText, renderPrompt } from "../prompts.ts";
 import { wordCountTool, worldFindTool, worldUpdateTool } from "../tools.ts";
 import { resolveWorldRefs } from "./assembler.ts";
 import { loadScript, reviseScript, saveScript } from "./script-store.ts";
-import { type ActorText, type InjectRule, type SceneScript, type ScriptPatch } from "./types.ts";
+import { type ActorSpec, type ActorText, type InjectRule, type SceneScript, type ScriptPatch } from "./types.ts";
 import type { RoleSpec, StageOrchestrator } from "./orchestrator.ts";
 
 /**
@@ -49,18 +49,22 @@ export function directorRole(orch: StageOrchestrator): RoleSpec {
 		extensions: [{ name: "stage-director", factory: (pi) => stageDirectorExtension(pi, orch) }],
 		excludeTools: ["bash"],
 		activeTools: ["read", "write", "edit", "ls", "grep"],
-		customTools: [scriptConfirmTool(orch), stageScriptTool(orch), stageReviseTool(orch), worldFindTool, worldUpdateTool, wordCountTool],
+		customTools: [scriptConfirmTool(orch), stageScriptTool(orch), stageReviseTool(orch), stageCastTool(orch), worldFindTool, worldUpdateTool, wordCountTool],
 	};
 }
 
-export function actorRole(orch: StageOrchestrator, actorId: string): RoleSpec {
+export function actorRole(orch: StageOrchestrator, actorId: string, spec?: ActorSpec): RoleSpec {
 	// 叙述者专属 prompt（角色名约定为"叙述者"）；演员第一人称思考用 low（§10.6）
 	const isNarrator = orch.script?.definition.cast[actorId]?.[0] === "叙述者";
+	const defaultThinking = isNarrator ? undefined : "low";
 	return {
 		systemPrompt: isNarrator ? NARRATOR_PROMPT : ACTOR_PROMPT,
 		extensions: [{ name: `stage-actor-${actorId}`, factory: (pi) => stageActorExtension(pi, orch, actorId) }],
 		noTools: "all",
-		thinkingLevel: isNarrator ? undefined : "low",
+		model: spec?.model,
+		thinkingLevel: spec?.thinking ?? defaultThinking,
+		temperature: spec?.temperature,
+		topP: spec?.topP,
 	};
 }
 
@@ -356,6 +360,37 @@ function stageReviseTool(orch: StageOrchestrator): ToolDefinition {
 			return {
 				content: [{ type: "text", text: `剧本已修订 → v${revised.version}（${sceneId}），下一轮生效。` }],
 				details: { sceneId, version: revised.version, ok: true },
+			};
+		},
+	});
+}
+
+const stageCastParameters = Type.Object({
+	actor: Type.String({ description: "演员 id（如 actor-1；/cast 可查看）" }),
+	model: Type.Optional(Type.String({ description: "演员使用的模型模式串（provider/id 或 pattern）" })),
+	thinking: Type.Optional(Type.String({ description: "演员思考级别（off/minimal/low/medium/high/xhigh/max）" })),
+	temperature: Type.Optional(Type.Number({ description: "采样温度 0..2（不传保持不变）" })),
+	topP: Type.Optional(Type.Number({ description: "核采样概率 0..1（不传保持不变）" })),
+});
+
+/** 导演专属工具：调整演员编制参数（模型/思考/温度/top_p）。 */
+function stageCastTool(orch: StageOrchestrator): ToolDefinition {
+	return defineTool<typeof stageCastParameters, { ok: boolean; actor?: unknown }>({
+		name: "stage_cast",
+		label: "设定演员参数",
+		description:
+			"为演员池中的某个演员设置模型/思考级别/采样温度/top_p。设置写入 cast.json；已开演的演员会话会尽量即时生效，未创建会话的演员在下次开演时使用。不传的字段保持不变。",
+		parameters: stageCastParameters,
+		execute: async (_callId, params) => {
+			const result = await orch.updateActorSpec(params.actor, {
+				...(params.model !== undefined ? { model: params.model } : {}),
+				...(params.thinking !== undefined ? { thinking: params.thinking } : {}),
+				...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
+				...(params.topP !== undefined ? { topP: params.topP } : {}),
+			});
+			return {
+				content: [{ type: "text", text: result.text }],
+				details: { ok: result.ok, ...(result.actor ? { actor: result.actor } : {}) },
 			};
 		},
 	});

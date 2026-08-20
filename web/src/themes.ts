@@ -89,7 +89,7 @@ export function themeStarterCss(): string {
 	return `/* 自定义主题骨架:覆盖任意颜色 token(完整 26 色见 THEME_TOKENS)。 */
 :root {
   --bg: #101010; --bg-elev: #161616; --bg-elev-2: #1d1d1d;
-  --ink: #e8e6e1; --ink-2: #c6c2b9; --muted: #989287; --faint: #787266;
+  --ink: #e8e6e1; --ink-2: #c6c2b9; --muted: #989287; --faint: #8f8779;
   --line: #2a2a2a; --line-strong: #3b3b3b;
   --amber: #d9a84e; --green: #8fb57f; --red: #db7e6c; --err-soft: #e8a294;
   --amber-tint: rgba(217, 168, 78, 0.09); --amber-tint-strong: rgba(217, 168, 78, 0.28);

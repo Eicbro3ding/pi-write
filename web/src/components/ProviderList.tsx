@@ -103,85 +103,86 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 				onChange={(e) => setQuery(e.target.value)}
 			/>
 			{filtered.length === 0 ? (
-				<div className="s-row">
+				<div className="s-empty-row">
 					<span className="s-val muted">未找到匹配的 provider</span>
 				</div>
 			) : (
-				filtered.map((p) => (
-					<div className="s-row s-provider" key={p.id}>
-						<span className="s-key mono">
-							{p.configured ? "✓ " : "○ "}
-							{p.id}
-						</span>
-						{p.configured ? (
-							<span className="s-tag ok">已配置{p.source === "stored" ? " · 已存 key" : ""}</span>
-						) : p.authKind === "ambient" ? (
-							<span className="s-tag">环境变量</span>
-						) : (
-							<span className="s-tag">未配置</span>
-						)}
-						<span className="s-actions">
-							{p.authKind === "api_key" || p.authKind === "both" ? (
-								<>
-										<button
-											className="btn-ghost"
-											disabled={busyId !== null}
-											onClick={() => {
-												setEditingId(p.id);
+				<div className="s-provider-list">
+					{filtered.map((p) => (
+						<div className={`s-provider-row${p.configured ? " configured" : ""}`} key={p.id}>
+							<div className="s-provider-main">
+								<span className="s-provider-id">{p.id}</span>
+								{p.configured ? (
+									<span className="s-tag ok">已配置{p.source === "stored" ? " · 已存 key" : ""}</span>
+								) : p.authKind === "ambient" ? (
+									<span className="s-tag">环境变量</span>
+								) : (
+									<span className="s-tag muted">未配置</span>
+								)}
+								<span className="s-actions">
+									{p.authKind === "api_key" || p.authKind === "both" ? (
+										<>
+											<button
+												className="btn-ghost"
+												disabled={busyId !== null}
+												onClick={() => {
+													setEditingId(p.id);
+													setKeyValue("");
+													setConfirmId(null);
+												}}
+											>
+												{p.configured ? "更新" : "添加 key"}
+											</button>
+											{p.configured && (
+												<button className="btn-ghost danger" disabled={busyId !== null} onClick={() => setConfirmId(p.id)}>
+													移除
+												</button>
+											)}
+										</>
+									) : p.authKind === "oauth" ? (
+										<span className="s-note-inline">支持订阅登录(暂未支持)</span>
+									) : null}
+								</span>
+							</div>
+							{editingId === p.id && (
+								<div className="s-provider-form">
+									<input
+										type="password"
+										className="s-input"
+										placeholder="粘贴 API key"
+										value={keyValue}
+										autoFocus
+										onChange={(e) => setKeyValue(e.target.value)}
+										onKeyDown={(e) => {
+											if (e.key === "Enter" && keyValue.trim().length > 0) void saveKey(p.id);
+											if (e.key === "Escape") {
+												setEditingId(null);
 												setKeyValue("");
-												setConfirmId(null);
-											}}
-										>
-										{p.configured ? "更新" : "添加 key"}
+											}
+										}}
+									/>
+									<button className="btn-ghost" disabled={busyId !== null || keyValue.trim().length === 0} onClick={() => void saveKey(p.id)}>
+										{busyId === p.id ? "保存中…" : "保存"}
 									</button>
-									{p.configured && (
-										<button className="btn-ghost danger" disabled={busyId !== null} onClick={() => setConfirmId(p.id)}>
-											移除
-										</button>
-									)}
-								</>
-							) : p.authKind === "oauth" ? (
-								<span className="s-note-inline">支持订阅登录(暂未支持)</span>
-							) : null}
-						</span>
-						{editingId === p.id && (
-							<div className="s-provider-form">
-								<input
-									type="password"
-									className="s-input"
-									placeholder="粘贴 API key"
-									value={keyValue}
-									autoFocus
-									onChange={(e) => setKeyValue(e.target.value)}
-									onKeyDown={(e) => {
-										if (e.key === "Enter" && keyValue.trim().length > 0) void saveKey(p.id);
-										if (e.key === "Escape") {
-											setEditingId(null);
-											setKeyValue("");
-										}
-									}}
-								/>
-								<button className="btn-ghost" disabled={busyId !== null || keyValue.trim().length === 0} onClick={() => void saveKey(p.id)}>
-									{busyId === p.id ? "保存中…" : "保存"}
-								</button>
-								<button className="btn-ghost" disabled={busyId !== null} onClick={() => { setEditingId(null); setKeyValue(""); }}>
-									取消
-								</button>
-							</div>
-						)}
-						{confirmId === p.id && (
-							<div className="s-provider-confirm">
-								<span>移除后该 provider 将无法使用,确认?</span>
-								<button className="btn-ghost danger" disabled={busyId !== null} onClick={() => void removeKey(p.id)}>
-									{busyId === p.id ? "移除中…" : "确认移除"}
-								</button>
-								<button className="btn-ghost" disabled={busyId !== null} onClick={() => setConfirmId(null)}>
-									取消
-								</button>
-							</div>
-						)}
-					</div>
-				))
+									<button className="btn-ghost" disabled={busyId !== null} onClick={() => { setEditingId(null); setKeyValue(""); }}>
+										取消
+									</button>
+								</div>
+							)}
+							{confirmId === p.id && (
+								<div className="s-provider-confirm">
+									<span>移除后该 provider 将无法使用,确认?</span>
+									<button className="btn-ghost danger" disabled={busyId !== null} onClick={() => void removeKey(p.id)}>
+										{busyId === p.id ? "移除中…" : "确认移除"}
+									</button>
+									<button className="btn-ghost" disabled={busyId !== null} onClick={() => setConfirmId(null)}>
+										取消
+									</button>
+								</div>
+							)}
+						</div>
+					))}
+				</div>
 			)}
 		</>
 	);

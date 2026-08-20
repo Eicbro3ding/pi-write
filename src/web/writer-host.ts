@@ -59,6 +59,10 @@ export interface WriterHostOptions {
 	model?: string;
 	/** --thinking 档位。 */
 	thinkingLevel?: string;
+	/** 采样温度(0..2)。 */
+	temperature?: number;
+	/** 核采样概率(0..1)。 */
+	topP?: number;
 	/** MCP 外部工具惰性获取(web 注入,编剧会话可用;导演同款,2026-08-11)。 */
 	getMcpTools?: () => ToolDefinition[];
 	/** 测试注入:自定义宿主工厂(缺省创建真实会话)。 */
@@ -87,6 +91,8 @@ async function readTextSafe(path: string): Promise<string | null> {
 
 export class WriterHost {
 	private readonly options: WriterHostOptions;
+	private temperature?: number;
+	private topP?: number;
 	/** 会话键 = `${slug}:${chapterFile}`(编剧对话按章节隔离——切章后各章独立
 	 *  对话/历史/上下文,不再整本书共用,2026-08-10)。 */
 	private readonly hosts = new Map<string, SessionHost>();
@@ -98,11 +104,22 @@ export class WriterHost {
 
 	constructor(options: WriterHostOptions) {
 		this.options = options;
+		this.temperature = options.temperature;
+		this.topP = options.topP;
 	}
 
 	/** server 构造时注入事件转发(WriterHost 在 web.ts 先于 server 创建)。 */
 	setEventSink(sink: (slug: string, chapterFile: string | null, event: AgentSessionEvent) => void): void {
 		this.eventSink = sink;
+	}
+
+	/** 设置采样参数：更新未来新建会话的默认值，并即时应用到已创建的编剧会话。null 恢复模型默认。 */
+	setSamplingParameters(temperature?: number | null, topP?: number | null): void {
+		if (temperature !== undefined) this.temperature = temperature ?? undefined;
+		if (topP !== undefined) this.topP = topP ?? undefined;
+		for (const host of this.hosts.values()) {
+			host.setSamplingParameters(temperature, topP);
+		}
 	}
 
 	/** 会话键:书 + 章节(chat 未声明章节时用 currentChapter 兜底,再无则 "default")。 */
@@ -151,6 +168,7 @@ export class WriterHost {
 	private roleFactory(slug: string, chapterFile: string | null): CreateAgentSessionRuntimeFactory {
 		const agentDir = getAgentDir();
 		const { model, thinkingLevel } = this.options;
+		const { temperature, topP } = this;
 		const inject = (messages: AgentMessage[]): Promise<AgentMessage[] | undefined> => this.editorContext(slug, chapterFile, messages);
 		// 正文文件白名单:write 只允许写当前章节文件(agent 自创文件名会把正文写到
 		// 前端读不到的路径——2026-08-11 编剧乱写 draft/第一章.md 的根因)
@@ -174,6 +192,8 @@ export class WriterHost {
 			],
 			model,
 			thinkingLevel: thinkingLevel as ThinkingLevel | undefined,
+			temperature,
+			topP,
 			excludeTools: ["bash"],
 			initialActiveToolNames: ["write", "read"],
 			// world_find(只读检索世界书):编剧无 world_update,但可结构化查条目——

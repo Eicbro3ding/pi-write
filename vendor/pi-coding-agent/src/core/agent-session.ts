@@ -872,6 +872,16 @@ export class AgentSession {
 		return this.agent.state.thinkingLevel;
 	}
 
+	/** Current sampling temperature (undefined = provider default). */
+	get temperature(): number | undefined {
+		return this.agent.state.temperature;
+	}
+
+	/** Current nucleus sampling probability mass (undefined = provider default). */
+	get topP(): number | undefined {
+		return this.agent.state.topP;
+	}
+
 	/** Whether the session is currently processing an agent run or post-run continuation. */
 	get isStreaming(): boolean {
 		return this._isAgentRunActive;
@@ -1695,6 +1705,37 @@ export class AgentSession {
 				level: effectiveLevel,
 				previousLevel,
 			});
+		}
+	}
+
+	/**
+	 * Set sampling parameters (temperature/top_p).
+	 *
+	 * Passing `undefined` leaves that parameter unchanged. Passing `null` clears it
+	 * back to the provider default. By default persists to global settings so newly
+	 * created sessions use the same defaults; pass `persist=false` for per-agent
+	 * overrides that should not change global defaults.
+	 */
+	setSamplingParameters(temperature?: number | null, topP?: number | null, persist = true): void {
+		if (temperature !== undefined) {
+			if (temperature !== null && (typeof temperature !== "number" || Number.isNaN(temperature))) {
+				throw new Error(`Invalid temperature: ${String(temperature)}`);
+			}
+			this.agent.state.temperature = temperature ?? undefined;
+			if (persist) {
+				if (temperature === null) this.settingsManager.clearDefaultTemperature();
+				else this.settingsManager.setDefaultTemperature(temperature);
+			}
+		}
+		if (topP !== undefined) {
+			if (topP !== null && (typeof topP !== "number" || Number.isNaN(topP))) {
+				throw new Error(`Invalid topP: ${String(topP)}`);
+			}
+			this.agent.state.topP = topP ?? undefined;
+			if (persist) {
+				if (topP === null) this.settingsManager.clearDefaultTopP();
+				else this.settingsManager.setDefaultTopP(topP);
+			}
 		}
 	}
 

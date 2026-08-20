@@ -44,6 +44,8 @@ interface CliOptions {
 	chapter: string | undefined;
 	model: string | undefined;
 	thinking: string | undefined;
+	temperature: number | undefined;
+	topP: number | undefined;
 	prompt: string | undefined;
 	printMode: boolean;
 	verbose: boolean;
@@ -62,6 +64,8 @@ function parseArgs(argv: string[]): CliOptions {
 		chapter: undefined,
 		model: undefined,
 		thinking: undefined,
+		temperature: undefined,
+		topP: undefined,
 		prompt: undefined,
 		printMode: false,
 		verbose: false,
@@ -123,6 +127,20 @@ function parseArgs(argv: string[]): CliOptions {
 				opts.webExtra.push("--thinking", value);
 				break;
 			}
+			case "--temperature": {
+				const value = Number(next());
+				if (Number.isNaN(value)) throw new Error(`Invalid --temperature value: ${argv[i]}`);
+				opts.temperature = value;
+				opts.webExtra.push("--temperature", String(value));
+				break;
+			}
+			case "--top-p": {
+				const value = Number(next());
+				if (Number.isNaN(value)) throw new Error(`Invalid --top-p value: ${argv[i]}`);
+				opts.topP = value;
+				opts.webExtra.push("--top-p", String(value));
+				break;
+			}
 			case "-p":
 			case "--print":
 				opts.printMode = true;
@@ -168,6 +186,8 @@ Usage:
 Options:
   --model <pattern>                      model specifier (provider/id or pattern; --thinking <level>)
   --thinking <level>                      off | minimal | low | medium | high | xhigh | max
+  --temperature <number>                  sampling temperature (0..2)
+  --top-p <number>                        nucleus sampling probability mass (0..1)
   -p, --print [prompt]                    non-interactive: write the prompt and exit
   --verbose                               force verbose startup
   -v, --version                           show version
@@ -265,7 +285,7 @@ async function main(): Promise<void> {
 	if (opts.stage) {
 		// `pi-writer --stage`:舞台区共演 demo(导演/演员/编剧多 agent 编排),stdin 交互。
 		const { runStageCli } = await import("./stage/cli.ts");
-		await runStageCli({ slug: opts.book, model: opts.model, thinking: opts.thinking });
+		await runStageCli({ slug: opts.book, model: opts.model, thinking: opts.thinking, temperature: opts.temperature, topP: opts.topP });
 		return;
 	}
 	if (opts.web) {
@@ -356,6 +376,8 @@ async function main(): Promise<void> {
 		extensionFactories: [writerExtension],
 		model: opts.model,
 		thinkingLevel: opts.thinking as ThinkingLevel | undefined,
+		temperature: opts.temperature,
+		topP: opts.topP,
 		// 显式激活内置全量工具(不再用 tools 白名单——白名单会把 MCP customTools 滤掉,
 		// 见 src/web.ts webExcludeTools 注释;word_count 等扩展工具自动激活)
 		initialActiveToolNames: ["read", "bash", "write", "edit", "grep", "find", "ls"],

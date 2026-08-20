@@ -367,6 +367,7 @@ export const stream: StreamFunction<"pi-messages", PiMessagesOptions> = (
 				context,
 				options: {
 					temperature: options?.temperature,
+					topP: options?.topP,
 					maxTokens: options?.maxTokens,
 					reasoning: options?.reasoning,
 					cacheRetention: resolveCacheRetention(options?.cacheRetention, options?.env),

@@ -294,6 +294,10 @@ function buildParams(
 		params.temperature = options?.temperature;
 	}
 
+	if (options?.topP !== undefined) {
+		params.top_p = options.topP;
+	}
+
 	if (options?.serviceTier !== undefined) {
 		params.service_tier = options.serviceTier;
 	}

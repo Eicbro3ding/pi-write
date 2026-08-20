@@ -276,6 +276,10 @@ export class SessionHost {
 		// ThinkingLevel 是字符串字面量联合,由调用方保证传入合法值
 		this.requireRuntime().session.setThinkingLevel(level as ThinkingLevel);
 	}
+	/** 设置采样参数(temperature/topP);undefined 保持当前值, null 恢复模型默认。persist=false 时不写全局默认(演员级覆盖用)。 */
+	setSamplingParameters(temperature?: number | null, topP?: number | null, persist = true): void {
+		this.requireRuntime().session.setSamplingParameters(temperature, topP, persist);
+	}
 
 	/**
 	 * 撤回某条用户消息及其之后的所有消息:把会话 leaf 指针移回该消息之前,

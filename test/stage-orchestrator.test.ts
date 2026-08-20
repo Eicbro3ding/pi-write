@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { loadCast, saveCast } from "../src/stage/cast.ts";
 import { saveScript } from "../src/stage/script-store.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -347,5 +348,44 @@ describe("buildScriptMethodBlock（剧本写作方法注入，含 skill 绝对�
 		const block = buildScriptMethodBlock("C:/repo/skills");
 		expect(block).toContain("read C:/repo/skills/stage-scripting/SKILL.md");
 		expect(block).not.toContain("read skills/");
+	});
+});
+
+describe("updateActorSpec（导演 stage_cast 后端）", () => {
+	let tmp: string;
+	beforeEach(() => {
+		tmp = mkdtempSync(join(tmpdir(), "piw-cast-spec-"));
+	});
+	afterEach(() => {
+		rmSync(tmp, { recursive: true, force: true });
+	});
+
+	it("更新 cast.json 中的演员采样参数；不存在演员时返回错误", async () => {
+		await saveCast(tmp, { version: 1, actors: [{ id: "actor-1", type: "pool" }] });
+		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
+		const r = await orch.updateActorSpec("actor-1", { temperature: 0.8, topP: 0.9 });
+		expect(r.ok).toBe(true);
+		expect(r.text).toContain("temperature=0.8");
+		expect(r.text).toContain("topP=0.9");
+		const cast = await loadCast(tmp);
+		expect(cast.actors[0]).toMatchObject({ id: "actor-1", temperature: 0.8, topP: 0.9 });
+		expect((await orch.updateActorSpec("ghost", { temperature: 1 })).ok).toBe(false);
+	});
+
+	it("setSamplingParameters(null) 清除所有演员的 temperature 覆盖", async () => {
+		await saveCast(tmp, {
+			version: 1,
+			actors: [
+				{ id: "actor-1", type: "pool", temperature: 0.7, topP: 0.9 },
+				{ id: "actor-2", type: "pool", temperature: 1.1 },
+			],
+		});
+		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
+		await orch.setSamplingParameters(null);
+		const cast = await loadCast(tmp);
+		expect(cast.actors[0]?.temperature).toBeUndefined();
+		expect(cast.actors[1]?.temperature).toBeUndefined();
+		// 未传 topP 时不清除演员 topP
+		expect(cast.actors[0]?.topP).toBe(0.9);
 	});
 });

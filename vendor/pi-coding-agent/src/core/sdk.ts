@@ -48,6 +48,10 @@ export interface CreateAgentSessionOptions {
 	model?: Model<any>;
 	/** Thinking level. Default: from settings, else 'medium' (clamped to model capabilities) */
 	thinkingLevel?: ThinkingLevel;
+	/** Sampling temperature (0..2). Default: provider default. */
+	temperature?: number;
+	/** Nucleus sampling probability mass (0..1). Default: provider default. */
+	topP?: number;
 	/** Models available for cycling (Ctrl+P in interactive mode) */
 	scopedModels?: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
 
@@ -249,6 +253,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		thinkingLevel = clampThinkingLevel(model, thinkingLevel) as ThinkingLevel;
 	}
 
+	const temperature = options.temperature ?? settingsManager.getDefaultTemperature();
+	const topP = options.topP ?? settingsManager.getDefaultTopP();
+
 	const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write"];
 	const allowedToolNames = options.tools ?? (options.noTools === "all" ? [] : undefined);
 	const excludedToolNames = options.excludeTools;
@@ -303,6 +310,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			systemPrompt: "",
 			model,
 			thinkingLevel,
+			temperature,
+			topP,
 			tools: [],
 		},
 		convertToLlm: convertToLlmWithBlockImages,

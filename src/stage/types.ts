@@ -20,8 +20,14 @@ export interface ActorSpec {
 	type: ActorKind;
 	/** named 演员绑定的角色名（与 characters.md 对应）。 */
 	character?: string;
+	/** 演员级模型覆盖（缺省用全局 --model/设置默认）。 */
 	model?: string;
+	/** 演员级思考级别覆盖。 */
 	thinking?: string;
+	/** 演员级采样温度（0..2）。 */
+	temperature?: number;
+	/** 演员级核采样概率（0..1）。 */
+	topP?: number;
 }
 
 /** 演员池编制（cast.json）。池是上限不是常驻：角色没上过场不建会话。 */
@@ -135,6 +141,8 @@ export const ActorSpecSchema = Type.Object({
 	character: Type.Optional(Type.String()),
 	model: Type.Optional(Type.String()),
 	thinking: Type.Optional(Type.String()),
+	temperature: Type.Optional(Type.Number()),
+	topP: Type.Optional(Type.Number()),
 });
 
 export const CastConfigSchema = Type.Object({

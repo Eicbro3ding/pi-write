@@ -115,6 +115,8 @@ export interface ProviderResponse {
 
 export interface StreamOptions {
 	temperature?: number;
+	/** Nucleus sampling probability mass (0..1). Passed through to providers that support it. */
+	topP?: number;
 	maxTokens?: number;
 	signal?: AbortSignal;
 	apiKey?: string;

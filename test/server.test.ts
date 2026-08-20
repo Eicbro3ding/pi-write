@@ -91,6 +91,7 @@ function fakeHost() {
 		},
 		setModel: async () => {},
 		setThinkingLevel: async () => {},
+		setSamplingParameters: () => {},
 		listProviders: async () => providers,		setProviderApiKey: async (id: string, key: string) => {
 			if (id === "fail-provider") {
 				throw new ProviderAuthError(
@@ -486,6 +487,16 @@ describe("WriterServer", () => {
 		expect(m.status).toBe(200);
 		const t = await fetch(`${base}/api/thinking`, { method: "POST", headers: json, body: JSON.stringify({ level: "high" }) });
 		expect(t.status).toBe(200);
+	});
+	it("POST /api/sampling 返回 200 并校验范围", async () => {
+		const ok = await fetch(`${base}/api/sampling`, { method: "POST", headers: json, body: JSON.stringify({ temperature: 0.8, topP: 0.9 }) });
+		expect(ok.status).toBe(200);
+		const reset = await fetch(`${base}/api/sampling`, { method: "POST", headers: json, body: JSON.stringify({ temperature: null }) });
+		expect(reset.status).toBe(200);
+		const bad = await fetch(`${base}/api/sampling`, { method: "POST", headers: json, body: JSON.stringify({ temperature: 3 }) });
+		expect(bad.status).toBe(400);
+		const empty = await fetch(`${base}/api/sampling`, { method: "POST", headers: json, body: JSON.stringify({}) });
+		expect(empty.status).toBe(400);
 	});
 	it("POST /api/abort 返回 200", async () => {
 		const res = await fetch(`${base}/api/abort`, { method: "POST" });

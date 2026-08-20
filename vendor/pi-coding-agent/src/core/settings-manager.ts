@@ -88,6 +88,8 @@ export interface Settings {
 	defaultProvider?: string;
 	defaultModel?: string;
 	defaultThinkingLevel?: ThinkingLevel;
+	defaultTemperature?: number;
+	defaultTopP?: number;
 	transport?: TransportSetting; // default: "auto"
 	steeringMode?: "all" | "one-at-a-time";
 	followUpMode?: "all" | "one-at-a-time";
@@ -749,6 +751,38 @@ export class SettingsManager {
 	setDefaultThinkingLevel(level: ThinkingLevel): void {
 		this.globalSettings.defaultThinkingLevel = level;
 		this.markModified("defaultThinkingLevel");
+		this.save();
+	}
+
+	getDefaultTemperature(): number | undefined {
+		return this.settings.defaultTemperature;
+	}
+
+	setDefaultTemperature(temperature: number): void {
+		this.globalSettings.defaultTemperature = temperature;
+		this.markModified("defaultTemperature");
+		this.save();
+	}
+
+	getDefaultTopP(): number | undefined {
+		return this.settings.defaultTopP;
+	}
+
+	setDefaultTopP(topP: number): void {
+		this.globalSettings.defaultTopP = topP;
+		this.markModified("defaultTopP");
+		this.save();
+	}
+
+	clearDefaultTemperature(): void {
+		delete this.globalSettings.defaultTemperature;
+		this.markModified("defaultTemperature");
+		this.save();
+	}
+
+	clearDefaultTopP(): void {
+		delete this.globalSettings.defaultTopP;
+		this.markModified("defaultTopP");
 		this.save();
 	}
 

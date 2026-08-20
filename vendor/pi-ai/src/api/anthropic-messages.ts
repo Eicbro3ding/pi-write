@@ -999,9 +999,13 @@ function buildParams(
 		];
 	}
 
-	// Temperature is incompatible with extended thinking and unsupported on Claude Opus 4.7+.
+	// Temperature/top_p are incompatible with extended thinking and unsupported on Claude Opus 4.7+.
 	if (options?.temperature !== undefined && !options?.thinkingEnabled && compat.supportsTemperature) {
 		params.temperature = options.temperature;
+	}
+
+	if (options?.topP !== undefined && !options?.thinkingEnabled && compat.supportsTemperature) {
+		(params as any).top_p = options.topP;
 	}
 
 	if (immediateTools.length > 0 || deferredTools.length > 0) {

@@ -210,6 +210,7 @@ export function McpServerList({ client }: { client: ApiClient }) {
 	}
 
 	const formOpen = adding || editingName !== null;
+	const hasServers = (servers ?? []).length > 0;
 
 	return (
 		<>
@@ -218,11 +219,19 @@ export function McpServerList({ client }: { client: ApiClient }) {
 			<div className="s-hint">
 				MCP 服务器为 AI 提供外部工具(stdio 本地命令 / http、sse 远端)。保存后立即重连并重建会话,新工具即时生效;连接意外断开会自动重连。
 			</div>
-			{(servers ?? []).length === 0 ? (
-				<div className="s-row">
-					<span className="s-val muted">尚未配置 MCP 服务器</span>
+			{!hasServers && !formOpen && (
+				<div className="s-empty-state">
+					<div className="s-empty-icon">◊</div>
+					<div className="s-empty-title">尚未配置 MCP 服务器</div>
+					<div className="s-empty-desc">
+						配置后 AI 可以使用外部工具,如文件系统、资料库、搜索等。
+					</div>
+					<button className="btn-ghost" disabled={busy} onClick={startAdd}>
+						＋ 添加 MCP 服务器
+					</button>
 				</div>
-			) : (
+			)}
+			{hasServers && (
 				(servers ?? []).map((s) => {
 					const st = statusOf(s.name);
 					return (
@@ -300,7 +309,7 @@ export function McpServerList({ client }: { client: ApiClient }) {
 					</div>
 				</div>
 			)}
-			{!formOpen && (
+			{!formOpen && hasServers && (
 				<div className="s-actions">
 					<button className="btn-ghost" disabled={busy} onClick={startAdd}>
 						＋ 添加 MCP 服务器

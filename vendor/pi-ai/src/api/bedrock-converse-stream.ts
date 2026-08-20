@@ -239,6 +239,7 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 				inferenceConfig: {
 					...(inferenceMaxTokens !== undefined && { maxTokens: inferenceMaxTokens }),
 					...(options.temperature !== undefined && { temperature: options.temperature }),
+					...(options.topP !== undefined && { topP: options.topP }),
 				},
 				toolConfig: convertToolConfig(context.tools, options.toolChoice, model.compat?.supportsStrictMode ?? false),
 				additionalModelRequestFields: buildAdditionalModelRequestFields(model, options),

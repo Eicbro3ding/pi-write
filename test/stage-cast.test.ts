@@ -43,7 +43,7 @@ describe("cast.json 读写", () => {
 		const cast: CastConfig = {
 			version: 1,
 			actors: [
-				{ id: "actor-1", type: "named", character: "李四" },
+				{ id: "actor-1", type: "named", character: "李四", temperature: 0.9, topP: 0.95 },
 				{ id: "actor-3", type: "pool" },
 				{ id: "actor-4", type: "narrator" },
 			],
@@ -100,6 +100,19 @@ describe("validateCast", () => {
 		const errors = validateCast(cast);
 		expect(errors.some((e) => e.includes("缺少 character"))).toBe(true);
 		expect(errors.some((e) => e.includes("不应绑定 character"))).toBe(true);
+	});
+
+	it("检出采样参数越界", () => {
+		const cast: CastConfig = {
+			version: 1,
+			actors: [
+				{ id: "a", type: "pool", temperature: 2.5 },
+				{ id: "b", type: "pool", topP: 1.2 },
+			],
+		};
+		const errors = validateCast(cast);
+		expect(errors.some((e) => e.includes("temperature 必须在 0..2"))).toBe(true);
+		expect(errors.some((e) => e.includes("topP 必须在 0..1"))).toBe(true);
 	});
 });
 

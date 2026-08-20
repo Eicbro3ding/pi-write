@@ -568,6 +568,10 @@ function buildRequestBody(
 		body.temperature = options.temperature;
 	}
 
+	if (options?.topP !== undefined) {
+		body.top_p = options.topP;
+	}
+
 	if (options?.serviceTier !== undefined) {
 		body.service_tier = options.serviceTier;
 	}

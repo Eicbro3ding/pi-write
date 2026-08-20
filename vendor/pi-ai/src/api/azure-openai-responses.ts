@@ -297,6 +297,10 @@ function buildParams(
 		params.temperature = options?.temperature;
 	}
 
+	if (options?.topP !== undefined) {
+		params.top_p = options.topP;
+	}
+
 	if (context.tools && context.tools.length > 0) {
 		params.tools = convertResponsesTools(context.tools, {
 			supportsStrictMode: model.compat?.supportsStrictMode ?? true,

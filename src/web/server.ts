@@ -300,6 +300,14 @@ function optionalString(body: unknown, key: string): string | undefined {
 	return value;
 }
 
+/** 取可选数字或 null 字段;null 表示恢复模型默认。 */
+function optionalNumberOrNull(body: unknown, key: string): number | null | undefined {
+	const value = (body as Record<string, unknown> | null)?.[key];
+	if (value === undefined || value === null) return value;
+	if (typeof value !== "number" || !Number.isFinite(value)) throw new HttpError(400, "bad_request", `字段 ${key} 必须是数字或 null`);
+	return value;
+}
+
 /**
  * 从 Cookie 头解析 pi_writer_token 值:按 ";" 分段、trim 后找
  * "pi_writer_token=" 前缀,取前缀之后的部分;不存在返回 undefined。
@@ -490,6 +498,7 @@ export class WriterServer {
 			{ method: "POST", segments: ["models", "custom"], handler: (ctx) => this.handlePostModelCustom(ctx) },
 			{ method: "POST", segments: ["model"], handler: (ctx) => this.handlePostModel(ctx) },
 			{ method: "POST", segments: ["thinking"], handler: (ctx) => this.handlePostThinking(ctx) },
+			{ method: "POST", segments: ["sampling"], handler: (ctx) => this.handlePostSampling(ctx) },
 			{ method: "GET", segments: ["providers"], handler: (ctx) => this.handleGetProviders(ctx) },
 			{ method: "POST", segments: ["providers", ":id", "apikey"], handler: (ctx) => this.handlePostProviderApiKey(ctx) },
 			{ method: "DELETE", segments: ["providers", ":id"], handler: (ctx) => this.handleDeleteProvider(ctx) },
@@ -1144,7 +1153,7 @@ export class WriterServer {
 		const runtime = this.options.sessionHost.getRuntime();
 		const models = await runtime.session.modelRuntime.getAvailable();
 		const state = runtime.session.state;
-		this.send(ctx.res, 200, { models, current: state.model, thinking: state.thinkingLevel });
+		this.send(ctx.res, 200, { models, current: state.model, thinking: state.thinkingLevel, temperature: state.temperature, topP: state.topP });
 	}
 
 	/**
@@ -1211,6 +1220,26 @@ export class WriterServer {
 		const body = await readJsonBody(ctx.req);
 		const level = requireString(body, "level");
 		await this.options.sessionHost.setThinkingLevel(level);
+		this.send(ctx.res, 200, { ok: true });
+	}
+
+	/** POST /api/sampling {temperature?, topP?}:切换采样参数;null 表示恢复模型默认。 */
+	private async handlePostSampling(ctx: RouteContext): Promise<void> {
+		const body = await readJsonBody(ctx.req);
+		const temperature = optionalNumberOrNull(body, "temperature");
+		const topP = optionalNumberOrNull(body, "topP");
+		if (temperature === undefined && topP === undefined) {
+			throw new HttpError(400, "bad_request", "至少提供 temperature、topP 或 null 之一");
+		}
+		if (temperature !== null && temperature !== undefined && (temperature < 0 || temperature > 2)) {
+			throw new HttpError(400, "bad_request", "temperature 必须在 0..2 之间");
+		}
+		if (topP !== null && topP !== undefined && (topP < 0 || topP > 1)) {
+			throw new HttpError(400, "bad_request", "topP 必须在 0..1 之间");
+		}
+		this.options.sessionHost.setSamplingParameters(temperature, topP);
+		this.options.writerHost?.setSamplingParameters(temperature, topP);
+		await this.options.stageHost?.setSamplingParameters(temperature, topP);
 		this.send(ctx.res, 200, { ok: true });
 	}
 

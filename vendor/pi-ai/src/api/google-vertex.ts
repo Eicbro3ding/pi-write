@@ -461,6 +461,9 @@ function buildParams(
 	if (options.temperature !== undefined) {
 		generationConfig.temperature = options.temperature;
 	}
+	if (options.topP !== undefined) {
+		generationConfig.topP = options.topP;
+	}
 	if (options.maxTokens !== undefined) {
 		generationConfig.maxOutputTokens = options.maxTokens;
 	}

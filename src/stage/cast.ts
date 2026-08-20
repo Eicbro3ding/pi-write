@@ -11,6 +11,10 @@ function isActorSpec(value: unknown): value is ActorSpec {
 	if (typeof v.id !== "string" || v.id.length === 0) return false;
 	if (v.type !== "named" && v.type !== "pool" && v.type !== "narrator") return false;
 	if (v.character !== undefined && typeof v.character !== "string") return false;
+	if (v.model !== undefined && typeof v.model !== "string") return false;
+	if (v.thinking !== undefined && typeof v.thinking !== "string") return false;
+	if (v.temperature !== undefined && (typeof v.temperature !== "number" || Number.isNaN(v.temperature))) return false;
+	if (v.topP !== undefined && (typeof v.topP !== "number" || Number.isNaN(v.topP))) return false;
 	return true;
 }
 
@@ -48,6 +52,12 @@ export function validateCast(cast: CastConfig): string[] {
 		}
 		if (actor.type === "pool" && actor.character) {
 			errors.push(`pool 演员 ${actor.id} 不应绑定 character（群演按幕注入）`);
+		}
+		if (actor.temperature !== undefined && (actor.temperature < 0 || actor.temperature > 2)) {
+			errors.push(`演员 ${actor.id} 的 temperature 必须在 0..2 之间`);
+		}
+		if (actor.topP !== undefined && (actor.topP < 0 || actor.topP > 1)) {
+			errors.push(`演员 ${actor.id} 的 topP 必须在 0..1 之间`);
 		}
 	}
 	return errors;

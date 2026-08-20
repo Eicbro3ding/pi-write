@@ -51,6 +51,10 @@ export interface SessionFactoryOptions {
 	model?: string;
 	/** 思考等级。 */
 	thinkingLevel?: ThinkingLevel;
+	/** 采样温度(0..2);缺省用服务默认。 */
+	temperature?: number;
+	/** 核采样概率质量(0..1);缺省用服务默认。 */
+	topP?: number;
 }
 
 /**
@@ -95,6 +99,8 @@ export function createSessionRuntimeFactory(opts: SessionFactoryOptions): Create
 			sessionStartEvent,
 			model,
 			thinkingLevel: opts.thinkingLevel,
+			temperature: opts.temperature,
+			topP: opts.topP,
 			...(opts.excludeTools ? { excludeTools: opts.excludeTools } : {}),
 			...(opts.initialActiveToolNames ? { initialActiveToolNames: opts.initialActiveToolNames } : {}),
 			...(opts.noTools ? { noTools: opts.noTools } : {}),

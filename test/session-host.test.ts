@@ -15,6 +15,7 @@ function makeFakeRuntime(modelRuntime: Record<string, unknown> = {}) {
 		abort: vi.fn(async () => {}),
 		setModel: vi.fn(async () => {}),
 		setThinkingLevel: vi.fn(() => {}),
+		setSamplingParameters: vi.fn(() => {}),
 		sendCustomMessage: vi.fn(async () => {}),
 		getContextUsage: vi.fn(() => ({ tokens: 1200, contextWindow: 2000, percent: 60 })),
 		compact: vi.fn(async () => ({
@@ -100,6 +101,13 @@ describe("SessionHost", () => {
 			estimatedTokensAfter: 400,
 		});
 		expect(fake.session.compact).toHaveBeenCalledWith("保留冲突");
+	});
+	it("setSamplingParameters 转发 temperature/topP", async () => {
+		const fake = makeFakeRuntime();
+		const host = makeHost(fake);
+		await host.start();
+		host.setSamplingParameters(0.8, 0.9);
+		expect(fake.session.setSamplingParameters).toHaveBeenCalledWith(0.8, 0.9, true);
 	});
 	it("switchSession 转发绝对路径", async () => {
 		const fake = makeFakeRuntime();

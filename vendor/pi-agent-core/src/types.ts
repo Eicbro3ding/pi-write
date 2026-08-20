@@ -331,6 +331,10 @@ export interface AgentState {
 	model: Model<any>;
 	/** Requested reasoning level for future turns. */
 	thinkingLevel: ThinkingLevel;
+	/** Sampling temperature (0..2). Undefined = provider default. */
+	temperature?: number;
+	/** Nucleus sampling probability mass (0..1). Undefined = provider default. */
+	topP?: number;
 	/** Available tools. Assigning a new array copies the top-level array. */
 	set tools(tools: AgentTool<any>[]);
 	get tools(): AgentTool<any>[];
