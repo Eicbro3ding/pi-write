@@ -243,14 +243,18 @@ export function validateWorld(value: unknown): WorldData {
 		notice: needsNoticeMigrate
 			? {
 					enabled: (raw.notice as unknown as { enabled?: boolean }).enabled ?? true,
-					items: [
-						{
-							id: newId("ntc"),
-							text: (raw.notice as unknown as { text: string }).text,
-							done: false,
-							updatedAt: (raw.notice as unknown as { updatedAt?: number }).updatedAt ?? Date.now(),
-						},
-					],
+					// 旧版 text 为空白时不生成空待办项(否则备忘录板渲染出一行无文字条目)
+					items:
+						(raw.notice as unknown as { text: string }).text.trim() === ""
+							? []
+							: [
+									{
+										id: newId("ntc"),
+										text: (raw.notice as unknown as { text: string }).text,
+										done: false,
+										updatedAt: (raw.notice as unknown as { updatedAt?: number }).updatedAt ?? Date.now(),
+									},
+								],
 				}
 			: raw.notice,
 		relations: needsArrow

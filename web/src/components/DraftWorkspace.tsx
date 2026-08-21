@@ -331,7 +331,11 @@ export function DraftWorkspace({
 				/>
 			</div>
 			<div className={`d-hint ${HINT_CLASS[status]}`}>
-				Alt+E 进入编辑 · Ctrl+S 保存 · {statusHint(status, loadError !== null)} · {wordCount} 字
+				{/* 键位段包 .d-keys:窄屏/触屏下经 CSS 隐藏(F3) */}
+				<span className="d-keys">Alt+E 进入编辑 · Ctrl+S 保存 · </span>
+				{/* 稳态「已保存」顶栏已展示,底部不再重复(F4);异常态(加载中/未保存/保存中/失败)保留本地提示 */}
+				{status !== "saved" && `${statusHint(status, loadError !== null)} · `}
+				{wordCount} 字
 			</div>
 		</aside>
 	);

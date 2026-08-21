@@ -8,7 +8,7 @@ import type { ProviderInfo } from "../types.ts";
  * 移除确认。认证变化(添加/移除 key)后回调 onAuthChanged,由外层
  * 刷新模型列表并处理当前模型失效回退。
  */
-export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onAuthChanged: () => void }) {
+export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onAuthChanged: () => void | Promise<void> }) {
 	/** null = 加载中;[] = 已加载但为空(或加载失败)。 */
 	const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
 	const [query, setQuery] = useState("");
@@ -65,7 +65,11 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 		} catch {
 			setRowErr("提供商列表刷新失败");
 		}
-		onAuthChanged();
+		try {
+			await onAuthChanged();
+		} catch (e) {
+			setRowErr(`认证状态刷新失败: ${friendlyError(e)}`);
+		}
 		setBusyId(null);
 	}
 
@@ -87,7 +91,11 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 		} catch {
 			setRowErr("提供商列表刷新失败");
 		}
-		onAuthChanged();
+		try {
+			await onAuthChanged();
+		} catch (e) {
+			setRowErr(`认证状态刷新失败: ${friendlyError(e)}`);
+		}
 		setBusyId(null);
 	}
 

@@ -318,6 +318,10 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .d-hint.dirty { color: var(--amber); }
 .d-hint.busy { color: var(--amber); }
 .d-hint.err { color: var(--red); }
+/* 触屏/窄屏下键盘快捷键提示无意义,隐藏(键位段由 .d-keys 包裹) */
+@media (max-width: 768px) {
+  .d-hint .d-keys { display: none; }
+}
 /* 加载错误/冲突提示框(原硬编码内联样式收敛为 CSS 类) */
 .d-error {
   flex: none; margin: 0 10px 8px; padding: 8px 12px; font-size: 12px;
@@ -552,6 +556,8 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
    2026-08-12 补基础规则统一全局(约束面板新建/导入/删除/清空等共用) */
 .btn-ghost {
   display: inline-flex; align-items: center; gap: 6px;
+  /* flex:none + nowrap:窄 flex 容器(发展线/时间线新增行)里不被压缩成竖排折行 */
+  flex: none; white-space: nowrap;
   padding: 5px 12px; font-size: 12.5px; color: var(--ink-2);
   background: transparent; border: 1px solid var(--line); border-radius: var(--r-sm);
   cursor: pointer; transition: color var(--dur-fast), background var(--dur-fast), border-color var(--dur-fast);
@@ -1011,6 +1017,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .s-select:focus { border-color: var(--amber); }
 .s-select:disabled { color: var(--faint); cursor: default; }
 .s-busy { flex: none; font-size: 12px; color: var(--faint); }
+.s-busy.err { color: var(--red); }
 .s-tag { flex: none; margin-left: auto; font-size: 11px; padding: 1px 10px; border-radius: var(--r-full); }
 .s-tag.ok { color: var(--green); border: 1px solid var(--green-tint-strong); background: var(--green-tint); }
 .s-note { padding: 12px 14px; font-size: 12px; color: var(--faint); line-height: 1.7; }

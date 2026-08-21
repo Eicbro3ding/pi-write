@@ -61,7 +61,8 @@ export function App() {
 				</div>
 				<div className="book">
 					{header
-						? `《${header.bookTitle}》${header.bookSlug ? ` · ${header.bookSlug}` : ""}${header.chapterTitle ? ` · ${header.chapterTitle}` : ""}`
+						? // slug 与书名相同时不重复展示(默认书 title===slug,如「《未命名》 · 未命名」)
+							`《${header.bookTitle}》${header.bookSlug && header.bookSlug !== header.bookTitle ? ` · ${header.bookSlug}` : ""}${header.chapterTitle ? ` · ${header.chapterTitle}` : ""}`
 						: "《未命名》"}
 				</div>
 				<div className="right">

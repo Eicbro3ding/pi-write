@@ -57,6 +57,8 @@ export const CodeMirrorBox = forwardRef<CodeMirrorBoxHandle, CodeMirrorBoxProps>
 			extensions: [
 				basicSetup,
 				markdown(),
+				// 中文长段落必须软换行(basicSetup 不含),否则横向裁切只能靠滚动条
+				EditorView.lineWrapping,
 				effectiveVim ? vim() : [],
 				EditorView.updateListener.of((update) => {
 					if (update.docChanged) onChangeRef.current(update.state.doc.toString());
@@ -87,6 +89,9 @@ export const CodeMirrorBox = forwardRef<CodeMirrorBoxHandle, CodeMirrorBoxProps>
 						},
 						// 行号 gutter 整体隐藏:写作界面不显示行号,正文占满宽度
 						".cm-gutters": { display: "none" },
+						// basicSetup 默认 activeLine 是冷灰蓝,与暖色主题不搭;改用主题中性 tint
+						".cm-activeLine": { backgroundColor: "var(--hover-tint)" },
+						".cm-activeLineGutter": { backgroundColor: "transparent" },
 						"&.cm-focused": { outline: "none" },
 					}),
 			],

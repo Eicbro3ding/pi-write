@@ -495,6 +495,7 @@ export class WriterServer {
 			{ method: "POST", segments: ["abort"], handler: (ctx) => this.handleAbort(ctx) },
 			// models / providers
 			{ method: "GET", segments: ["models"], handler: (ctx) => this.handleGetModels(ctx) },
+			{ method: "POST", segments: ["models", "refresh"], handler: (ctx) => this.handlePostModelsRefresh(ctx) },
 			{ method: "POST", segments: ["models", "custom"], handler: (ctx) => this.handlePostModelCustom(ctx) },
 			{ method: "POST", segments: ["model"], handler: (ctx) => this.handlePostModel(ctx) },
 			{ method: "POST", segments: ["thinking"], handler: (ctx) => this.handlePostThinking(ctx) },
@@ -1153,7 +1154,39 @@ export class WriterServer {
 		const runtime = this.options.sessionHost.getRuntime();
 		const models = await runtime.session.modelRuntime.getAvailable();
 		const state = runtime.session.state;
-		this.send(ctx.res, 200, { models, current: state.model, thinking: state.thinkingLevel, temperature: state.temperature, topP: state.topP });
+		// vendor 未选模型时 state.model 是 {provider:"unknown", id:"unknown"} 占位——
+		// 归一为 null,前端据此显示「未设置」而非裸 "unknown"(2026-08 UI 评审)
+		const m = state.model as { provider?: unknown; id?: unknown } | undefined | null;
+		// 仅当当前模型仍出现在可用列表中才返回;key 移除/失效后前端应显示「未设置」,
+		// 而不是把已不可用的旧模型继续当作当前模型(2026-08 设置页认证状态反馈)
+		const current =
+			m && typeof m.provider === "string" && typeof m.id === "string" && m.provider !== "unknown" && m.id !== "unknown" &&
+			models.some((model) => model.provider === m.provider && model.id === m.id)
+				? m
+				: null;
+		this.send(ctx.res, 200, { models, current, thinking: state.thinkingLevel, temperature: state.temperature, topP: state.topP });
+	}
+
+	/** POST /api/models/refresh:联网刷新模型目录(远程 catalog / 动态 provider),返回最新模型列表。 */
+	private async handlePostModelsRefresh(ctx: RouteContext): Promise<void> {
+		const runtime = this.options.sessionHost.getRuntime();
+		const result = await runtime.session.modelRuntime.refresh({ allowNetwork: true, force: true });
+		const models = await runtime.session.modelRuntime.getAvailable();
+		const state = runtime.session.state;
+		const m = state.model as { provider?: unknown; id?: unknown } | undefined | null;
+		const current =
+			m && typeof m.provider === "string" && typeof m.id === "string" && m.provider !== "unknown" && m.id !== "unknown" &&
+			models.some((model) => model.provider === m.provider && model.id === m.id)
+				? m
+				: null;
+		this.send(ctx.res, 200, {
+			models,
+			current,
+			thinking: state.thinkingLevel,
+			temperature: state.temperature,
+			topP: state.topP,
+			errors: [...result.errors.values()].map((e) => e.message),
+		});
 	}
 
 	/**

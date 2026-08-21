@@ -66,12 +66,12 @@ function EmptyBooks({ onCreate }: { onCreate: (title: string) => void }) {
 	return (
 		<div className="empty-books">
 			<div className="empty-books-title">还没有书</div>
-			<div className="empty-books-desc">创建第一本,开始写作</div>
+			<div className="empty-books-desc">创建第一本，开始写作</div>
 			<div className="empty-books-form">
 				<input
 					className="empty-books-input"
 					autoFocus
-					placeholder="书名,如《雾港记事》"
+					placeholder="书名，如《雾港记事》"
 					value={title}
 					onChange={(e) => setTitle(e.target.value)}
 					onKeyDown={(e) => {
@@ -800,7 +800,7 @@ export function WritePage({
 			const conflict = book.slug.includes("-import-");
 			setBooks(await client.getBooks());
 			await openBook(book.slug);
-			if (conflict) setError(`slug 已存在,已导入为副本 ${book.slug}`);
+			if (conflict) setError(`slug 已存在，已导入为副本 ${book.slug}`);
 		} catch (e) {
 			setError(`导入失败: ${friendlyError(e)}`);
 		} finally {
@@ -1182,7 +1182,7 @@ export function WritePage({
 								onConfirmCard={confirmCard}
 								onRevertCard={(id) => void revertCard(id)}
 								onEdit={(m, newText) => void editWriterMessage(m, newText)}
-								emptyText="向编剧发一句话,讨论行文、取舍与节奏——修改正文会生成待确认卡,可随时回退;选中正文会自动填入选区"
+								emptyText="向编剧发一句话，讨论行文、取舍与节奏——修改正文会生成待确认卡，可随时回退；选中正文会自动填入选区"
 							/>
 							{writerUsageHint && (
 								<div className={`notice ${writerUsageHint.tone}`} role="status">
@@ -1197,7 +1197,7 @@ export function WritePage({
 									const s = bookDetailRef.current?.slug;
 									if (s) void client.writerAbort(s);
 								}}
-								placeholder="向编剧说话…(/ 命令面板;选中正文自动填入,Ctrl+Enter 发送,Enter 换行)"
+								placeholder="向编剧说话…(/ 命令面板；选中正文自动填入，Ctrl+Enter 发送，Enter 换行)"
 								ariaLabel="向编剧说话"
 								commands={writerSlashCommands}
 								context={writerSlashContext}

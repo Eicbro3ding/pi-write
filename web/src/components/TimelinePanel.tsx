@@ -33,7 +33,7 @@ export function TimelinePanel({ events, chapters, chaptersOk, onChange }: Timeli
 	return (
 		<section className="w-panel">
 			<div className="s-head">时间线</div>
-			{events.length === 0 && <div className="w-empty">暂无事件,在下方新增</div>}
+			{events.length === 0 && <div className="w-empty">暂无事件，在下方新增</div>}
 			{events.map((ev) => (
 				<div className="w-timeline-row" key={ev.id}>
 					<span className="w-chapter-tag" title={ev.chapter}>
@@ -43,7 +43,7 @@ export function TimelinePanel({ events, chapters, chaptersOk, onChange }: Timeli
 					<button
 						type="button"
 						className="w-ibtn danger"
-						title="删除事件"
+						title="删除事件" aria-label="删除事件"
 						onClick={() => onChange(events.filter((x) => x.id !== ev.id))}
 					>
 						删
@@ -67,7 +67,7 @@ export function TimelinePanel({ events, chapters, chaptersOk, onChange }: Timeli
 					<input
 						className="w-input"
 						value={text}
-						placeholder="事件描述,如: 凯文在酒馆遇到神秘老者"
+						placeholder="事件描述，如：凯文在酒馆遇到神秘老者"
 						onKeyDown={(e) => {
 							if (e.key === "Enter") add();
 						}}
@@ -78,7 +78,7 @@ export function TimelinePanel({ events, chapters, chaptersOk, onChange }: Timeli
 					</button>
 				</div>
 			) : (
-				<div className="w-field-hint">章节列表不可用,暂无法新增事件</div>
+				<div className="w-field-hint">章节列表不可用，暂无法新增事件</div>
 			)}
 		</section>
 	);

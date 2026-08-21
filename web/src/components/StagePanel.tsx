@@ -81,7 +81,7 @@ export function StagePanel({
 							<div className="st-empty">
 							还没有剧本。
 							<br />
-							讨论到火候后示意「写剧本」,导演会用 stage_script 工具开演。
+							讨论到火候后示意「写剧本」,导演就会开演。
 						</div>
 					))}
 
@@ -98,7 +98,9 @@ export function StagePanel({
 										<StageAvatar slug={slug} name={name} narrator={a.type === "narrator"} size="sm" />
 										<span className="st-cast-name">{name}</span>
 										<span className="st-cast-meta">
-											{a.id} · {a.type}
+											{/* 槽位 id 与角色名相同时不重复展示;类型映射为中文(2026-08 UI 评审) */}
+											{name !== a.id && `${a.id} · `}
+											{a.type === "named" ? "角色" : a.type === "pool" ? "群演" : "旁白"}
 										</span>
 										<span className="st-cast-role">
 											{a.model ?? "缺省模型"}

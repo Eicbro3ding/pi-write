@@ -122,7 +122,7 @@ function RelationForm({
 			>
 				<div className="rel-form-head">
 					<span>{isCreate ? "新建关系" : "编辑关系"}</span>
-					<button type="button" className="rel-form-close" onClick={onCancel} title="关闭">
+					<button type="button" className="rel-form-close" onClick={onCancel} title="关闭" aria-label="关闭">
 						✕
 					</button>
 				</div>
@@ -661,11 +661,11 @@ export function RelationGraph({
 								⟳ 排列
 							</button>
 							<span className="graph-zoom-sep" />
-							<button type="button" className="graph-zoom-btn" onClick={() => zoomBy(1 / 1.3)} title="缩小">
+							<button type="button" className="graph-zoom-btn" onClick={() => zoomBy(1 / 1.3)} title="缩小" aria-label="缩小">
 								−
 							</button>
 							<span className="graph-zoom-pct">{zoomPct}%</span>
-							<button type="button" className="graph-zoom-btn" onClick={() => zoomBy(1.3)} title="放大">
+							<button type="button" className="graph-zoom-btn" onClick={() => zoomBy(1.3)} title="放大" aria-label="放大">
 								+
 							</button>
 							<span className="graph-zoom-sep" />
@@ -780,6 +780,7 @@ export function RelationGraph({
 											className="rel-form-close"
 											onClick={() => setRenameTarget(null)}
 											title="关闭"
+											aria-label="关闭"
 										>
 											✕
 										</button>

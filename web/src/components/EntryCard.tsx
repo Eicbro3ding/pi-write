@@ -157,10 +157,10 @@ export function EntryCard({ entry, entries, relations, slug, client, onJump, onC
 					)}
 					{currentFile && entry.images.length > 1 && (
 						<>
-							<button type="button" className="entry-viewer-zone left" onClick={prevImage} title="上一张">
+							<button type="button" className="entry-viewer-zone left" onClick={prevImage} title="上一张" aria-label="上一张">
 								<span className="entry-viewer-arrow">‹</span>
 							</button>
-							<button type="button" className="entry-viewer-zone right" onClick={nextImage} title="下一张">
+							<button type="button" className="entry-viewer-zone right" onClick={nextImage} title="下一张" aria-label="下一张">
 								<span className="entry-viewer-arrow">›</span>
 							</button>
 							<span className="entry-viewer-counter">
@@ -181,22 +181,22 @@ export function EntryCard({ entry, entries, relations, slug, client, onJump, onC
 							<button
 								type="button"
 								className="entry-thumb-img"
-								title={f === entry.avatar ? "主图 · 点击查看" : "点击查看"}
+								title={f === entry.avatar ? "主图 · 点击查看" : "点击查看"} aria-label={f === entry.avatar ? "主图 · 点击查看" : "点击查看"}
 								onClick={() => setCurrentIdx(i)}
 							>
 								<img src={imageUrl(slug, f)} alt="" />
 							</button>
 							{f === entry.avatar && <span className="entry-img-tag">主图</span>}
 							<span className="entry-img-ops">
-								<button type="button" title="设为主图" disabled={f === entry.avatar} onClick={() => set({ avatar: f, updatedAt: Date.now() })}>◎</button>
-								<button type="button" title="删除" disabled={uploading} onClick={() => void removeImage(f)}>✕</button>
+								<button type="button" title="设为主图" aria-label="设为主图" disabled={f === entry.avatar} onClick={() => set({ avatar: f, updatedAt: Date.now() })}>◎</button>
+								<button type="button" title="删除" aria-label="删除" disabled={uploading} onClick={() => void removeImage(f)}>✕</button>
 							</span>
 						</div>
 					))}
 					<button
 						type="button"
 						className="entry-thumb-add"
-						title="上传图片"
+						title="上传图片" aria-label="上传图片"
 						disabled={uploading || entry.images.length >= MAX_ENTRY_IMAGES}
 						onClick={() => fileRef.current?.click()}
 					>

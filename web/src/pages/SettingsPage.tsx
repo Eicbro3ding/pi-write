@@ -110,6 +110,7 @@ export function SettingsPage({
 	const [loadErr, setLoadErr] = useState<string | null>(null);
 	const [actErr, setActErr] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
+	const [modelRefreshBusy, setModelRefreshBusy] = useState(false);
 	/** 自定义模型表单(openai-completions 协议,如本地 mock LLM)。 */
 	const [customProvider, setCustomProvider] = useState("");
 	const [customModel, setCustomModel] = useState("");
@@ -423,6 +424,27 @@ export function SettingsPage({
 		}
 	}
 
+	/** 联网刷新模型目录:远程 catalog / 动态 provider 重新拉取,成功后刷新前端模型列表。 */
+	async function refreshModelList() {
+		if (modelRefreshBusy || busy) return;
+		setModelRefreshBusy(true);
+		setNotice(null);
+		setActErr(null);
+		try {
+			const r = await client.refreshModels();
+			await load();
+			if (r.errors && r.errors.length > 0) {
+				setNotice(`模型列表已刷新，但部分目录更新失败: ${r.errors.join("; ")}`);
+			} else {
+				setNotice("模型列表已联网刷新");
+			}
+		} catch (e) {
+			setActErr(`模型列表刷新失败: ${friendlyError(e)}`);
+		} finally {
+			setModelRefreshBusy(false);
+		}
+	}
+
 	/** 添加自定义模型(写 models.json + 服务端热重载)→ 刷新列表并自动切换到新模型。 */
 	async function addCustomModel() {
 		if (customBusy) return;
@@ -465,6 +487,8 @@ export function SettingsPage({
 			const ok = await changeModel(fallback);
 			if (ok) setNotice(`当前模型已不可用,已自动切换到 ${fallback}`);
 		} else if (before && !r.models.some((m) => `${m.provider}/${m.id}` === before)) {
+			// 无可用回退时清掉前端当前模型,避免设置页继续显示已失效的旧模型
+			setCurrent(null);
 			setNotice("当前模型已不可用,请重新选择模型");
 		}
 	}
@@ -550,7 +574,7 @@ export function SettingsPage({
 												setNotice(null);
 												void changeModel(e.target.value);
 											}}
-											disabled={busy || models === null}
+											disabled={busy || modelRefreshBusy || models === null}
 											title="按 provider 分组选择模型"
 										>
 											<option value="" disabled>
@@ -567,6 +591,15 @@ export function SettingsPage({
 											))}
 										</select>
 										{busy && <span className="s-busy">设置中…</span>}
+										<button
+											type="button"
+											className="btn-ghost"
+											disabled={busy || modelRefreshBusy || models === null}
+											onClick={() => void refreshModelList()}
+											title="重新联网拉取模型目录"
+										>
+											{modelRefreshBusy ? "刷新中…" : "联网刷新"}
+										</button>
 									</div>
 								</div>
 							</div>
@@ -707,7 +740,7 @@ export function SettingsPage({
 											<button className="btn-ghost" type="button" disabled={customBusy} onClick={() => void addCustomModel()}>
 												{customBusy ? "添加中…" : "添加并切换"}
 											</button>
-											{customErr && <span className="s-busy" style={{ color: "#e08a8a" }}>{customErr}</span>}
+											{customErr && <span className="s-busy err">{customErr}</span>}
 										</div>
 									</div>
 								)}
@@ -728,7 +761,7 @@ export function SettingsPage({
 										<div className="s-card-desc">
 											为 provider 添加 API key 后其模型即可在「切换模型」中使用;key 存储在 ~/.pi/writer/agent/auth.json。
 										</div>
-										<ProviderList client={client} onAuthChanged={() => void handleAuthChanged()} />
+										<ProviderList client={client} onAuthChanged={handleAuthChanged} />
 									</div>
 								)}
 							</div>
@@ -861,21 +894,21 @@ export function SettingsPage({
 											<div className="s-pref-title">简化输出</div>
 											<div className="s-pref-desc">开启后对话中不显示工具调用卡片,以「正在阅读 / 正在编辑」等动态提示代替。</div>
 										</div>
-										<ToggleSwitch checked={simplifiedTools} onChange={onSimplifiedToolsChange} />
+										<ToggleSwitch checked={simplifiedTools} onChange={onSimplifiedToolsChange} ariaLabel="简化输出" />
 									</div>
 									<div className="s-pref-item">
 										<div className="s-pref-text">
 											<div className="s-pref-title">自动展开思考</div>
 											<div className="s-pref-desc">开启后思考块默认展开,无需逐条点击;关闭后回到手动展开。</div>
 										</div>
-										<ToggleSwitch checked={autoExpandThinking} onChange={onAutoExpandThinkingChange} />
+										<ToggleSwitch checked={autoExpandThinking} onChange={onAutoExpandThinkingChange} ariaLabel="自动展开思考" />
 									</div>
 									<div className="s-pref-item">
 										<div className="s-pref-text">
 											<div className="s-pref-title">编辑免确认</div>
 											<div className="s-pref-desc">开启后编剧的修改落盘即生效,不再弹「待确认」卡。</div>
 										</div>
-										<ToggleSwitch checked={autoConfirmEdits} onChange={onAutoConfirmEditsChange} />
+										<ToggleSwitch checked={autoConfirmEdits} onChange={onAutoConfirmEditsChange} ariaLabel="编辑免确认" />
 									</div>
 								</div>
 							</div>
@@ -909,6 +942,7 @@ export function SettingsPage({
 											checked={world.notice.enabled}
 											onChange={(v) => void toggleInjection("notice", v)}
 											disabled={worldBusy}
+											ariaLabel="Notice 注入"
 										/>
 									</div>
 									<div className="s-pref-item">
@@ -920,6 +954,7 @@ export function SettingsPage({
 											checked={world.storyline.enabled}
 											onChange={(v) => void toggleInjection("storyline", v)}
 											disabled={worldBusy}
+											ariaLabel="发展线注入"
 										/>
 									</div>
 								</div>

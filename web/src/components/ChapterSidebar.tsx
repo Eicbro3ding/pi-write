@@ -179,7 +179,7 @@ export function ChapterSidebar({
 				transition={T_DRAWER}
 			>
 				{drawerOpen && onClose && (
-					<button type="button" className="panel-close" aria-label="关闭章节栏" onClick={onClose}>
+					<button type="button" className="panel-close" title="关闭章节栏" aria-label="关闭章节栏" onClick={onClose}>
 						×
 					</button>
 				)}

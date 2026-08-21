@@ -543,7 +543,7 @@ export function StagePage({
 				{busyCmd === "cut" && !cutDirectorDone && (
 					<div className="stage-editing">
 						<span className="se-spin">✎</span>
-						<span>导演正在编辑消息,请稍等…</span>
+						<span>导演正在编辑消息，请稍等…</span>
 					</div>
 				)}
 
@@ -632,8 +632,8 @@ export function StagePage({
 						<div className="guide-card">
 							<div className="g-title">◇ 与导演共谋一幕</div>
 							<div className="g-line">
-								和导演聊聊你的故事:<b>人物、悬念、基调</b>。导演会边聊边维护世界书;你想好剧本后,示意「
-								<b>写剧本</b>」,导演会用工具开演。
+								和导演聊聊你的故事：<b>人物、悬念、基调</b>。导演会边聊边维护世界书；你想好剧本后，示意「
+								<b>写剧本</b>」，导演会用工具开演。
 							</div>
 							<div className="guide-steps">
 								<span className="g-step on">① 讨论剧情</span>
@@ -702,7 +702,7 @@ export function StagePage({
 							streaming={directorSession.isStreaming}
 							compacting={directorSession.compacting}
 							simplifiedTools={simplifiedTools === true}
-							emptyText="向导演发一句话,讨论剧情、人物与悬念——导演会边聊边维护世界书"
+							emptyText="向导演发一句话，讨论剧情、人物与悬念——导演会边聊边维护世界书"
 						/>
 					)}
 					{/* 导演世界书编辑预览卡:world_update 变更的 diff/关系图(最新一次) */}
@@ -715,7 +715,7 @@ export function StagePage({
 							data={{ kind: "script", toolName: "script_confirm", sceneId: scriptConfirm.sceneId, script: scriptConfirm.script }}
 							actions={
 								scriptConfirm.confirmed ? (
-									<span className="preview-note">已确认,等待导演开演…</span>
+									<span className="preview-note">已确认，等待导演开演…</span>
 								) : (
 									<>
 										<button type="button" className="btn primary" disabled={busy} onClick={() => void confirmScript()}>
@@ -726,7 +726,7 @@ export function StagePage({
 											className="btn"
 											onClick={() => {
 												setConfirmDismissed(true);
-												dispatch({ type: "system", text: "在下方对话里告诉导演要修改哪里,导演会用 script_confirm 重新提交。" });
+												dispatch({ type: "system", text: "在下方对话里告诉导演要修改哪里，导演会用 script_confirm 重新提交。" });
 											}}
 										>
 											需要修改
@@ -764,7 +764,7 @@ export function StagePage({
 				commands={directorSlashCommands}
 				context={directorSlashContext}
 				onCommandError={(msg) => dispatch({ type: "system", text: `命令失败: ${msg}`, err: true })}
-					placeholder="向导演说话…(/ 命令面板;Ctrl+Enter 发送,Enter 换行;演出前聊剧情,演出中可插话/反馈)"
+					placeholder="向导演说话…(/ 命令面板；Ctrl+Enter 发送，Enter 换行；演出前聊剧情，演出中可插话/反馈)"
 					ariaLabel="向导演说话"
 				/>
 			</div>

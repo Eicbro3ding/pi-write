@@ -185,6 +185,13 @@ export class ApiClient {
 		return this.request<{ models: unknown[]; current: unknown; thinking: unknown; temperature: unknown; topP: unknown }>("/api/models");
 	}
 
+	/** 联网刷新模型目录(远程 catalog / 动态 provider),返回最新模型与可选刷新错误。 */
+	async refreshModels(): Promise<{ models: unknown[]; current: unknown; thinking: unknown; temperature: unknown; topP: unknown; errors?: string[] }> {
+		return this.request<{ models: unknown[]; current: unknown; thinking: unknown; temperature: unknown; topP: unknown; errors?: string[] }>("/api/models/refresh", {
+			method: "POST",
+		});
+	}
+
 	/** 切换模型。 */
 	async setModel(model: string): Promise<void> {
 		await this.request<{ ok: boolean }>("/api/model", { method: "POST", body: JSON.stringify({ model }) });

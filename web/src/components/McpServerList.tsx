@@ -217,14 +217,14 @@ export function McpServerList({ client }: { client: ApiClient }) {
 			{loadErr && <div className="notice err">{loadErr}</div>}
 			{rowErr && <div className="notice err">{rowErr}</div>}
 			<div className="s-hint">
-				MCP 服务器为 AI 提供外部工具(stdio 本地命令 / http、sse 远端)。保存后立即重连并重建会话,新工具即时生效;连接意外断开会自动重连。
+				MCP 服务器为 AI 提供外部工具(stdio 本地命令 / http、sse 远端)。保存后立即重连并重建会话，新工具即时生效；连接意外断开会自动重连。
 			</div>
 			{!hasServers && !formOpen && (
 				<div className="s-empty-state">
 					<div className="s-empty-icon">◊</div>
 					<div className="s-empty-title">尚未配置 MCP 服务器</div>
 					<div className="s-empty-desc">
-						配置后 AI 可以使用外部工具,如文件系统、资料库、搜索等。
+						配置后 AI 可以使用外部工具，如文件系统、资料库、搜索等。
 					</div>
 					<button className="btn-ghost" disabled={busy} onClick={startAdd}>
 						＋ 添加 MCP 服务器
@@ -287,17 +287,17 @@ export function McpServerList({ client }: { client: ApiClient }) {
 							onChange={(e) => setDraft({ ...draft, type: e.target.value === "stdio" ? "stdio" : e.target.value === "sse" ? "sse" : "http" })}
 						>
 							<option value="stdio">stdio(本地命令)</option>
-							<option value="http">http(streamable,现行标准)</option>
-							<option value="sse">sse(旧版,兼容)</option>
+							<option value="http">http(streamable，现行标准)</option>
+							<option value="sse">sse(旧版，兼容)</option>
 						</select>
 						{draft.type === "stdio" ? (
 							<>
-								<input className="s-input" placeholder="命令,如 npx" value={draft.command} onChange={(e) => setDraft({ ...draft, command: e.target.value })} />
-								<input className="s-input" placeholder="参数,逗号分隔,如 -y,@modelcontextprotocol/server-everything" value={draft.args} onChange={(e) => setDraft({ ...draft, args: e.target.value })} />
-								<input className="s-input" placeholder="环境变量,逗号分隔 KEY=VALUE(可选)" value={draft.env} onChange={(e) => setDraft({ ...draft, env: e.target.value })} />
+								<input className="s-input" placeholder="命令，如 npx" value={draft.command} onChange={(e) => setDraft({ ...draft, command: e.target.value })} />
+								<input className="s-input" placeholder="参数，逗号分隔，如 -y,@modelcontextprotocol/server-everything" value={draft.args} onChange={(e) => setDraft({ ...draft, args: e.target.value })} />
+								<input className="s-input" placeholder="环境变量，逗号分隔 KEY=VALUE(可选)" value={draft.env} onChange={(e) => setDraft({ ...draft, env: e.target.value })} />
 							</>
 						) : (
-							<input className="s-input" placeholder="URL,如 http://localhost:8765/mcp" value={draft.url} onChange={(e) => setDraft({ ...draft, url: e.target.value })} />
+							<input className="s-input" placeholder="URL，如 http://localhost:8765/mcp" value={draft.url} onChange={(e) => setDraft({ ...draft, url: e.target.value })} />
 						)}
 					<div>
 						<button className="btn-ghost" disabled={busy} onClick={() => void save()}>
@@ -322,7 +322,7 @@ export function McpServerList({ client }: { client: ApiClient }) {
 			{/* 直接编辑文件:原样读写 mcp.json(支持 imports/mcpServers 等表单表达不了的形状) */}
 			{rawOpen && (
 				<div className="s-mcp-raw">
-					<div className="s-hint">直接编辑 mcp.json(位于 ~/.pi/writer/agent/)。支持自有 servers 数组或 Claude Code 的 mcpServers 对象 + imports;保存时校验 JSON 与结构,原样落盘。</div>
+					<div className="s-hint">直接编辑 mcp.json(位于 ~/.pi/writer/agent/)。支持自有 servers 数组或 Claude Code 的 mcpServers 对象 + imports；保存时校验 JSON 与结构，原样落盘。</div>
 					<textarea
 						className="s-mcp-raw-input"
 						spellCheck={false}

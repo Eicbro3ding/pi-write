@@ -127,7 +127,7 @@ export function NoticeBoard({ client, slug }: NoticeBoardProps) {
 					<div key={it.id} className={it.done ? "notice-item done" : "notice-item"}>
 						<input type="checkbox" checked={it.done} onChange={(e) => patchItem(it.id, { done: e.target.checked })} title={it.done ? "标记未完成" : "标记完成"} />
 						<input type="text" value={it.text} onChange={(e) => patchItem(it.id, { text: e.target.value })} className="notice-text" />
-						<button type="button" className="notice-del" title="删除" onClick={() => removeItem(it.id)}>
+						<button type="button" className="notice-del" title="删除" aria-label="删除" onClick={() => removeItem(it.id)}>
 							×
 						</button>
 					</div>

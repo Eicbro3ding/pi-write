@@ -67,8 +67,8 @@ export function StorylinePanel({ storyline, onChange }: StorylinePanelProps) {
 	return (
 		<section className="w-panel">
 			<div className="s-head">发展线</div>
-			<div className="w-panel-note">节点按序推进故事;「进行中」节点至多一个</div>
-			{nodes.length === 0 && <div className="w-empty">暂无节点,在下方新增</div>}
+			<div className="w-panel-note">节点按序推进故事；「进行中」节点至多一个</div>
+			{nodes.length === 0 && <div className="w-empty">暂无节点，在下方新增</div>}
 			{nodes.map((n, i) => (
 				<div className="w-story" key={n.id}>
 					<span className={`w-badge ${n.status}`}>{STATUS_LABEL[n.status]}</span>
@@ -98,23 +98,23 @@ export function StorylinePanel({ storyline, onChange }: StorylinePanelProps) {
 					<input
 						className="w-input"
 						value={n.next ?? ""}
-						placeholder="下一步(该节点完成后的内容,非 id)"
+						placeholder="下一步(该节点完成后的剧情走向，而非节点编号)"
 						onChange={(e) => update(i, { next: e.target.value.trim() === "" ? null : e.target.value })}
 					/>
 					<span className="w-ibtn-row">
-						<button type="button" className="w-ibtn" disabled={i === 0} title="上移" onClick={() => move(i, -1)}>
+						<button type="button" className="w-ibtn" disabled={i === 0} title="上移" aria-label="上移" onClick={() => move(i, -1)}>
 							↑
 						</button>
 						<button
 							type="button"
 							className="w-ibtn"
 							disabled={i === nodes.length - 1}
-							title="下移"
+							title="下移" aria-label="下移"
 							onClick={() => move(i, 1)}
 						>
 							↓
 						</button>
-						<button type="button" className="w-ibtn danger" title="删除节点" onClick={() => setNodes(nodes.filter((_, j) => j !== i))}>
+						<button type="button" className="w-ibtn danger" title="删除节点" aria-label="删除节点" onClick={() => setNodes(nodes.filter((_, j) => j !== i))}>
 							删
 						</button>
 					</span>
