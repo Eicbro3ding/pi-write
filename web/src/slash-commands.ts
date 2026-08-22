@@ -31,10 +31,42 @@ export interface SlashSuggestion {
 	hint?: string;
 	/** 附加信息(类型 / 字数 / 附加要求)。 */
 	meta?: string;
-	/** 选中后立即插入输入框的文本(insert 命令)。 */
+	/** 选中后立即插入输入框的文本(insert 命令;如命令选择阶段的 `/trigger `)。 */
 	insertText?: string;
-	/** 选中后异步加载再插入的文本(章节全文按需读取,避免搜索时预读所有草稿)。 */
+	/**
+	 * 选中后作为「引用芯片」挂到输入框——输入框只显示紧凑 pill(标题+路径+×),
+	 * 发送时才把全文展开进消息(zcode/GPT 式引用,2026-08-22 替代整段塞入输入框)。
+	 */
+	attachment?: {
+		/** 芯片主标签(如「ch01 · 第一章」)。 */
+		label: string;
+		/** 弱化详情(如 draft/ch01.md)。 */
+		detail?: string;
+		/** 发送时展开的注入文本(选中候选项时异步预读,失败走命令错误条)。 */
+		loadText: (ctx: SlashContext) => Promise<string>;
+	};
+	/** @deprecated 旧整段插入路径(仅兼容保留;内容类命令已迁移到 attachment)。 */
 	loadText?: (ctx: SlashContext) => Promise<string>;
+}
+
+/** 输入框里的一枚引用芯片(选中带 attachment 的候选后挂载;发送时展开)。 */
+export interface InputChip {
+	/** 去重/移除定位键(取候选项 id)。 */
+	key: string;
+	/** 芯片主标签。 */
+	label: string;
+	/** 弱化详情(路径等)。 */
+	detail?: string;
+	/** 已解析的注入文本(选中时读取缓存;发送时拼接)。 */
+	text: string;
+}
+
+/** 组装发送消息:各芯片注入块在前,用户输入在后;空段不参与,非空段以空行连接。 */
+export function composeMessageWithAttachments(chips: ReadonlyArray<InputChip>, text: string): string {
+	return [...chips.map((c) => c.text), text]
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0)
+		.join("\n\n");
 }
 
 /** 一条 `/` 命令。 */
@@ -116,7 +148,7 @@ export function worldEntryInsertText(entry: WorldEntryDto): string {
 	return `【世界书 · ${typeLabel} · ${entry.title}${activeNote}】\n${entry.body}`;
 }
 
-/** 世界条目 → 面板候选(搜索排序后映射)。 */
+/** 世界条目 → 面板候选(搜索排序后映射;选中挂引用芯片,发送时展开注入块)。 */
 export function worldEntrySuggestion(entry: WorldEntryDto): SlashSuggestion {
 	const typeLabel = ENTRY_TYPE_LABELS[entry.type] ?? entry.type;
 	const preview = entry.body.replace(/\s+/g, " ").trim().slice(0, 30);
@@ -125,7 +157,11 @@ export function worldEntrySuggestion(entry: WorldEntryDto): SlashSuggestion {
 		label: `${typeLabel} · ${entry.title || "未命名"}`,
 		hint: entry.keys.length > 0 ? entry.keys.slice(0, 3).join(" / ") : preview,
 		meta: `${entry.active ? "" : "未激活 · "}${entry.body.length} 字`,
-		insertText: worldEntryInsertText(entry),
+		attachment: {
+			label: entry.title || "未命名",
+			detail: typeLabel,
+			loadText: async () => worldEntryInsertText(entry),
+		},
 	};
 }
 
@@ -180,10 +216,14 @@ export function makeChapterCommand(): SlashCommand {
 					label: `${ch.id} · ${ch.title || "未命名"}${ch.label ? ` · ${ch.label}` : ""}`,
 					hint: file,
 					meta: "原文",
-					loadText: async (ctx2) => {
-						const { text } = await ctx2.client.getDraft(file, ctx2.slug ?? undefined);
-						const heading = `【原文 · ${ch.id}${ch.title ? `《${ch.title}》` : ""} · ${file}】`;
-						return text.trim().length > 0 ? `${heading}\n${text}` : `${heading}\n（该章正文为空）`;
+					attachment: {
+						label: `${ch.id}${ch.title ? `《${ch.title}》` : ""}`,
+						detail: file,
+						loadText: async (ctx2) => {
+							const { text } = await ctx2.client.getDraft(file, ctx2.slug ?? undefined);
+							const heading = `【原文 · ${ch.id}${ch.title ? `《${ch.title}》` : ""} · ${file}】`;
+							return text.trim().length > 0 ? `${heading}\n${text}` : `${heading}\n（该章正文为空）`;
+						},
 					},
 				} satisfies SlashSuggestion;
 			});

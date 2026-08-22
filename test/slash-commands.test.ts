@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+	composeMessageWithAttachments,
 	makeChapterCommand,
 	makeCompactCommand,
 	makeNodeCommand,
@@ -65,13 +66,16 @@ describe("世界条目搜索与注入", () => {
 		expect(scoreWorldEntry(entry({}), "林")).toBeGreaterThan(scoreWorldEntry(entry({ title: "灯塔" }), "林"));
 		expect(worldEntryInsertText(entry({}))).toBe("【世界书 · 人物 · 林婉】\n灯塔看守人的女儿。");
 	});
-	it("makeNodeCommand 按 slug 加载世界书并返回前 N 条", async () => {
+	it("makeNodeCommand 按 slug 加载世界书并返回前 N 条(引用芯片,发送时展开)", async () => {
 		const world = { entries: [entry({}), entry({ id: "chr-lita", title: "灯塔" })] };
 		const cmd = makeNodeCommand({ loadWorld: async () => world as never });
 		const items = await cmd.search!("林", { ...ctx, slug: "fog-harbor" });
 		expect(items).toHaveLength(1);
 		expect(items[0].label).toContain("林婉");
-		expect(items[0].insertText).toContain("灯塔看守人的女儿。");
+		// 内容命令迁移到 attachment 芯片:不再整段塞进输入框
+		expect(items[0].insertText).toBeUndefined();
+		expect(items[0].attachment!.label).toBe("林婉");
+		expect(await items[0].attachment!.loadText(ctx)).toContain("灯塔看守人的女儿。");
 	});
 	it("无书 / 读取失败返回空候选项", async () => {
 		const cmd = makeNodeCommand({ loadWorld: async () => null });
@@ -80,20 +84,40 @@ describe("世界条目搜索与注入", () => {
 });
 
 describe("章节原文命令", () => {
-	it("按 id/标题过滤,选中时按需读草稿并带路径标签", async () => {
+	it("按 id/标题过滤,选中挂引用芯片(标题+路径),发送时按需读草稿", async () => {
 		const client = { getDraft: async (file: string) => ({ text: "夜航。", mtime: 1 }) };
 		const c = { ...ctx, client } as unknown as SlashContext;
 		const cmd = makeChapterCommand();
 		const items = await cmd.search!("ch01", c);
 		expect(items).toHaveLength(1);
 		expect(items[0].hint).toBe("draft/ch01.md");
-		const text = await items[0].loadText!(c);
+		expect(items[0].attachment!.label).toBe("ch01《第一章》");
+		expect(items[0].attachment!.detail).toBe("draft/ch01.md");
+		const text = await items[0].attachment!.loadText!(c);
 		expect(text).toBe("【原文 · ch01《第一章》 · draft/ch01.md】\n夜航。");
 	});
 	it("空章节给出明确空正文标签", async () => {
 		const c = { ...ctx, client: { getDraft: async () => ({ text: "  ", mtime: 0 }) } } as unknown as SlashContext;
 		const items = await makeChapterCommand().search!("ch01", c);
-		expect(await items[0].loadText!(c)).toContain("（该章正文为空）");
+		expect(await items[0].attachment!.loadText!(c)).toContain("（该章正文为空）");
+	});
+});
+
+describe("composeMessageWithAttachments(引用芯片发送组装)", () => {
+	it("芯片注入块在前、用户输入在后,空段不参与", () => {
+		const chips = [
+			{ key: "a", label: "ch01", text: "【原文 · ch01】\n夜航。" },
+			{ key: "b", label: "林婉", text: "【世界书 · 人物 · 林婉】\n灯塔看守人的女儿。" },
+		];
+		expect(composeMessageWithAttachments(chips, "帮我衔接下一场")).toBe(
+			"【原文 · ch01】\n夜航。\n\n【世界书 · 人物 · 林婉】\n灯塔看守人的女儿。\n\n帮我衔接下一场",
+		);
+	});
+	it("无芯片 / 空输入的边界:只输入 → 原样;只有芯片 → 注入块;全空 → 空串", () => {
+		expect(composeMessageWithAttachments([], "你好")).toBe("你好");
+		const chips = [{ key: "a", label: "x", text: "块" }];
+		expect(composeMessageWithAttachments(chips, "")).toBe("块");
+		expect(composeMessageWithAttachments([], "   ")).toBe("");
 	});
 });
 

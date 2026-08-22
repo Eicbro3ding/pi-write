@@ -1,7 +1,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import {
+	composeMessageWithAttachments,
 	parseSlashQuery,
 	slashCommandMatches,
+	type InputChip,
 	type SlashCommand,
 	type SlashContext,
 	type SlashQuery,
@@ -53,6 +55,8 @@ const MAX_HEIGHT = 160;
 /**
  * 输入框:单行自动增高的 textarea,Ctrl+Enter 发送、Enter 换行;
  * 流式中输入保持可用(可插话),按钮切换为「中断」。
+ * `/node`、`/chapter` 类内容命令选中后挂「引用芯片」(紧凑 pill,可 × 移除,
+ * 同 id 去重),发送时才展开为注入文本——输入框不再被整段原文撑爆。
  * 可选 placeholder / ariaLabel;ref 暴露 submit 句柄,供外部按钮触发同一发送路径。
  */
 export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function InputBar(
@@ -69,6 +73,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 	ref,
 ) {
 	const [text, setText] = useState("");
+	/** 引用芯片(/node、/chapter 选中后挂载):发送时才展开为注入文本,输入框只显示紧凑 pill。 */
+	const [chips, setChips] = useState<InputChip[]>([]);
 	const [menu, setMenu] = useState<SlashMenuState | null>(null);
 	const taRef = useRef<HTMLTextAreaElement>(null);
 	/** 最新 props(命令/上下文)经 ref 读取,搜索回调无需随每次渲染重挂。 */
@@ -195,13 +201,25 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 		insertRange(start, end, "");
 	}
 
-	/** 选中菜单候选项:插入文本 / 异步读取后插入 / 执行动作。 */
+	/** 移除一枚引用芯片。 */
+	function removeChip(key: string) {
+		setChips((prev) => prev.filter((c) => c.key !== key));
+	}
+
+	/** 选中菜单候选项:挂引用芯片 / 插入文本 / 执行动作。 */
 	async function pick(item: SlashSuggestion | undefined, m: SlashMenuState) {
 		if (!item) return;
-		setMenu({ ...m, loading: true, notice: m.command.run ? "正在执行…" : item.loadText ? "正在读取原文…" : null, items: m.items });
+		setMenu({ ...m, loading: true, notice: m.command.run ? "正在执行…" : item.attachment ? "正在读取原文…" : null, items: m.items });
 		try {
-			if (m.command.run && item.insertText === undefined && item.loadText === undefined) {
+			if (m.command.run && item.insertText === undefined && item.attachment === undefined) {
 				await m.command.run(m.query.term, contextRef.current ?? ({} as SlashContext));
+				removeRange(m.query.start, m.query.end);
+			} else if (item.attachment) {
+				// 引用芯片:选中时预读全文(失败走命令错误条,不挂芯片);同 id 去重;
+				// 同时清掉输入框里的命令查询区间(/chapter ch01),不留残留原文
+				const resolved = await item.attachment.loadText(contextRef.current ?? ({} as SlashContext));
+				const chip: InputChip = { key: item.id, label: item.attachment.label, detail: item.attachment.detail, text: resolved };
+				setChips((prev) => (prev.some((c) => c.key === chip.key) ? prev : [...prev, chip]));
 				removeRange(m.query.start, m.query.end);
 			} else if (item.loadText) {
 				const insertion = await item.loadText(contextRef.current ?? ({} as SlashContext));
@@ -219,9 +237,12 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 	function send() {
 		setMenu(null);
 		const t = text.trim();
-		if (t.length === 0) return;
+		// 芯片可以独立发送(只引用不说话);两者皆空才忽略
+		if (t.length === 0 && chips.length === 0) return;
+		const message = composeMessageWithAttachments(chips, t);
 		setText("");
-		onSend(t);
+		setChips([]);
+		onSend(message);
 	}
 
 	// 无依赖数组:每次渲染重建句柄,保证闭包读到最新 text
@@ -306,6 +327,19 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 				</div>
 			)}
 			<div className="inputbar-inner">
+				{chips.length > 0 && (
+					<div className="inputbar-chips" aria-label="引用附件">
+						{chips.map((c) => (
+							<span key={c.key} className="input-chip" title={c.text}>
+								<span className="input-chip-label">{c.label}</span>
+								{c.detail && <span className="input-chip-detail">{c.detail}</span>}
+								<button type="button" className="input-chip-x" aria-label={`移除引用 ${c.label}`} onClick={() => removeChip(c.key)}>
+									×
+								</button>
+							</span>
+						))}
+					</div>
+				)}
 				<textarea
 					ref={taRef}
 					rows={1}
@@ -325,7 +359,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 						中断
 					</button>
 				) : (
-					<button className="btn-send" aria-label="发送" disabled={text.trim().length === 0} onClick={send}>
+					<button className="btn-send" aria-label="发送" disabled={text.trim().length === 0 && chips.length === 0} onClick={send}>
 						发送
 					</button>
 				)}
