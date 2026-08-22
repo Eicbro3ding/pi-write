@@ -116,5 +116,27 @@ export function resolveSkillsDir(env: Record<string, string | undefined> = proce
 	return join(here, "..", "skills");
 }
 
+/**
+ * 提示词缓存保留档位(vendor pi-ai 的 CacheRetention)。
+ * 写作是间歇性交互,场景之间常超过默认 5 分钟 TTL——过期后整段上下文
+ * 全价重算。`long` 映射 Anthropic `cache_control.ttl:"1h"`(写入 2x、
+ * 读取仍约 0.1x)与 OpenAI `prompt_cache_retention:"24h"`;对 DeepSeek
+ * 这类自动前缀缓存的 provider 无影响。
+ */
+export type CacheRetentionSetting = "short" | "long" | "none";
+
+/**
+ * 应用缓存保留档位:vendor pi-ai 在每次请求时读 `PI_CACHE_RETENTION`
+ * (anthropic-messages 与 openai-completions 两条路径都有),这里在入口
+ * 处把 `--cache-retention` 的值写入该环境变量;非法值抛中文错误。
+ */
+export function applyCacheRetention(value: string | undefined, env: Record<string, string | undefined> = process.env): void {
+	if (!value) return;
+	if (value !== "short" && value !== "long" && value !== "none") {
+		throw new Error(`Invalid --cache-retention value: ${value}(可选 short | long | none)`);
+	}
+	env.PI_CACHE_RETENTION = value;
+}
+
 /** Version string; read from package.json (lockstep with the monorepo). */
 export const VERSION: string = pkg.version || "0.0.0";

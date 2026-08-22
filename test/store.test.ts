@@ -34,6 +34,27 @@ describe("processAgentEvent", () => {
     s = processAgentEvent(s, ev(`{"type":"message_end","message":{}}`));
     expect(s.messages[0].done).toBe(true);
   });
+  it("message_end 携带 assistant usage 时更新 cacheHit", () => {
+    let s = initialSessionState();
+    s = processAgentEvent(s, ev(`{"type":"message_start","message":{"role":"assistant","content":[]}}`));
+    s = processAgentEvent(s, ev(`{"type":"message_end","message":{"role":"assistant","usage":{"input":1000,"output":50,"cacheRead":9000,"cacheWrite":500,"totalTokens":10550}}}`));
+    expect(s.cacheHit).toEqual({ rate: 9000 / 10500, promptTokens: 10500, cachedTokens: 9000 });
+  });
+  it("message_end 无 usage(历史水合)保留原 cacheHit", () => {
+    let s = initialSessionState();
+    s = processAgentEvent(s, ev(`{"type":"message_start","message":{"role":"assistant","content":[]}}`));
+    s = processAgentEvent(s, ev(`{"type":"message_end","message":{"role":"assistant","usage":{"input":100,"output":10,"cacheRead":900,"cacheWrite":0,"totalTokens":1010}}}`));
+    expect(s.cacheHit).not.toBeNull();
+    // 历史水合的成对 message_end(message 为空对象)不清掉已算出的命中
+    s = processAgentEvent(s, ev(`{"type":"message_end","message":{}}`));
+    expect(s.cacheHit).not.toBeNull();
+  });
+  it("provider 未上报缓存字段(cacheRead/cacheWrite 全 0)不产生 cacheHit", () => {
+    let s = initialSessionState();
+    s = processAgentEvent(s, ev(`{"type":"message_start","message":{"role":"assistant","content":[]}}`));
+    s = processAgentEvent(s, ev(`{"type":"message_end","message":{"role":"assistant","usage":{"input":1000,"output":50,"cacheRead":0,"cacheWrite":0,"totalTokens":1050}}}`));
+    expect(s.cacheHit).toBeNull();
+  });
   it("message_start 追加 user 消息(事件无 id)", () => {
     let s = initialSessionState();
     s = processAgentEvent(s, ev(`{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"请续写"}]}}`));

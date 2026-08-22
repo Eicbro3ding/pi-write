@@ -12,7 +12,7 @@ import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import type { ThinkingLevel } from "../vendor/pi-agent-core/src/index.ts";
 import { SessionManager } from "../vendor/pi-coding-agent/src/index.ts";
-import { getAgentDir, getBookDir, getBooksDir, resolveSkillsDir } from "./config.ts";
+import { applyCacheRetention, getAgentDir, getBookDir, getBooksDir, resolveSkillsDir } from "./config.ts";
 import {
 	addChapter,
 	createBook,
@@ -42,6 +42,7 @@ export interface WebCliOptions {
 	thinking: string | undefined; // --thinking <level>:思考等级
 	temperature: number | undefined; // --temperature <number>:采样温度
 	topP: number | undefined; // --top-p <number>:核采样概率
+	cacheRetention: string | undefined; // --cache-retention <short|long|none>:提示词缓存保留档位
 	/**
 	 * 前端静态目录(web/dist)显式路径。缺省时服务端按 resolveWebDistDir 探测
 	 * (exe 旁 / import.meta.url 烘焙路径)——CI 构建的产物在用户机器上探测会
@@ -83,6 +84,7 @@ export function parseWebArgs(argv: string[]): WebCliOptions {
 		thinking: undefined,
 		temperature: undefined,
 		topP: undefined,
+		cacheRetention: undefined,
 	};
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
@@ -126,6 +128,10 @@ export function parseWebArgs(argv: string[]): WebCliOptions {
 				opts.topP = v;
 				break;
 			}
+			case "--cache-retention":
+				opts.cacheRetention = next();
+				applyCacheRetention(opts.cacheRetention);
+				break;
 			default:
 				throw new Error(`Unknown web option: ${arg}`);
 		}

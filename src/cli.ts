@@ -37,6 +37,7 @@ import {
 import { writerExtension } from "./extension.ts";
 import { McpManager } from "./mcp/manager.ts";
 import { buildWriterSystemPrompt } from "./prompt.ts";
+import { applyCacheRetention } from "./config.ts";
 
 interface CliOptions {
 	book: string | undefined;
@@ -46,6 +47,7 @@ interface CliOptions {
 	thinking: string | undefined;
 	temperature: number | undefined;
 	topP: number | undefined;
+	cacheRetention: string | undefined;
 	prompt: string | undefined;
 	printMode: boolean;
 	verbose: boolean;
@@ -66,6 +68,7 @@ function parseArgs(argv: string[]): CliOptions {
 		thinking: undefined,
 		temperature: undefined,
 		topP: undefined,
+		cacheRetention: undefined,
 		prompt: undefined,
 		printMode: false,
 		verbose: false,
@@ -141,6 +144,12 @@ function parseArgs(argv: string[]): CliOptions {
 				opts.webExtra.push("--top-p", String(value));
 				break;
 			}
+			case "--cache-retention": {
+				const value = next();
+				opts.cacheRetention = value;
+				opts.webExtra.push("--cache-retention", value);
+				break;
+			}
 			case "-p":
 			case "--print":
 				opts.printMode = true;
@@ -188,6 +197,9 @@ Options:
   --thinking <level>                      off | minimal | low | medium | high | xhigh | max
   --temperature <number>                  sampling temperature (0..2)
   --top-p <number>                        nucleus sampling probability mass (0..1)
+  --cache-retention <mode>                prompt cache retention: short | long | none
+                                          (long = Anthropic 1h TTL / OpenAI 24h; helps when
+                                          pauses between scenes exceed the default 5min TTL)
   -p, --print [prompt]                    non-interactive: write the prompt and exit
   --verbose                               force verbose startup
   -v, --version                           show version
@@ -282,6 +294,10 @@ async function main(): Promise<void> {
 		process.stdout.write(`${VERSION}\n`);
 		return;
 	}
+	// 缓存保留档位:入口处写入 PI_CACHE_RETENTION(vendor pi-ai 请求时读取);
+	// web 分支 parseWebArgs 里也会应用(直接 `web` 子命令进入时),此处覆盖
+	// TUI/stage/print 路径。放在 help/version 之后,--help 不校验值。
+	applyCacheRetention(opts.cacheRetention);
 	if (opts.stage) {
 		// `pi-writer --stage`:舞台区共演 demo(导演/演员/编剧多 agent 编排),stdin 交互。
 		const { runStageCli } = await import("./stage/cli.ts");

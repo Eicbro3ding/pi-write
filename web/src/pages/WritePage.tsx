@@ -13,7 +13,7 @@ import type {
 	TextSelectionSnapshot,
 	WorldDataDto,
 } from "../types.ts";
-import { contextUsageHint } from "../context-usage.ts";
+import { contextUsageHint, formatCacheHit } from "../context-usage.ts";
 import {
 	makeChapterCommand,
 	makeCompactCommand,
@@ -999,6 +999,8 @@ export function WritePage({
 	const saveLabel = SAVE_LABELS[draftStatus];
 	/** 上下文占用达到阈值时,输入框上方的「建议 /compact」提示。 */
 	const writerUsageHint = contextUsageHint(writerUsage);
+	/** 最近一轮提示词缓存命中徽标(观察缓存优化效果;provider 未上报时不显示)。 */
+	const writerCacheHitText = formatCacheHit(writerSession.cacheHit);
 	// 临时诊断:渲染时反映 previewCards/confirmCards 长度(读 title 即可观察 state)
 
 	// 顶栏信息上报
@@ -1184,6 +1186,11 @@ export function WritePage({
 								onEdit={(m, newText) => void editWriterMessage(m, newText)}
 								emptyText="向编剧发一句话，讨论行文、取舍与节奏——修改正文会生成待确认卡，可随时回退；选中正文会自动填入选区"
 							/>
+							{writerCacheHitText && (
+								<div className="notice info" role="status">
+									{writerCacheHitText}
+								</div>
+							)}
 							{writerUsageHint && (
 								<div className={`notice ${writerUsageHint.tone}`} role="status">
 									{writerUsageHint.text}

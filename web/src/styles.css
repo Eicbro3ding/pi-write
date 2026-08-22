@@ -589,6 +589,8 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .notice { font-size: 12px; padding: 8px 12px; border-radius: var(--r-md); line-height: 1.6; display: flex; align-items: center; gap: 10px; }
 .notice.err { color: var(--red); border: 1px solid var(--red-tint-strong); background: var(--red-tint); }
 .notice.warn { color: var(--amber); border: 1px solid var(--amber-tint-strong); background: var(--amber-tint); }
+/* 中性信息(缓存命中徽标):只用既有 token,不新增主题键(themes 测试强约束) */
+.notice.info { color: var(--faint); border: 1px solid transparent; }
 .notice-action { flex-shrink: 0; margin-left: auto; font-size: 12px; padding: 3px 10px; }
 .paper-zone > .notice, .companion > .notice { margin: 10px 22px 0; }
 .paper-zone > .notice { margin: 10px 22px 0; }

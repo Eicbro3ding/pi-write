@@ -32,6 +32,11 @@ describe("parseWebArgs", () => {
 		expect(() => parseWebArgs(["--temperature", "abc"])).toThrow();
 		expect(() => parseWebArgs(["--top-p", "abc"])).toThrow();
 	});
+	it("解析 --cache-retention(合法值透传,非法值抛错)", () => {
+		expect(parseWebArgs(["--cache-retention", "long"]).cacheRetention).toBe("long");
+		expect(parseWebArgs(["--cache-retention", "none"]).cacheRetention).toBe("none");
+		expect(() => parseWebArgs(["--cache-retention", "forever"])).toThrow();
+	});
 	it("非法端口抛错", () => {
 		expect(() => parseWebArgs(["--port", "abc"])).toThrow();
 	});

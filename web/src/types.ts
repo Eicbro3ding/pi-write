@@ -162,12 +162,24 @@ export interface ContextUsageDto {
 	percent: number | null;
 }
 
+/** 最近一轮 assistant 消息的提示词缓存命中(usage.cacheRead 投影;2026-08-22)。 */
+export interface CacheHitInfo {
+	/** 命中率 0..1(cacheRead / 全部提示词 token)。 */
+	rate: number;
+	/** 本轮全部提示词 token(input + cacheRead + cacheWrite)。 */
+	promptTokens: number;
+	/** 命中(cacheRead)token。 */
+	cachedTokens: number;
+}
+
 /** 会话视图状态(由 SSE 事件 reducer 纯函数维护)。 */
 export interface SessionViewState {
 	messages: ChatMessage[];
 	isStreaming: boolean;
 	/** 上下文压缩中(自动/手动触发):对话末尾显示「正在压缩上下文」提示。 */
 	compacting: boolean;
+	/** 最近一轮提示词缓存命中(message_end 的 assistant usage);provider 未上报缓存字段或尚无响应为 null。 */
+	cacheHit: CacheHitInfo | null;
 }
 
 /**

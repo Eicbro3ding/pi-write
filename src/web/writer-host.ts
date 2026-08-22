@@ -7,8 +7,10 @@
  * (chatAndWait)——编辑页「编剧」标签的对话与收幕成文是同一个编剧、同一份记忆;
  * CLI 模式无本宿主,收幕仍走编排器内置 writer(stage-writer.jsonl)。
  *
- * 上下文注入(context 钩子,每次调用前):当前章节草稿 + 世界书角色条目 +
- * 文风采样 + 最近一幕舞台转录——编剧据此讨论行文/取舍/评戏/维护 advice.md。
+ * 上下文注入分两类:**稳定块**(世界观概述/世界书条目/文风采样/写作约束)按
+ * 指纹持久化进会话(nextTurn custom 消息,内容变化才重注入,可缓存前缀的一部分);
+ * **易变块**(当前章节草稿 + 发展线 + Notice 备忘录 + 最近一幕舞台转录)经
+ * context 钩子每次调用前追加在消息尾部——编剧据此讨论行文/取舍/评戏/维护 advice.md。
  * 章节由 chat() 的 chapterFile 声明(每书记最近一次,无则只注入世界书)。
  *
  * 事件:SessionHost.subscribe 的原生会话事件(含 message_end 附加的 entryId)
@@ -98,6 +100,9 @@ export class WriterHost {
 	private readonly hosts = new Map<string, SessionHost>();
 	/** 每书最近一次对话声明的章节文件(无 chapterFile 参数的端点兜底定位)。 */
 	private readonly currentChapter = new Map<string, string | null>();
+	/** 已注入会话的稳定块指纹(键 = 会话键):内容不变不重注入;服务重启后为空,
+	 *  由 sessionLeafHasFingerprint 扫当前分支补记账。 */
+	private readonly stableInjected = new Map<string, string>();
 	/** 事件转发(server 构造时注入 → broadcast 为 writer_event);注入前静默丢弃。
 	 *  chapterFile 随事件透传(编剧会话按章节隔离,前端据此过滤,2026-08-13)。 */
 	private eventSink: (slug: string, chapterFile: string | null, event: AgentSessionEvent) => void = () => {};
@@ -202,8 +207,12 @@ export class WriterHost {
 		});
 	}
 
-	/** 上下文注入:本会话章节草稿 + 世界观概述 + 世界书角色条目 + 文风采样 + 最近一幕舞台转录(截断保护)。
-	 *  章节随会话固定——切章后新会话注入新章,旧会话不再被使用。 */
+	/** 上下文注入(易变块,每次调用追加在消息尾部):当前章节草稿 + 发展线 +
+	 *  Notice 备忘录 + 最近一幕舞台转录。
+	 *  稳定块(世界观概述/世界书条目/文风采样/写作约束)不在这里逐轮注入——
+	 *  它们变化很少,逐轮注入等于每轮都付一笔全价未缓存输入;改为
+	 *  syncStableContext 按「指纹」持久化进会话(chat/chatAndWait 前调用),
+	 *  内容变化才重注入。章节随会话固定——切章后新会话注入新章,旧会话不再被使用。 */
 	private async editorContext(slug: string, chapterFile: string | null, messages: AgentMessage[]): Promise<AgentMessage[] | undefined> {
 		const blocks: string[] = [];
 		if (chapterFile) {
@@ -218,6 +227,38 @@ export class WriterHost {
 				blocks.push(`【当前正文 · ${file}】尚未创建——你的写作/修改请用 write 工具写入此文件(路径如上),不要自创其他文件名`);
 			}
 		}
+		try {
+			const world = await ensureWorld(getBookDir(slug));
+			// 发展线视图(当前目标 + 已完成列表)——编剧成文/讨论时不重复推进已完成
+			// 目标(借鉴 AI-Novel completedMilestones 守卫,2026-08-12)
+			const view = buildStorylineView(world);
+			if (view) {
+				const lines: string[] = [];
+				if (view.currentTitle) lines.push(`当前位置: ${view.currentTitle}`);
+				if (view.completed.length > 0) lines.push(`已完成(禁止重复追求/推进): ${view.completed.join("、")}`);
+				if (lines.length > 0) blocks.push(`【发展线】\n${lines.join("\n")}`);
+			}
+			// 全局备忘录(Notice 待办,未完成项)——编剧要遵守/续写埋伏笔(2026-08-12 回到初衷)
+			const noticeOpen = world.notice.items.filter((i) => !i.done).slice(0, NOTICE_INJECT_LIMIT);
+			if (world.notice.enabled && noticeOpen.length > 0) {
+				blocks.push(`【Notice·备忘录】\n${noticeOpen.map((i) => `- [ ] ${i.text}`).join("\n")}`);
+			}
+		} catch {
+			/* 世界书缺失:跳过注入,不阻断对话 */
+		}
+		// 最近一幕舞台转录(评戏与 advice.md 的依据;收幕委托回合消息内已含【舞台转录】,
+		// 此处会重复注入同源内容——截断上限兜底,可接受)
+		const transcript = await latestStageTranscript(getBookDir(slug));
+		if (transcript) blocks.push(`【最近一幕舞台转录】\n${transcript}`);
+		if (blocks.length === 0) return undefined;
+		return [...messages, { role: "user", content: blocks.join("\n\n"), timestamp: Date.now() }];
+	}
+
+	/** 稳定块上下文(世界观概述/世界书角色条目/文风采样/写作约束;截断保护同易变块)。
+	 *  与易变块分离:syncStableContext 按指纹持久化进会话,内容不变不重注入,
+	 *  省掉每轮数 k token 的全价未缓存输入(2026-08-22 缓存命中优化)。 */
+	private async stableContext(slug: string): Promise<string> {
+		const blocks: string[] = [];
 		try {
 			const world = await ensureWorld(getBookDir(slug));
 			// 简要世界观概述(常驻,与写作会话同款语义;为空跳过,截断保护同采样)
@@ -239,34 +280,37 @@ export class WriterHost {
 				const body = style.length > STYLE_LIMIT ? `${style.slice(0, STYLE_LIMIT)}…(截断)` : style;
 				blocks.push(`【文风采样】（作者文风基准：模仿语感与句式，不抄写、不复用具体内容）\n${body}`);
 			}
-			// 发展线视图(当前目标 + 已完成列表)——编剧成文/讨论时不重复推进已完成
-			// 目标(借鉴 AI-Novel completedMilestones 守卫,2026-08-12)
-			const view = buildStorylineView(world);
-			if (view) {
-				const lines: string[] = [];
-				if (view.currentTitle) lines.push(`当前位置: ${view.currentTitle}`);
-				if (view.completed.length > 0) lines.push(`已完成(禁止重复追求/推进): ${view.completed.join("、")}`);
-				if (lines.length > 0) blocks.push(`【发展线】\n${lines.join("\n")}`);
-			}
-			// 全局备忘录(Notice 待办,未完成项)——编剧要遵守/续写埋伏笔(2026-08-12 回到初衷)
-			const noticeOpen = world.notice.items.filter((i) => !i.done).slice(0, NOTICE_INJECT_LIMIT);
-			if (world.notice.enabled && noticeOpen.length > 0) {
-				blocks.push(`【Notice·备忘录】\n${noticeOpen.map((i) => `- [ ] ${i.text}`).join("\n")}`);
-			}
 			// 写作约束(按 target 过滤:编剧收 writer/all)——酒馆式规则包(2026-08-12)
 			const editorConstraints = world.constraints.filter((c) => c.enabled && constraintTargetMatches(c.target, "writer"));
 			if (editorConstraints.length > 0) {
 				blocks.push(`【写作约束】\n${editorConstraints.map((c) => `- ${c.name}: ${c.text}`).join("\n")}`);
 			}
 		} catch {
-			/* 世界书缺失:跳过注入,不阻断对话 */
+			/* 世界书缺失:跳过注入 */
 		}
-		// 最近一幕舞台转录(评戏与 advice.md 的依据;收幕委托回合消息内已含【舞台转录】,
-		// 此处会重复注入同源内容——截断上限兜底,可接受)
-		const transcript = await latestStageTranscript(getBookDir(slug));
-		if (transcript) blocks.push(`【最近一幕舞台转录】\n${transcript}`);
-		if (blocks.length === 0) return undefined;
-		return [...messages, { role: "user", content: blocks.join("\n\n"), timestamp: Date.now() }];
+		return blocks.join("\n\n");
+	}
+
+	/**
+	 * 同步稳定块上下文:指纹与会话内已注入的一致则跳过;不一致(首次/世界书或
+	 * 文风等变更后)经 injectContext 以 nextTurn custom 消息持久化——随下个用户
+	 * prompt 进入上下文并落盘,之后成为可缓存前缀的一部分,不再每轮重付。
+	 * 指纹扫描沿当前 leaf 分支:压缩(compaction 把旧历史移出 leaf 链)或切分支后
+	 * 稳定块不在上下文里时会被重新发现并补注入。
+	 */
+	private async syncStableContext(slug: string, chapterFile: string | null, host: SessionHost): Promise<void> {
+		const stable = await this.stableContext(slug);
+		if (stable.length === 0) return;
+		const fp = stableFingerprint(stable);
+		const key = WriterHost.key(slug, chapterFile);
+		if (this.stableInjected.get(key) === fp) return;
+		if (!this.stableInjected.has(key) && sessionLeafHasFingerprint(slug, chapterFile, fp)) {
+			// 服务重启后内存为空,但当前分支已含同指纹注入:只补记账,不重注入
+			this.stableInjected.set(key, fp);
+			return;
+		}
+		await host.injectContext(`【编剧稳定上下文 · 指纹 ${fp}】以下是世界观与写作基准,长期有效:\n\n${stable}`);
+		this.stableInjected.set(key, fp);
 	}
 
 	/** 编剧会话状态快照(纯读;未对话过的章节返回空态,不创建会话)。
@@ -321,6 +365,7 @@ export class WriterHost {
 		if (chapterFile) this.currentChapter.set(slug, chapterFile);
 		const file = chapterFile ?? this.currentChapter.get(slug) ?? null;
 		const host = await this.getOrCreate(slug, file);
+		await this.syncStableContext(slug, file, host);
 		await host.sendMessage(text);
 	}
 
@@ -334,6 +379,7 @@ export class WriterHost {
 		if (chapterFile) this.currentChapter.set(slug, chapterFile);
 		const file = chapterFile ?? this.currentChapter.get(slug) ?? null;
 		const host = await this.getOrCreate(slug, file);
+		await this.syncStableContext(slug, file, host);
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const timeout = new Promise<"timeout">((resolve) => {
 			timer = setTimeout(() => resolve("timeout"), timeoutMs);
@@ -469,6 +515,40 @@ function readSessionFromDisk(slug: string, chapterFile: string | null): {
 function writerSessionFile(chapterFile: string | null | undefined): string {
 	const id = (chapterFile ?? "default").replace(/\.jsonl$/, "") || "default";
 	return `writer-${id}.jsonl`;
+}
+
+/** FNV-1a 8 位十六进制指纹(稳定块内容);不引 crypto,防碰撞能力对「内容变没变」判断足够。 */
+export function stableFingerprint(text: string): string {
+	let h = 0x811c9dc5;
+	for (let i = 0; i < text.length; i++) {
+		h ^= text.charCodeAt(i);
+		h = Math.imul(h, 0x01000193);
+	}
+	return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
+ * 当前 leaf 分支是否已含该指纹的稳定块注入(只读打开会话文件)。
+ * 沿 leaf 链扫描:压缩/切分支后旧注入移出当前上下文 → 返回 false → syncStableContext 允许补注入。
+ * 文件不存在/解析失败返回 false(视为未注入)。
+ */
+function sessionLeafHasFingerprint(slug: string, chapterFile: string | null, fp: string): boolean {
+	try {
+		const sessionsDir = getBookSessionsDir(slug);
+		const abs = join(sessionsDir, writerSessionFile(chapterFile));
+		if (!existsSync(abs)) return false;
+		const sm = SessionManager.open(abs, sessionsDir, getBookDir(slug));
+		const leafId = sm.getLeafId();
+		if (!leafId) return false;
+		const marker = `指纹 ${fp}`;
+		for (const e of sm.getBranch(leafId)) {
+			if (e.type !== "custom_message") continue;
+			if (JSON.stringify(e).includes(marker)) return true;
+		}
+		return false;
+	} catch {
+		return false;
+	}
 }
 
 /**

@@ -9,10 +9,11 @@
  * 等非气泡角色直接跳过,不渲染为气泡。
  */
 import type { AgentEventDto, ChatMessage, SessionViewState, ToolCallInfo } from "./types.ts";
+import { extractCacheHit } from "./context-usage.ts";
 
 /** 初始会话视图状态。 */
 export function initialSessionState(): SessionViewState {
-	return { messages: [], isStreaming: false, compacting: false };
+	return { messages: [], isStreaming: false, compacting: false, cacheHit: null };
 }
 
 /**
@@ -209,6 +210,9 @@ export function processAgentEvent(state: SessionViewState, event: AgentEventDto)
 		case "message_end": {
 			// 只标记最后一条未 done 的 assistant 消息;message_end 也会为 toolResult/user 消息发射,忽略它们
 			const { entryId } = event;
+			// 最近一轮提示词缓存命中:随 assistant 的 message_end 到达(toolResult/user
+			// 及历史水合的空 message 无 usage,extractCacheHit 返回 null,保留原值)
+			const hit = extractCacheHit(event.message);
 			let messages = state.messages;
 			// 服务端附加的 entry id:替换该角色的临时随机 id(乐观气泡/流式消息),
 			// 撤回按钮据此定位(找最后一条「同角色且尚无 entryId」的消息)
@@ -223,10 +227,10 @@ export function processAgentEvent(state: SessionViewState, event: AgentEventDto)
 				}
 			}
 			const i = lastPendingAssistantIndex(messages);
-			if (i === -1) return { ...state, messages };
+			if (i === -1) return { ...state, messages, ...(hit ? { cacheHit: hit } : {}) };
 			messages = [...messages];
 			messages[i] = { ...messages[i]!, done: true };
-			return { ...state, messages };
+			return { ...state, messages, ...(hit ? { cacheHit: hit } : {}) };
 		}
 		case "turn_start":
 			return { ...state, isStreaming: true };
