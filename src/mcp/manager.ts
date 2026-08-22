@@ -45,10 +45,23 @@ interface McpConnection {
 	tools: ToolDefinition[];
 	/** 关闭 client 与 transport;重复调用安全。 */
 	close: () => Promise<void>;
+	/** 配置序(连接表中的原始位置):watchdog 重连后按此原位插回,保工具序稳定。 */
+	slot?: number;
 }
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * 按 slot(断开前的配置序)把重连的连接原位插回连接表:找第一个 slot 更大的
+ * 连接插到它前面;没有更大的(或本连接无 slot)追加尾部。
+ * 纯函数(只依赖元素的 slot 字段)便于单测覆盖多台同时断线、乱序重连的组合。
+ */
+export function insertConnectionBySlot<T extends { slot?: number }>(connections: T[], conn: T): void {
+	const at = conn.slot === undefined ? -1 : connections.findIndex((c) => (c.slot ?? Number.MAX_SAFE_INTEGER) > conn.slot!);
+	if (at >= 0) connections.splice(at, 0, conn);
+	else connections.push(conn);
 }
 
 /** 认证失败的常见特征(401/403 状态码或 SDK 的 OAuth 提示),追加可读说明。 */
@@ -210,23 +223,30 @@ export class McpManager {
 		this.status = status;
 	}
 
-	/** 注册 watchdog:连接意外断开时从连接表移除并调度重连(退避翻倍,封顶 30s)。 */
+	/** 注册 watchdog:连接意外断开时从连接表移除并调度重连(退避翻倍,封顶 30s)。
+	 *  断开时记录原下标(slot),重连后按 slot 原位插回——工具定义序列化进
+	 *  prompt 前缀,顺序漂移(旧实现 push 到尾部)会让全会话提示词缓存失效,
+	 *  且跨服务器重名工具的「后者跳过」归属会翻转。 */
 	private armWatchdog(conn: McpConnection, gen: number): void {
 		conn.client.onclose = () => {
 			if (this.closed || this.generation !== gen) return;
+			const idx = this.connections.indexOf(conn);
+			if (idx >= 0) conn.slot = idx;
 			this.connections = this.connections.filter((c) => c !== conn);
 			this.rebuild();
 			void this.reconnectLoop(conn.config, gen, RETRY_BASE_DELAY_MS);
 		};
 	}
 
-	/** 重连循环:失败记入 status 并退避重试;成功恢复连接并通知服务端。 */
+	/** 重连循环:失败记入 status 并退避重试;成功恢复连接并通知服务端。
+	 *  按 conn.slot 原位插回(insertConnectionBySlot)——数组里可能已有其他
+	 *  重连回来的连接,直接用下标 splice 会破坏相对顺序。 */
 	private async reconnectLoop(config: McpServerConfig, gen: number, delayMs: number): Promise<void> {
 		await sleep(delayMs);
 		if (this.closed || this.generation !== gen) return;
 		try {
 			const conn = await connectServer(config, (c) => this.armWatchdog(c, gen));
-			this.connections.push(conn);
+			insertConnectionBySlot(this.connections, conn);
 			this.rebuild();
 			this.onReconnect?.(config.name);
 		} catch (err) {
@@ -266,6 +286,7 @@ export class McpManager {
 		for (const server of config.servers) {
 			try {
 				const conn = await connectServer(server, (c) => this.armWatchdog(c, gen));
+				conn.slot = this.connections.length;
 				this.connections.push(conn);
 			} catch (err) {
 				this.status.push({
