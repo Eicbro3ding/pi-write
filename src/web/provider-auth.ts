@@ -11,6 +11,21 @@ export interface ProviderListItem {
 	label?: string;
 }
 
+/** GET /api/providers/:id 的详情响应:基本信息 + 模型列表(不含认证过滤)。 */
+export interface ProviderDetail {
+	provider: ProviderListItem & { baseUrl?: string };
+	models: Array<{
+		id: string;
+		name: string;
+		api: string;
+		baseUrl: string;
+		reasoning: boolean;
+		input: ("text" | "image")[];
+		contextWindow: number;
+		maxTokens: number;
+	}>;
+}
+
 /** 按 Provider.auth 形状推导认证种类:apiKey.login 存在与否 + oauth 存在与否。 */
 export function deriveAuthKind(provider: Pick<Provider, "auth">): ProviderAuthKind {
 	const hasKeyLogin = Boolean(provider.auth.apiKey?.login);

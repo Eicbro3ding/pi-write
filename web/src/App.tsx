@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ApiClient } from "./api/client.ts";
 import { useLibrary } from "./library.ts";
 import { IconEdit, IconGear, IconGlobe, IconStage } from "./components/Icons.tsx";
+import { SetupWizard } from "./components/SetupWizard.tsx";
 import { WritePage, type HeaderInfo } from "./pages/WritePage.tsx";
 import { StagePage } from "./pages/StagePage.tsx";
 import { WorldPage } from "./pages/WorldPage.tsx";
@@ -26,6 +27,9 @@ const SAVE_STYLE: Record<string, { icon: string; cls: string }> = {
 	"保存失败": { icon: "!", cls: "err" },
 	"加载中": { icon: "", cls: "loading" },
 };
+
+/** 首启向导检查相位:checking 拉取中 / pending 未完成(弹向导)/ done 已完成或检查失败。 */
+type SetupPhase = "checking" | "pending" | "done";
 
 export function App() {
 	const client = useMemo(() => new ApiClient(), []);
@@ -53,6 +57,43 @@ export function App() {
 		persistAutoConfirmEdits(v);
 		setAutoConfirmEditsState(v);
 	};
+	/** 首启向导状态:挂载时查一次服务端(~/.pi/writer/setup.json)。 */
+	const [setupPhase, setSetupPhase] = useState<SetupPhase>("checking");
+	/** 设置页「重新运行配置向导」:向导以覆盖层叠加(页面保持挂载,流式状态不丢)。 */
+	const [rerunWizard, setRerunWizard] = useState(false);
+	useEffect(() => {
+		let cancelled = false;
+		client
+			.getSetup()
+			.then((r) => {
+				if (!cancelled) setSetupPhase(r.completed ? "done" : "pending");
+			})
+			.catch(() => {
+				// 状态检查失败不挡主界面:当作已完成(下次启动会再查)
+				if (!cancelled) setSetupPhase("done");
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [client]);
+
+	// 首启:向导独占渲染,主界面四页尚未挂载——完成后才挂载,WritePage 的挂载
+	// 效应会拉书列表并自动打开第一本书(向导建的书记得一进去就打开)。
+	if (setupPhase === "checking") return <div className="wz-boot" />;
+	if (setupPhase === "pending") {
+		return (
+			<SetupWizard
+				client={client}
+				simplifiedTools={simplifiedTools}
+				onSimplifiedToolsChange={setSimplifiedTools}
+				autoExpandThinking={autoExpandThinking}
+				onAutoExpandThinkingChange={setAutoExpandThinking}
+				autoConfirmEdits={autoConfirmEdits}
+				onAutoConfirmEditsChange={setAutoConfirmEdits}
+				onFinished={() => setSetupPhase("done")}
+			/>
+		);
+	}
 	return (
 		<div className="app">
 			<header className="topbar">
@@ -150,9 +191,24 @@ export function App() {
 							onAutoExpandThinkingChange={setAutoExpandThinking}
 							autoConfirmEdits={autoConfirmEdits}
 							onAutoConfirmEditsChange={setAutoConfirmEdits}
+							onRerunSetup={() => setRerunWizard(true)}
 						/>
 					</section>
 			</div>
+			{/* 重运行形态:覆盖层叠加在已挂载页面上,不打断流式状态;建书后刷新书库列表 */}
+			{rerunWizard && (
+				<SetupWizard
+					client={client}
+					simplifiedTools={simplifiedTools}
+					onSimplifiedToolsChange={setSimplifiedTools}
+					autoExpandThinking={autoExpandThinking}
+					onAutoExpandThinkingChange={setAutoExpandThinking}
+					autoConfirmEdits={autoConfirmEdits}
+					onAutoConfirmEditsChange={setAutoConfirmEdits}
+					onBooksChanged={() => void library.loadBooks()}
+					onFinished={() => setRerunWizard(false)}
+				/>
+			)}
 		</div>
 	);
 }

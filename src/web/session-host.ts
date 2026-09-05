@@ -21,7 +21,7 @@ import type { AuthInteraction } from "../../vendor/pi-ai/src/index.ts";
 import { getBooksDir } from "../config.ts";
 import { toolGuardContext } from "../tool-guard.ts";
 import { chatTextOfMessage, chatThinkingOfMessage } from "../session-text.ts";
-import { createKeyInteraction, deriveAuthKind, sortProviders, type ProviderListItem } from "./provider-auth.ts";
+import { createKeyInteraction, deriveAuthKind, sortProviders, type ProviderDetail, type ProviderListItem } from "./provider-auth.ts";
 
 /** SessionHost 构造选项;createRuntime 由调用方注入,SessionHost 不自己构造 services。 */
 export interface SessionHostOptions {
@@ -432,6 +432,41 @@ export class SessionHost {
 	async setProviderApiKey(providerId: string, key: string): Promise<void> {
 		const interaction: AuthInteraction = createKeyInteraction(key);
 		await this.requireRuntime().services.modelRuntime.login(providerId, "api_key", interaction);
+	}
+
+	/**
+	 * 供应商详情:基本信息 + 模型列表(默认模型步/设置页详情卡用)。
+	 * 模型来自 getModels(providerId) 全量目录,**不按认证过滤**——未配置的
+	 * 供应商也能看到它的模型(与 getAvailable 只含已认证的区别);未知 id 返回 null。
+	 */
+	async getProviderDetail(providerId: string): Promise<ProviderDetail | null> {
+		const mr = this.requireRuntime().services.modelRuntime;
+		// getModels(providerId) 对未注册 id 返回空数组;先经 getProvider 确认存在
+		const provider = mr.getProvider(providerId);
+		if (!provider) return null;
+		const models = mr.getModels(providerId);
+		const status = mr.getProviderAuthStatus(providerId);
+		return {
+			provider: {
+				id: provider.id,
+				name: provider.name ?? providerId,
+				configured: status.configured,
+				authKind: deriveAuthKind(provider),
+				source: status.source,
+				label: status.label,
+				baseUrl: provider.baseUrl,
+			},
+			models: models.map((m) => ({
+				id: m.id,
+				name: m.name,
+				api: m.api,
+				baseUrl: m.baseUrl,
+				reasoning: m.reasoning,
+				input: m.input,
+				contextWindow: m.contextWindow,
+				maxTokens: m.maxTokens,
+			})),
+		};
 	}
 
 	/** 移除 provider 凭据(官方 logout 路径,自动刷新可用模型快照)。 */

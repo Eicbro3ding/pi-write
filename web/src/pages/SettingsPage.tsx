@@ -7,7 +7,7 @@ import { applyTheme, currentTheme } from "../theme.ts";
 import { ProviderList } from "../components/ProviderList.tsx";
 import { McpServerList } from "../components/McpServerList.tsx";
 import { ToggleSwitch } from "../components/ToggleSwitch.tsx";
-import { IconBook, IconDoc, IconGear, IconGlobe } from "../components/Icons.tsx";
+import { IconBook, IconDoc, IconGear, IconGlobe, IconX } from "../components/Icons.tsx";
 
 /** 思考级别选项(与后端 session-host 的 ThinkingLevel 对齐)。 */
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -85,6 +85,7 @@ export function SettingsPage({
 	onAutoExpandThinkingChange,
 	autoConfirmEdits,
 	onAutoConfirmEditsChange,
+	onRerunSetup,
 }: {
 	client: ApiClient;
 	/** 当前打开的书 slug(世界书注入分组随打开书重拉;null = 未打开书)。 */
@@ -98,6 +99,8 @@ export function SettingsPage({
 	/** 编辑免确认开关状态(编剧编辑落盘即归档;缺省关闭,默认走待确认卡)。 */
 	autoConfirmEdits: boolean;
 	onAutoConfirmEditsChange: (enabled: boolean) => void;
+	/** 重新运行首次启动配置向导(App 弹覆盖层;缺省不显示入口)。 */
+	onRerunSetup?: () => void;
 }) {
 	/** 当前分类(左侧导航激活项;默认「模型」)。 */
 	const [cat, setCat] = useState<SettingCat>("model");
@@ -111,15 +114,7 @@ export function SettingsPage({
 	const [actErr, setActErr] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [modelRefreshBusy, setModelRefreshBusy] = useState(false);
-	/** 自定义模型表单(openai-completions 协议,如本地 mock LLM)。 */
-	const [customProvider, setCustomProvider] = useState("");
-	const [customModel, setCustomModel] = useState("");
-	const [customBaseUrl, setCustomBaseUrl] = useState("");
-	const [customApiKey, setCustomApiKey] = useState("");
-	const [customBusy, setCustomBusy] = useState(false);
-	const [customErr, setCustomErr] = useState<string | null>(null);
-	/** 折叠状态 */
-	const [customOpen, setCustomOpen] = useState(false);
+	/** 模型提供商管理弹窗(新增/管理供应商与自定义模型已并入其中)。 */
 	const [providersOpen, setProvidersOpen] = useState(false);
 	const [theme, setTheme] = useState<ThemeId>(() => currentTheme());
 	/** 内置主题列表(资产文件自动发现,零 ts 注册;night 无文件,单独用 NIGHT_THEME)。 */
@@ -445,35 +440,6 @@ export function SettingsPage({
 		}
 	}
 
-	/** 添加自定义模型(写 models.json + 服务端热重载)→ 刷新列表并自动切换到新模型。 */
-	async function addCustomModel() {
-		if (customBusy) return;
-		if (!customProvider.trim() || !customModel.trim() || !customBaseUrl.trim()) {
-			setCustomErr("provider id、模型 id 与 baseUrl 必填");
-			return;
-		}
-		setCustomBusy(true);
-		setCustomErr(null);
-		try {
-			await client.addCustomModel({
-				provider: customProvider.trim(),
-				model: customModel.trim(),
-				baseUrl: customBaseUrl.trim(),
-				...(customApiKey.trim() ? { apiKey: customApiKey.trim() } : {}),
-			});
-			await load();
-			const ref = `${customProvider.trim()}/${customModel.trim()}`;
-			const ok = await changeModel(ref);
-			setNotice(ok ? `自定义模型已添加并切换: ${ref}` : `自定义模型已添加,请手动选择: ${ref}`);
-			setCustomBaseUrl("");
-			setCustomApiKey("");
-		} catch (e) {
-			setCustomErr(`添加失败: ${friendlyError(e)}`);
-		} finally {
-			setCustomBusy(false);
-		}
-	}
-
 	/**
 	 * 提供商认证变化(添加/移除 key)后刷新模型;当前模型失效时自动回退
 	 * 到第一个可用模型,无可用模型则提示手动选择。
@@ -681,92 +647,20 @@ export function SettingsPage({
 								</div>
 							</div>
 
-							{/* 自定义模型 — 可折叠 */}
-							<div className="s-card s-collapsible">
-								<button
-									type="button"
-									className="s-collapsible-head"
-									onClick={() => setCustomOpen((v) => !v)}
-								>
-									<span>自定义模型</span>
-									<span className={`s-collapsible-arrow${customOpen ? " open" : ""}`}>▸</span>
-								</button>
-								{customOpen && (
-									<div className="s-collapsible-body">
-										<div className="s-card-desc">添加 OpenAI 兼容的自定义模型(如本地 mock 服务器)。模型引用为 provider id / 模型 id。</div>
-										<div className="s-field-grid">
-											<div className="s-field">
-												<label className="s-field-label">provider id</label>
-												<input
-													className="s-input"
-													placeholder="如 mock"
-													value={customProvider}
-													disabled={customBusy}
-													onChange={(e) => setCustomProvider(e.target.value)}
-												/>
-											</div>
-											<div className="s-field">
-												<label className="s-field-label">模型 id</label>
-												<input
-													className="s-input"
-													placeholder="如 mock-1"
-													value={customModel}
-													disabled={customBusy}
-													onChange={(e) => setCustomModel(e.target.value)}
-												/>
-											</div>
-											<div className="s-field">
-												<label className="s-field-label">baseUrl</label>
-												<input
-													className="s-input"
-													placeholder="http://127.0.0.1:8787/v1"
-													value={customBaseUrl}
-													disabled={customBusy}
-													onChange={(e) => setCustomBaseUrl(e.target.value)}
-												/>
-											</div>
-											<div className="s-field">
-												<label className="s-field-label">apiKey(可选)</label>
-												<input
-													className="s-input"
-													placeholder="留空则无鉴权"
-													value={customApiKey}
-													disabled={customBusy}
-													onChange={(e) => setCustomApiKey(e.target.value)}
-												/>
-											</div>
-										</div>
-										<div className="s-field-row" style={{ marginTop: 10 }}>
-											<button className="btn-ghost" type="button" disabled={customBusy} onClick={() => void addCustomModel()}>
-												{customBusy ? "添加中…" : "添加并切换"}
-											</button>
-											{customErr && <span className="s-busy err">{customErr}</span>}
-										</div>
+								{/* 模型提供商 — 入口卡(点击弹出双栏管理卡) */}
+								<div className="s-card">
+									<div className="s-card-head">模型提供商</div>
+									<div className="s-card-desc">
+										管理模型提供商与 API key;为 provider 添加 key 后其模型即可在「切换模型」中使用。新增自定义模型/供应商也在此完成。
 									</div>
-								)}
-							</div>
-
-							{/* 模型提供商 — 可折叠 */}
-							<div className="s-card s-collapsible">
-								<button
-									type="button"
-									className="s-collapsible-head"
-									onClick={() => setProvidersOpen((v) => !v)}
-								>
-									<span>模型提供商</span>
-									<span className={`s-collapsible-arrow${providersOpen ? " open" : ""}`}>▸</span>
-								</button>
-								{providersOpen && (
-									<div className="s-collapsible-body">
-										<div className="s-card-desc">
-											为 provider 添加 API key 后其模型即可在「切换模型」中使用;key 存储在 ~/.pi/writer/agent/auth.json。
-										</div>
-										<ProviderList client={client} onAuthChanged={handleAuthChanged} />
+									<div className="s-field-row" style={{ marginBottom: 0 }}>
+										<button type="button" className="btn-ghost" onClick={() => setProvidersOpen(true)}>
+											管理供应商
+										</button>
 									</div>
-								)}
-							</div>
-						</>
-					)}
+								</div>
+							</>
+						)}
 
 					{cat === "ui" && (
 						<>
@@ -912,6 +806,18 @@ export function SettingsPage({
 									</div>
 								</div>
 							</div>
+
+							{onRerunSetup && (
+								<div className="s-card">
+									<div className="s-card-head">配置向导</div>
+									<div className="s-field-row">
+										<span className="s-val muted">重新走一遍首次启动配置(模型服务、默认模型、第一本书、界面偏好)。</span>
+										<button type="button" className="btn-ghost" onClick={onRerunSetup}>
+											重新运行配置向导
+										</button>
+									</div>
+								</div>
+							)}
 						</>
 					)}
 
@@ -973,6 +879,22 @@ export function SettingsPage({
 					)}
 				</div>
 			</main>
+			{/* 模型提供商管理弹窗:双栏卡片悬浮层(关闭即卸载,列表状态在下一次打开时重建) */}
+			{providersOpen && (
+				<div className="wz-overlay" role="dialog" aria-modal="true" aria-label="模型提供商">
+					<div className="wz-panel pvd-panel">
+						<header className="pvd-head">
+							<span className="pvd-title">模型提供商</span>
+							<button type="button" className="icon-btn" aria-label="关闭" onClick={() => setProvidersOpen(false)}>
+								<IconX size={16} />
+							</button>
+						</header>
+						<div className="pvd-body">
+							<ProviderList client={client} onAuthChanged={handleAuthChanged} />
+						</div>
+					</div>
+				</div>
+			)}
 		</div>
 	);
 }

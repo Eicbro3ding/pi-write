@@ -13,7 +13,7 @@ import { pipeline } from "node:stream/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import yazl from "yazl";
 import { resolveBuiltinThemesDir, WriterServer } from "../src/web/server.ts";
-import { getBookDir, getWriterDir } from "../src/config.ts";
+import { getAgentDir, getBookDir, getWriterDir } from "../src/config.ts";
 import { getBookSessionsDir, getChapterSessionsPath, loadBook } from "../src/book-manager.ts";
 import { readImportZip } from "../src/web/book-zip.ts";
 import { ProviderAuthError } from "../src/web/provider-auth.ts";
@@ -41,7 +41,7 @@ function fakeHost() {
 		diagnostics: [] as Array<{ type: string; message: string }>,
 	};
 	const session = {
-		modelRuntime: { getAvailable: async () => [{ id: "sonnet", provider: "anthropic" }] },
+		modelRuntime: { getAvailable: async () => [{ id: "sonnet", provider: "anthropic" }], refresh: async () => {} },
 		state: { model: { id: "sonnet", provider: "anthropic" }, thinkingLevel: "off" },
 	};
 	let providers = [
@@ -92,7 +92,20 @@ function fakeHost() {
 		setModel: async () => {},
 		setThinkingLevel: async () => {},
 		setSamplingParameters: () => {},
-		listProviders: async () => providers,		setProviderApiKey: async (id: string, key: string) => {
+		listProviders: async () => providers,
+		getProviderDetail: async (id: string) => {
+			const p = providers.find((x) => x.id === id);
+			if (!p) return null;
+			// 模拟 vendor 全量目录(未配置 provider 也有模型,不按认证过滤)
+			return {
+				provider: { ...p, baseUrl: `https://api.${id}.test` },
+				models: [
+					{ id: "sonnet", name: "Sonnet", api: "anthropic-messages", baseUrl: `https://api.${id}.test`, reasoning: true, input: ["text", "image"], contextWindow: 200000, maxTokens: 8192 },
+					{ id: "sonnet-v2", name: "Sonnet V2", api: "anthropic-messages", baseUrl: `https://api.${id}.test`, reasoning: false, input: ["text"], contextWindow: 1000000, maxTokens: 4096 },
+				],
+			};
+		},
+		setProviderApiKey: async (id: string, key: string) => {
 			if (id === "fail-provider") {
 				throw new ProviderAuthError(
 					"该 provider 需要额外配置(如 account ID),请用 TUI /login 或手动编辑 ~/.pi/writer/agent/auth.json",
@@ -563,6 +576,56 @@ describe("WriterServer", () => {
 	it("DELETE 未知 provider → 404", async () => {
 		const res = await fetch(`${base}/api/providers/nope`, { method: "DELETE" });
 		expect(res.status).toBe(404);
+	});
+	it("GET /api/providers/:id 返回详情(未配置 provider 也有模型,不按认证过滤)", async () => {
+		const res = await fetch(`${base}/api/providers/openai`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { provider: { id: string; baseUrl?: string; configured: boolean }; models: Array<{ id: string; contextWindow: number; input: string[] }> };
+		expect(body.provider.id).toBe("openai");
+		expect(body.provider.configured).toBe(false);
+		expect(body.provider.baseUrl).toBe("https://api.openai.test");
+		// openai 未配置,但模型列表仍返回(全量目录;getAvailable 才过滤)
+		expect(body.models.map((m) => m.id)).toEqual(["sonnet", "sonnet-v2"]);
+		expect(body.models[0]).toMatchObject({ contextWindow: 200000, input: ["text", "image"], reasoning: true });
+	});
+	it("GET /api/providers/:id 未知 id → 404", async () => {
+		const res = await fetch(`${base}/api/providers/nope`);
+		expect(res.status).toBe(404);
+		const body = (await res.json()) as { error: { code: string } };
+		expect(body.error.code).toBe("not_found");
+	});
+	it("POST /api/models/custom 同 provider 加两个模型:models.json 两者都保留", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		const post = (model: string) =>
+			fetch(`${base}/api/models/custom`, {
+				method: "POST",
+				headers: json,
+				body: JSON.stringify({ provider: "mock", model, baseUrl: "http://127.0.0.1:8787/v1" }),
+			});
+		const r1 = await post("mock-1");
+		expect(r1.status).toBe(200);
+		const r2 = await post("mock-2");
+		expect(r2.status).toBe(200);
+		const cfg = JSON.parse(readFileSync(customPath, "utf8")) as { providers: Record<string, { models: Array<{ id: string }> }> };
+		expect(cfg.providers.mock.models.map((m) => m.id)).toEqual(["mock-1", "mock-2"]);
+	});
+	it("POST /api/models/custom 带 input/contextWindow/maxTokens 落盘正确", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		const res = await fetch(`${base}/api/models/custom`, {
+			method: "POST",
+			headers: json,
+			body: JSON.stringify({
+				provider: "vision",
+				model: "vision-1",
+				baseUrl: "https://api.example.test/v1",
+				input: ["text", "image"],
+				contextWindow: 1000000,
+				maxTokens: 128000,
+			}),
+		});
+		expect(res.status).toBe(200);
+		const cfg = JSON.parse(readFileSync(customPath, "utf8")) as { providers: Record<string, { models: Array<Record<string, unknown>> }> };
+		expect(cfg.providers.vision.models[0]).toMatchObject({ id: "vision-1", contextWindow: 1000000, maxTokens: 128000, input: ["text", "image"] });
 	});
 	it("GET /api/world 无会话返回 404", async () => {
 		const res = await fetch(`${base}/api/world`);

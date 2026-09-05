@@ -5,7 +5,7 @@
  * 注意:本文件不得在 import 时触碰 DOM 专属 API(EventSource 只在 subscribeEvents 内使用),
  * 以兼容 node 环境的 vitest 单测。
  */
-import type { AgentEventDto, BookDetail, BookMeta, ChapterRef, ContextUsageDto, McpServerInfo, McpServerStatus, ProviderInfo, SessionState, SessionTreeDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, WorldDataDto, WriterStateDto } from "../types.ts";
+import type { AgentEventDto, BookDetail, BookMeta, ChapterRef, ContextUsageDto, McpServerInfo, McpServerStatus, ProviderDetailDto, ProviderInfo, SessionState, SessionTreeDto, SetupStateDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, WorldDataDto, WriterStateDto } from "../types.ts";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
 
 /** 图片访问 URL(同源相对路径;生产/Electron 同源,vite dev 经代理)。 */
@@ -205,6 +205,10 @@ export class ApiClient {
 		apiKey?: string;
 		contextWindow?: number;
 		maxTokens?: number;
+		/** 模型输入类型(vendor 只支持 text/image;缺省 ["text"])。 */
+		input?: ("text" | "image")[];
+		/** 模型显示名(缺省取模型 id)。 */
+		name?: string;
 	}): Promise<{ ok: boolean; provider: string; model: string }> {
 		return this.request<{ ok: boolean; provider: string; model: string }>("/api/models/custom", {
 			method: "POST",
@@ -228,6 +232,11 @@ export class ApiClient {
 		return r.providers;
 	}
 
+	/** 供应商详情(含该 provider 全量模型列表,不按认证过滤;未知 id 404)。 */
+	async getProviderDetail(id: string): Promise<ProviderDetailDto> {
+		return this.request<ProviderDetailDto>(`/api/providers/${encodeURIComponent(id)}`);
+	}
+
 	/** 为 provider 写入 API key(失败抛 ApiError,含多提示/不支持等中文错误体)。 */
 	async setProviderApiKey(id: string, key: string): Promise<void> {
 		await this.request<{ ok: boolean }>(`/api/providers/${encodeURIComponent(id)}/apikey`, {
@@ -239,6 +248,27 @@ export class ApiClient {
 	/** 移除 provider 凭据。 */
 	async deleteProvider(id: string): Promise<void> {
 		await this.request<{ ok: boolean }>(`/api/providers/${encodeURIComponent(id)}`, { method: "DELETE" });
+	}
+
+	/** 首次启动配置向导状态(存服务端 ~/.pi/writer/setup.json)。 */
+	async getSetup(): Promise<{ completed: boolean; setup: SetupStateDto }> {
+		return this.request<{ completed: boolean; setup: SetupStateDto }>("/api/setup");
+	}
+
+	/**
+	 * 标记向导完成。steps 为各步骤完成标记(未知键服务端 400);传空对象表示
+	 * 「跳过向导」——同样置完成时间,不再重复弹。返回最新状态。
+	 */
+	async completeSetup(steps: Partial<Record<keyof SetupStateDto["steps"], boolean>>): Promise<{ completed: boolean; setup: SetupStateDto }> {
+		return this.request<{ completed: boolean; setup: SetupStateDto }>("/api/setup", {
+			method: "POST",
+			body: JSON.stringify({ steps }),
+		});
+	}
+
+	/** 重置向导为未完成(设置页「重新运行配置向导」)。返回重置后的状态。 */
+	async resetSetup(): Promise<{ completed: boolean; setup: SetupStateDto }> {
+		return this.request<{ completed: boolean; setup: SetupStateDto }>("/api/setup/reset", { method: "POST" });
 	}
 
 	/** MCP 服务器配置 + 连接状态。 */

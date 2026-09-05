@@ -31,6 +31,14 @@ import {
 } from "../book-manager.ts";
 import { getAgentDir, getBookDir, getThemesDir, getWriterDir } from "../config.ts";
 import { atomicWriteFile } from "../atomic-write.ts";
+import {
+	SETUP_VERSION,
+	defaultSetupState,
+	isSetupStepId,
+	readSetupState,
+	writeSetupState,
+	type SetupState,
+} from "../setup.ts";
 import { MAX_ZIP_BYTES, exportBookZip, readImportZip, type BookZipImport } from "./book-zip.ts";
 import { ensureWorld, newId, readWorldEditRecord, saveWorld, WorldValidationError, type WorldData } from "../world-data.ts";
 import { buildChapterContext, DEFAULT_CONTEXT_BUDGET, trimMemory } from "../world-context.ts";
@@ -501,6 +509,7 @@ export class WriterServer {
 			{ method: "POST", segments: ["thinking"], handler: (ctx) => this.handlePostThinking(ctx) },
 			{ method: "POST", segments: ["sampling"], handler: (ctx) => this.handlePostSampling(ctx) },
 			{ method: "GET", segments: ["providers"], handler: (ctx) => this.handleGetProviders(ctx) },
+			{ method: "GET", segments: ["providers", ":id"], handler: (ctx) => this.handleGetProviderDetail(ctx) },
 			{ method: "POST", segments: ["providers", ":id", "apikey"], handler: (ctx) => this.handlePostProviderApiKey(ctx) },
 			{ method: "DELETE", segments: ["providers", ":id"], handler: (ctx) => this.handleDeleteProvider(ctx) },
 			// world / draft / cards
@@ -535,6 +544,10 @@ export class WriterServer {
 			{ method: "GET", segments: ["themes", ":file"], handler: (ctx) => this.handleGetThemeFile(ctx) },
 			{ method: "PUT", segments: ["themes", ":file"], handler: (ctx) => this.handlePutThemeFile(ctx) },
 			{ method: "DELETE", segments: ["themes", ":file"], handler: (ctx) => this.handleDeleteThemeFile(ctx) },
+			// setup(首次启动配置向导状态;静态段 reset 在表中唯一,无参数段冲突)
+			{ method: "GET", segments: ["setup"], handler: (ctx) => this.handleGetSetup(ctx) },
+			{ method: "POST", segments: ["setup"], handler: (ctx) => this.handlePostSetup(ctx) },
+			{ method: "POST", segments: ["setup", "reset"], handler: (ctx) => this.handlePostSetupReset(ctx) },
 			// 插件路由预留(构造参数;追加在内置路由之后)
 			...(this.options.extraRoutes ?? []),
 		];
@@ -1215,21 +1228,33 @@ export class WriterServer {
 		} catch {
 			/* 不存在/损坏:从空开始 */
 		}
+		// input 只接受 text/image(vendor models.json schema 合法值,无视频/PDF 语义)
+		const rawInput = Array.isArray(body.input) ? body.input : [];
+		const input = rawInput.filter((v): v is "text" | "image" => v === "text" || v === "image");
+		const modelEntry = {
+			id: modelId,
+			name: typeof body.name === "string" && body.name.trim().length > 0 ? body.name.trim() : modelId,
+			reasoning: false,
+			contextWindow: Number(body.contextWindow ?? 32000),
+			maxTokens: Number(body.maxTokens ?? 4096),
+			...(input.length > 0 ? { input } : {}),
+		};
+		// 同 provider 已有自定义条目(models.json 里)时合并 models 数组——否则
+		// 第二次添加会整体覆盖 provider,丢掉之前添加的模型(保留原 apiKey/baseUrl)
+		const existing = cfg.providers?.[providerId];
+		const existingModels = (existing as { models?: unknown[] } | undefined)?.models ?? [];
 		const provider = {
+			...(typeof existing === "object" && existing !== null ? (existing as Record<string, unknown>) : {}),
 			api: "openai-completions",
 			baseUrl,
 			// vendor 把无 apiKey 的 provider 视为未配置并跳过列表——本地 mock 等
-			// 无需鉴权的服务也须有占位 key(实测 provider-composer 跳过无 key provider)
-			apiKey: typeof body.apiKey === "string" && body.apiKey.length > 0 ? body.apiKey : "sk-custom",
-			models: [
-				{
-					id: modelId,
-					name: modelId,
-					reasoning: false,
-					contextWindow: Number(body.contextWindow ?? 32000),
-					maxTokens: Number(body.maxTokens ?? 4096),
-				},
-			],
+			// 无需鉴权的服务也须有占位 key(实测 provider-composer 跳过无 key provider);
+			// 已有条目时保留原有 apiKey,避免 body 未传时覆盖成占位值
+			apiKey:
+				typeof body.apiKey === "string" && body.apiKey.length > 0
+					? body.apiKey
+					: (existing as { apiKey?: string } | undefined)?.apiKey ?? "sk-custom",
+			models: [...existingModels, modelEntry],
 		};
 		cfg.providers = { ...(cfg.providers ?? {}), [providerId]: provider };
 		await atomicWriteFile(modelsPath, `${JSON.stringify(cfg, null, 2)}\n`);
@@ -1280,6 +1305,14 @@ export class WriterServer {
 	private async handleGetProviders(ctx: RouteContext): Promise<void> {
 		const providers = await this.options.sessionHost.listProviders();
 		this.send(ctx.res, 200, { providers });
+	}
+
+	/** GET /api/providers/:id:供应商详情(含全量模型列表,不按认证过滤)。 */
+	private async handleGetProviderDetail(ctx: RouteContext): Promise<void> {
+		const id = ctx.params.id!;
+		const detail = await this.options.sessionHost.getProviderDetail(id);
+		if (!detail) throw new HttpError(404, "not_found", `provider 不存在: ${id}`);
+		this.send(ctx.res, 200, detail);
 	}
 
 	/** POST /api/providers/:id/apikey {key}:写入 API key(官方 login 路径)。 */
@@ -1756,6 +1789,47 @@ export class WriterServer {
 			if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
 		}
 		this.send(ctx.res, 200, { ok: true });
+	}
+
+	// ---- setup 路由(首次启动配置向导)----
+
+	/**
+	 * GET /api/setup:向导状态——是否已完成 + 各步骤标记。前端据此决定首次
+	 * 启动是否弹出向导;读取失败(文件损坏)返回未完成态,不阻塞主界面。
+	 */
+	private async handleGetSetup(ctx: RouteContext): Promise<void> {
+		const setup = await readSetupState();
+		this.send(ctx.res, 200, { completed: setup.completedAt !== null, setup });
+	}
+
+	/**
+	 * POST /api/setup {steps?}:标记向导完成。steps 可选,只收白名单步骤且值
+	 * 为 true 的项(未知键 400,防前端写错步骤名静默丢失);缺省/空对象表示
+	 * 「跳过向导」——同样写完成时间,避免每次启动重复弹。
+	 */
+	private async handlePostSetup(ctx: RouteContext): Promise<void> {
+		const body = (await readJsonBody(ctx.req)) as Record<string, unknown> | null;
+		const steps = defaultSetupState().steps;
+		const rawSteps = body?.steps;
+		if (rawSteps !== undefined) {
+			if (typeof rawSteps !== "object" || rawSteps === null || Array.isArray(rawSteps)) {
+				throw new HttpError(400, "bad_request", "字段 steps 必须是对象");
+			}
+			for (const [key, value] of Object.entries(rawSteps as Record<string, unknown>)) {
+				if (!isSetupStepId(key)) throw new HttpError(400, "bad_request", `未知向导步骤: ${key}`);
+				if (value === true) steps[key] = true;
+			}
+		}
+		const state: SetupState = { version: SETUP_VERSION, completedAt: new Date().toISOString(), steps };
+		await writeSetupState(state);
+		this.send(ctx.res, 200, { completed: true, setup: state });
+	}
+
+	/** POST /api/setup/reset:重置为未完成(设置页「重新运行配置向导」入口)。 */
+	private async handlePostSetupReset(ctx: RouteContext): Promise<void> {
+		const state = defaultSetupState();
+		await writeSetupState(state);
+		this.send(ctx.res, 200, { completed: false, setup: state });
 	}
 
 	// ---- 请求分发 ----

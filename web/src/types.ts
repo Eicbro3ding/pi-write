@@ -436,6 +436,42 @@ export interface ProviderInfo {
 	label?: string;
 }
 
+/** 模型条目最小形状(vendor Model 字段子集;来源 /api/providers/:id,不按认证过滤)。 */
+export interface ModelDto {
+	id: string;
+	name: string;
+	api: string;
+	baseUrl: string;
+	reasoning: boolean;
+	input: ("text" | "image")[];
+	contextWindow: number;
+	maxTokens: number;
+}
+
+/** /api/providers/:id 详情:基本信息 + 该 provider 全量模型列表。 */
+export interface ProviderDetailDto {
+	provider: ProviderInfo & { baseUrl?: string };
+	models: ModelDto[];
+}
+
+/**
+ * 首次启动配置向导状态(与 src/setup.ts 的 SetupState 对齐;存服务端
+ * ~/.pi/writer/setup.json,跨窗口/跨浏览器一致)。
+ */
+export interface SetupStateDto {
+	version: number;
+	/** 完成时间(ISO 8601);null = 未完成。 */
+	completedAt: string | null;
+	/** 各步骤是否真正走过(跳过向导时全 false)。 */
+	steps: {
+		intro: boolean;
+		provider: boolean;
+		model: boolean;
+		book: boolean;
+		prefs: boolean;
+	};
+}
+
 /** MCP 服务器配置条目(与 src/mcp/config.ts 的 McpServerConfig 对齐)。 */
 export interface McpServerInfo {
 	name: string;
