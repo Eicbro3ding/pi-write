@@ -85,3 +85,14 @@
 
 - 酒馆(SillyTavern)调研结论:WI 预算 = Context % 比例制、预算耗尽即停;Min Activations(激活不足往前多扫)与我们「每棵树至少一盏灯」防同一问题;其「深度」= 扫消息数 + 递归层数两个设置,与我们「跳距上限」同名不同物。
 - 成本基线(deepseek-v4-flash 实测):单幕(开戏→演出→收幕→成文)≈ ¥0.10-0.14,41 次调用 163k tokens;缓存命中价 0.02 vs 未命中 1 元/1M,保持前缀稳定是最大成本杠杆。
+
+## 9. 插件系统(2026-09,0.0.5)
+
+- **目录装载**:`~/.pi/writer/plugins/<id>/`,plugin.json(id/version/name/description/enabled/backend/frontend)+ 入口(index.mjs,default export = ExtensionFactory,与 vendor InlineExtension 同语义);清单零信任解析(字段级白名单,非法项逐条丢弃,坏插件 error 隔离不阻塞);入口 resolve 后必须在插件目录内(防逃逸);
+- **启用双层**:manifest `enabled:false` 强制禁用 > 用户运行时开关(plugin-state.json,缺省 true);「完全信任」同条目(缺省 false),enabled/trusted 分开读写、merge 语义;
+- **能力面(定级)**:
+  - 后端:工具注册(与 MCP 工具同通道注入 agent);「完全信任」后入口可导出 `routes`(后端自定义路由,segments 自动加 `plugins/<id>` 前缀,内置路由优先于插件路由);
+  - 前端:声明式设置菜单(settingsItems 字段白名单 string/number/boolean/select/textarea,值存 plugins/<id>/settings.json,写路径按清单 key+类型校验);声明式斜杠命令(触发词 + webCommands 具名导出,主进程执行、结果回插输入框,只收清单已声明 trigger);「完全信任」后 frontend.mjs(经 GET /api/plugins/:id/frontend.mjs 加载,仅 trusted 返回 text/javascript);
+- **安全模型**:插件与主进程同权(似 Obsidian 社区插件),显式启用、不自动安装/更新;trusted 是单一总闸——未信任插件的 routes/frontend.mjs 在装载期/端点双重拒绝,renderer 永不执行未信任用户 JS;开关带「与主进程/渲染进程同权,仅信任自己安装的插件」确认;
+- **热重载**:切换启用/信任时重新扫描 + 原生 import(URL 带随机 query 防 Node 模块缓存——jiti/进程内缓存实测改文件后仍返回旧代码);
+- **指南与示例**:docs/plugin-development.md;examples/plugins/dice(掷骰子)、examples/plugins/inspire(灵感笔,测试插件)。

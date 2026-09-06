@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.0.5] - 2026-09-06
+
+插件系统:plugins 目录装载 + 设置页管理 + 声明式设置菜单与斜杠命令 + 完全信任(trusted)。
+
+- **插件装载**:`~/.pi/writer/plugins/<id>`/(plugin.json + 入口 index.mjs,default export = 扩展工厂);清单字段级白名单校验,坏插件错误隔离不阻塞其他插件;启用双层(作者 `enabled:false` 强制禁用优先、用户运行时开关缺省启用),切换后重建会话即时生效
+- **声明式扩展**:设置项(插件在设置页左侧注册分类;字段类型 string/number/boolean/select/textarea,值存 `plugins/<id>/settings.json`)、斜杠命令(如 `/灵感`,主进程执行、结果回插输入框)
+- **完全信任(trusted)**:插件级开关(`plugin-state.json`,缺省关闭);开启后入口可导出 `routes` 注册后端自定义路由(自动加 `/api/plugins/<id>` 前缀,仅 trusted 注册)并加载前端 JS(`frontend.mjs` 经 `GET /api/plugins/:id/frontend.mjs` 加载,仅 trusted 返回);开关带「与主进程/渲染进程同权」风险确认;未信任插件两者一律不可用
+- **LLM 工具**:插件经工厂注册工具(如 dice 的 `roll_dice`、inspire 的 `inspire`),与 MCP 工具同通道注入 agent
+- **示例插件**:掷骰子 dice(工具 + `/快骰` + 设置菜单 + 信任后掷骰历史)、灵感笔 inspire(工具 + `/灵感` + 灵感库设置 + 信任后灵感面板)
+- **文档与测试**:`docs/plugin-development.md` 插件开发指南(声明式清单、web 命令、完全信任、安全模型);loader/server/slash-commands 用例扩充
+
 ## [0.0.4] - 2026-09-05
 
 首次启动配置向导 + 模型供应商配置界面重构。
