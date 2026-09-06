@@ -18,6 +18,7 @@ import {
 	makeChapterCommand,
 	makeCompactCommand,
 	makeNodeCommand,
+	makePluginCommand,
 	type SlashCommand,
 	type SlashContext,
 } from "../slash-commands.ts";
@@ -920,10 +921,36 @@ export function WritePage({
 		bookDetail,
 		currentChapterFile: currentChapter?.file ?? null,
 	};
+	/** 插件声明的斜杠命令(拉一次,随插件启停重建;运行中新增插件命令需重启页面)。 */
+	const [pluginCommands, setPluginCommands] = useState<SlashCommand[] | null>(null);
+	useEffect(() => {
+		let cancelled = false;
+		client
+			.getPlugins()
+			.then((plugins) => {
+				if (cancelled) return;
+				const cmds: SlashCommand[] = [];
+				for (const p of plugins) {
+					for (const c of p.frontend?.slashCommands ?? []) {
+						cmds.push(makePluginCommand({ pluginId: p.id, trigger: c.trigger, hint: c.hint, client }));
+					}
+				}
+				setPluginCommands(cmds);
+			})
+			.catch(() => {
+				/* 插件命令拉取失败:仅少命令,不影响主功能 */
+				if (!cancelled) setPluginCommands([]);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [client]);
+
 	const writerSlashCommands: SlashCommand[] = [
 		makeNodeCommand({ loadWorld: loadWorldForSlash }),
 		makeChapterCommand(),
 		makeCompactCommand({ run: runWriterCompact }),
+		...(pluginCommands ?? []),
 	];
 
 	/** 发送给编剧(常驻编辑 agent):202 即返回,流式/工具事件走 writer_event SSE;

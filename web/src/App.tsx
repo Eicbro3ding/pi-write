@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ApiClient } from "./api/client.ts";
 import { useLibrary } from "./library.ts";
+import { syncPluginScripts } from "./plugin-scripts.ts";
 import { IconEdit, IconGear, IconGlobe, IconStage } from "./components/Icons.tsx";
 import { SetupWizard } from "./components/SetupWizard.tsx";
 import { WritePage, type HeaderInfo } from "./pages/WritePage.tsx";
@@ -76,6 +77,29 @@ export function App() {
 			cancelled = true;
 		};
 	}, [client]);
+
+	// 插件前端 JS:trusted 插件的 frontend.mjs 经 <script module> 注入;状态变化(启停)
+	// 由设置页操作驱动,此处仅挂载+定期对账(30s);插件脚本错误静默不影响主界面。
+	useEffect(() => {
+		if (setupPhase !== "done") return;
+		let cancelled = false;
+		const sync = () => {
+			client
+				.getPlugins()
+				.then((plugins) => {
+					if (!cancelled) syncPluginScripts(plugins);
+				})
+				.catch(() => {
+					/* 插件列表拉取失败:脚本对账跳过(下次再试) */
+				});
+		};
+		sync();
+		const timer = setInterval(sync, 30_000);
+		return () => {
+			cancelled = true;
+			clearInterval(timer);
+		};
+	}, [client, setupPhase]);
 
 	// 首启:向导独占渲染,主界面四页尚未挂载——完成后才挂载,WritePage 的挂载
 	// 效应会拉书列表并自动打开第一本书(向导建的书记得一进去就打开)。

@@ -12,6 +12,7 @@ import {
 	makeChapterCommand,
 	makeCompactCommand,
 	makeNodeCommand,
+	makePluginCommand,
 	type SlashCommand,
 	type SlashContext,
 } from "../slash-commands.ts";
@@ -484,10 +485,35 @@ export function StagePage({
 		bookDetail,
 		currentChapterFile: currentChapter?.file ?? null,
 	};
+	/** 插件声明的斜杠命令(拉一次;随插件启停重建,运行中新增需重启页面)。 */
+	const [pluginCommands, setPluginCommands] = useState<SlashCommand[] | null>(null);
+	useEffect(() => {
+		let cancelled = false;
+		client
+			.getPlugins()
+			.then((plugins) => {
+				if (cancelled) return;
+				const cmds: SlashCommand[] = [];
+				for (const p of plugins) {
+					for (const c of p.frontend?.slashCommands ?? []) {
+						cmds.push(makePluginCommand({ pluginId: p.id, trigger: c.trigger, hint: c.hint, client }));
+					}
+				}
+				setPluginCommands(cmds);
+			})
+			.catch(() => {
+				if (!cancelled) setPluginCommands([]);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [client]);
+
 	const directorSlashCommands: SlashCommand[] = [
 		makeNodeCommand({ loadWorld: loadWorldForSlash }),
 		makeChapterCommand(),
 		makeCompactCommand({ run: runDirectorCompact }),
+		...(pluginCommands ?? []),
 	];
 	/** 导演会话上下文占用达到阈值时的「建议 /compact」提示。 */
 	const directorUsageHint = contextUsageHint(stage.snapshot?.directorUsage ?? null);

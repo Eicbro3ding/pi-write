@@ -1,0 +1,54 @@
+{
+  "id": "inspire",
+  "name": "灵感笔",
+  "version": "0.1.0",
+  "description": "测试插件:写作灵感工具(inspire,LLM 可调)+ /灵感 斜杠命令 + 设置菜单(风格/条数/自定义库)+ 完全信任后自带前端面板。",
+  "backend": "index.mjs",
+  "frontend": {
+    "frontend": "frontend.mjs",
+    "slashCommands": [{ "trigger": "灵感", "hint": "随机一条写作灵感,插回输入框" }],
+    "ui": {
+      "settingsItems": [
+        {
+          "title": "灵感笔",
+          "description": "灵感库与生成条数;/灵感 命令与 inspire 工具共用。",
+          "fields": [
+            {
+              "key": "style",
+              "label": "灵感风格",
+              "type": "select",
+              "default": "literary",
+              "options": [
+                { "value": "literary", "label": "文学梗" },
+                { "value": "plot", "label": "剧情钩子" },
+                { "value": "image", "label": "画面" },
+                { "value": "verse", "label": "诗句" }
+              ]
+            },
+            {
+              "key": "count",
+              "label": "一次给几条",
+              "type": "number",
+              "default": 2,
+              "desc": "1-5 条。"
+            },
+            {
+              "key": "custom",
+              "label": "自定义灵感库",
+              "type": "textarea",
+              "default": "",
+              "desc": "每行一条,优先于内置库。"
+            },
+            {
+              "key": "only_custom",
+              "label": "只出自定义",
+              "type": "boolean",
+              "default": false,
+              "desc": "开启后只用自定义库(库为空则回退内置)。"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

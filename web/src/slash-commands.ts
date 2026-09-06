@@ -76,8 +76,11 @@ export interface SlashCommand {
 	aliases?: readonly string[];
 	/** 命令面板里的说明。 */
 	hint: string;
-	/** action 命令:选中直接执行,不插入文本(如 /compact)。 */
-	run?: (term: string, ctx: SlashContext) => Promise<void>;
+	/**
+	 * action 命令:选中直接执行,不插入文本(如 /compact)。
+	 * 返回非空字符串 = 结果文本插入输入框(插件命令语义:执行后端 handler 后把结果插回)。
+	 */
+	run?: (term: string, ctx: SlashContext) => Promise<void | string>;
 	/** insert 命令:按 term 异步搜索候选项。 */
 	search?: (term: string, ctx: SlashContext) => Promise<SlashSuggestion[]>;
 }
@@ -242,6 +245,27 @@ export function makeCompactCommand(opts: {
 		hint: opts.hint ?? "压缩当前对话上下文(可附加整理要求,如 /compact 保留最近冲突)",
 		run: async (term) => {
 			await opts.run(term.trim());
+		},
+	};
+}
+
+/**
+ * 插件 Web 命令工厂:把 plugin.json 声明的 trigger/hint 转成 SlashCommand,
+ * run 调后端 POST /api/plugins/:id/command/:name(主进程 handler),
+ * 返回的结果文本插入输入框(用户看过再发送)。renderer 零 JS——执行逻辑全在服务端。
+ */
+export function makePluginCommand(opts: {
+	pluginId: string;
+	trigger: string;
+	hint: string;
+	client: ApiClient;
+}): SlashCommand {
+	return {
+		trigger: opts.trigger,
+		hint: opts.hint,
+		run: async (term) => {
+			// 命令结果回插输入框(InputBar 对 run 返回字符串的语义)
+			return opts.client.runPluginCommand(opts.pluginId, opts.trigger, term.trim() || undefined);
 		},
 	};
 }

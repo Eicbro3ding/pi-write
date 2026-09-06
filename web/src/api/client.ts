@@ -5,7 +5,7 @@
  * 注意:本文件不得在 import 时触碰 DOM 专属 API(EventSource 只在 subscribeEvents 内使用),
  * 以兼容 node 环境的 vitest 单测。
  */
-import type { AgentEventDto, BookDetail, BookMeta, ChapterRef, ContextUsageDto, McpServerInfo, McpServerStatus, PluginInfoDto, ProviderDetailDto, ProviderInfo, SessionState, SessionTreeDto, SetupStateDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, WorldDataDto, WriterStateDto } from "../types.ts";
+import type { AgentEventDto, BookDetail, BookMeta, ChapterRef, ContextUsageDto, McpServerInfo, McpServerStatus, PluginInfoDto, PluginSettingsItemDto, ProviderDetailDto, ProviderInfo, SessionState, SessionTreeDto, SetupStateDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, WorldDataDto, WriterStateDto } from "../types.ts";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
 
 /** 图片访问 URL(同源相对路径;生产/Electron 同源,vite dev 经代理)。 */
@@ -399,12 +399,46 @@ export class ApiClient {
 		return r.plugins;
 	}
 
+	/** 切换插件用户级完全信任状态(解锁后端路由 + 前端 JS;返回最新列表)。 */
+	async setPluginTrusted(id: string, trusted: boolean): Promise<PluginInfoDto[]> {
+		const r = await this.request<{ plugins: PluginInfoDto[] }>(`/api/plugins/${encodeURIComponent(id)}`, {
+			method: "PUT",
+			body: JSON.stringify({ trusted }),
+		});
+		return r.plugins;
+	}
+
 	/** 删除插件目录(返回最新列表)。 */
 	async deletePlugin(id: string): Promise<PluginInfoDto[]> {
 		const r = await this.request<{ plugins: PluginInfoDto[] }>(`/api/plugins/${encodeURIComponent(id)}`, {
 			method: "DELETE",
 		});
 		return r.plugins;
+	}
+
+	/** 插件设置菜单:schema(清单声明)+ 当前值(settings.json;不存在 = 空对象)。 */
+	async getPluginSettings(id: string): Promise<{ schema: PluginSettingsItemDto[]; values: Record<string, unknown> }> {
+		return this.request<{ schema: PluginSettingsItemDto[]; values: Record<string, unknown> }>(
+			`/api/plugins/${encodeURIComponent(id)}/settings`,
+		);
+	}
+
+	/** 保存插件设置值(白名单字段;返回保存后的完整值)。 */
+	async putPluginSettings(id: string, values: Record<string, unknown>): Promise<Record<string, unknown>> {
+		const r = await this.request<{ ok: boolean; values: Record<string, unknown> }>(
+			`/api/plugins/${encodeURIComponent(id)}/settings`,
+			{ method: "PUT", body: JSON.stringify({ values }) },
+		);
+		return r.values;
+	}
+
+	/** 执行插件 Web 命令(主进程 handler;返回结果文本)。 */
+	async runPluginCommand(id: string, name: string, term?: string): Promise<string> {
+		const r = await this.request<{ text: string }>(
+			`/api/plugins/${encodeURIComponent(id)}/command/${encodeURIComponent(name)}`,
+			{ method: "POST", body: JSON.stringify({ term }) },
+		);
+		return r.text;
 	}
 
 	/** 保存用户主题 CSS(新建或覆盖;file 含 .css)。 */

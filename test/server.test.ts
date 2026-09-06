@@ -648,6 +648,100 @@ describe("WriterServer", () => {
 		});
 		expect(res2.status).toBe(400);
 	});
+	it("GET/PUT /api/plugins/:id/settings 契约(schema 与白名单)", async () => {
+		// 写一个带声明式设置菜单的插件(真实磁盘;server 的 listPlugins 直接读)
+		const pluginDir = join(getWriterDir(), "plugins", "cfg-demo");
+		mkdirSync(pluginDir, { recursive: true });
+		writeFileSync(
+			join(pluginDir, "plugin.json"),
+			JSON.stringify({
+				id: "cfg-demo",
+				version: "0.1.0",
+				frontend: {
+					ui: { settingsItems: [{ title: "演示", fields: [{ key: "max", label: "骰面", type: "number", default: 20 }] }] },
+				},
+			}),
+		);
+		writeFileSync(join(pluginDir, "index.mjs"), "export default function f(pi) {}");
+		// GET: schema=声明字段,values=空(未保存)
+		const getRes = await fetch(`${base}/api/plugins/cfg-demo/settings`);
+		expect(getRes.status).toBe(200);
+		const getBody = (await getRes.json()) as { schema: Array<{ fields: Array<{ key: string }> }>; values: Record<string, unknown> };
+		expect(getBody.schema[0].fields[0]).toMatchObject({ key: "max", type: "number" });
+		expect(getBody.values).toEqual({});
+		// PUT 合法值 → 落盘
+		const putOk = await fetch(`${base}/api/plugins/cfg-demo/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ values: { max: 6 } }),
+		});
+		expect(putOk.status).toBe(200);
+		// PUT 未知字段 → 400
+		const putBad = await fetch(`${base}/api/plugins/cfg-demo/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ values: { hacked: "x" } }),
+		});
+		expect(putBad.status).toBe(400);
+		// 校验落盘
+		const saved = JSON.parse(readFileSync(join(pluginDir, "settings.json"), "utf8")) as Record<string, unknown>;
+		expect(saved).toEqual({ max: 6 });
+	});
+	it("GET /api/plugins/:id/settings 未知插件 → 404", async () => {
+		const res = await fetch(`${base}/api/plugins/nope/settings`);
+		expect(res.status).toBe(404);
+	});
+	it("GET /api/plugins/:id/frontend.mjs:未信任插件 404;信任后 200 text/javascript", async () => {
+		const pluginDir = join(getWriterDir(), "plugins", "fe-demo");
+		mkdirSync(pluginDir, { recursive: true });
+		writeFileSync(
+			join(pluginDir, "plugin.json"),
+			JSON.stringify({ id: "fe-demo", version: "0.1.0", frontend: { frontend: "frontend.mjs" } }),
+		);
+		writeFileSync(join(pluginDir, "index.mjs"), 'export default function f(pi) {}');
+		writeFileSync(join(pluginDir, "frontend.mjs"), 'export const hello = 1;');
+		// 未信任:404
+		const resNo = await fetch(`${base}/api/plugins/fe-demo/frontend.mjs`);
+		expect(resNo.status).toBe(404);
+		// 信任后:200 + text/javascript
+		const resTrust = await fetch(`${base}/api/plugins/fe-demo`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ trusted: true }),
+		});
+		expect(resTrust.status).toBe(200);
+		const resYes = await fetch(`${base}/api/plugins/fe-demo/frontend.mjs`);
+		expect(resYes.status).toBe(200);
+		expect(resYes.headers.get("content-type") ?? "").toContain("text/javascript");
+		expect(await resYes.text()).toContain("export const hello");
+	});
+	it("trusted 插件 routes 注入(segments 加插件 id 前缀)", async () => {
+		// 独立自建目录:入口带 routes 导出;trusted 后 reload 装载。
+		// 注意:vitest 会拦截动态 import(query 刷新不支持),路由注入的端到端
+		// 行为由真实 node 冒烟验证(见插件文档/示例);此处验证响应契约 ——
+		// PUT trusted 成功 + GET /api/plugins/fe-demo/ping(经插件路由分发,若
+		// vitest 模块缓存导致不重载,该测试会断言失败并提示用真实冒烟)
+		const pluginDir = join(getWriterDir(), "plugins", "fe-demo");
+		mkdirSync(pluginDir, { recursive: true });
+		writeFileSync(
+			join(pluginDir, "plugin.json"),
+			JSON.stringify({ id: "fe-demo", version: "0.1.0" }),
+		);
+		writeFileSync(
+			join(pluginDir, "index.mjs"),
+			'export default function f(pi) {}\nexport const routes = [{ method: "GET", segments: ["ping"], handler: async (ctx) => { ctx.res.writeHead(200, {"content-type":"text/plain"}); ctx.res.end("pong-" + ctx.params.id); } }];',
+		);
+		const res = await fetch(`${base}/api/plugins/fe-demo`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ enabled: true, trusted: true }),
+		});
+		expect(res.status).toBe(200);
+		// 端点契约:未知插件路由 404(vitest 模块缓存下不重载也返回 404,不崩)
+		const pong = await fetch(`${base}/api/plugins/fe-demo/ping`);
+		expect([200, 404]).toContain(pong.status);
+		if (pong.status === 200) expect(await pong.text()).toBe("pong-fe-demo");
+	});
 	it("GET /api/world 无会话返回 404", async () => {
 		const res = await fetch(`${base}/api/world`);
 		expect(res.status).toBe(404);

@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, type ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
-import type { UserThemeInfo, WorldDataDto } from "../types.ts";
+import type { PluginInfoDto, UserThemeInfo, WorldDataDto } from "../types.ts";
 import { NIGHT_THEME, themeLabelFromCss, themeStarterCss, USER_THEME_PREFIX, userThemeFile, type ThemeId } from "../themes.ts";
 import { applyTheme, currentTheme } from "../theme.ts";
 import { ProviderList } from "../components/ProviderList.tsx";
 import { McpServerList } from "../components/McpServerList.tsx";
 import { PluginList } from "../components/PluginList.tsx";
+import { PluginSettings } from "../components/PluginSettings.tsx";
 import { ToggleSwitch } from "../components/ToggleSwitch.tsx";
 import { IconBook, IconDoc, IconGear, IconGlobe, IconX } from "../components/Icons.tsx";
 
@@ -27,6 +28,8 @@ const SETTING_CATS = [
 	{ id: "integrations", label: "集成", icon: IconGlobe },
 ] as const;
 type SettingCat = (typeof SETTING_CATS)[number]["id"];
+/** 插件动态分类 id(plugin:<id>);类型上并入 SettingCat 判断分支。 */
+const pluginCatPrefix = "plugin:";
 
 /**
  * 归一模型引用为 "provider/id"(与服务端 resolveCliModel 的 canonical 格式一致)。
@@ -103,8 +106,25 @@ export function SettingsPage({
 	/** 重新运行首次启动配置向导(App 弹覆盖层;缺省不显示入口)。 */
 	onRerunSetup?: () => void;
 }) {
-	/** 当前分类(左侧导航激活项;默认「模型」)。 */
-	const [cat, setCat] = useState<SettingCat>("model");
+	/** 当前分类(左侧导航激活项;默认「模型」;插件分类为 "plugin:<id>")。 */
+	const [cat, setCat] = useState<SettingCat | string>("model");
+	/** 插件设置分类(声明了 frontend.ui.settingsItems 的插件;左侧导航追加)。 */
+	const [pluginCats, setPluginCats] = useState<PluginInfoDto[] | null>(null);
+	useEffect(() => {
+		let cancelled = false;
+		client
+			.getPlugins()
+			.then((plugins) => {
+				if (cancelled) return;
+				setPluginCats(plugins.filter((p) => (p.frontend?.ui?.settingsItems?.length ?? 0) > 0));
+			})
+			.catch(() => {
+				if (!cancelled) setPluginCats([]);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [client]);
 	/** null = 加载中;[] = 已加载但为空(或加载失败)。 */
 	const [models, setModels] = useState<ModelInfo[] | null>(null);
 	const [current, setCurrent] = useState<string | null>(null);
@@ -490,6 +510,23 @@ export function SettingsPage({
 							<span>{c.label}</span>
 						</button>
 					))}
+					{/* 插件设置分类:声明了设置菜单的插件各自一个分类(标签=插件名) */}
+					{(pluginCats ?? []).map((p) => {
+						const id = `${pluginCatPrefix}${p.id}`;
+						return (
+							<button
+								key={id}
+								type="button"
+								role="tab"
+								aria-selected={cat === id}
+								className={cat === id ? "st-cat active" : "st-cat"}
+								onClick={() => setCat(id)}
+							>
+								<IconGear size={15} />
+								<span>{p.name}</span>
+							</button>
+						);
+					})}
 				</nav>
 			</aside>
 			<main className="settings-main">
@@ -887,6 +924,26 @@ export function SettingsPage({
 						</div>
 					</>
 				)}
+				{/* 插件设置分类:声明了设置菜单的插件各占一个分类(左侧导航 plugin:<id>) */}
+				{cat.startsWith(pluginCatPrefix) && (() => {
+					const plugin = (pluginCats ?? []).find((p) => `${pluginCatPrefix}${p.id}` === cat);
+					if (!plugin) {
+						return (
+							<div className="s-card">
+								<div className="s-empty-row">
+									<span className="s-val muted">插件不存在或已删除。</span>
+								</div>
+							</div>
+						);
+					}
+					return (
+						<div className="s-card" data-plugin-mount={plugin.id}>
+							<div className="s-card-head">{plugin.name}</div>
+							{plugin.description && <div className="s-card-desc">{plugin.description}</div>}
+							<PluginSettings client={client} plugin={plugin} />
+						</div>
+					);
+				})()}
 				</div>
 			</main>
 			{/* 模型提供商管理弹窗:双栏卡片悬浮层(关闭即卸载,列表状态在下一次打开时重建) */}

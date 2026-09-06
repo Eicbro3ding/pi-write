@@ -29,7 +29,7 @@ import {
 	setCurrentChapter,
 	updateChapter,
 } from "../book-manager.ts";
-import { listPlugins, loadPlugins, removePlugin, writePluginEnabled, type PluginRuntimeInfo } from "../plugin-loader.ts";
+import { getPluginFrontendPath, listPlugins, loadPlugins, readPluginSettings, removePlugin, writePluginEnabled, writePluginSettings, writePluginTrusted, type PluginRouteDef, type PluginRuntimeInfo, type PluginWebCommandHandler } from "../plugin-loader.ts";
 import { getAgentDir, getBookDir, getThemesDir, getWriterDir } from "../config.ts";
 import { atomicWriteFile } from "../atomic-write.ts";
 import {
@@ -399,6 +399,10 @@ export class WriterServer {
 	private readonly staticRoot: string | null;
 	/** 插件装载态(loadPlugins 结果;GET /api/plugins 合并展示装载错误)。 */
 	private pluginInfos: PluginRuntimeInfo[] | null = null;
+	/** 插件 Web 命令注册表(loadPlugins 的 webCommands;POST /api/plugins/:id/command 查询用)。 */
+	private pluginWebCommands: Map<string, Record<string, PluginWebCommandHandler>> = new Map();
+	/** 插件后端路由(仅 trusted 插件;segments 已加插件 id 前缀,装配时并入路由表)。 */
+	private pluginRoutes: PluginRouteDef[] = [];
 	/**
 	 * 章节切换互斥队列:session 路由整体串行执行(切章 → 写 book.json → 注入背景包),
 	 * 避免多浏览器并发切章时交错(最终会话章节与 book.json 不一致、背景包注入错章节)。
@@ -529,8 +533,13 @@ export class WriterServer {
 			{ method: "PUT", segments: ["mcp", "raw"], handler: (ctx) => this.handlePutMcpRaw(ctx) },
 			{ method: "PUT", segments: ["mcp", ":name"], handler: (ctx) => this.handlePutMcpServer(ctx) },
 			{ method: "DELETE", segments: ["mcp", ":name"], handler: (ctx) => this.handleDeleteMcpServer(ctx) },
-			// plugins(插件管理:列表/启用开关/删除;装载在启动时,切换后重建会话)
+			// plugins(插件管理:列表/启用开关/删除;装载在启动时,切换后重建会话;
+			//   settings/command 为字面段,与 :id 参数段(2 段)段数不同无冲突)
 			{ method: "GET", segments: ["plugins"], handler: (ctx) => this.handleGetPlugins(ctx) },
+			{ method: "GET", segments: ["plugins", ":id", "frontend.mjs"], handler: (ctx) => this.handleGetPluginFrontend(ctx) },
+			{ method: "GET", segments: ["plugins", ":id", "settings"], handler: (ctx) => this.handleGetPluginSettings(ctx) },
+			{ method: "PUT", segments: ["plugins", ":id", "settings"], handler: (ctx) => this.handlePutPluginSettings(ctx) },
+			{ method: "POST", segments: ["plugins", ":id", "command", ":name"], handler: (ctx) => this.handlePostPluginCommand(ctx) },
 			{ method: "PUT", segments: ["plugins", ":id"], handler: (ctx) => this.handlePutPlugin(ctx) },
 			{ method: "DELETE", segments: ["plugins", ":id"], handler: (ctx) => this.handleDeletePlugin(ctx) },
 			// stage
@@ -1569,11 +1578,17 @@ export class WriterServer {
 	// ---- plugins 路由 ----
 
 	/** 注入插件装载态(web.ts 启动时 loadPlugins 后调用;GET /api/plugins 合并展示)。 */
-	setPluginInfos(infos: PluginRuntimeInfo[]): void {
+	setPluginInfos(
+		infos: PluginRuntimeInfo[],
+		webCommands?: Map<string, Record<string, PluginWebCommandHandler>>,
+		routes?: PluginRouteDef[],
+	): void {
 		this.pluginInfos = infos;
+		if (webCommands) this.pluginWebCommands = webCommands;
+		if (routes) this.pluginRoutes = routes;
 	}
 
-	/** GET /api/plugins:插件列表(id 排序;含启用状态与装载错误)。 */
+	/** GET /api/plugins:插件列表(id 排序;含启用状态、装载错误与 frontend 声明)。 */
 	private async handleGetPlugins(ctx: RouteContext): Promise<void> {
 		const infos = await listPlugins();
 		// 装载错误只在 loadPlugins 时产生(动态 import 侧);列表端点重新扫描
@@ -1581,28 +1596,66 @@ export class WriterServer {
 		const loaded = this.pluginInfos ?? [];
 		const merged = infos.map((info) => {
 			const runInfo = loaded.find((l) => l.id === info.id);
-			return runInfo && runInfo.error ? { ...info, error: runInfo.error } : info;
+			return {
+				...info,
+				// 装载结果(验证过的 frontend 声明/错误)优先于裸扫描值
+				...(runInfo?.frontend ? { frontend: runInfo.frontend } : {}),
+				...(runInfo && runInfo.error ? { error: runInfo.error } : {}),
+			};
 		});
 		this.send(ctx.res, 200, { plugins: merged });
 	}
 
 	/**
-	 * PUT /api/plugins/:id {enabled}:切换用户级启用状态 → 重新装载插件 →
-	 * 重建会话(MCP redo 同款 reloadRuntime;新工具经新的 extensionFactories 生效)。
-	 * manifest 声明 enabled:false 的插件不可被用户启用。
+	 * GET /api/plugins/:id/frontend.mjs:插件前端 JS(仅 trusted 插件返回)。
+	 * 安全:未信任插件的 JS 不加载——渲染进程只执行用户显式「完全信任」的插件代码;
+	 * 路径经 getPluginFrontendPath 防逃逸;manifest 声明入口缺省 frontend.mjs。
+	 */
+	private async handleGetPluginFrontend(ctx: RouteContext): Promise<void> {
+		const id = ctx.params.id!;
+		const infos = await listPlugins();
+		const info = infos.find((p) => p.id === id);
+		if (!info) throw new HttpError(404, "not_found", `插件不存在: ${id}`);
+		if (!info.trusted) {
+			throw new HttpError(404, "not_found", "插件未信任,不提供前端 JS(设置页开启「完全信任」后可用)");
+		}
+		const rel = info.frontend?.frontend;
+		const path = getPluginFrontendPath(id, rel);
+		if (!path) throw new HttpError(404, "not_found", "插件前端入口不存在");
+		const source = await readFile(path, "utf8");
+		ctx.res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
+		ctx.res.end(source);
+	}
+
+	/**
+	 * PUT /api/plugins/:id {enabled?, trusted?}:切换用户级启用/信任状态 →
+	 * 重新装载插件 → 重建会话。
+	 * - manifest 声明 enabled:false 的插件不可被用户启用;
+	 * - trusted(完全信任)开启后解锁后端自定义路由 + 前端 JS(单次信任,无分层);
+	 * - 至少传一个布尔字段;缺省不动。
 	 */
 	private async handlePutPlugin(ctx: RouteContext): Promise<void> {
 		const id = ctx.params.id!;
 		const body = (await readJsonBody(ctx.req)) as Record<string, unknown> | null;
 		const enabled = body?.enabled;
-		if (typeof enabled !== "boolean") throw new HttpError(400, "bad_request", "字段 enabled 必须为 boolean");
+		const trusted = body?.trusted;
+		if (enabled !== undefined && typeof enabled !== "boolean") {
+			throw new HttpError(400, "bad_request", "字段 enabled 必须为 boolean");
+		}
+		if (trusted !== undefined && typeof trusted !== "boolean") {
+			throw new HttpError(400, "bad_request", "字段 trusted 必须为 boolean");
+		}
+		if (enabled === undefined && trusted === undefined) {
+			throw new HttpError(400, "bad_request", "至少提供一个字段(enabled/trusted)");
+		}
 		const infos = await listPlugins();
 		const info = infos.find((p) => p.id === id);
 		if (!info) throw new HttpError(404, "not_found", `插件不存在: ${id}`);
-		if (enabled && info.manifestDisabled) {
+		if (enabled === true && info.manifestDisabled) {
 			throw new HttpError(400, "bad_request", "插件在 plugin.json 中声明禁用,无法从用户侧启用");
 		}
-		await writePluginEnabled(id, enabled);
+		if (trusted !== undefined) await writePluginTrusted(id, trusted);
+		if (enabled !== undefined) await writePluginEnabled(id, enabled);
 		// 装载结果变化 → 重建会话使插件工具生效(与 handleMcpReload 同款)
 		await this.reloadPluginRuntime();
 		this.send(ctx.res, 200, { ok: true, plugins: await listPlugins() });
@@ -1622,17 +1675,97 @@ export class WriterServer {
 
 	/** 重载插件并重建会话(工具变更生效;失败不丢服务,插件错误经 GET 展示)。 */
 	private async reloadPluginRuntime(): Promise<void> {
-		// 同步装载态:重新执行 loadPlugins(启用/禁用变化),把错误挂到列表合并源
+		// 同步装载态:重新执行 loadPlugins(启用/禁用/信任变化),把错误挂到列表合并源
 		try {
-			const { infos } = await loadPlugins();
+			const { infos, webCommands, routes } = await loadPlugins();
 			this.pluginInfos = infos;
+			this.pluginWebCommands = webCommands;
+			this.pluginRoutes = routes;
 		} catch {
 			this.pluginInfos = null;
+			this.pluginWebCommands = new Map();
+			this.pluginRoutes = [];
 		}
 		try {
 			await this.options.sessionHost.reloadRuntime();
 		} catch {
 			/* 会话重建失败:保留旧 runtime,插件错误仍可经 /api/plugins 查看 */
+		}
+	}
+
+	// ---- plugins 设置/命令子路由 ----
+
+	/**
+	 * GET /api/plugins/:id/settings:插件设置菜单 schema + 当前值。
+	 * schema 来自 plugin.json 的 frontend.ui.settingsItems(字段级白名单校验后的);
+	 * values 来自 plugins/<id>/settings.json(不存在 = 空对象)。
+	 * 插件不存在 404;未声明设置菜单的插件返回 schema=[]。
+	 */
+	private async handleGetPluginSettings(ctx: RouteContext): Promise<void> {
+		const id = ctx.params.id!;
+		const infos = await listPlugins();
+		const info = infos.find((p) => p.id === id);
+		if (!info) throw new HttpError(404, "not_found", `插件不存在: ${id}`);
+		const schema = info.frontend?.ui?.settingsItems ?? [];
+		const values = await readPluginSettings(id);
+		this.send(ctx.res, 200, { schema, values });
+	}
+
+	/**
+	 * PUT /api/plugins/:id/settings {values}:写插件设置(白名单字段类型校验;
+	 * 未知键/类型不匹配 400) → 落盘 → 重建会话,新值对插件工具生效。
+	 */
+	private async handlePutPluginSettings(ctx: RouteContext): Promise<void> {
+		const id = ctx.params.id!;
+		const infos = await listPlugins();
+		const info = infos.find((p) => p.id === id);
+		if (!info) throw new HttpError(404, "not_found", `插件不存在: ${id}`);
+		const schema = info.frontend?.ui?.settingsItems ?? [];
+		const fields = schema.flatMap((item) => item.fields);
+		const body = (await readJsonBody(ctx.req)) as Record<string, unknown> | null;
+		const values = body?.values;
+		if (typeof values !== "object" || values === null || Array.isArray(values)) {
+			throw new HttpError(400, "bad_request", "字段 values 必须为对象");
+		}
+		// 白名单 + 类型校验:未知字段 400(前端只会发声明字段;手改请求体不该静默丢)
+		const allowed = new Map(fields.map((f) => [f.key, f.type]));
+		for (const [key, value] of Object.entries(values as Record<string, unknown>)) {
+			const type = allowed.get(key);
+			if (!type) throw new HttpError(400, "bad_request", `未知设置字段: ${key}`);
+			const typeOk =
+				(type === "boolean" && typeof value === "boolean") ||
+				(type === "number" && typeof value === "number") ||
+				(type === "string" && typeof value === "string") ||
+				(type === "textarea" && typeof value === "string") ||
+				(type === "select" && typeof value === "string");
+			if (!typeOk) throw new HttpError(400, "bad_request", `字段 ${key} 类型不匹配(应为 ${type})`);
+		}
+		await writePluginSettings(id, values as Record<string, unknown>, fields);
+		await this.reloadPluginRuntime();
+		this.send(ctx.res, 200, { ok: true, values: await readPluginSettings(id) });
+	}
+
+	/**
+	 * POST /api/plugins/:id/command/:name {term?, bookSlug?}:执行插件 Web 命令
+	 * (入口 webCommands 的 handler;主进程执行,renderer 零 JS)。
+	 * 命令未注册 404;handler 抛错 500;结果文本长度上限截断(防工具滥用超长响应)。
+	 */
+	private async handlePostPluginCommand(ctx: RouteContext): Promise<void> {
+		const id = ctx.params.id!;
+		const name = ctx.params.name!;
+		const commands = this.pluginWebCommands.get(id);
+		const handler = commands?.[name];
+		if (!handler) throw new HttpError(404, "not_found", `插件命令不存在: ${id}/${name}`);
+		const body = (await readJsonBody(ctx.req).catch(() => null)) as Record<string, unknown> | null;
+		try {
+			const text = await handler({
+				...(typeof body?.term === "string" ? { term: body.term } : {}),
+				...(typeof body?.bookSlug === "string" ? { bookSlug: body.bookSlug } : {}),
+			});
+			const out = typeof text === "string" ? text : String(text);
+			this.send(ctx.res, 200, { text: out.slice(0, 4000) });
+		} catch (e) {
+			throw new HttpError(500, "plugin_error", `插件命令执行失败: ${e instanceof Error ? e.message : String(e)}`);
 		}
 	}
 
@@ -1976,7 +2109,9 @@ export class WriterServer {
 			this.openSse(res);
 			return;
 		}
-		const matched = matchRoute(method, parts.slice(1), this.routes);
+		// 匹配顺序:内置路由优先,其后是 trusted 插件动态路由(segments 已带插件 id 前缀,
+		// 只追加不改,防插件覆盖内置端点)
+		const matched = matchRoute(method, parts.slice(1), this.routes) ?? matchRoute(method, parts.slice(1), this.pluginRoutes);
 		if (!matched) {
 			this.send(res, 404, { error: { code: "not_found", message: "未找到" } });
 			return;

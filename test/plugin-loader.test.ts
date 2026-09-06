@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { getPluginsDir, getPluginStatePath, listPlugins, loadPlugins, removePlugin, writePluginEnabled } from "../src/plugin-loader.ts";
+import { getPluginFrontendPath, getPluginsDir, getPluginStatePath, listPlugins, loadPlugins, readPluginSettings, removePlugin, writePluginEnabled, writePluginSettings, writePluginTrusted } from "../src/plugin-loader.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "piw-plugins-"));
 process.env.PI_WRITER_DIR = tmp;
@@ -137,5 +137,146 @@ describe("removePlugin(删除与防逃逸)", () => {
 
 	it("非法 id(路径穿越)→ 抛错不删", async () => {
 		await expect(removePlugin("../evil")).rejects.toThrow("非法插件 id");
+	});
+});
+
+describe("settings 读写(白名单字段)", () => {
+	it("read 缺省 {};write 只收白名单字段(未知键丢弃)", async () => {
+		writePlugin("config", {
+			manifest: {
+				frontend: {
+					ui: {
+						settingsItems: [
+							{
+								title: "掷骰子",
+								fields: [
+									{ key: "max", label: "骰面", type: "number", default: 20 },
+									{ key: "lucky", label: "幸运", type: "boolean" },
+									{ key: "greet", label: "感言", type: "string" },
+								],
+							},
+						],
+					},
+				},
+			},
+		});
+		expect(await readPluginSettings("config")).toEqual({});
+		const list = await listPlugins();
+		expect(list[0].frontend?.ui?.settingsItems?.[0].fields).toHaveLength(3);
+		await writePluginSettings(
+			"config",
+			{ max: 6, lucky: true, greet: "好", hacked: "x", evil: 42 },
+			list[0].frontend!.ui!.settingsItems![0].fields,
+		);
+		expect(await readPluginSettings("config")).toEqual({ max: 6, lucky: true, greet: "好" });
+	});
+
+	it("类型不匹配的值丢弃(boolean 字段收到 string 不收)", async () => {
+		writePlugin("typed", {
+			manifest: {
+				frontend: { ui: { settingsItems: [{ title: "t", fields: [{ key: "flag", label: "开关", type: "boolean" }] }] } },
+			},
+		});
+		const list = await listPlugins();
+		await writePluginSettings("typed", { flag: "yes" }, list[0].frontend!.ui!.settingsItems![0].fields);
+		expect(await readPluginSettings("typed")).toEqual({});
+	});
+});
+
+describe("frontend 声明校验(字段级白名单)", () => {
+	it("非法字段类型丢弃,合法透传;select 无 options 丢弃", async () => {
+		writePlugin("badfields", {
+			manifest: {
+				frontend: {
+					ui: {
+						settingsItems: [
+							{
+								title: "坏字段",
+								fields: [
+									{ key: "ok", label: "好", type: "string" },
+									{ key: "badtype", label: "坏", type: "color_picker" },
+									{ key: "noopts", label: "选择", type: "select" },
+									{ label: "缺key", type: "string" },
+								],
+							},
+						],
+					},
+				},
+			},
+		});
+		const list = await listPlugins();
+		const fields = list[0].frontend?.ui?.settingsItems?.[0].fields ?? [];
+		expect(fields).toHaveLength(1);
+		expect(fields[0]).toMatchObject({ key: "ok", type: "string" });
+	});
+
+	it("slashCommands 声明校验:含斜杠或空 hint 丢弃;合法透传", async () => {
+		writePlugin("cmds", {
+			manifest: {
+				frontend: {
+					slashCommands: [
+						{ trigger: "roll", hint: "掷骰子" },
+						{ trigger: "/bad", hint: "带斜杠" },
+						{ trigger: "empty", hint: "" },
+					],
+				},
+			},
+		});
+		const list = await listPlugins();
+		expect(list[0].frontend?.slashCommands).toEqual([{ trigger: "roll", hint: "掷骰子" }]);
+	});
+});
+
+describe("Web 命令注册表(webCommands 具名导出)", () => {
+	it("入口导出 webCommands 且 trigger 在 manifest 声明内 → 注册;未声明忽略", async () => {
+		writePlugin("cmd", {
+			manifest: { frontend: { slashCommands: [{ trigger: "roll", hint: "掷骰子" }] } },
+			entry: `export default function factory(pi) {}
+export const webCommands = { roll: async () => "d20 = 7", ghost: async () => "未声明" };`,
+		});
+		const { webCommands } = await loadPlugins();
+		const cmds = webCommands.get("cmd");
+		expect(Object.keys(cmds ?? {})).toEqual(["roll"]);
+		expect(await cmds!.roll({})).toBe("d20 = 7");
+	});
+
+	it("无 manifest 声明(未配置 slashCommands)时即使导出也不注册", async () => {
+		writePlugin("nospec", {
+			entry: `export default function factory(pi) {}
+export const webCommands = { roll: async () => "x" };`,
+		});
+		const { webCommands } = await loadPlugins();
+		expect(webCommands.has("nospec")).toBe(false);
+	});
+});
+
+describe("trusted(完全信任)状态与 merge 语义", () => {
+	it("readState 多键透传;改 enabled 不丢 trusted(merge 而非整体替换)", async () => {
+		writePlugin("t1", {});
+		await writePluginEnabled("t1", false);
+		await writePluginTrusted("t1", true);
+		let list = await listPlugins();
+		expect(list[0]).toMatchObject({ enabled: false, trusted: true });
+		// 再改 enabled:trusted 必须保留
+		await writePluginEnabled("t1", true);
+		list = await listPlugins();
+		expect(list[0]).toMatchObject({ enabled: true, trusted: true });
+	});
+
+	it("trusted 缺省 false;writePluginTrusted 往返", async () => {
+		writePlugin("t2", {});
+		expect((await listPlugins())[0].trusted).toBe(false);
+		await writePluginTrusted("t2", true);
+		expect((await listPlugins())[0].trusted).toBe(true);
+	});
+
+	it("getPluginFrontendPath:存在返回绝对路径;不存在/逃逸返回 null", async () => {
+		const dir = join(root, "fe");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "frontend.mjs"), "export default 1;");
+		expect(getPluginFrontendPath("fe")).toBe(join(dir, "frontend.mjs"));
+		expect(getPluginFrontendPath("fe", "custom.mjs")).toBeNull(); // 不存在
+		expect(getPluginFrontendPath("fe", "../x.mjs")).toBeNull(); // 逃逸
+		expect(getPluginFrontendPath("../evil")).toBeNull();
 	});
 });

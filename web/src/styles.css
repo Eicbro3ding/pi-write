@@ -2055,3 +2055,26 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .s-plugin-id { font-size: 11px; color: var(--faint); }
 .s-plugin-desc { font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.6; }
 .s-plugin-err { font-size: 11.5px; color: var(--red); margin-top: 4px; word-break: break-all; }
+
+/* ---- 插件设置菜单(ps-*,声明式 FieldRenderer)---- */
+.ps-body { padding: 12px 4px 4px; }
+.ps-settings { display: flex; flex-direction: column; gap: 14px; }
+.ps-section {
+  background: var(--bg-elev-2); border: 1px solid var(--line);
+  border-radius: var(--r-md); padding: 12px 14px;
+}
+.ps-section-title { font-size: 12.5px; font-weight: 500; color: var(--ink); margin-bottom: 2px; }
+.ps-section-desc { font-size: 11.5px; color: var(--muted); margin-bottom: 10px; line-height: 1.6; }
+.ps-section .s-field { margin-bottom: 10px; }
+.ps-section .s-field:last-child { margin-bottom: 0; }
+.ps-section textarea.s-input { resize: vertical; min-height: 64px; }
+
+/* 插件信任确认(s-plugin-trust-*) */
+.s-plugin-trust-confirm {
+  margin-top: 10px; padding: 10px 12px;
+  background: var(--amber-tint); border: 1px solid var(--amber-tint-strong);
+  border-radius: var(--r-sm);
+}
+.s-plugin-trust-warn {
+  font-size: 11.5px; color: var(--ink-2); line-height: 1.6; margin-bottom: 8px;
+}

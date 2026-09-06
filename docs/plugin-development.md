@@ -54,7 +54,7 @@ export default function myPlugin(pi) {
 | `description` | 否 | 一句话描述(设置页列表展示) |
 | `backend` | 否 | 后端入口文件(相对插件目录;**缺省 `index.mjs`**) |
 | `enabled` | 否 | 作者级禁用开关:false 时用户侧无法启用(`manifestDisabled`) |
-| `frontend` | 否 | 声明式前端贡献;当前支持 `slashCommands`(斜杠命令),`ui`(设置页菜单)为预留字段 |
+| `frontend` | 否 | 声明式前端贡献:`slashCommands`(Web 斜杠命令)+ `ui.settingsItems`(设置菜单字段 schema,见第 7 节) |
 
 **manifest 缺失/损坏**:插件仍以目录名兜底列出(version `0.0.0`),入口缺省 `index.mjs`;若也没有入口,列表显示「入口文件缺失」错误。
 
@@ -145,21 +145,55 @@ pi.on("tool_call", (event) => { return { block: true, reason: "本插件不允�
 
 ## 6. 示例插件
 
-仓库 `examples/plugins/dice/`(完整可运行):
+仓库 `examples/plugins/dice/`(完整可运行,包含工具 + 设置菜单 + Web 命令):
 
 ```
 examples/plugins/dice/
-  plugin.json
-  index.mjs
+  plugin.json   # 声明工具设置(骰面/幸运感言/感言下拉/备注)+ /快骰 命令
+  index.mjs     # default export 工厂(roll_dice 工具)+ webCommands 具名导出(/快骰)
+  settings.json # 用户设置值(声明式表单保存后生成;不入库)
 ```
 
 玩法:
 1. 把目录复制到 `~/.pi/writer/plugins/dice`;
 2. 重启/刷新 Web;
 3. 对话里让 agent「掷个骰子」即可触发 `roll_dice` 工具;
-4. 设置页「集成 → 插件」看到状态,启用/禁用/删除。
+4. 设置页「集成 → 插件」看到状态,点「设置」调默认骰面/感言;保存后重启生效;
+5. 输入框开写 `/快骰`,回车选中命令——主进程掷骰,结果文本插回输入框。
 
-## 7. 装载与错误行为
+## 7. 设置菜单(声明式表单)
+
+插件在 plugin.json 声明设置字段,schema 是纯数据,**renderer 按白名单字段类型渲染**(不执行插件 JS)。值存 `~/.pi/writer/plugins/<id>/settings.json`(atomicWriteFile;未知键丢弃)。
+
+**声明**(`frontend.ui.settingsItems`):
+
+```json
+{
+  "frontend": {
+    "ui": {
+      "settingsItems": [
+        {
+          "title": "掷骰子",
+          "description": "设置影响 roll_dice 工具与 /快骰 命令",
+          "fields": [
+            { "key": "max", "label": "默认骰面", "type": "number", "default": 20, "desc": "范围 2-1000" },
+            { "key": "lucky", "label": "幸运叙事", "type": "boolean", "default": true },
+            { "key": "flavor", "label": "感言", "type": "select", "default": "mild",
+              "options": [{ "value": "mild", "label": "含蓄" }, { "value": "silly", "label": "无厘头" }] },
+            { "key": "note", "label": "备注", "type": "textarea", "default": "" }
+          ]
+        }
+      ]
+    }
+  }
+}
+```
+
+**字段类型白名单**:`string | number | boolean | select | textarea`。select 必须带 `options`(至少一项);字段 key 须小写字母/数字/连字符/点/下划线。非法字段(未知 type/缺 key/select 无 options)**整条丢弃**,不阻塞插件装载。
+
+**读取设置**:插件自己在主进程读 `settings.json`(示例见 dice 的 `readSettings()`);也可在 Web 命令 handler 里读。设置保存后 pi-writer 重建会话(工具即时用新值)。
+
+## 8. 装载与错误行为
 
 | 阶段 | 失败表现 |
 |---|---|
@@ -167,6 +201,7 @@ examples/plugins/dice/
 | import | 模块顶层抛错 → 该插件 `error`,其他插件照常;服务器不崩 |
 | 工厂调用 | 抛错(注册阶段被 vendor 捕获)→ 会话装配继续,该插件工具不可用 |
 | 运行时 | 工具 execute 抛错 → 返回错误给 agent(常规);事件 handler 抛错 → 单次隔离 |
+| 命令执行 | webCommands handler 抛错 → 该命令 500,对话不中断 |
 
 装载错误经 `GET /api/plugins` / 设置页「集成 → 插件」列表展示(`s-plugin-err` 红字)。
 
@@ -176,7 +211,7 @@ examples/plugins/dice/
 - 切换启用后 pi-writer **重建会话**(与 MCP 配置变更同款),新工具即时生效;
 - 删除 = 移除插件目录(路径经防逃逸校验,插件根目录外不可删)。
 
-## 8. 开发调试
+## 9. 开发调试
 
 **临时目录隔离(避免污染写作用数据)**:
 
@@ -188,26 +223,58 @@ env PI_WRITER_DIR=/tmp/piw-dev npx tsx src/cli.ts --web --no-browser
 **查看装载状态**:
 
 ```bash
-curl http://127.0.0.1:8811/api/plugins   # 列表(含 error)
+curl http://127.0.0.1:8811/api/plugins              # 列表(含 error/frontend 声明)
+curl http://127.0.0.1:8811/api/plugins/dice/settings  # schema + 值
 ```
 
-**写测试**:装载器逻辑(`test/plugin-loader.test.ts` 已有范例)放在 `test/`,只测纯逻辑(临时 PI_WRITER_DIR + 真实磁盘插件目录),不碰真实 provider。
+**写测试**:装载器/校验逻辑(`test/plugin-loader.test.ts`)放在 `test/`,只测纯逻辑(临时 PI_WRITER_DIR + 真实磁盘插件目录),不碰真实 provider。
 
-## 9. Web 斜杠命令(声明式)
+## 10. Web 斜杠命令(声明式 + 后端执行器)
 
-`description` 节预留的 `frontend.slashCommands`(已实现的注册缝,见 `web/src/slash-commands.ts`):
+**两步**:
 
-```json
-{
-  "frontend": {
-    "slashCommands": [{ "trigger": "roll", "hint": "掷骰子" }]
-  }
-}
+1. **声明**(plugin.json):`frontend.slashCommands:[{ trigger, hint }]`——trigger 不含斜杠,为命令面板的 `/trigger`。
+2. **执行器**(入口模块):具名导出 `webCommands = { trigger: async ({ term, bookSlug }) => "结果文本" }`,**在主进程执行**(renderer 零 JS)。
+
+```js
+// index.mjs
+export default function dicePlugin(pi) { /* 工厂:注册工具等 */ }
+
+export const webCommands = {
+  "快骰": async () => "d20 = 7",
+};
 ```
 
-当前执行逻辑仍须走**内置 executor**(受信任服务端实现);插件自带 executor 属于后续声明式协议演进(UI/菜单扩展与 0.0.4 插件系统同批设计)。现阶段建议:用户通过对话调用工具(工具能力已完备),而不要依赖 Web 输入框斜杠命令作为插件入口。
+**调用链**:前端 `/快骰` → `POST /api/plugins/dice/command/快骰`(服务端注册表;trigger 必须已在 manifest 声明,否则忽略)→ 主进程 handler → `{text}` 结果插回输入框(用户看过再发送)。
 
-## 10. 常见问题(FAQ)
+**约束**:
+- 命令 handler 参数 `{ term?, bookSlug? }`(term = 命令后的参数文本;结果 > 4000 字符截断);
+- 未声明的 trigger 即使导出也**不注册**(白名单);
+- handler 抛错 → 该命令报错(500),会话不受影响。
+
+## 11. 完全信任(trusted)
+
+**默认安全模型**:插件只能声明式 UI(设置菜单 schema)+ 主进程逻辑(工具/webCommands/事件);renderer 绝不执行插件 JS。
+
+**「完全信任」开启后**(设置页「集成 → 插件」每插件一个开关,需二次确认)解锁两种能力:
+
+| 能力 | 说明 |
+|---|---|
+| 后端自定义路由 | 入口 `export const routes = [{ method, segments, handler }]`;自动挂 `/api/plugins/<id>/...`(segments 加插件 id 前缀),**仅 trusted 插件注册** |
+| 前端 JS | 入口 `frontend.mjs`(manifest `frontend.frontend` 可换路径),经 `GET /api/plugins/:id/frontend.mjs` 返回 `text/javascript`,**仅 trusted 插件可加载** |
+
+**前端 JS 约定**:
+- pi-writer 在设置页插件分类提供挂载点 `data-plugin-mount="<pluginId>"`;插件 JS 自我管理该节点下 DOM(示例:掷骰历史按钮);
+- 插件 JS 调自己注册的后端路由(`/api/plugins/<id>/...`)取数据;
+- 插件前端失败静默(不影响主界面),错误可经插件自身 console 观察。
+
+**风险**:trusted 插件与 pi-writer **主进程/渲染进程同权**(可在渲染进程执行任意 JS,并凭同族 HTTP 端点访问本地数据)。开启=用户声明"我信任这个插件的作者"。**仅信任你自己安装的插件**。
+
+**关闭信任**:开关取关即回收(frontend.mjs 的 script 标签移除、路由不注册)。
+
+示例见 `examples/plugins/dice/`(index.mjs 的 routes 导出 + frontend.mjs + json 历史演示)。
+
+## 12. 常见问题(FAQ)
 
 **Q:插件写了但不生效?**
 A:①确认目录在 `~/.pi/writer/plugins/<id>/`(`PI_WRITER_DIR` 覆盖时换路径);②`plugin.json` 的 `id` 与目录名一致;③设置页插件列表看有无错误(入口缺失/工厂抛错);④重启 pi-writer(Web 服务),装载发生在启动时。
@@ -224,7 +291,7 @@ A:本期(0.0.4)**不能**。renderer 不执行用户 JS 是安全红线,前端 U
 **Q:插件与 MCP 是什么关系?**
 A:两条独立通道——MCP 解决「接外部服务器」,插件解决「本地注册工具/事件/命令」。插件 = 受信任本地代码(不做沙箱);MCP = 远端服务器工具(经 `mcp.json`)。插件可以封装 MCP 客户端,但不在本期开放面。
 
-## 11. 上线前 checklist
+## 13. 上线前 checklist
 
 - [ ] `plugin.json` 与目录名一致、`version` 语义化
 - [ ] 工具名带插件前缀(降低冲突)

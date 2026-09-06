@@ -276,8 +276,8 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 		// Electron 壳显式传 asar 内前端目录;缺省探测(烘焙路径)在 CI 产物上会落空
 		...(opts.webDistDir ? { webDistDir: opts.webDistDir } : {}),
 	});
-	// 插件装载态(错误等)交给 server,GET /api/plugins 合并展示
-	server.setPluginInfos(pluginLoad.infos);
+	// 插件装载态(错误/声明/命令注册表/trusted 路由)交给 server,GET /api/plugins 合并展示
+	server.setPluginInfos(pluginLoad.infos, pluginLoad.webCommands, pluginLoad.routes);
 	const { port } = await server.start();
 	return { server, url: `http://127.0.0.1:${port}`, port };
 }

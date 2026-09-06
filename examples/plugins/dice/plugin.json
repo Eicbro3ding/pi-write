@@ -1,7 +1,52 @@
 {
   "id": "dice",
   "name": "掷骰子",
-  "version": "0.1.0",
-  "description": "示例插件:掷骰子工具(带剧情审判提示)。复制到 ~/.pi/writer/plugins/dice 即可体验。",
-  "backend": "index.mjs"
+  "version": "0.2.0",
+  "description": "示例插件:掷骰子工具 + 设置菜单(默认骰面/幸运叙事/感言)+ /快骰 Web 命令。复制到 ~/.pi/writer/plugins/dice 即可体验。",
+  "backend": "index.mjs",
+  "frontend": {
+    "slashCommands": [{ "trigger": "快骰", "hint": "用设置中的默认骰面掷一次" }],
+    "ui": {
+      "settingsItems": [
+        {
+          "title": "掷骰子",
+          "description": "设置影响 roll_dice 工具与 /快骰 命令的默认行为。",
+          "fields": [
+            {
+              "key": "max",
+              "label": "默认骰面",
+              "type": "number",
+              "default": 20,
+              "desc": "默认 20 面;范围 2-1000。"
+            },
+            {
+              "key": "lucky",
+              "label": "幸运叙事",
+              "type": "boolean",
+              "default": true,
+              "desc": "开启后大成功/大失败附一句剧情提示。"
+            },
+            {
+              "key": "flavor",
+              "label": "感言",
+              "type": "select",
+              "default": "mild",
+              "options": [
+                { "value": "mild", "label": "含蓄" },
+                { "value": "dramatic", "label": "戏剧性" },
+                { "value": "silly", "label": "无厘头" }
+              ]
+            },
+            {
+              "key": "note",
+              "label": "备注",
+              "type": "textarea",
+              "default": "",
+              "desc": "展示在掷骰结果旁的备注(可留空)。"
+            }
+          ]
+        }
+      ]
+    }
+  }
 }

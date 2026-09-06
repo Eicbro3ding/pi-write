@@ -8,6 +8,7 @@ import {
 	makeChapterCommand,
 	makeCompactCommand,
 	makeNodeCommand,
+	makePluginCommand,
 	parseSlashQuery,
 	scoreWorldEntry,
 	worldEntryInsertText,
@@ -127,5 +128,35 @@ describe("compact 动作命令", () => {
 		const cmd = makeCompactCommand({ run: async (s) => calls.push(s) });
 		await cmd.run!("保留最近的冲突", {} as SlashContext);
 		expect(calls).toEqual(["保留最近的冲突"]);
+	});
+});
+
+describe("插件 Web 命令(makePluginCommand)", () => {
+	it("构造 SlashCommand:trigger/hint 透传;run 调 client.runPluginCommand 并返回文本", async () => {
+		const calls: Array<{ id: string; name: string; term: string | undefined }> = [];
+		const fakeClient = {
+			runPluginCommand: async (id: string, name: string, term?: string) => {
+				calls.push({ id, name, term });
+				return "d20 = 7";
+			},
+		};
+		const cmd = makePluginCommand({ pluginId: "dice", trigger: "roll", hint: "掷骰子", client: fakeClient as never });
+		expect(cmd.trigger).toBe("roll");
+		expect(cmd.hint).toBe("掷骰子");
+		const result = await cmd.run!("", {} as SlashContext);
+		expect(calls).toEqual([{ id: "dice", name: "roll", term: undefined }]);
+		expect(result).toBe("d20 = 7");
+	});
+	it("term 非空透传(trim 后),空串转 undefined", async () => {
+		const calls: string[] = [];
+		const cmd = makePluginCommand({
+			pluginId: "dice",
+			trigger: "roll",
+			hint: "掷骰子",
+			client: { runPluginCommand: async (_id: string, _name: string, term?: string) => { calls.push(term ?? "(none)"); return "ok"; } } as never,
+		});
+		await cmd.run!("6", {} as SlashContext);
+		await cmd.run!("  ", {} as SlashContext);
+		expect(calls).toEqual(["6", "(none)"]);
 	});
 });

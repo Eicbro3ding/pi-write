@@ -212,8 +212,14 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 		setMenu({ ...m, loading: true, notice: m.command.run ? "正在执行…" : item.attachment ? "正在读取原文…" : null, items: m.items });
 		try {
 			if (m.command.run && item.insertText === undefined && item.attachment === undefined) {
-				await m.command.run(m.query.term, contextRef.current ?? ({} as SlashContext));
-				removeRange(m.query.start, m.query.end);
+				const result = await m.command.run(m.query.term, contextRef.current ?? ({} as SlashContext));
+				// run 返回文本 = 结果回插输入框(插件命令:执行后端 handler 后把结果填入,
+				// 用户看过再发送);返回 undefined 的纯 action 命令只清命令原文
+				if (typeof result === "string" && result.length > 0) {
+					insertRange(m.query.start, m.query.end, result);
+				} else {
+					removeRange(m.query.start, m.query.end);
+				}
 			} else if (item.attachment) {
 				// 引用芯片:选中时预读全文(失败走命令错误条,不挂芯片);同 id 去重;
 				// 同时清掉输入框里的命令查询区间(/chapter ch01),不留残留原文

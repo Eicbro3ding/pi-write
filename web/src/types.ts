@@ -414,10 +414,39 @@ export interface PluginInfoDto {
 	manifestDisabled: boolean;
 	/** 用户级启用(plugin-state.json;缺省 true)。 */
 	enabled: boolean;
+	/** 用户级完全信任(缺省 false;开启解锁后端路由 + 前端 JS)。 */
+	trusted: boolean;
 	/** 装载期错误(null = 正常)。 */
 	error: string | null;
 	/** 入口文件绝对路径(展示/调试用)。 */
 	path: string;
+	/** 声明式前端贡献(设置菜单 schema / 斜杠命令 / 前端 JS 入口)。 */
+	frontend?: {
+		slashCommands?: Array<{ trigger: string; hint: string }>;
+		ui?: { settingsItems?: PluginSettingsItemDto[] };
+		/** 前端 JS 入口(相对插件目录;仅 trusted 加载)。 */
+		frontend?: string;
+	};
+}
+
+/** 设置字段类型白名单(与 src/plugins.ts 对齐)。 */
+export type PluginSettingsFieldType = "string" | "number" | "boolean" | "select" | "textarea";
+
+/** 设置字段声明(schema 项)。 */
+export interface PluginSettingsFieldDto {
+	key: string;
+	label: string;
+	type: PluginSettingsFieldType;
+	desc?: string;
+	default?: string | number | boolean;
+	options?: Array<{ value: string; label: string }>;
+}
+
+/** 设置菜单区块(标题 + 描述 + 字段组)。 */
+export interface PluginSettingsItemDto {
+	title: string;
+	description?: string;
+	fields: PluginSettingsFieldDto[];
 }
 
 // —— 专注写作台 workspace 类型(前端本地模型,不与后端字段对齐)——
