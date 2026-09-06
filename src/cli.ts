@@ -36,6 +36,7 @@ import {
 } from "./book-manager.ts";
 import { writerExtension } from "./extension.ts";
 import { McpManager } from "./mcp/manager.ts";
+import { loadPlugins } from "./plugin-loader.ts";
 import { buildWriterSystemPrompt } from "./prompt.ts";
 import { applyCacheRetention } from "./config.ts";
 
@@ -379,6 +380,10 @@ async function main(): Promise<void> {
 	const mcpManager = new McpManager(agentDir);
 	await mcpManager.reload();
 
+	// 外部插件:与 web 模式共用 ~/.pi/writer/plugins/(单个插件失败隔离,
+	// 错误经 listPlugins 展示;TUI 无管理 UI,启停走 plugin-state.json)
+	const { factories: pluginFactories } = await loadPlugins();
+
 	const createRuntime = createSessionRuntimeFactory({
 		agentDir,
 		readOnlyDirs: [skillsDir],
@@ -390,6 +395,7 @@ async function main(): Promise<void> {
 				true,
 			),
 		extensionFactories: [writerExtension],
+		pluginFactories,
 		model: opts.model,
 		thinkingLevel: opts.thinking as ThinkingLevel | undefined,
 		temperature: opts.temperature,

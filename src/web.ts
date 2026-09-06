@@ -25,6 +25,7 @@ import {
 } from "./book-manager.ts";
 import { writerExtension } from "./extension.ts";
 import { McpManager } from "./mcp/manager.ts";
+import { loadPlugins } from "./plugin-loader.ts";
 import { createSessionRuntimeFactory } from "./session-factory.ts";
 import { buildWriterSystemPrompt } from "./prompt.ts";
 import { WriterServer } from "./web/server.ts";
@@ -217,6 +218,11 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 	const mcpManager = new McpManager(agentDir);
 	await mcpManager.reload();
 
+	// 外部插件:扫描 ~/.pi/writer/plugins/<id>/ → jiti 动态 import 启用插件 →
+	// 工厂并入 extensionFactories(单个插件失败隔离,error 经 /api/plugins 展示)
+	const pluginLoad = await loadPlugins();
+	const { factories: pluginFactories } = pluginLoad;
+
 	// createRuntime 工厂:与 cli.ts 共用 session-factory 的装配(隐藏 skill
 	// 命令;工具集为 web 子集;--model/--thinking 解析),只声明 web 差异项。
 	const createRuntime = createSessionRuntimeFactory({
@@ -231,6 +237,7 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 				false,
 			),
 		extensionFactories: [writerExtension],
+		pluginFactories,
 		model: opts.model,
 		thinkingLevel: opts.thinking as ThinkingLevel | undefined,
 		temperature: opts.temperature,
@@ -269,6 +276,8 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 		// Electron 壳显式传 asar 内前端目录;缺省探测(烘焙路径)在 CI 产物上会落空
 		...(opts.webDistDir ? { webDistDir: opts.webDistDir } : {}),
 	});
+	// 插件装载态(错误等)交给 server,GET /api/plugins 合并展示
+	server.setPluginInfos(pluginLoad.infos);
 	const { port } = await server.start();
 	return { server, url: `http://127.0.0.1:${port}`, port };
 }

@@ -2036,3 +2036,22 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 }
 .pvd-body .pvc-card { min-height: 430px; }
 .pvd-body .pvc-detail { max-height: 520px; }
+
+/* ---- 插件列表(s-plugin-*,2026-09-05)---- */
+.s-plugin-list { display: flex; flex-direction: column; gap: 2px; }
+.s-plugin-row {
+  border-radius: var(--r-sm);
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+}
+.s-plugin-row:hover { background: var(--hover-tint); }
+.s-plugin-row.disabled { opacity: 0.65; }
+.s-plugin-main {
+  display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap;
+}
+.s-plugin-name { font-size: 13px; color: var(--ink); font-weight: 500; }
+.s-plugin-id { font-size: 11px; color: var(--faint); }
+.s-plugin-desc { font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.6; }
+.s-plugin-err { font-size: 11.5px; color: var(--red); margin-top: 4px; word-break: break-all; }

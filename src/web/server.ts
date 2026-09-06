@@ -29,6 +29,7 @@ import {
 	setCurrentChapter,
 	updateChapter,
 } from "../book-manager.ts";
+import { listPlugins, loadPlugins, removePlugin, writePluginEnabled, type PluginRuntimeInfo } from "../plugin-loader.ts";
 import { getAgentDir, getBookDir, getThemesDir, getWriterDir } from "../config.ts";
 import { atomicWriteFile } from "../atomic-write.ts";
 import {
@@ -396,6 +397,8 @@ export class WriterServer {
 	private readonly options: WriterServerOptions;
 	/** 静态资源根目录(web/dist);null 表示未配置,非 /api 保持 404。 */
 	private readonly staticRoot: string | null;
+	/** 插件装载态(loadPlugins 结果;GET /api/plugins 合并展示装载错误)。 */
+	private pluginInfos: PluginRuntimeInfo[] | null = null;
 	/**
 	 * 章节切换互斥队列:session 路由整体串行执行(切章 → 写 book.json → 注入背景包),
 	 * 避免多浏览器并发切章时交错(最终会话章节与 book.json 不一致、背景包注入错章节)。
@@ -526,6 +529,10 @@ export class WriterServer {
 			{ method: "PUT", segments: ["mcp", "raw"], handler: (ctx) => this.handlePutMcpRaw(ctx) },
 			{ method: "PUT", segments: ["mcp", ":name"], handler: (ctx) => this.handlePutMcpServer(ctx) },
 			{ method: "DELETE", segments: ["mcp", ":name"], handler: (ctx) => this.handleDeleteMcpServer(ctx) },
+			// plugins(插件管理:列表/启用开关/删除;装载在启动时,切换后重建会话)
+			{ method: "GET", segments: ["plugins"], handler: (ctx) => this.handleGetPlugins(ctx) },
+			{ method: "PUT", segments: ["plugins", ":id"], handler: (ctx) => this.handlePutPlugin(ctx) },
+			{ method: "DELETE", segments: ["plugins", ":id"], handler: (ctx) => this.handleDeletePlugin(ctx) },
 			// stage
 			{ method: "GET", segments: ["stage", ":slug"], handler: (ctx) => this.handleGetStage(ctx) },
 			{ method: "GET", segments: ["stage", ":slug", "last-world-edit"], handler: (ctx) => this.handleGetStageLastWorldEdit(ctx) },
@@ -1557,6 +1564,76 @@ export class WriterServer {
 		}
 		await this.handleMcpReload();
 		this.send(ctx.res, 200, { servers: (await mgr.listConfig()).servers, status: mgr.getStatus() });
+	}
+
+	// ---- plugins 路由 ----
+
+	/** 注入插件装载态(web.ts 启动时 loadPlugins 后调用;GET /api/plugins 合并展示)。 */
+	setPluginInfos(infos: PluginRuntimeInfo[]): void {
+		this.pluginInfos = infos;
+	}
+
+	/** GET /api/plugins:插件列表(id 排序;含启用状态与装载错误)。 */
+	private async handleGetPlugins(ctx: RouteContext): Promise<void> {
+		const infos = await listPlugins();
+		// 装载错误只在 loadPlugins 时产生(动态 import 侧);列表端点重新扫描
+		// 会覆盖为 null——把装载态合并回来,展现「插件装载后状态」而非仅磁盘状态
+		const loaded = this.pluginInfos ?? [];
+		const merged = infos.map((info) => {
+			const runInfo = loaded.find((l) => l.id === info.id);
+			return runInfo && runInfo.error ? { ...info, error: runInfo.error } : info;
+		});
+		this.send(ctx.res, 200, { plugins: merged });
+	}
+
+	/**
+	 * PUT /api/plugins/:id {enabled}:切换用户级启用状态 → 重新装载插件 →
+	 * 重建会话(MCP redo 同款 reloadRuntime;新工具经新的 extensionFactories 生效)。
+	 * manifest 声明 enabled:false 的插件不可被用户启用。
+	 */
+	private async handlePutPlugin(ctx: RouteContext): Promise<void> {
+		const id = ctx.params.id!;
+		const body = (await readJsonBody(ctx.req)) as Record<string, unknown> | null;
+		const enabled = body?.enabled;
+		if (typeof enabled !== "boolean") throw new HttpError(400, "bad_request", "字段 enabled 必须为 boolean");
+		const infos = await listPlugins();
+		const info = infos.find((p) => p.id === id);
+		if (!info) throw new HttpError(404, "not_found", `插件不存在: ${id}`);
+		if (enabled && info.manifestDisabled) {
+			throw new HttpError(400, "bad_request", "插件在 plugin.json 中声明禁用,无法从用户侧启用");
+		}
+		await writePluginEnabled(id, enabled);
+		// 装载结果变化 → 重建会话使插件工具生效(与 handleMcpReload 同款)
+		await this.reloadPluginRuntime();
+		this.send(ctx.res, 200, { ok: true, plugins: await listPlugins() });
+	}
+
+	/** DELETE /api/plugins/:id:删除插件目录(移除后重建会话;state 一并清理)。 */
+	private async handleDeletePlugin(ctx: RouteContext): Promise<void> {
+		const id = ctx.params.id!;
+		try {
+			await removePlugin(id);
+		} catch (err) {
+			throw new HttpError(404, "not_found", err instanceof Error ? err.message : "插件不存在");
+		}
+		await this.reloadPluginRuntime();
+		this.send(ctx.res, 200, { ok: true, plugins: await listPlugins() });
+	}
+
+	/** 重载插件并重建会话(工具变更生效;失败不丢服务,插件错误经 GET 展示)。 */
+	private async reloadPluginRuntime(): Promise<void> {
+		// 同步装载态:重新执行 loadPlugins(启用/禁用变化),把错误挂到列表合并源
+		try {
+			const { infos } = await loadPlugins();
+			this.pluginInfos = infos;
+		} catch {
+			this.pluginInfos = null;
+		}
+		try {
+			await this.options.sessionHost.reloadRuntime();
+		} catch {
+			/* 会话重建失败:保留旧 runtime,插件错误仍可经 /api/plugins 查看 */
+		}
 	}
 
 	// ---- stage 路由 ----

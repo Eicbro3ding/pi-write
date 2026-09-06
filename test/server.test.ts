@@ -118,6 +118,7 @@ function fakeHost() {
 		},
 		getState: () => state,
 		getRuntime: () => ({ session }),
+		reloadRuntime: async () => {},
 		dispose: async () => {},
 	} as never;
 	return { host, listeners, switchCalls, switchGate, state, session, providers, providerCalls, injectCalls, retractCalls, branchCalls, navigateCalls };
@@ -626,6 +627,26 @@ describe("WriterServer", () => {
 		expect(res.status).toBe(200);
 		const cfg = JSON.parse(readFileSync(customPath, "utf8")) as { providers: Record<string, { models: Array<Record<string, unknown>> }> };
 		expect(cfg.providers.vision.models[0]).toMatchObject({ id: "vision-1", contextWindow: 1000000, maxTokens: 128000, input: ["text", "image"] });
+	});
+	it("GET /api/plugins 返回插件列表(空目录 = 空数组)", async () => {
+		const res = await fetch(`${base}/api/plugins`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { plugins: Array<{ id: string }> };
+		expect(body.plugins).toEqual([]);
+	});
+	it("PUT /api/plugins/:id 未知 id → 404;enabled 非 boolean → 400", async () => {
+		const res = await fetch(`${base}/api/plugins/nope`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ enabled: true }),
+		});
+		expect(res.status).toBe(404);
+		const res2 = await fetch(`${base}/api/plugins/nope`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ enabled: "yes" }),
+		});
+		expect(res2.status).toBe(400);
 	});
 	it("GET /api/world 无会话返回 404", async () => {
 		const res = await fetch(`${base}/api/world`);

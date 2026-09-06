@@ -5,7 +5,7 @@
  * 注意:本文件不得在 import 时触碰 DOM 专属 API(EventSource 只在 subscribeEvents 内使用),
  * 以兼容 node 环境的 vitest 单测。
  */
-import type { AgentEventDto, BookDetail, BookMeta, ChapterRef, ContextUsageDto, McpServerInfo, McpServerStatus, ProviderDetailDto, ProviderInfo, SessionState, SessionTreeDto, SetupStateDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, WorldDataDto, WriterStateDto } from "../types.ts";
+import type { AgentEventDto, BookDetail, BookMeta, ChapterRef, ContextUsageDto, McpServerInfo, McpServerStatus, PluginInfoDto, ProviderDetailDto, ProviderInfo, SessionState, SessionTreeDto, SetupStateDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, WorldDataDto, WriterStateDto } from "../types.ts";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
 
 /** 图片访问 URL(同源相对路径;生产/Electron 同源,vite dev 经代理)。 */
@@ -382,6 +382,29 @@ export class ApiClient {
 	/** 主题清单(内置资产 + 用户自定义;文件 + 全文,设置页自动发现与编辑器用)。 */
 	async getThemes(): Promise<ThemeManifest> {
 		return this.request<ThemeManifest>("/api/themes");
+	}
+
+	/** 插件列表(id 排序;含启用状态与装载错误)。 */
+	async getPlugins(): Promise<PluginInfoDto[]> {
+		const r = await this.request<{ plugins: PluginInfoDto[] }>("/api/plugins");
+		return r.plugins;
+	}
+
+	/** 切换插件用户级启用状态(重新装载 + 重建会话;返回最新列表)。 */
+	async setPluginEnabled(id: string, enabled: boolean): Promise<PluginInfoDto[]> {
+		const r = await this.request<{ plugins: PluginInfoDto[] }>(`/api/plugins/${encodeURIComponent(id)}`, {
+			method: "PUT",
+			body: JSON.stringify({ enabled }),
+		});
+		return r.plugins;
+	}
+
+	/** 删除插件目录(返回最新列表)。 */
+	async deletePlugin(id: string): Promise<PluginInfoDto[]> {
+		const r = await this.request<{ plugins: PluginInfoDto[] }>(`/api/plugins/${encodeURIComponent(id)}`, {
+			method: "DELETE",
+		});
+		return r.plugins;
 	}
 
 	/** 保存用户主题 CSS(新建或覆盖;file 含 .css)。 */

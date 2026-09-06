@@ -10,7 +10,7 @@
  * 动态工具段,MCP 外部工具对 agent 不可见——2026-08-08 根因,见 prompt.ts)。
  */
 
-import type { InlineExtension, ToolDefinition } from "../vendor/pi-coding-agent/src/index.ts";
+import type { InlineExtension, ExtensionFactory, ToolDefinition } from "../vendor/pi-coding-agent/src/index.ts";
 import {
 	type CreateAgentSessionRuntimeFactory,
 	createAgentSessionFromServices,
@@ -34,6 +34,8 @@ export interface SessionFactoryOptions {
 	systemPromptOverride: () => string;
 	/** 扩展工厂(writerExtension 等;vendor InlineExtension,含裸函数形式)。 */
 	extensionFactories: InlineExtension[];
+	/** 外部插件工厂(plugin-loader 加载的 ExtensionFactory;追加到 extensionFactories 之后)。 */
+	pluginFactories?: ExtensionFactory[];
 	/** 附加 skill 路径(TUI/web 加载打包 skills;stage 不加载)。 */
 	additionalSkillPaths?: string[];
 	/** 正文文件白名单(如 "ch01.md"):启用 draft/ 目录 write 强制,只允许写当前章节文件。
@@ -78,11 +80,13 @@ export function createSessionRuntimeFactory(opts: SessionFactoryOptions): Create
 					// 独立身份（2026-08-11）：不加载 ~/.agents 全局技能与祖先目录 AGENTS.md
 					// 项目上下文（导演实测混入主目录 skills/AGENTS.md 的根因）；技能只经
 					// additionalSkillPaths 显式加载（pi-writer 打包 skills）
-					noSkills: true,
-					noContextFiles: true,
-					...(opts.additionalSkillPaths ? { additionalSkillPaths: opts.additionalSkillPaths } : {}),
-					extensionFactories: opts.extensionFactories,
-				},
+						noSkills: true,
+						noContextFiles: true,
+						...(opts.additionalSkillPaths ? { additionalSkillPaths: opts.additionalSkillPaths } : {}),
+						extensionFactories: opts.pluginFactories?.length
+							? [...opts.extensionFactories, ...opts.pluginFactories]
+							: opts.extensionFactories,
+					},
 			});
 		// 隐藏 skill 系统:会话的 / 菜单不再显示任何 /skill:xxx 命令
 		services.settingsManager.setEnableSkillCommands(false);

@@ -1,0 +1,7 @@
+{
+  "id": "dice",
+  "name": "掷骰子",
+  "version": "0.1.0",
+  "description": "示例插件:掷骰子工具(带剧情审判提示)。复制到 ~/.pi/writer/plugins/dice 即可体验。",
+  "backend": "index.mjs"
+}

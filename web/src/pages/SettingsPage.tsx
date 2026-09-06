@@ -6,6 +6,7 @@ import { NIGHT_THEME, themeLabelFromCss, themeStarterCss, USER_THEME_PREFIX, use
 import { applyTheme, currentTheme } from "../theme.ts";
 import { ProviderList } from "../components/ProviderList.tsx";
 import { McpServerList } from "../components/McpServerList.tsx";
+import { PluginList } from "../components/PluginList.tsx";
 import { ToggleSwitch } from "../components/ToggleSwitch.tsx";
 import { IconBook, IconDoc, IconGear, IconGlobe, IconX } from "../components/Icons.tsx";
 
@@ -868,7 +869,8 @@ export function SettingsPage({
 						</div>
 					)}
 
-					{cat === "integrations" && (
+				{cat === "integrations" && (
+					<>
 						<div className="s-card">
 							<div className="s-card-head">MCP 服务器</div>
 							<div className="s-card-desc">
@@ -876,7 +878,15 @@ export function SettingsPage({
 							</div>
 							<McpServerList client={client} />
 						</div>
-					)}
+						<div className="s-card">
+							<div className="s-card-head">插件</div>
+							<div className="s-card-desc">
+								扩展写作能力(工具/事件/命令)。插件目录 ~/.pi/writer/plugins/&lt;id&gt;,内含 plugin.json 与入口 index.mjs;切换启用后会话重建生效。
+							</div>
+							<PluginList client={client} />
+						</div>
+					</>
+				)}
 				</div>
 			</main>
 			{/* 模型提供商管理弹窗:双栏卡片悬浮层(关闭即卸载,列表状态在下一次打开时重建) */}

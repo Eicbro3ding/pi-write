@@ -21,6 +21,7 @@ docs/*
 !docs/architecture.md
 !docs/design.md
 !docs/development.md
+!docs/plugin-development.md
 !docs/security.md
 !docs/screenshots/
 

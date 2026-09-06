@@ -404,6 +404,22 @@ export interface ThemeManifest {
 	builtin: UserThemeInfo[];
 }
 
+/** 插件列表项(/api/plugins;与服务端 PluginRuntimeInfo 对齐)。 */
+export interface PluginInfoDto {
+	id: string;
+	name: string;
+	version: string;
+	description?: string;
+	/** plugin.json 声明禁用(作者级;用户侧无法启用)。 */
+	manifestDisabled: boolean;
+	/** 用户级启用(plugin-state.json;缺省 true)。 */
+	enabled: boolean;
+	/** 装载期错误(null = 正常)。 */
+	error: string | null;
+	/** 入口文件绝对路径(展示/调试用)。 */
+	path: string;
+}
+
 // —— 专注写作台 workspace 类型(前端本地模型,不与后端字段对齐)——
 
 /** CodeMirror 选区快照:编剧「选中文本自动填入」所需的纯文本信息(书/文件/章节归属
