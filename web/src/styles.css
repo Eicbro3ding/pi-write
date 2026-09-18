@@ -150,10 +150,16 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 /* —— 书库栏(左):书 + 章节 —— */
 .chapters {
   flex: none; display: flex; flex-direction: column; gap: 2px;
-  padding: 14px 10px; border-right: 1px solid var(--line); overflow-y: auto; overflow-x: hidden;
+  padding: 14px 10px; border-right: 1px solid var(--line); overflow: hidden; overflow-x: hidden;
   position: relative; background: var(--bg);
   /* 折叠/展开宽度动画(拖拽调宽时经 .resizing 禁用,保持跟手) */
   transition: width var(--dur-slow) var(--ease-out);
+}
+/* 左栏滚动区:只有它滚(切换控件与「收起」钮固定)。
+   此前整条 .chapters 自己滚,导致收起钮在内容短时悬在半空、内容长时被顶出视野 */
+.rail-scroll {
+  flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 2px;
+  overflow-y: auto; overflow-x: hidden;
 }
 .chapters.resizing { transition: none; }
 .c-head { font-size: 11px; letter-spacing: 0.12em; color: var(--faint); padding: 4px 10px 8px; font-weight: 500; }
@@ -266,7 +272,8 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 /* 折叠态:56px 图标条,只留当前书首字按钮 + 展开钮 */
 .chapters.collapsed { width: 56px !important; padding: 14px 8px; }
 .chapters.collapsed .c-head, .chapters.collapsed .c-list, .chapters.collapsed .c-new,
-.chapters.collapsed .c-books, .chapters.collapsed .c-resize, .chapters.collapsed .c-collapse-text { display: none; }
+.chapters.collapsed .c-books, .chapters.collapsed .c-resize, .chapters.collapsed .c-collapse-text,
+.chapters.collapsed .rail-seg, .chapters.collapsed .rail-ws { display: none; }
 .c-collapsed-book {
   display: none; width: 36px; height: 36px; margin: 0 auto 4px; flex: none;
   border-radius: var(--r-md); background: var(--amber-tint); color: var(--amber);
@@ -278,7 +285,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .chapters.collapsed .c-collapsed-book { display: flex; }
 
 /* —— 纸张(中):正文常驻 —— */
-.paper-zone { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+.paper-zone { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); position: relative; }
 .paper-head {
   flex: none; display: flex; align-items: center; gap: 12px;
   padding: 14px 22px 10px; min-height: 52px;
@@ -484,15 +491,28 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 /* 工具卡:悬浮圆角卡 */
 .tools { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
 .tool {
-  display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 11.5px;
+  display: flex; flex-direction: column; gap: 6px;
+  font-family: var(--mono); font-size: 11.5px;
   color: var(--green); background: var(--bg-elev); border: 1px solid var(--line);
   border-radius: var(--r-md); padding: 6px 12px; box-shadow: var(--shadow-1);
 }
+.tool-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .tool-name { font-weight: 500; flex: none; }
 .tool-args { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%; }
 .tool-result { margin-left: auto; font-size: 11px; color: var(--green); flex: none; }
 .tool.err { color: var(--red); border-color: var(--red-tint-strong); background: var(--red-tint); }
 .tool.err .tool-result { color: var(--red); }
+/* 外部命令(bash)的流式输出:快照整段替换,运行中自动滚到底(见 ToolCard)。
+   运行中边框转暖金,提示「正在跑」;结束后回落普通边框,内容留作回看 */
+.tool-stream {
+  margin: 0; padding: 7px 9px; max-height: 220px; overflow-y: auto;
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-sm);
+  font-family: var(--mono); font-size: 11px; line-height: 1.55; color: var(--ink-2);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.tool[data-live="1"] { border-color: var(--amber-tint-strong); }
+.tool[data-live="1"] .tool-result { color: var(--amber); }
+.tool[data-live="1"] .tool-stream { border-color: var(--amber-tint-strong); }
 
 /* 输入条:圆角容器 + focus 暖金描边;命令面板以 inputbar 为定位上下文向上弹出 */
 .inputbar {
@@ -2078,3 +2098,89 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .s-plugin-trust-warn {
   font-size: 11.5px; color: var(--ink-2); line-height: 1.6; margin-bottom: 8px;
 }
+
+/* —— 左栏内容切换(章节 / 工作区)与工作区面板 —— */
+/* 位置:原来章节栏的顶上。工作区与章节列表是同一层级的两块内容,不是第五个页面 */
+.rail-seg {
+  display: flex; gap: 2px; margin: 0 2px 10px; padding: 2px;
+  border: 1px solid var(--line-strong); border-radius: var(--r-md); background: var(--bg-elev);
+}
+.rail-seg button {
+  flex: 1; padding: 4px 0; font-size: 12px; color: var(--muted);
+  border-radius: var(--r-sm); transition: color var(--dur-fast) var(--ease-out);
+}
+.rail-seg button:hover { color: var(--ink); }
+.rail-seg button.active { background: var(--amber-tint); color: var(--amber); }
+.rail-ws { display: flex; flex-direction: column; gap: 2px; }
+
+.ws-desc { font-size: 12px; color: var(--faint); line-height: 1.6; padding: 6px 10px; }
+.ws-notice { margin: 0 2px 8px; }
+/* 本次会话 agent 碰过的文件(前端台账;刷新后重置) */
+.ws-inbox {
+  margin: 0 2px 12px; padding: 9px 10px;
+  background: var(--bg-elev); border: 1px solid var(--line-strong); border-radius: var(--r-md);
+}
+.ws-inbox-head { font-size: 12px; color: var(--ink-2); margin-bottom: 3px; }
+.ws-inbox-desc { font-size: 11px; color: var(--faint); line-height: 1.5; margin-bottom: 7px; }
+.ws-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.ws-chip {
+  max-width: 100%; padding: 1px 7px; font-size: 11px; border-radius: var(--r-full);
+  background: var(--amber-tint); color: var(--amber);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ws-chip:hover { outline: 1px solid var(--amber-tint-strong); }
+
+.ws-group { margin: 0 2px 12px; }
+.ws-group-head { display: flex; align-items: baseline; gap: 6px; padding: 4px 8px; font-size: 12.5px; color: var(--ink-2); }
+.ws-count { font-size: 11px; color: var(--faint); }
+.ws-lock {
+  margin-left: auto; font-size: 10.5px; color: var(--faint);
+  border: 1px solid var(--line-strong); border-radius: var(--r-full); padding: 0 6px;
+}
+.ws-group-desc { padding: 0 8px 6px; font-size: 11px; color: var(--faint); line-height: 1.5; }
+.ws-row {
+  display: block; width: 100%; text-align: left; padding: 5px 8px;
+  border-radius: var(--r-sm); border-left: 2px solid transparent;
+}
+.ws-row:hover { background: var(--hover-tint); }
+.ws-row-name { display: block; font-size: 12.5px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-row-name em { font-style: normal; margin-left: 8px; font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
+.ws-row-meta { display: flex; align-items: center; gap: 5px; margin-top: 1px; font-size: 10.5px; color: var(--faint); }
+.ws-badge {
+  font-size: 10px; padding: 0 4px; border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong); color: var(--faint);
+}
+.ws-badge.ai { color: var(--amber); border-color: var(--amber-tint-strong); background: var(--amber-tint); }
+
+/* 文件预览覆盖层(压在纸张区上;正文编辑器保留在下面不卸载) */
+.ws-preview {
+  position: absolute; inset: 0; z-index: 20;
+  display: flex; flex-direction: column; background: var(--bg);
+  animation: ws-pv-in var(--dur-base) var(--ease-out);
+}
+@keyframes ws-pv-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.ws-pv-head {
+  flex: none; display: flex; align-items: flex-start; gap: 12px;
+  padding: 14px 22px 12px; border-bottom: 1px solid var(--line);
+}
+.ws-pv-title { flex: 1; min-width: 0; }
+.ws-pv-name { font-size: 15px; color: var(--ink); }
+.ws-pv-path { font-family: var(--mono); font-size: 11.5px; color: var(--muted); word-break: break-all; margin-top: 2px; }
+.ws-pv-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 6px; font-size: 11.5px; color: var(--faint); }
+.ws-pv-actions { flex: none; display: flex; gap: 8px; }
+.ws-pv-body { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 26px 40px; }
+.ws-pv-body > .notice { max-width: 62ch; }
+.ws-pv-text { max-width: 68ch; }
+.ws-pv-image { margin: 0; max-width: 100%; }
+.ws-pv-image img {
+  display: block; max-width: 100%; border: 1px solid var(--line);
+  border-radius: var(--r-md); background: var(--bg-elev);
+}
+.ws-pv-image figcaption { margin-top: 6px; font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+.ws-pv-binary {
+  max-width: 56ch; padding: 18px 20px;
+  border: 1px dashed var(--line-strong); border-radius: var(--r-md); color: var(--muted); font-size: 12.5px;
+}
+.ws-pv-kv { margin-top: 10px; font-size: 12px; color: var(--faint); }
+.ws-pv-kv > div { display: flex; gap: 10px; padding: 2px 0; }
+.ws-pv-kv span:first-child { width: 48px; flex: none; }

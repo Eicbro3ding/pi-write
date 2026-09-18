@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { DUR, EASE } from "../motion.ts";
 import { useMediaQuery } from "../useMediaQuery.ts";
@@ -40,6 +40,11 @@ interface ChapterSidebarProps {
 	/** 窄屏抽屉打开:根元素追加 drawer-open class,并渲染关闭按钮(Task 7 负责抽屉视觉)。 */
 	drawerOpen?: boolean;
 	onClose?: () => void;
+	/** 左栏内容模式:章节(默认)或工作区。 */
+	railMode?: "chapters" | "workspace";
+	onRailModeChange?: (mode: "chapters" | "workspace") => void;
+	/** 「工作区」模式的内容(由页面注入;未传则该模式显示占位提示)。 */
+	workspace?: ReactNode;
 }
 
 /** 侧栏宽度限制(px)。 */
@@ -73,6 +78,9 @@ export function ChapterSidebar({
 	onToggleCollapse,
 	drawerOpen = false,
 	onClose,
+	railMode = "chapters",
+	onRailModeChange,
+	workspace,
 }: ChapterSidebarProps) {
 	/** 新建书内联输入框是否展开。 */
 	const [addingBook, setAddingBook] = useState(false);
@@ -191,6 +199,36 @@ export function ChapterSidebar({
 						</button>
 					)
 					) : (
+						<>
+						{/* 左栏内容切换:章节(默认,书 + 章节列表)/ 工作区(书目录里看得见的东西)。
+						    位置就是原来章节栏的顶上——工作区与章节列表是同一层级的两块内容,
+						    不是第五个页面,所以不占顶栏。折叠态整条隐藏(见 styles.css)。
+						    切换控件留在滚动区之外:它是「这一栏现在装什么」的开关,滚走了就找不回来 */}
+						<div className="rail-seg" role="group" aria-label="左栏内容">
+							<button
+								type="button"
+								className={railMode === "chapters" ? "active" : ""}
+								aria-pressed={railMode === "chapters"}
+								onClick={() => onRailModeChange?.("chapters")}
+							>
+								章节
+							</button>
+							<button
+								type="button"
+								className={railMode === "workspace" ? "active" : ""}
+								aria-pressed={railMode === "workspace"}
+								onClick={() => onRailModeChange?.("workspace")}
+							>
+								工作区
+							</button>
+						</div>
+						{/* 滚动区:内容多时只滚这一块,「收起」钮因此永远贴侧栏底部。
+						    此前整条 .chapters 自己滚,工作区内容短时收起钮悬在半空
+						    (距底 504px)、章节多时又会被内容顶出视野(2026-09-18) */}
+						<div className="rail-scroll">
+						{railMode === "workspace" ? (
+							<div className="rail-ws">{workspace ?? <div className="ws-desc">工作区未接入。</div>}</div>
+						) : (
 						<>
 						{books.length >= 1 && (
 							<>
@@ -427,6 +465,9 @@ export function ChapterSidebar({
 						<button className="c-new" disabled={importing} onClick={() => fileRef.current?.click()}>
 							{importing ? "导入中…" : "＋ 导入书"}
 						</button>
+						</>
+						)}
+						</div>
 						</>
 					)}
 					{onToggleCollapse && (

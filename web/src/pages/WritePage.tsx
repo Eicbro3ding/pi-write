@@ -6,6 +6,7 @@ import { initialSessionState, messagesToEvents, RESET, sessionReducer } from "..
 import type {
 	AgentEventDto,
 	BookDetail,
+	BookFileEntryDto,
 	ChapterRef,
 	ContextUsageDto,
 	DraftStatus,
@@ -26,12 +27,15 @@ import { BranchBar } from "../components/BranchBar.tsx";
 import { ChapterSidebar } from "../components/ChapterSidebar.tsx";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
 import { DraftWorkspace } from "../components/DraftWorkspace.tsx";
+import { FilePreview } from "../components/FilePreview.tsx";
 import { FullScreenEditor } from "../components/FullScreenEditor.tsx";
 import { InputBar, type InputBarHandle } from "../components/InputBar.tsx";
 import { MessageList } from "../components/MessageList.tsx";
 import { NoticeBoard } from "../components/NoticeBoard.tsx";
+import { WorkspacePanel } from "../components/WorkspacePanel.tsx";
 import { newId } from "../components/id.ts";
 import { createEditCapture } from "../edit-capture.ts";
+import { parseToolArgs, pathFromArgs } from "../preview.ts";
 import type { Library } from "../library.ts";
 import { DUR, EASE } from "../motion.ts";
 import { useMediaQuery } from "../useMediaQuery.ts";
@@ -92,6 +96,10 @@ function EmptyBooks({ onCreate }: { onCreate: (title: string) => void }) {
  * 2026-08-10:批注功能退役并入编剧——选中正文自动预填编剧输入框(选区上下文),
  * 编辑走确认/免确认卡;主会话仅保留章节会话跟随与查看模式基础设施。
  * 书/章节切换通过现有 switchSession + RESET + 水合。
+ *
+ * classicMode(2026-09-18,单 agent):页面结构不变,只是——服务端这个会话已经是
+ * 带全量工具的写作 agent(不是受限编剧),界面去掉「编剧」这个身份标签,免得
+ * 用户以为旁边还有别人。舞台页在经典模式下不渲染(见 App);世界书页照常。
  */
 export function WritePage({
 	client,
@@ -99,6 +107,7 @@ export function WritePage({
 	library,
 	simplifiedTools,
 	autoConfirmEdits,
+	classicMode,
 }: {
 	client: ApiClient;
 	onHeader?: (h: HeaderInfo) => void;
@@ -108,6 +117,8 @@ export function WritePage({
 	simplifiedTools: boolean;
 	/** 编辑免确认:编剧编辑落盘即归档(设置页开关,缺省关闭 = 默认走待确认卡)。 */
 	autoConfirmEdits: boolean;
+	/** 经典模式(单 agent):AI 是带全量工具的写作 agent,标签与文案不再称「编剧」。 */
+	classicMode: boolean;
 }) {
 	// 书库状态来自 App 级 useLibrary;以 React setState 同形别名接入,
 	// 既有调用点(setBooks/setBookDetail/...)零改动,状态实际存于共享 hook
@@ -141,6 +152,16 @@ export function WritePage({
 	const [companionWidth, setCompanionWidth] = useState(380);
 	/** 全屏编辑器(设计 §5.4):非空时渲染覆盖层。 */
 	const [fsEditor, setFsEditor] = useState<{ file: string; title: string } | null>(null);
+	/** 左栏内容模式:章节(默认)/ 工作区(书目录文件清单)。 */
+	const [railMode, setRailMode] = useState<"chapters" | "workspace">("chapters");
+	/** 工作区文件预览(非空时在纸张区渲染只读覆盖层)。 */
+	const [filePreview, setFilePreview] = useState<BookFileEntryDto | null>(null);
+	/**
+	 * 本会话 agent 碰过的文件路径台账(工作区的「AI 过得」标记)。
+	 * 前端内存态:来源是 writer_event 的 tool_execution_start 参数里的 path,
+	 * 刷新/换窗口即空——要跨刷新保留就得在服务端落写入台账(2026-09-18 未做)。
+	 */
+	const [aiTouched, setAiTouched] = useState<ReadonlySet<string>>(() => new Set());
 	/** 服务端会话诊断(认证缺失等),type=error/warning 渲染为工作区顶部提示(设计 §4.3)。 */
 	const [diags, setDiags] = useState<Array<{ type: string; message: string }>>([]);
 	const [words, setWords] = useState(0);
@@ -259,6 +280,8 @@ export function WritePage({
 		confirmScopeRef.current = null;
 		writerCapture.clear();
 		writerAlignedRef.current = null;
+		// 换书/换章后旧文件预览已不属当前上下文:关掉(避免看的是别书的 notes)
+		setFilePreview(null);
 	}
 
 	/** 确认卡持久化与恢复:按「书+章节」归属——书/章节变化(含未经 resetChat 的
@@ -683,6 +706,21 @@ export function WritePage({
 		}
 	}
 
+	/**
+	 * 工作区点草稿条目:切回「章节」模式并选中该章。
+	 * 草稿不在工作区里开只读预览——编辑页本来就是它的编辑器(见 WorkspacePanel 注释)。
+	 * chapterId("ch01")→ 章节 file("ch01.jsonl")由 bookDetail 映射,映射不到就提示。
+	 */
+	function openChapterFromWorkspace(chapterId: string) {
+		const ch = (bookDetailRef.current?.chapters ?? []).find((c) => c.id === chapterId);
+		if (!ch) {
+			setError(`章节不存在: ${chapterId}`);
+			return;
+		}
+		setRailMode("chapters");
+		void selectChapter(ch);
+	}
+
 	/** 新建章节:创建 → 切换到新章节。代数防过期与 selectChapter 同。 */
 	async function newChapter() {
 		if (!bookDetail) return;
@@ -813,6 +851,10 @@ export function WritePage({
 	 *  与舞台导演预览卡同一套捕获逻辑,页面层只保留「确认卡」状态容器与锚点。 */
 	function handleWriterToolStart(e: Extract<AgentEventDto, { type: "tool_execution_start" }>) {
 		writerCapture.handleStart(e.toolCallId, e.toolName, e.args);
+		// 工作区台账:agent 这次工具动了哪个文件(带 path 参数的工具才有)。
+		// 只记路径不记工具名——面板要回答的是「哪些文件被动过」,不是「怎么动的」。
+		const path = pathFromArgs(parseToolArgs(e.args));
+		if (path) setAiTouched((prev) => (prev.has(path) ? prev : new Set(prev).add(path)));
 	}
 
 	/**
@@ -1071,6 +1113,18 @@ export function WritePage({
 				onToggleCollapse={toggleSidebarCollapsed}
 				drawerOpen={mobileDrawer === "chapters"}
 				onClose={() => setMobileDrawer(null)}
+				railMode={railMode}
+				onRailModeChange={setRailMode}
+				workspace={
+					<WorkspacePanel
+						client={client}
+						slug={bookDetail?.slug ?? null}
+						active={railMode === "workspace"}
+						aiTouched={aiTouched}
+						onOpenChapter={openChapterFromWorkspace}
+						onPreview={setFilePreview}
+					/>
+				}
 			/>
 			<section className="paper-zone">
 				{/* 服务端诊断(认证缺失等):error 红色、warning 琥珀,渲染在纸张顶部(设计 §4.3) */}
@@ -1139,6 +1193,16 @@ export function WritePage({
 						</div>
 					</>
 				)}
+				{/* 工作区文件预览:只读覆盖层压住纸张区(正文编辑器不卸载,
+				    关掉即回到原样;Esc 也可关)。图片/文本/二进制在 FilePreview 内分派 */}
+				{filePreview && bookDetail && (
+					<FilePreview
+						client={client}
+						slug={bookDetail.slug}
+						entry={filePreview}
+						onClose={() => setFilePreview(null)}
+					/>
+				)}
 			</section>
 			{/* AI 伙伴:编剧对话单栏(批注 2026-08-10 退役并入编剧);宽屏常驻右栏,窄屏右侧抽屉 */}
 			<>
@@ -1175,7 +1239,7 @@ export function WritePage({
 						    外观与舞台页 st-tabs 分段控件同款(data-active 驱动滑动指示器) */}
 						<div className="c-tabs" role="tablist" data-active={memoTab === "memo" ? "1" : "0"}>
 							<button type="button" className={memoTab === "chat" ? "c-tab active" : "c-tab"} onClick={() => changeMemoTab("chat")}>
-								编剧
+								{classicMode ? "AI" : "编剧"}
 							</button>
 							<button type="button" className={memoTab === "memo" ? "c-tab active" : "c-tab"} onClick={() => changeMemoTab("memo")}>
 								备忘录
@@ -1211,7 +1275,11 @@ export function WritePage({
 								onConfirmCard={confirmCard}
 								onRevertCard={(id) => void revertCard(id)}
 								onEdit={(m, newText) => void editWriterMessage(m, newText)}
-								emptyText="向编剧发一句话，讨论行文、取舍与节奏——修改正文会生成待确认卡，可随时回退；选中正文会自动填入选区"
+								emptyText={
+									classicMode
+										? "向 AI 说一句话——它带着全套工具,可以直接改稿、查字数、维护世界书;修改会生成待确认卡,可随时回退;选中正文会自动填入选区"
+										: "向编剧发一句话，讨论行文、取舍与节奏——修改正文会生成待确认卡，可随时回退；选中正文会自动填入选区"
+								}
 							/>
 							{writerCacheHitText && (
 								<div className="notice info" role="status">
@@ -1231,8 +1299,12 @@ export function WritePage({
 									const s = bookDetailRef.current?.slug;
 									if (s) void client.writerAbort(s);
 								}}
-								placeholder="向编剧说话…(/ 命令面板；选中正文自动填入，Ctrl+Enter 发送，Enter 换行)"
-								ariaLabel="向编剧说话"
+								placeholder={
+									classicMode
+										? "向 AI 说话…(/ 命令面板；选中正文自动填入，Ctrl+Enter 发送，Enter 换行)"
+										: "向编剧说话…(/ 命令面板；选中正文自动填入，Ctrl+Enter 发送，Enter 换行)"
+								}
+								ariaLabel={classicMode ? "向 AI 说话" : "向编剧说话"}
 								commands={writerSlashCommands}
 								context={writerSlashContext}
 								onCommandError={(msg) => setError(`命令失败: ${msg}`)}
