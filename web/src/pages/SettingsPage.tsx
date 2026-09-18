@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, type ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
-import type { PluginInfoDto, UserThemeInfo, WorldDataDto } from "../types.ts";
+import type { PluginInfoDto, ResolvedShellDto, ShellDialectDto, ShellKindDto, UserThemeInfo, WorldDataDto } from "../types.ts";
 import { NIGHT_THEME, themeLabelFromCss, themeStarterCss, USER_THEME_PREFIX, userThemeFile, type ThemeId } from "../themes.ts";
 import { applyTheme, currentTheme } from "../theme.ts";
 import { ProviderList } from "../components/ProviderList.tsx";
@@ -30,6 +30,17 @@ const SETTING_CATS = [
 type SettingCat = (typeof SETTING_CATS)[number]["id"];
 /** 插件动态分类 id(plugin:<id>);类型上并入 SettingCat 判断分支。 */
 const pluginCatPrefix = "plugin:";
+
+/**
+ * shell 解析结果的可读名(与服务端 src/shell-kind.ts 的 SHELL_DIALECT_LABELS 对齐;
+ * 前端不 import src/,故此处单列一份展示用文案)。
+ */
+const SHELL_DIALECT_TEXT: Record<ShellDialectDto, string> = {
+	none: "无 shell",
+	bash: "bash",
+	pwsh: "PowerShell 7(pwsh)",
+	powershell: "Windows PowerShell 5.1",
+};
 
 /**
  * 归一模型引用为 "provider/id"(与服务端 resolveCliModel 的 canonical 格式一致)。
@@ -93,6 +104,10 @@ export function SettingsPage({
 	onClassicModeChange,
 	shellEnabled,
 	onShellEnabledChange,
+	shellKind,
+	shellPath,
+	resolvedShell,
+	onShellSettingsChange,
 	onRerunSetup,
 }: {
 	client: ApiClient;
@@ -115,6 +130,17 @@ export function SettingsPage({
 	shellEnabled: boolean;
 	/** 开关外部命令(写服务端并重建会话;失败抛出由本页展示)。 */
 	onShellEnabledChange: (enabled: boolean) => Promise<void>;
+	/** shell 方言(bash / pwsh)。 */
+	shellKind: ShellKindDto;
+	/** 显式 shell 可执行文件路径;空 = 自动探测。 */
+	shellPath: string;
+	/** 服务端按当前设置解析出的实际方言/路径(选 pwsh 但没装时 dialect = "none")。 */
+	resolvedShell: ResolvedShellDto | null;
+	/** 更新方言/路径(写服务端并重建会话;失败抛出由本页展示)。 */
+	onShellSettingsChange: (
+		patch: { shellKind?: ShellKindDto; shellPath?: string },
+		prev: { shellKind: ShellKindDto; shellPath: string },
+	) => Promise<void>;
 	/** 重新运行首次启动配置向导(App 弹覆盖层;缺省不显示入口)。 */
 	onRerunSetup?: () => void;
 }) {
@@ -303,6 +329,39 @@ export function SettingsPage({
 			await onShellEnabledChange(enabled);
 		} catch (e) {
 			setActErr(`切换外部命令失败: ${friendlyError(e)}`);
+		}
+	}
+
+	/** shell 方言切换中(避免连点;下拉先乐观置位,失败回滚)。 */
+	const [shellBusy, setShellBusy] = useState(false);
+	/** 路径输入草稿:打字不逐键写服务端,点「保存路径」才提交。 */
+	const [shellPathDraft, setShellPathDraft] = useState(shellPath);
+	useEffect(() => {
+		setShellPathDraft(shellPath);
+	}, [shellPath]);
+
+	async function changeShellKind(kind: ShellKindDto) {
+		if (kind === shellKind) return;
+		setActErr(null);
+		setShellBusy(true);
+		try {
+			await onShellSettingsChange({ shellKind: kind }, { shellKind, shellPath });
+		} catch (e) {
+			setActErr(`切换 shell 方言失败: ${friendlyError(e)}`);
+		} finally {
+			setShellBusy(false);
+		}
+	}
+
+	async function saveShellPath() {
+		setActErr(null);
+		setShellBusy(true);
+		try {
+			await onShellSettingsChange({ shellPath: shellPathDraft.trim() }, { shellKind, shellPath });
+		} catch (e) {
+			setActErr(`保存 shell 路径失败: ${friendlyError(e)}`);
+		} finally {
+			setShellBusy(false);
 		}
 	}
 
@@ -887,6 +946,56 @@ export function SettingsPage({
 										</div>
 										<ToggleSwitch checked={shellEnabled} onChange={askShellEnable} ariaLabel="外部命令" />
 									</div>
+									<div className="s-pref-item">
+										<div className="s-pref-text">
+											<div className="s-pref-title">Shell 方言</div>
+											<div className="s-pref-desc">
+												决定 AI 实际执行哪种 shell 语法。Windows 上 bash 需要 Git Bash;选 PowerShell 则命令按 PowerShell 语法执行,系统提示词也会照实说明(工具名仍显示为 bash)。
+											</div>
+										</div>
+										<select
+											className="s-select"
+											value={shellKind}
+											disabled={shellBusy}
+											onChange={(e) => void changeShellKind(e.target.value as ShellKindDto)}
+										>
+											<option value="bash">bash</option>
+											<option value="pwsh">PowerShell</option>
+										</select>
+									</div>
+									<div className="s-pref-item">
+										<div className="s-pref-text">
+											<div className="s-pref-title">Shell 可执行文件路径</div>
+											<div className="s-pref-desc">
+												留空则自动探测:PowerShell 依次找 Program Files\PowerShell\7\pwsh.exe → PATH → 回退系统自带 Windows PowerShell 5.1(不支持 && / ||);bash 交给 pi 自带的探测链(Git Bash → PATH bash → /bin/bash)。也可指定 Cygwin/MSYS2 的 bash.exe。
+											</div>
+										</div>
+										<div style={{ display: "flex", gap: 8 }}>
+											<input
+												className="s-input"
+												style={{ minWidth: 220 }}
+												placeholder="留空 = 自动探测"
+												value={shellPathDraft}
+												onChange={(e) => setShellPathDraft(e.target.value)}
+											/>
+											<button
+												type="button"
+												className="btn-ghost"
+												disabled={shellBusy || shellPathDraft.trim() === shellPath}
+												onClick={() => void saveShellPath()}
+											>
+												保存
+											</button>
+										</div>
+									</div>
+									{(shellEnabled || shellKind === "pwsh") && resolvedShell && (
+										<div className="s-card-desc">
+											实际使用:{SHELL_DIALECT_TEXT[resolvedShell.dialect]}
+											{resolvedShell.path ? `(${resolvedShell.path})` : ""}
+											{resolvedShell.warning ? ` — ${resolvedShell.warning}` : ""}
+											{resolvedShell.dialect === "none" ? ";此时不会给 AI 放开 shell 工具" : ""}
+										</div>
+									)}
 									{shellConfirm && (
 										<div className="s-plugin-trust-confirm">
 											<div className="s-plugin-trust-warn">

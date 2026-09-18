@@ -2,13 +2,28 @@ import { describe, expect, it } from "vitest";
 import { buildWriterSystemPrompt } from "../src/prompt.ts";
 
 describe("buildWriterSystemPrompt", () => {
-	it("无外部工具时只含基础提示,shell 行按 hasBash 注入", () => {
-		const web = buildWriterSystemPrompt([], false);
+	it("无外部工具时只含基础提示,shell 行按方言注入", () => {
+		const web = buildWriterSystemPrompt([], "none");
 		expect(web).toContain("你**没有** \\`bash\\`");
 		expect(web).not.toContain("外部工具(MCP)");
-		const tui = buildWriterSystemPrompt([], true);
+		const tui = buildWriterSystemPrompt([], "bash");
 		expect(tui).toContain("你可以使用 \\`bash\\`");
 		expect(tui).not.toContain("你**没有** \\`bash\\`");
+	});
+
+	it("pwsh 方言:点明实际是 PowerShell、工具名仍叫 bash,并说明退出码折算", () => {
+		const prompt = buildWriterSystemPrompt([], "pwsh");
+		expect(prompt).toContain("PowerShell 7(pwsh)");
+		// 工具名仍是 bash(schema 由 vendor 固定),必须让模型知道别写 bash 语法
+		expect(prompt).toContain("\\`bash\\` 工具");
+		expect(prompt).toContain("exit $LASTEXITCODE");
+		expect(prompt).not.toContain("你**没有** \\`bash\\`");
+	});
+
+	it("Windows PowerShell 5.1:额外说明不支持 && / ||", () => {
+		const prompt = buildWriterSystemPrompt([], "powershell");
+		expect(prompt).toContain("Windows PowerShell 5.1");
+		expect(prompt).toContain("`&&`/`||`");
 	});
 
 	it("外部工具清单追加在文末,名称+单行描述", () => {
@@ -17,7 +32,7 @@ describe("buildWriterSystemPrompt", () => {
 				{ name: "tavily_search", description: "网络搜索,查资料用" },
 				{ name: "fetch_url", description: "抓取网页\n支持多行描述" },
 			],
-			false,
+			"none",
 		);
 		expect(prompt).toContain("# 外部工具(MCP)");
 		expect(prompt).toContain("`tavily_search` — 网络搜索,查资料用");
@@ -27,7 +42,7 @@ describe("buildWriterSystemPrompt", () => {
 	});
 
 	it("占位符被替换,不残留 {SHELL_LINE}", () => {
-		const prompt = buildWriterSystemPrompt([], false);
+		const prompt = buildWriterSystemPrompt([], "none");
 		expect(prompt).not.toContain("{SHELL_LINE}");
 	});
 });

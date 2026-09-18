@@ -222,3 +222,39 @@ describe("syncStableContext(稳定块指纹注入,2026-08-22 缓存优化)", () 
 		expect(fake.sendMessage).toHaveBeenCalledWith("hi");
 	});
 });
+
+describe("setShell(shell 方言,2026-09-18)", () => {
+	it("变化时释放已建会话(下次对话按新装配重建);无变化为 no-op", async () => {
+		const fake = makeFakeHost();
+		const fake2 = makeFakeHost();
+		const createHost = vi.fn(async () => (createHost.mock.calls.length === 1 ? fake : fake2) as never);
+		const host = new WriterHost({ createHost, shellDialect: "bash", shellPath: null });
+		await host.chat("shell-book", "hi", "ch01.jsonl");
+		expect(createHost).toHaveBeenCalledTimes(1);
+		// 无变化:不该释放(否则每次 PUT 都白扔会话)
+		await host.setShell({ enabled: false, dialect: "bash", path: null });
+		expect(fake.dispose).not.toHaveBeenCalled();
+		expect(createHost).toHaveBeenCalledTimes(1);
+		// 换成 pwsh:释放已建会话;下次对话用新装配重建
+		await host.setShell({ enabled: true, dialect: "pwsh", path: "C:\\pwsh.exe" });
+		expect(fake.dispose).toHaveBeenCalledTimes(1);
+		await host.chat("shell-book", "hi again", "ch01.jsonl");
+		expect(createHost).toHaveBeenCalledTimes(2);
+		// 同一个会话键复用新宿主;仅路径变化也释放(换了可执行文件 = 换了 shell)
+		await host.chat("shell-book", "hi third", "ch01.jsonl");
+		expect(createHost).toHaveBeenCalledTimes(2);
+		await host.setShell({ enabled: true, dialect: "pwsh", path: "D:\\pwsh.exe" });
+		expect(fake2.dispose).toHaveBeenCalledTimes(1);
+	});
+
+	it("编剧(固定角色提示)在放开 shell 后追加方言行,未放开时不追加", () => {
+		const shellOff = new WriterHost({ createHost: async () => makeFakeHost() as never });
+		const off = (shellOff as unknown as { editorSystemPrompt(): string }).editorSystemPrompt();
+		expect(off).not.toContain("外部命令");
+
+		const shellOn = new WriterHost({ createHost: async () => makeFakeHost() as never, enableShell: true, shellDialect: "pwsh" });
+		const on = (shellOn as unknown as { editorSystemPrompt(): string }).editorSystemPrompt();
+		expect(on).toContain("# 外部命令");
+		expect(on).toContain("PowerShell 7(pwsh)");
+	});
+});

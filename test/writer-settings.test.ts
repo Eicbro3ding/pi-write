@@ -29,8 +29,14 @@ afterEach(() => {
 });
 
 describe("parseWriterSettings", () => {
-	it("缺省关闭经典模式", () => {
-		expect(defaultWriterSettings()).toEqual({ version: WRITER_SETTINGS_VERSION, classicMode: false, enableShell: false });
+	it("缺省关闭经典模式,shell 方言为 bash、路径为空(自动)", () => {
+		expect(defaultWriterSettings()).toEqual({
+			version: WRITER_SETTINGS_VERSION,
+			classicMode: false,
+			enableShell: false,
+			shellKind: "bash",
+			shellPath: "",
+		});
 	});
 
 	it("版本不符/非对象/字段类型错 → 回退默认值", () => {
@@ -46,6 +52,8 @@ describe("parseWriterSettings", () => {
 			version: WRITER_SETTINGS_VERSION,
 			classicMode: true,
 			enableShell: false,
+			shellKind: "bash",
+			shellPath: "",
 		});
 	});
 
@@ -55,6 +63,20 @@ describe("parseWriterSettings", () => {
 		// 旧文件没有这个字段:读出来必须是关闭(危险开关不能因为缺字段而默认打开)
 		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION }).enableShell).toBe(false);
 	});
+
+	it("shellKind 只认 bash/pwsh,拼错或旧文件缺字段 → 回落 bash", () => {
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, shellKind: "pwsh" }).shellKind).toBe("pwsh");
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, shellKind: "bash" }).shellKind).toBe("bash");
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, shellKind: "zsh" }).shellKind).toBe("bash");
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, shellKind: 7 }).shellKind).toBe("bash");
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION }).shellKind).toBe("bash");
+	});
+
+	it("shellPath 去空白、非字符串回落空、超长截断", () => {
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, shellPath: "  C:\\pwsh.exe  " }).shellPath).toBe("C:\\pwsh.exe");
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, shellPath: 42 }).shellPath).toBe("");
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, shellPath: "x".repeat(900) }).shellPath).toHaveLength(500);
+	});
 });
 
 describe("settings.json 读写", () => {
@@ -63,11 +85,12 @@ describe("settings.json 读写", () => {
 	});
 
 	it("写入后落盘为 JSON 且父目录自动创建", async () => {
-		await writeWriterSettings({ version: WRITER_SETTINGS_VERSION, classicMode: true, enableShell: false });
+		const written = { version: WRITER_SETTINGS_VERSION, classicMode: true, enableShell: false, shellKind: "pwsh" as const, shellPath: "C:\\pwsh.exe" };
+		await writeWriterSettings(written);
 		const path = getWriterSettingsPath();
 		expect(path).toBe(join(tmp, "settings.json"));
-		expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: WRITER_SETTINGS_VERSION, classicMode: true, enableShell: false });
-		await expect(readWriterSettings()).resolves.toEqual({ version: WRITER_SETTINGS_VERSION, classicMode: true, enableShell: false });
+		expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(written);
+		await expect(readWriterSettings()).resolves.toEqual(written);
 	});
 
 	it("损坏文件 → 默认值", async () => {
@@ -76,12 +99,22 @@ describe("settings.json 读写", () => {
 	});
 
 	it("updateWriterSettings 只改传入字段", async () => {
-		await writeWriterSettings({ version: WRITER_SETTINGS_VERSION, classicMode: true, enableShell: false });
+		await writeWriterSettings({ version: WRITER_SETTINGS_VERSION, classicMode: true, enableShell: false, shellKind: "bash", shellPath: "" });
 		const same = await updateWriterSettings({});
 		expect(same.classicMode).toBe(true);
 		const off = await updateWriterSettings({ classicMode: false });
 		expect(off.classicMode).toBe(false);
-		await expect(readWriterSettings()).resolves.toEqual({ version: WRITER_SETTINGS_VERSION, classicMode: false, enableShell: false });
+		await expect(readWriterSettings()).resolves.toEqual({ version: WRITER_SETTINGS_VERSION, classicMode: false, enableShell: false, shellKind: "bash", shellPath: "" });
+	});
+
+	it("shell 方言与路径可单独更新(与经典模式/外部命令互不干扰)", async () => {
+		await updateWriterSettings({ classicMode: true });
+		const withPwsh = await updateWriterSettings({ shellKind: "pwsh" });
+		expect(withPwsh).toMatchObject({ classicMode: true, shellKind: "pwsh", shellPath: "" });
+		const withPath = await updateWriterSettings({ shellPath: "C:\\Program Files\\PowerShell\\7\\pwsh.exe" });
+		expect(withPath).toMatchObject({ classicMode: true, shellKind: "pwsh", shellPath: "C:\\Program Files\\PowerShell\\7\\pwsh.exe" });
+		const backToBash = await updateWriterSettings({ shellKind: "bash", shellPath: "" });
+		expect(backToBash).toMatchObject({ classicMode: true, shellKind: "bash", shellPath: "" });
 	});
 
 	it("两个字段互不干扰(classicMode 与 enableShell 各自独立)", async () => {

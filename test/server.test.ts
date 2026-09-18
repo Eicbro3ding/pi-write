@@ -1526,8 +1526,8 @@ describe("WriterServer · /api/settings(全局设置 · 经典模式)", () => {
 	let base = "";
 	/** setClassicMode 调用记录(经典模式切换必须即时应用到 WriterHost)。 */
 	const classicCalls: boolean[] = [];
-	/** setShellEnabled 调用记录(外部命令开关同理)。 */
-	const shellCalls: boolean[] = [];
+	/** setShell 调用记录(外部命令开关 + shell 方言)。 */
+	const shellCalls: Array<{ enabled: boolean; dialect: string; path: string | null }> = [];
 	/** SSE 广播帧(验证 settings_changed 会推给其他窗口)。 */
 	const events: Array<{ type: string; settings?: { classicMode: boolean; enableShell: boolean } }> = [];
 
@@ -1541,8 +1541,8 @@ describe("WriterServer · /api/settings(全局设置 · 经典模式)", () => {
 			setClassicMode: async (enabled: boolean) => {
 				classicCalls.push(enabled);
 			},
-			setShellEnabled: async (enabled: boolean) => {
-				shellCalls.push(enabled);
+			setShell: async (next: { enabled: boolean; dialect: string; path: string | null }) => {
+				shellCalls.push(next);
 			},
 		};
 		server = new WriterServer({
@@ -1634,11 +1634,49 @@ describe("WriterServer · /api/settings(全局设置 · 经典模式)", () => {
 		expect(await res.json()).toMatchObject({ settings: { enableShell: true } });
 		// 每次 PUT 都会把当前值重新应用一遍(幂等,setXxx 内部比对后是 no-op),
 		// 所以断言看最后一次调用,而不是整个序列
-		expect(shellCalls.at(-1)).toBe(true);
+		expect(shellCalls.at(-1)).toMatchObject({ enabled: true });
 		// 两个字段互不干扰:只传 enableShell 不该把 classicMode 带跑
 		expect(classicCalls.at(-1)).toBe(false);
 		const persisted = JSON.parse(readFileSync(join(getWriterDir(), "settings.json"), "utf8")) as { enableShell: boolean };
 		expect(persisted.enableShell).toBe(true);
+	});
+
+	it("PUT shellKind/shellPath:落盘并解析出实际方言(localhost 上 pwsh 可能不存在 → none)", async () => {
+		const res = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ shellKind: "pwsh" }),
+		});
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { settings: { shellKind: string }; shell: { dialect: string; warning?: string } };
+		expect(body.settings.shellKind).toBe("pwsh");
+		// 断言的是"解析器跑过了且给了合法方言",而不是本机一定装了 pwsh(CI 上没有)
+		expect(["pwsh", "powershell", "none"]).toContain(body.shell.dialect);
+		expect(shellCalls.at(-1)).toMatchObject({ dialect: body.shell.dialect });
+		const persisted = JSON.parse(readFileSync(join(getWriterDir(), "settings.json"), "utf8")) as { shellKind: string };
+		expect(persisted.shellKind).toBe("pwsh");
+		// 还原:避免影响后续用例(同一份 settings.json)
+		await fetch(`${base}/api/settings`, { method: "PUT", headers: json, body: JSON.stringify({ shellKind: "bash", shellPath: "" }) });
+	});
+
+	it("非法 shellKind 返回 400", async () => {
+		const res = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ shellKind: "zsh" }),
+		});
+		expect(res.status).toBe(400);
+		expect(await res.json()).toMatchObject({ error: { code: "bad_request" } });
+	});
+
+	it("非字符串 shellPath 返回 400", async () => {
+		const res = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ shellPath: 5 }),
+		});
+		expect(res.status).toBe(400);
+		expect(await res.json()).toMatchObject({ error: { code: "bad_request" } });
 	});
 
 	it("非布尔 enableShell 返回 400", async () => {

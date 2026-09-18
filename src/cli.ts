@@ -38,6 +38,8 @@ import { writerExtension } from "./extension.ts";
 import { McpManager } from "./mcp/manager.ts";
 import { loadPlugins } from "./plugin-loader.ts";
 import { buildWriterSystemPrompt } from "./prompt.ts";
+import { resolveWriterShell } from "./shell-kind.ts";
+import { readWriterSettings } from "./writer-settings.ts";
 import { applyCacheRetention } from "./config.ts";
 
 interface CliOptions {
@@ -374,6 +376,12 @@ async function main(): Promise<void> {
 
 	const agentDir = getAgentDir();
 	const skillsDir = resolveSkillsDir();
+	// shell 方言(设置里的 shellKind/shellPath):TUI 的 shell 恒开(enableShell 是 web 侧的
+	// 风险开关),但方言跟随设置——选了 pwsh 就按 pwsh 叙述并交给 vendor 执行;
+	// 解析不到(如选了 pwsh 但本机没装)→ 按"无 shell"装配,提示词不会宣称有 shell。
+	const shell = resolveWriterShell(await readWriterSettings());
+	const shellOn = shell.dialect !== "none";
+	if (shell.warning) process.stderr.write(`${shell.warning}\n`);
 	const initialSessionManager = SessionManager.open(chapterAbsPath, sessionsDir, bookDir);
 	// MCP 服务器:与 web 模式共用 ~/.pi/writer/agent/mcp.json;启动时连接一次,
 	// 工具经 customTools 注入(配置变更需重启 TUI 生效)
@@ -388,11 +396,11 @@ async function main(): Promise<void> {
 		agentDir,
 		readOnlyDirs: [skillsDir],
 		additionalSkillPaths: [skillsDir],
-		// 系统提示动态生成:MCP 外部工具清单追加在文末,TUI 有 bash
+		// 系统提示动态生成:MCP 外部工具清单追加在文末,shell 行按方言注入
 		systemPromptOverride: () =>
 			buildWriterSystemPrompt(
 				mcpManager.getTools().map((t) => ({ name: t.name, description: t.description })),
-				true,
+				shell.dialect,
 			),
 		extensionFactories: [writerExtension],
 		pluginFactories,
@@ -402,7 +410,11 @@ async function main(): Promise<void> {
 		topP: opts.topP,
 		// 显式激活内置全量工具(不再用 tools 白名单——白名单会把 MCP customTools 滤掉,
 		// 见 src/web.ts webExcludeTools 注释;word_count 等扩展工具自动激活)
-		initialActiveToolNames: ["read", "bash", "write", "edit", "grep", "find", "ls"],
+		initialActiveToolNames: ["read", "write", "edit", "grep", "find", "ls", ...(shellOn ? ["bash"] : [])],
+		// shell 方言:path 有值(pwsh/自定义)则写进 vendor settings;null = 清空让 vendor
+		// 走 bash 探测链(选了 bash 却留着上次的 pwsh 路径 = 提示词说 bash、实际跑 pwsh)
+		shellPath: shell.path ?? null,
+		...(shellOn ? {} : { excludeTools: ["bash"] }),
 		customTools: mcpManager.getTools(),
 	});
 

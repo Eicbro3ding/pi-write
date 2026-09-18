@@ -18,6 +18,7 @@ import {
 	setSimplifiedTools as persistSimplifiedTools,
 	simplifiedToolsEnabled,
 } from "./settings.ts";
+import type { ResolvedShellDto, ShellKindDto, WriterSettingsDto } from "./types.ts";
 
 /** 顶层视图:舞台(默认,导演讨论室/演出现场)| 编辑(正文 + 编剧)| 世界书 | 设置。 */
 type View = "stage" | "edit" | "world" | "settings";
@@ -96,19 +97,54 @@ export function App() {
 	const applyShellEnabled = useCallback((enabled: boolean) => {
 		setShellEnabledState(enabled);
 	}, []);
+	/**
+	 * shell 方言(bash / pwsh)与显式路径:同样以服务端为准(它决定 agent 实际执行
+	 * 哪种 shell 与提示词怎么叙述)。`resolvedShell` 是服务端解析结果——选了 pwsh 但
+	 * 本机没装时 dialect 为 "none",设置页据此给出提示。
+	 */
+	const [shellKind, setShellKindState] = useState<ShellKindDto>("bash");
+	const [shellPath, setShellPathState] = useState("");
+	const [resolvedShell, setResolvedShell] = useState<ResolvedShellDto | null>(null);
+	const applyShellSettings = useCallback((settings: WriterSettingsDto, resolved?: ResolvedShellDto) => {
+		setShellKindState(settings.shellKind);
+		setShellPathState(settings.shellPath);
+		if (resolved) setResolvedShell(resolved);
+	}, []);
+	/**
+	 * 更新 shell 方言/路径:先乐观置位(下拉即时响应),再写服务端;服务端是权威值,
+	 * 以它的解析结果回写(失败回滚到调用方给的 prev 并抛给调用方展示错误)。
+	 * 服务端写入会释放已建会话,下次对话按新装配重建(agent 实际执行的 shell 与
+	 * 提示词里的方言说明都在装配时定下),所以这一步不能只改本地。
+	 */
+	const changeShellSettings = useCallback(
+		async (patch: { shellKind?: ShellKindDto; shellPath?: string }, prev: { shellKind: ShellKindDto; shellPath: string }) => {
+			setShellKindState(patch.shellKind ?? prev.shellKind);
+			setShellPathState(patch.shellPath ?? prev.shellPath);
+			try {
+				const { settings, shell } = await client.putSettings(patch);
+				applyShellSettings(settings, shell);
+			} catch (e) {
+				setShellKindState(prev.shellKind);
+				setShellPathState(prev.shellPath);
+				throw e;
+			}
+		},
+		[client, applyShellSettings],
+	);
 	const changeShellEnabled = useCallback(
 		async (v: boolean) => {
 			const prev = shellEnabled;
 			applyShellEnabled(v);
 			try {
-				const { settings } = await client.putSettings({ enableShell: v });
+				const { settings, shell } = await client.putSettings({ enableShell: v });
 				applyShellEnabled(settings.enableShell);
+				applyShellSettings(settings, shell);
 			} catch (e) {
 				applyShellEnabled(prev);
 				throw e;
 			}
 		},
-		[client, shellEnabled, applyShellEnabled],
+		[client, shellEnabled, applyShellEnabled, applyShellSettings],
 	);
 	/**
 	 * 切换经典模式:先本地落盘 + 置位(开关即时响应),再写服务端;服务端是权威值,
@@ -156,10 +192,11 @@ export function App() {
 		let cancelled = false;
 		client
 			.getSettings()
-			.then(({ settings }) => {
+			.then(({ settings, shell }) => {
 				if (cancelled) return;
 				applyClassicMode(settings.classicMode);
 				applyShellEnabled(settings.enableShell);
+				applyShellSettings(settings, shell);
 			})
 			.catch(() => {
 				/* 读取失败:沿用本地缓存 */
@@ -168,12 +205,13 @@ export function App() {
 			if (e.type !== "settings_changed") return;
 			applyClassicMode(e.settings.classicMode);
 			applyShellEnabled(e.settings.enableShell);
+			applyShellSettings(e.settings);
 		});
 		return () => {
 			cancelled = true;
 			unsub();
 		};
-	}, [client, applyClassicMode, applyShellEnabled]);
+	}, [client, applyClassicMode, applyShellEnabled, applyShellSettings]);
 
 	// 插件前端 JS:trusted 插件的 frontend.mjs 经 <script module> 注入;状态变化(启停)
 	// 由设置页操作驱动,此处仅挂载+定期对账(30s);插件脚本错误静默不影响主界面。
@@ -328,6 +366,10 @@ export function App() {
 							onClassicModeChange={changeClassicMode}
 							shellEnabled={shellEnabled}
 							onShellEnabledChange={changeShellEnabled}
+							shellKind={shellKind}
+							shellPath={shellPath}
+							resolvedShell={resolvedShell}
+							onShellSettingsChange={changeShellSettings}
 							onRerunSetup={() => setRerunWizard(true)}
 						/>
 					</section>

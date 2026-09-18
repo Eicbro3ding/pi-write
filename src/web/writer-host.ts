@@ -48,7 +48,8 @@ import {
 import { ensureWorld } from "../world-data.ts";
 import { buildStorylineView, constraintTargetMatches, NOTICE_INJECT_LIMIT } from "../world-context.ts";
 import { loadPromptText } from "../prompts.ts";
-import { buildWriterSystemPrompt } from "../prompt.ts";
+import { buildWriterSystemPrompt, writerShellLine } from "../prompt.ts";
+import type { ShellDialect } from "../shell-kind.ts";
 import { wordCountTool, worldFindTool, worldUpdateTool } from "../tools.ts";
 import { SessionHost } from "./session-host.ts";
 import { formatStageLines } from "../stage/assembler.ts";
@@ -86,6 +87,13 @@ export interface WriterHostOptions {
 	 * 靠"命令与输出实时可见"来约束(见 web/src/store.ts 的 tool_execution_update)。
 	 */
 	enableShell?: boolean;
+	/**
+	 * shell 方言(enableShell 打开时实际执行哪种 shell;见 src/shell-kind.ts)。
+	 * 缺省 "none" = 按无 shell 装配(提示词不会宣称有 shell)。
+	 */
+	shellDialect?: ShellDialect;
+	/** 显式 shell 可执行文件路径(string = 写进 vendor settings;null = 清空走 bash 探测链)。 */
+	shellPath?: string | null;
 	/** 测试注入:自定义宿主工厂(缺省创建真实会话)。 */
 	createHost?: (slug: string) => Promise<SessionHost>;
 }
@@ -129,6 +137,10 @@ export class WriterHost {
 	private classicMode: boolean;
 	/** 外部命令(bash)是否放开;切换时同样释放全部会话。 */
 	private shellEnabled: boolean;
+	/** shell 方言(提示词按它叙述;enableShell 关闭时为 "none")。 */
+	private shellDialect: ShellDialect;
+	/** 显式 shell 路径(string = 写进 vendor settings;null = 清空)。 */
+	private shellPath: string | null;
 
 	constructor(options: WriterHostOptions) {
 		this.options = options;
@@ -136,6 +148,8 @@ export class WriterHost {
 		this.topP = options.topP;
 		this.classicMode = options.classicMode ?? false;
 		this.shellEnabled = options.enableShell ?? false;
+		this.shellDialect = options.shellDialect ?? "none";
+		this.shellPath = options.shellPath ?? null;
 	}
 
 	/**
@@ -149,12 +163,20 @@ export class WriterHost {
 	}
 
 	/**
-	 * 开关外部命令(bash)。变化时释放全部会话:bash 的有无改变工具集与系统提示
-	 * (提示词末尾的 shell 行按 hasBash 注入),旧会话不带新工具。
+	 * 开关外部命令(bash)并设置 shell 方言。任一变化都释放全部会话:shell 的有无
+	 * 改变工具集,tool 的方言改变系统提示(shell 行按方言注入),旧会话带的是老装配。
+	 *
+	 * @param next.enabled - 是否放开外部命令。
+	 * @param next.dialect - 实际生效的方言("none" = 按无 shell 装配)。
+	 * @param next.path - 显式 shell 路径;null = 清空(切回 bash 时必须清,否则
+	 *   vendor 还留着上次的 pwsh 路径:提示词说 bash、实际跑 pwsh)。
 	 */
-	async setShellEnabled(enabled: boolean): Promise<void> {
-		if (this.shellEnabled === enabled) return;
-		this.shellEnabled = enabled;
+	async setShell(next: { enabled: boolean; dialect: ShellDialect; path: string | null }): Promise<void> {
+		const changed = this.shellEnabled !== next.enabled || this.shellDialect !== next.dialect || this.shellPath !== next.path;
+		if (!changed) return;
+		this.shellEnabled = next.enabled;
+		this.shellDialect = next.dialect;
+		this.shellPath = next.path;
 		await this.disposeAll();
 	}
 
@@ -218,6 +240,16 @@ export class WriterHost {
 		return host;
 	}
 
+	/**
+	 * 常驻编剧的系统提示。编剧提示词是固定角色文本(prompts/writer-editor.md,无占位符),
+	 * 但放开外部命令后编剧**也**拿得到 shell 工具——不说清方言它会写 bash 语法。
+	 * 所以启用了 shell 就在文末追加同一行方言说明(与写作 agent 用的是同一份文案)。
+	 */
+	private editorSystemPrompt(): string {
+		if (!this.shellEnabled || this.shellDialect === "none") return EDITOR_PROMPT;
+		return `${EDITOR_PROMPT}\n\n# 外部命令\n\n${writerShellLine(this.shellDialect)}`;
+	}
+
 	/** 会话装配工厂(与 stage 角色同款样板;context 钩子注入本会话章节/世界书/文风采样)。
 	 *  经典模式走「写作 agent」装配(全量工具 + writer-main 提示,见类注释)。 */
 	private roleFactory(slug: string, chapterFile: string | null): CreateAgentSessionRuntimeFactory {
@@ -237,8 +269,12 @@ export class WriterHost {
 			readOnlyDirs: [resolveSkillsDir()],
 			draftFile,
 			systemPromptOverride: this.classicMode
-				? () => buildWriterSystemPrompt(mcpTools.map((t) => ({ name: t.name, description: t.description })), this.shellEnabled)
-				: () => EDITOR_PROMPT,
+				? () =>
+						buildWriterSystemPrompt(
+							mcpTools.map((t) => ({ name: t.name, description: t.description })),
+							this.shellEnabled ? this.shellDialect : "none",
+						)
+				: () => this.editorSystemPrompt(),
 			extensionFactories: [
 				{
 					name: `writer-resident-${slug}-${writerSessionFile(chapterFile)}`,
@@ -255,12 +291,17 @@ export class WriterHost {
 			temperature,
 			topP,
 			// bash:web 默认禁用(web 子集语义,见 web.ts webExcludeTools);设置里
-			// 放开「外部命令」后不再禁用,并在下面补进激活名单
-			excludeTools: this.shellEnabled ? [] : ["bash"],
+			// 放开「外部命令」后不再禁用,并在下面补进激活名单。
+			// 方言选 pwsh 而本机没装时 shellDialect = none:此时不放行 bash(否则模型
+			// 会去调一个必然报错的工具),提示词同样按无 shell 叙述。
+			excludeTools: this.shellEnabled && this.shellDialect !== "none" ? [] : ["bash"],
 			initialActiveToolNames: [
 				...(this.classicMode ? CLASSIC_ACTIVE_TOOLS : ["write", "read"]),
-				...(this.shellEnabled ? ["bash"] : []),
+				...(this.shellEnabled && this.shellDialect !== "none" ? ["bash"] : []),
 			],
+			// shell 方言路径(见 session-factory 的 shellPath):pwsh → 写 vendor settings;
+			// null → 清空让 vendor 走 bash 探测链
+			shellPath: this.shellPath,
 			// 编剧:world_find(只读检索世界书),无 world_update——长篇小说条目多时,
 			// read 全文翻找成本高(2026-08-12,审计后补);世界书建议写进 advice.md。
 			// 经典模式(单一写作 agent):补上 word_count 与 world_update,即完整写作工具集。

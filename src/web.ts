@@ -29,6 +29,7 @@ import { loadPlugins } from "./plugin-loader.ts";
 import { createSessionRuntimeFactory } from "./session-factory.ts";
 import { buildWriterSystemPrompt } from "./prompt.ts";
 import { readWriterSettings } from "./writer-settings.ts";
+import { resolveWriterShell } from "./shell-kind.ts";
 import { WriterServer } from "./web/server.ts";
 import { SessionHost } from "./web/session-host.ts";
 import { StageHost } from "./web/stage-host.ts";
@@ -221,10 +222,16 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 
 	const agentDir = getAgentDir();
 	const skillsDir = resolveSkillsDir();
-	// 服务端全局设置(经典模式 / 外部命令):必须在装配 createRuntime 之前读——
-	// 工具集与系统提示(有没有 bash)都在这里定下来,晚读会让开关"下次重启才生效"
+	// 服务端全局设置(经典模式 / 外部命令 / shell 方言):必须在装配 createRuntime
+	// 之前读——工具集与系统提示(有没有 shell、哪种方言)都在这里定下来,
+	// 晚读会让开关"下次重启才生效"
 	const writerSettings = await readWriterSettings();
 	const shellEnabled = writerSettings.enableShell;
+	// 方言解析(见 shell-kind.ts):选 pwsh 但本机没装 → dialect none,按"无 shell"装配,
+	// 提示词不会宣称有 shell(否则模型会去调一个必然报错的工具)
+	const resolvedShell = resolveWriterShell(writerSettings);
+	const shellOn = shellEnabled && resolvedShell.dialect !== "none";
+	if (shellEnabled && resolvedShell.warning) process.stderr.write(`${resolvedShell.warning}\n`);
 	const sessionManager = SessionManager.open(chapterAbsPath, sessionsDir, bookDir);
 	// MCP 服务器:读 mcp.json → 连接各 server → 工具定义注入 createRuntime 的
 	// customTools(单个 server 失败隔离,状态经 /api/mcp 展示;配置变更后由
@@ -248,7 +255,7 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 		systemPromptOverride: () =>
 			buildWriterSystemPrompt(
 				mcpManager.getTools().map((t) => ({ name: t.name, description: t.description })),
-				shellEnabled,
+				shellOn ? resolvedShell.dialect : "none",
 			),
 		extensionFactories: [writerExtension],
 		pluginFactories,
@@ -256,10 +263,13 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 		thinkingLevel: opts.thinking as ThinkingLevel | undefined,
 		temperature: opts.temperature,
 		topP: opts.topP,
+		// shell 方言:path 有值(pwsh/自定义)则写进 vendor settings;null = 清空让 vendor
+		// 走 bash 探测链(设置里从 pwsh 切回 bash 时必须清,否则提示词说 bash、实际跑 pwsh)
+		shellPath: resolvedShell.path ?? null,
 		// 黑名单禁 bash(web 子集;设置里放开「外部命令」后不再禁),显式激活内置工具;
 		// 白名单会滤掉 MCP customTools
-		excludeTools: webExcludeTools(process.env, { shell: shellEnabled }),
-		initialActiveToolNames: webActiveTools(process.env, { shell: shellEnabled }),
+		excludeTools: webExcludeTools(process.env, { shell: shellOn }),
+		initialActiveToolNames: webActiveTools(process.env, { shell: shellOn }),
 		// MCP 工具(经 customTools 注册;配置为空时是空数组,行为与之前一致)
 		customTools: mcpManager.getTools(),
 	});
@@ -283,6 +293,9 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 		getMcpTools: () => mcpManager.getTools(),
 		classicMode: writerSettings.classicMode,
 		enableShell: shellEnabled,
+		// shell 方言(选 pwsh 时实际执行 PowerShell,提示词按方言叙述);解析不到则按无 shell
+		shellDialect: shellOn ? resolvedShell.dialect : "none",
+		shellPath: resolvedShell.path ?? null,
 	});
 	// 舞台区宿主:每本书每个章节一个编排器,惰性创建;model/thinking 复用 web 的 CLI 选项
 	// (stage 端点未装配时由 server 侧 404,与 MCP 同款);writerHost 注入用于收幕委托

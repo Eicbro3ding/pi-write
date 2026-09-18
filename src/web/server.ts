@@ -41,6 +41,7 @@ import {
 	type SetupState,
 } from "../setup.ts";
 import { readWriterSettings, updateWriterSettings, type WriterSettings } from "../writer-settings.ts";
+import { resolveWriterShell } from "../shell-kind.ts";
 import { BOOK_FILE_GROUPS, classifyBookFileKind, isWorkspaceFile, listBookFiles, readWorkspaceText, statWorkspaceFile } from "../book-files.ts";
 import { MAX_ZIP_BYTES, exportBookZip, readImportZip, type BookZipImport } from "./book-zip.ts";
 import { ensureWorld, newId, readWorldEditRecord, saveWorld, WorldValidationError, type WorldData } from "../world-data.ts";
@@ -2065,47 +2066,69 @@ export class WriterServer {
 	/**
 	 * GET /api/settings:全局设置(~/.pi/writer/settings.json)。前端启动时对账
 	 * 本地缓存(经典模式决定顶栏导航显示哪几页),多窗口/换浏览器都读同一份。
+	 *
+	 * 附带 `shell` = 当前设置解析出的**实际**方言与路径(见 src/shell-kind.ts):
+	 * 选了 pwsh 但本机没装时 dialect 为 "none" 并带 warning,设置页据此提示,
+	 * 而不是等模型调 shell 报错才发现。
 	 */
 	private async handleGetSettings(ctx: RouteContext): Promise<void> {
 		const settings = await readWriterSettings();
-		this.send(ctx.res, 200, { settings });
+		this.send(ctx.res, 200, { settings, shell: resolveWriterShell(settings) });
 	}
 
 	/**
-	 * PUT /api/settings {classicMode?, enableShell?}:更新设置(只收白名单字段,未知字段忽略)。
+	 * PUT /api/settings {classicMode?, enableShell?, shellKind?, shellPath?}:
+	 * 更新设置(只收白名单字段,未知字段忽略)。
 	 *
-	 * 这两个开关都改变**服务端 agent 装配**(经典模式换提示词与工具集;外部命令放开 bash),
-	 * 所以落盘后立即应用:
+	 * 这些开关都改变**服务端 agent 装配**(经典模式换提示词与工具集;外部命令放开
+	 * shell;shellKind/shellPath 换方言与可执行文件),所以落盘后立即应用:
 	 * - WriterHost(编辑页会话)按开关释放已建会话,下次对话按新装配重建;
 	 * - 主 SessionHost 走 reloadRuntime()(与 MCP 配置变更同一路径:复用当前会话文件重建
 	 *   运行时,新工具随之生效,leaf 指针保留)。重建失败不回滚设置——设置已落盘,
 	 *   下次启动仍生效,这里只保证「能重建就重建」。
 	 *
 	 * 变更经 SSE 广播 settings_changed:其他窗口(另一浏览器/Electron)据此同步开关状态。
+	 * 响应带 `shell`(解析结果),前端据此回显「实际用哪个 shell / 是否找不到」。
 	 */
 	private async handlePutSettings(ctx: RouteContext): Promise<void> {
 		const body = (await readJsonBody(ctx.req)) as Record<string, unknown> | null;
 		const rawClassic = body?.classicMode;
 		const rawShell = body?.enableShell;
+		const rawKind = body?.shellKind;
+		const rawPath = body?.shellPath;
 		if (rawClassic !== undefined && typeof rawClassic !== "boolean") {
 			throw new HttpError(400, "bad_request", "字段 classicMode 必须是布尔值");
 		}
 		if (rawShell !== undefined && typeof rawShell !== "boolean") {
 			throw new HttpError(400, "bad_request", "字段 enableShell 必须是布尔值");
 		}
+		if (rawKind !== undefined && rawKind !== "bash" && rawKind !== "pwsh") {
+			throw new HttpError(400, "bad_request", "字段 shellKind 只能是 bash 或 pwsh");
+		}
+		if (rawPath !== undefined && typeof rawPath !== "string") {
+			throw new HttpError(400, "bad_request", "字段 shellPath 必须是字符串");
+		}
 		const settings: WriterSettings = await updateWriterSettings({
 			...(rawClassic === undefined ? {} : { classicMode: rawClassic }),
 			...(rawShell === undefined ? {} : { enableShell: rawShell }),
+			...(rawKind === undefined ? {} : { shellKind: rawKind }),
+			...(rawPath === undefined ? {} : { shellPath: rawPath.trim().slice(0, 500) }),
 		});
+		// 解析实际方言:选 pwsh 而本机没有 → none(会话按无 shell 装配,提示词如实叙述)
+		const shell = resolveWriterShell(settings);
 		await this.options.writerHost?.setClassicMode(settings.classicMode);
-		await this.options.writerHost?.setShellEnabled(settings.enableShell);
+		await this.options.writerHost?.setShell({
+			enabled: settings.enableShell,
+			dialect: shell.dialect,
+			path: shell.path ?? null,
+		});
 		try {
 			await this.options.sessionHost.reloadRuntime();
 		} catch {
 			/* 主会话重建失败:设置已落盘,旧 runtime 继续可用,下次启动生效 */
 		}
 		this.broadcast({ type: "settings_changed", settings });
-		this.send(ctx.res, 200, { settings });
+		this.send(ctx.res, 200, { settings, shell });
 	}
 
 	// ---- setup 路由(首次启动配置向导)----

@@ -259,10 +259,29 @@ export interface WriterSettingsDto {
 	/** 经典模式:单 agent(只有编辑页),写作 agent 带全量工具。 */
 	classicMode: boolean;
 	/**
-	 * 外部命令(bash):允许 agent 在书目录外执行 shell 命令;缺省关闭。
+	 * 外部命令(shell):允许 agent 在书目录外执行 shell 命令;缺省关闭。
 	 * 打开后命令以服务进程权限运行(路径守卫对它无效),靠命令与输出实时可见来约束。
 	 */
 	enableShell: boolean;
+	/** shell 方言(bash 缺省 / pwsh):实际换可执行文件,提示词按方言叙述工具用法。 */
+	shellKind: ShellKindDto;
+	/** 显式 shell 可执行文件路径;空 = 自动探测(见 src/shell-kind.ts)。 */
+	shellPath: string;
+}
+
+/** 用户可选的 shell 类型。 */
+export type ShellKindDto = "bash" | "pwsh";
+
+/** 实际解析出的 shell 方言("none" = 声明了 shell 但本机没找到可用的)。 */
+export type ShellDialectDto = "none" | "bash" | "pwsh" | "powershell";
+
+/** 服务端对当前设置的 shell 解析结果(GET/PUT /api/settings 的 `shell` 字段)。 */
+export interface ResolvedShellDto {
+	dialect: ShellDialectDto;
+	/** 实际使用的可执行文件路径(bash 交给 vendor 探测时为 undefined)。 */
+	path?: string;
+	/** 非致命提示(只找到 PowerShell 5.1、找不到指定 shell 等)。 */
+	warning?: string;
 }
 
 /** 常驻编剧/导演会话事件(主会话事件的子集,全部可被 processAgentEvent 处理)。 */

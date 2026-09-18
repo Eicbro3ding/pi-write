@@ -43,6 +43,14 @@ export interface SessionFactoryOptions {
 	draftFile?: string;
 	/** 内置工具黑名单(web 禁 bash)。 */
 	excludeTools?: string[];
+	/**
+	 * shell 可执行文件路径(shell 方言解析结果,见 shell-kind.ts):
+	 * - `string`:写入 vendor settingsManager.shellPath,由它 spawn 该可执行文件;
+	 * - `null`:清空该设置,让 vendor 走自己的探测链(Git Bash → PATH bash → /bin/bash);
+	 * - `undefined`:不动(舞台/编剧等不关心 shell 的装配点)。
+	 * 仅在值确实变化时写盘(settingsManager.setShellPath 会落盘 agent/settings.json)。
+	 */
+	shellPath?: string | null;
 	/** 初始激活的内置工具(不设白名单——白名单会把 MCP customTools 滤掉)。 */
 	initialActiveToolNames?: string[];
 	/** 禁用全部/内置工具(舞台演员等)。 */
@@ -90,6 +98,15 @@ export function createSessionRuntimeFactory(opts: SessionFactoryOptions): Create
 			});
 		// 隐藏 skill 系统:会话的 / 菜单不再显示任何 /skill:xxx 命令
 		services.settingsManager.setEnableSkillCommands(false);
+		// shell 方言:vendor 的 getShellConfig() 只会 spawn bash(除非 settings.shellPath
+		// 指向别的可执行文件——PowerShell 的 -Command 可缩写为 -c,所以 pwsh 能借此跑起来)。
+		// 只在值变化时写:setShellPath 会落盘 agent/settings.json,每次会话都写是噪音。
+		if (opts.shellPath !== undefined) {
+			const desired = opts.shellPath ?? undefined;
+			if (services.settingsManager.getShellPath() !== desired) {
+				services.settingsManager.setShellPath(desired);
+			}
+		}
 		let model: CliModel;
 		if (opts.model) {
 			const resolved = resolveCliModel({ cliModel: opts.model, modelRuntime: services.modelRuntime });
