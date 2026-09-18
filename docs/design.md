@@ -71,7 +71,7 @@
 
 | 决策 | 理由 |
 |------|------|
-| web 无 bash | bash = RCE 等价面;无鉴权本地服务下任何本机进程都能驱动 agent;护城河只在 TUI(用户在场 + Ctrl+C) |
+| web 缺省无 bash(0.0.6 起可显式开启) | bash = RCE 等价面;无鉴权本地服务下任何本机进程都能驱动 agent。默认关 + 风险确认 + 命令与输出实时可见:护城河从「没有这个工具」换成「你看得见它在做什么」——路径守卫管不到 shell,可见性是唯一真正的约束 |
 | world_update 唯一变更通道 | 结构性约束(重复 id、悬空引用、多 in-progress、自环)由程序校验,防世界书被绕过破坏 |
 | 关联激活用关系图而非内容递归 | 世界书有显式关系数据(emphasized 强关联);酒馆式内容递归(正文提关键词互相触发)列为候选通道 |
 | 深度 = 跳距上限而非步数计数 | 计数模型下死路 / 分支会「浪费」步数,覆盖依赖探索顺序;半径模型发现集与顺序无关 |
@@ -96,3 +96,10 @@
 - **安全模型**:插件与主进程同权(似 Obsidian 社区插件),显式启用、不自动安装/更新;trusted 是单一总闸——未信任插件的 routes/frontend.mjs 在装载期/端点双重拒绝,renderer 永不执行未信任用户 JS;开关带「与主进程/渲染进程同权,仅信任自己安装的插件」确认;
 - **热重载**:切换启用/信任时重新扫描 + 原生 import(URL 带随机 query 防 Node 模块缓存——jiti/进程内缓存实测改文件后仍返回旧代码);
 - **指南与示例**:docs/plugin-development.md;examples/plugins/dice(掷骰子)、examples/plugins/inspire(灵感笔,测试插件)。
+
+## 10. 外部命令与 shell 方言(2026-09,0.0.6)
+
+- **分层缺位**:vendor 没有 `ctx.shell` 那样的执行器抽象——它的 shell 通道 bash 专用(`getShellConfig()`:Windows 只找 Git Bash,找不到直接抛错;spawn 写死 `["-c"]`)。方言支持因此不加壳层,而是复用它**已有**的 `shellPath` 设置:`pwsh -Command` 可缩写为 `-c`,同一 spawn 形态直接跑 PowerShell(实测 `{shell, args:["-c"]}`);代价是退出码语义不同——`pwsh -Command` 会把原生程序退出码折算成 1,故提示词必须要求 `exit $LASTEXITCODE`;
+- **解析唯一实现** `src/shell-kind.ts`:显式路径(按文件名判方言)> `%ProgramFiles%\PowerShell\7\pwsh.exe` > PATH `pwsh` > 回退系统自带 Windows PowerShell 5.1(带 warning)。依赖(platform / env / exists / which)全注入,所以能纯逻辑单测——CI 无 pwsh、开发机有 pwsh,断言不会分叉;
+- **改提示词而不是改工具名**:vendor 的工具 schema 固定叫 `bash`,改名要动 vendor;选择在系统提示里点明方言。**解析不到就声明无 shell**:不给工具 + 如实叙述,避免「给了一个必然报错的工具」;
+- **安全面**:默认关、风险确认、命令与输出实时可见——三者缺一不可,详见 security.md「外部命令(shell)开关」。

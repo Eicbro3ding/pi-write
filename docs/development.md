@@ -75,7 +75,7 @@ cd web && npx tsc --noEmit -p tsconfig.json
 - 只用 **erasable TypeScript**(无 `enum` / `namespace` / 参数属性);
 - 工具定义走 `defineTool` + typebox `Type.Object`,勿手写 schema;
 - 用户可见 UI 文案**中文内联**;prompt.ts 以英文为主(模型指令);
-- **web 永远无 bash**(安全设计,勿放宽,见 security.md);
+- **web 默认无 bash**(设置页「外部命令」可显式放开:缺省关 + 风险确认 + 命令与输出实时可见;改动这条边界前先读 security.md);
 - 保持独立身份:不读取 `~/.pi/agent` 配置,不引入 coding-agent 的扩展 / 技能;
 - 舞台提示词是模板字符串,内部**不要用反引号**。
 

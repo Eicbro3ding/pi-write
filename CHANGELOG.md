@@ -1,10 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [0.0.6] - 2026-09-18
 
-经典模式(单 Agent)。
+经典模式(单 Agent)、工作区面板、外部命令与 shell 方言。
 
-- **经典模式**:设置页「界面 → 模式」与首启向导偏好步可切换。开启后去掉的只有**舞台**(导演 / 演员 / 旁白那套多 Agent 共演)——顶栏不再有舞台入口、该页不再挂载;编辑页、世界书页、设置页照常,世界书页本就没有 agent,是面向人的设定编辑器。编辑页的 AI 不再是受限编剧,而是**带全量工具的写作 agent**(系统提示 `prompts/writer-main.md`;工具 `read/write/edit/grep/find/ls` + `word_count`/`world_update`/`world_find` + MCP;bash 在 web 一律禁用),并解除「只能写当前章节草稿」的路径白名单(要能写 `outline.md` / `memory.md` / `notes/`)。
+- **经典模式**:设置页「界面 → 模式」与首启向导偏好步可切换。开启后去掉的只有**舞台**(导演 / 演员 / 旁白那套多 Agent 共演)——顶栏不再有舞台入口、该页不再挂载;编辑页、世界书页、设置页照常,世界书页本就没有 agent,是面向人的设定编辑器。编辑页的 AI 不再是受限编剧,而是**带全量工具的写作 agent**(系统提示 `prompts/writer-main.md`;工具 `read/write/edit/grep/find/ls` + `word_count`/`world_update`/`world_find` + MCP;bash 默认不给,可由设置页「外部命令」显式放开),并解除「只能写当前章节草稿」的路径白名单(要能写 `outline.md` / `memory.md` / `notes/`)。
 - **服务端设置**:新增 `GET|PUT /api/settings` 与 `~/.pi/writer/settings.json`。经典模式改变 agent 装配,放服务端而非浏览器——多窗口/换浏览器一致;切换后 `WriterHost.setClassicMode` 释放已建会话,下一次对话按新装配重建,并经 `settings_changed` SSE 广播;前端 localStorage 仅作首帧渲染缓存,挂载后以服务端为准对账。
 - **向导与设置页**:首启向导「界面偏好」步新增经典模式开关(介绍步的功能卡片随模式变化);设置页新增「模式」卡与开关;编辑页在经典模式下把「编剧」标签/占位文案换成单 agent 说法。
 - **测试**:`test/writer-settings.test.ts`(解析容错 / 读改写 merge);`test/server.test.ts` 补 `/api/settings` 用例(缺省 / 开关落盘 / 应用宿主 / SSE 广播 / 非法字段 400);`test/settings.test.ts` 补本地缓存解析用例。
@@ -20,6 +20,14 @@
 - **左栏布局修正**:左栏改为「切换控件固定 + 中间滚动区 + 底部固定」三段——此前整条 `.chapters` 自己滚,于是「收起」钮在工作区模式(内容短)悬在半空(距侧栏底 504px)、在章节多时又被内容顶出视野。现在切到哪种模式、内容多长,收起钮都贴底(实测三种情形均距底 14px)。
 - **提示词:让 AI 真的去产出中间产物**(此前提示词在**阻止**它):`prompts/writer-main.md` 原来写着「写在其他任何位置(临时文件、`notes/`、别处新建的 .md)用户在界面上都看不见,等于没写」——那是工作区面板出现之前的事实(界面只镜像当前章节草稿),却正好卡住工作区「资料与笔记」唯一的内容来源。现在改成区分**交付物 / 中间产物**:散文只有一个落点 `draft/<章节id>.md`(这条硬规则保留,它是 2026-08「正文写到 draft/第一章.md、前端读到空」的修复);资料、研究、场景备选、废弃片段落 `notes/**`,并新增「中间产物」小节写明何时该写、一个主题一个文件、**来源必须标(自己的知识要标"未核实")、绝不编造出处、没有联网检索工具就不要假装查过**。`prompts/director.md` 补一条「资料收集纪律」(开演前背景查证与用户给的材料的落点,并明确 `notes/` 不进正文、不进世界书)。常驻编剧(`writer-editor.md`)不承担资料收集,未改。
 - **测试**:`test/book-files.test.ts`(分组 / 展示名 / 生成物排除 / 机器数据排除 / 深度上限 / 路径校验 / 符号链接 / 截断)+ `test/workspace-panel.test.ts`(体积与相对时间格式化)+ `test/server.test.ts` 两组端点用例(清单、文本、图片、越界 400、机器数据与生成物 400、缺失 404、符号链接逃逸 404)。
+
+### 外部命令与 shell 方言
+
+- **外部命令开关**:设置页「模式 → 外部命令」放开 agent 的 shell 工具(缺省**关闭**)。这是唯一一条把边界从「书目录」扩大到「整台机器」的开关——命令以服务进程权限运行,`installToolPathGuard` 管不到它;因此默认关、开关带风险确认(写明「可读写整台磁盘、访问网络,书目录路径限制无效」),状态存服务端 `~/.pi/writer/settings.json`(`enableShell`)。切换后 `WriterHost.setShell` 释放已建会话,下一次对话按新装配重建。
+- **命令与输出实时可见**:开着「简化输出」也强制显示——这是外部命令唯一的约束方式。前端按 `toolCallId` 归并同一条命令的流式增量(`tool_execution_update`),而不是收尾才一次性贴出。
+- **shell 方言(bash / PowerShell)**:新增 `shellKind`(`bash` 缺省 / `pwsh`)与 `shellPath`(显式可执行文件,空 = 自动探测)。vendor 的 shell 通道是 bash 专用的(Windows 只找 Git Bash,找不到直接抛错),方言支持复用它已有的 `shellPath` 设置——PowerShell 的 `-Command` 可缩写为 `-c`,于是 pwsh 借用同一 spawn 形态跑起来(`args: ["-c"]`,已实测)。解析顺序收敛在 `src/shell-kind.ts`:显式路径(按文件名判方言)> `%ProgramFiles%\PowerShell\7\pwsh.exe` > PATH `pwsh` > 回退系统自带 Windows PowerShell 5.1(带 warning)。
+- **提示词按方言叙述**:工具名在 vendor 里始终是 `bash`(schema 与描述都是 bash 口径),不说清方言模型会写 bash 语法必然报错。`buildWriterSystemPrompt(customTools, shell)` 按 `none/bash/pwsh/powershell` 注入对应文案:pwsh 下点明「实际由 PowerShell 7 执行」+ 原生路径与 `$env:NAME` + `exit $LASTEXITCODE`(`pwsh -Command` 会把原生程序退出码折算成 1,不加这行模型判成败会误判);编剧的固定角色提示词没有占位符,由 `WriterHost.editorSystemPrompt()` 追加同一行文案。**选了 pwsh 但本机解析不到 → 方言为 `none`,不放开 shell 工具**,提示词如实说「没有 shell」,而不是给一个必然报错的工具。
+- **测试**:`test/shell-kind.test.ts`(方言解析:平台 / 环境 / 存在性 / which 全部注入,覆盖标准目录、PATH、5.1 回退、显式路径、路径不存在);`test/prompt.test.ts` 覆盖四套方言文案;`test/writer-settings.test.ts` 新字段解析与 merge 语义;`test/server.test.ts` 新字段校验与解析回显;`test/writer-host.test.ts` `setShell` 释放语义与编剧提示注入。
 
 ## [0.0.5] - 2026-09-06
 

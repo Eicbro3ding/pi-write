@@ -80,7 +80,7 @@ export default async function myPlugin(pi) { ... }  // 异步亦可
 | `pi.getActiveTools()` / `getAllTools()` | 查询工具集 |
 | `pi.exec(command, args)` | —— 请勿使用(等价 bash,违反 pi-writer 安全红线,会在审查期被拒) |
 
-> 插件的安全边界:**与 pi-writer 主进程同权**,等价于本地受信任代码(类似 Obsidian / SillyTavern 社区插件,非沙箱)。pi-writer 不自动安装/更新插件;`exec` 等任意 shell 能力**不可用**(web 无 bash 是 2026-08-10 起的安全设计,插件同样不得绕过)。
+> 插件的安全边界:**与 pi-writer 主进程同权**,等价于本地受信任代码(类似 Obsidian / SillyTavern 社区插件,非沙箱)。pi-writer 不自动安装/更新插件;`exec` 等任意 shell 能力**不可用**——agent 的 shell 通道由用户经设置页「外部命令」显式开启(默认关,见 security.md),插件不得自行开辟。
 
 更多能力(vendor `ExtensionAPI`):`registerShortcut` / `registerFlag` / `registerMessageRenderer`(自定义消息渲染,Web 端需额外桥接,慎用)/ `registerProvider`(与模型配置重叠,不建议)。
 

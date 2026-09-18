@@ -70,7 +70,8 @@ agent 会话事件(pi vendor AgentSessionEvent)
 ## 4. 工具系统
 
 - **装配**:`createSessionRuntimeFactory`(src/session-factory.ts,唯一入口)。用 `excludeTools` 黑名单 + `initialActiveToolNames`,**不用** `tools` 白名单——那是白名单语义,会把不在名单的 MCP customTools 滤掉。
-- **系统提示**:`buildWriterSystemPrompt(customTools, hasBash)` 动态生成(文末追加 MCP 工具清单);静态 override 会整个替换 pi 的动态工具段。
+- **系统提示**:`buildWriterSystemPrompt(customTools, shell)` 动态生成(文末追加 MCP 工具清单,shell 行按方言注入 `none/bash/pwsh/powershell`);静态 override 会整个替换 pi 的动态工具段。
+- **shell 与方言**(2026-09-18):`resolveWriterShell`(src/shell-kind.ts)把设置解析成「方言 + 可执行文件路径」,经 `settingsManager.shellPath` 交给 vendor(spawn 形态 `{shell, args:["-c"]}`);vendor 的工具 schema 固定叫 `bash`,故方言只改**执行哪个可执行文件**与**提示词怎么叙述**,不改工具名。解析不到(选了 pwsh 但本机没装)→ `dialect: "none"`:不激活 bash 工具 + 提示词如实说没有 shell。web 缺省不给 shell,由设置项 `enableShell` 显式放开(见 security.md)。
 - **世界书**:`world_update` 是唯一变更通道(提示词禁止 edit/write 直改);`applyWorldUpdate` 纯函数(判别联合 → clone → mutate → validateWorld),`withWorldLock` 串行化读-改-写(进程内;跨进程并发仍需外部文件锁)。
 - **守卫**:`installToolPathGuard(bookDir, readOnlyDirs)` 把文件工具限制在书目录内,`skills/` 目录只读放行;Web 多会话下通过 `AsyncLocalStorage` 按当前会话读取书目录 / 只读目录 / 正文白名单,避免并发会话互相覆盖。
 
@@ -98,7 +99,7 @@ agent 会话事件(pi vendor AgentSessionEvent)
 
 四页顶层视图(顶栏入口,四页常驻挂载、切换只改 hidden,保流式状态):**舞台**(默认;演出前 = 导演讨论室,演出中同页)｜**编辑**(章节侧栏 + 正文常驻 DraftWorkspace,CodeMirror 6 + 右栏 AI 伙伴「编剧」对话单栏,选中正文自动预填输入框;批注已退役并入编剧)｜**世界书**｜**设置**。书库栏(`web/src/library.ts` `useLibrary`,App 持有)在舞台 / 编辑两页常驻且状态同步,可折叠 56px 图标条;主题三套(night / paper / parchment,26 色 token)。
 
-**经典模式(单 Agent,2026-09-18)**:设置页「界面 → 模式」与首启向导偏好步可切换。开启后去掉的只有**舞台**(顶栏入口隐藏、StagePage 不挂载——它带着后台编排会话与 SSE 订阅,留着等于「关了还在跑」);编辑页、世界书页、设置页照常(世界书页没有 agent,只是面向人的设定编辑器)。编辑页的 AI 换成**带全量工具的写作 agent**——系统提示取 `prompts/writer-main.md`(`buildWriterSystemPrompt`,与 TUI / 主会话同款),工具集 `read/write/edit/grep/find/ls` + `word_count/world_update/world_find` + MCP(bash 在 web 一律禁用),且不再限制只写当前章节草稿(要能写 `memory.md` / `notes/**` 这类中间产物)。开关是**服务端设置**(`~/.pi/writer/settings.json`,`GET|PUT /api/settings`):它改变 agent 装配,必须多窗口一致,且切换后 `WriterHost.setClassicMode` 会释放已建会话,下一次对话按新装配重建;变更经 `settings_changed` SSE 广播给其他窗口。前端只把状态缓存在 localStorage 供首帧渲染(避免顶栏先画四个入口再收回),挂载后以服务端为准对账。
+**经典模式(单 Agent,2026-09-18)**:设置页「界面 → 模式」与首启向导偏好步可切换。开启后去掉的只有**舞台**(顶栏入口隐藏、StagePage 不挂载——它带着后台编排会话与 SSE 订阅,留着等于「关了还在跑」);编辑页、世界书页、设置页照常(世界书页没有 agent,只是面向人的设定编辑器)。编辑页的 AI 换成**带全量工具的写作 agent**——系统提示取 `prompts/writer-main.md`(`buildWriterSystemPrompt`,与 TUI / 主会话同款),工具集 `read/write/edit/grep/find/ls` + `word_count/world_update/world_find` + MCP(shell 默认不给,可由设置页「外部命令」显式放开,方言可选 bash / PowerShell),且不再限制只写当前章节草稿(要能写 `memory.md` / `notes/**` 这类中间产物)。开关是**服务端设置**(`~/.pi/writer/settings.json`,`GET|PUT /api/settings`):它改变 agent 装配,必须多窗口一致,且切换后 `WriterHost.setClassicMode` 会释放已建会话,下一次对话按新装配重建;变更经 `settings_changed` SSE 广播给其他窗口。前端只把状态缓存在 localStorage 供首帧渲染(避免顶栏先画四个入口再收回),挂载后以服务端为准对账。
 
 舞台对话与编剧 / 主会话同款归约(2026-08-11 统一重构):导演回复经 `stage_director_event`(内层主会话同款事件)→ `processAgentEvent` + MessageList;舞台流(feed,`StageFeedItem`)只剩舞台条目与系统行,不再含对话气泡。
 
