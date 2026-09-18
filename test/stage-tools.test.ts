@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectStageScriptErrors, prepareStageScriptArgs } from "../src/stage/stage-extension.ts";
+import { loadScript, saveScript } from "../src/stage/script-store.ts";
+import type { SceneScript } from "../src/stage/types.ts";
 import { createEmptyWorld, type WorldData } from "../src/world-data.ts";
 
 let tmp: string;
@@ -138,5 +140,126 @@ describe("collectStageScriptErrors 强制 perActor（2026-08-11）", () => {
 		const params = { cast: { "actor-1": ["李四"] }, text: { perActor: ["李四"] } };
 		const errors = collectStageScriptErrors(params as never, world);
 		expect(errors.some((e) => e.includes("text.perActor 缺失或为空"))).toBe(true);
+	});
+});
+
+describe("stage_revise 工具（导演改限制不得清空演出指令，2026-09-18）", () => {
+	/** 只暴露 execute 需要的三个成员（与真实编排器同形状）。 */
+	function fakeOrch(bookDir: string, sceneId: string) {
+		const applied: unknown[] = [];
+		return {
+			orch: { bookDir, sceneId, applyScriptUpdate: (s: unknown) => applied.push(s) },
+			applied,
+		};
+	}
+
+	function script(): SceneScript {
+		return {
+			scene: "开场",
+			chapter: "第一章",
+			version: 3,
+			definition: {
+				cast: { "actor-1": ["李四"] },
+				inject: {},
+				rules: { minLines: 2, maxLines: 8, wrapUpWindow: 3, turn: "round-robin" },
+			},
+			text: {
+				shared: { setting: "雨夜酒馆", goal: "试探", beats: ["进门"], tone: "压抑", forbidden: ["暴力"] },
+				perActor: { "actor-1": { objective: "要债", boundary: "每轮不超过 200 字", examples: ["你欠我的"] } },
+			},
+		};
+	}
+
+	async function reviseTool(orch: unknown) {
+		const { directorRole } = await import("../src/stage/stage-extension.ts");
+		const tool = directorRole(orch as never).customTools?.find((t) => t.name === "stage_revise");
+		if (!tool) throw new Error("stage_revise 工具缺失");
+		return tool as unknown as {
+			prepareArguments: (raw: unknown) => unknown;
+			execute: (id: string, params: unknown) => Promise<{ details: { ok: boolean; version?: number } }>;
+		};
+	}
+
+	it("只改 maxLines：规则生效，且 shared/perActor 一个字段都不丢", async () => {
+		const { orch, applied } = fakeOrch(tmp, "kai-chang");
+		await saveScript(tmp, "kai-chang", script());
+		const tool = await reviseTool(orch);
+
+		const prepared = tool.prepareArguments({ rules: { maxLines: 30 } });
+		const result = await tool.execute("c1", prepared);
+		expect(result.details).toMatchObject({ ok: true, version: 4 });
+
+		const onDisk = (await loadScript(tmp, "kai-chang"))!;
+		expect(onDisk.definition.rules).toEqual({ minLines: 2, maxLines: 30, wrapUpWindow: 3, turn: "round-robin" });
+		// 这是本次修复的核心：此前 shared 会被抹成 {}、perActor 丢字段
+		expect(onDisk.text.shared).toEqual({
+			setting: "雨夜酒馆",
+			goal: "试探",
+			beats: ["进门"],
+			tone: "压抑",
+			forbidden: ["暴力"],
+		});
+		expect(onDisk.text.perActor["actor-1"]).toEqual({ objective: "要债", boundary: "每轮不超过 200 字", examples: ["你欠我的"] });
+		// 内存态同步（下一轮生效）
+		expect(applied).toHaveLength(1);
+		expect((applied[0] as SceneScript).definition.rules.maxLines).toBe(30);
+	});
+
+	it("只改一个演员的 objective：其余演员与 shared 不受影响", async () => {
+		const { orch } = fakeOrch(tmp, "kai-chang");
+		const base = script();
+		base.text.perActor["actor-2"] = { objective: "旁观", examples: [] };
+		await saveScript(tmp, "kai-chang", base);
+		const tool = await reviseTool(orch);
+
+		await tool.execute("c1", tool.prepareArguments({ text: { perActor: { "actor-1": { objective: "改口供" } } } }));
+		const onDisk = (await loadScript(tmp, "kai-chang"))!;
+		expect(onDisk.text.perActor["actor-1"]).toMatchObject({ objective: "改口供", boundary: "每轮不超过 200 字" });
+		expect(onDisk.text.perActor["actor-2"]).toEqual({ objective: "旁观", examples: [] });
+		expect(onDisk.text.shared.setting).toBe("雨夜酒馆");
+	});
+});
+
+describe("script_confirm 不得覆写正在演的一幕（2026-09-18）", () => {
+	it("正在演出中 → 明确拒绝并指向 stage_revise（不落盘、不重置 v1）", async () => {
+		const { directorRole } = await import("../src/stage/stage-extension.ts");
+		const seen: string[] = [];
+		const orch = {
+			bookDir: tmp,
+			sceneId: "kai-chang",
+			isSceneActive: (id: string) => {
+				seen.push(id);
+				return true;
+			},
+			submitScript: async () => ({ ok: true, text: "不该被调用" }),
+		};
+		const tool = directorRole(orch as never).customTools?.find((t) => t.name === "script_confirm");
+		expect(tool).toBeDefined();
+		const result = await (tool as never as { execute: (id: string, p: unknown) => Promise<{ content: Array<{ text: string }>; details: { ok: boolean } }> }).execute("c1", {
+			scene: "开场",
+			chapter: "第一章",
+			cast: { "actor-1": ["李四"] },
+			text: { shared: { setting: "酒馆" }, perActor: { "actor-1": { objective: "要债" } } },
+		});
+		expect(result.details.ok).toBe(false);
+		expect(result.content[0].text).toContain("正在演出中");
+		expect(result.content[0].text).toContain("stage_revise");
+		// 判定用的是 slugify 后的 sceneId（与剧本文件名同一口径）
+		expect(seen).toHaveLength(1);
+		expect(seen[0]).not.toBe("");
+	});
+
+	it("未在演出（idle/closed）→ 放行到正常校验流程", async () => {
+		const { directorRole } = await import("../src/stage/stage-extension.ts");
+		const orch = { bookDir: tmp, sceneId: null, isSceneActive: () => false, submitScript: async () => ({ ok: true, text: "已提交" }) };
+		const tool = directorRole(orch as never).customTools?.find((t) => t.name === "script_confirm");
+		const result = await (tool as never as { execute: (id: string, p: unknown) => Promise<{ content: Array<{ text: string }> }> }).execute("c1", {
+			scene: "开场",
+			chapter: "第一章",
+			cast: { "actor-1": ["李四"] },
+			text: { shared: { setting: "酒馆" }, perActor: { "actor-1": { objective: "要债" } } },
+		});
+		// 走到 validateScriptParams（世界书为空 → cast 合法、inject 缺省，应通过并落盘）
+		expect(result.content[0].text).not.toContain("正在演出中");
 	});
 });

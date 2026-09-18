@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { type SceneScript, type ScriptPatch } from "./types.ts";
+import { type SceneRules, type SceneScript, type ScriptPatch } from "./types.ts";
 
 export const STAGE_DIR = "stage";
 
@@ -36,22 +36,41 @@ export async function listScripts(bookDir: string): Promise<string[]> {
 }
 
 /**
+ * 只合并**确实带了值**的字段：显式 `undefined` 一律视为「本次不改」。
+ *
+ * 2026-09-18 修复：工具垫片(prepareArguments)为了"缺字段补空值"曾对未提供的
+ * 字段显式产出 `undefined`，而这里原本用对象展开合并 → `{...旧值, setting: undefined}`
+ * 把旧值抹成 undefined。后果：导演用 stage_revise 只想改一下「上限条数」，
+ * 整块 text.shared(场景/节拍/基调/禁区)与 perActor(角色任务/每轮上限/示例)
+ * 被一起清空——演出指令凭空消失，看起来就是"导演改的限制/指令无效"。
+ * 现在两道防线：垫片不再产出 undefined，且这里的合并本身忽略 undefined。
+ */
+function mergeDefined<T extends object>(base: T, patch: Partial<T> | undefined): T {
+	if (!patch) return base;
+	const out = { ...base } as Record<string, unknown>;
+	for (const [key, value] of Object.entries(patch)) {
+		if (value !== undefined) out[key] = value;
+	}
+	return out as T;
+}
+
+/**
  * 剧本修改（/revise 语义，纯函数）：
  * - version +1；
- * - text.shared / text.perActor 为**字段级合并**（改一处不动其余）；
+ * - text.shared / text.perActor 为**字段级合并**（改一处不动其余；未提供的字段保持原值）；
  *   数组字段（beats/forbidden/examples）提供时整体替换；
  * - rules 字段合并（数值覆盖）；
  * - 上一版快照存入 previous，支持回退重演。
  */
 export function reviseScript(script: SceneScript, patch: ScriptPatch): SceneScript {
-	const shared = { ...script.text.shared, ...patch.text?.shared };
+	const shared = mergeDefined(script.text.shared, patch.text?.shared);
 	const perActor = { ...script.text.perActor };
 	if (patch.text?.perActor) {
 		for (const [actorId, fields] of Object.entries(patch.text.perActor)) {
-			perActor[actorId] = { ...perActor[actorId], ...fields };
+			perActor[actorId] = mergeDefined(perActor[actorId] ?? {}, fields);
 		}
 	}
-	const rules = { ...script.definition.rules, ...patch.rules };
+	const rules = mergeDefined<SceneRules>(script.definition.rules, patch.rules);
 	return {
 		...script,
 		version: script.version + 1,

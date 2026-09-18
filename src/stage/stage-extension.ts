@@ -310,7 +310,10 @@ function stageReviseTool(orch: StageOrchestrator): ToolDefinition {
 			"修订一幕正在演出的剧本（字段级合并：只改提供的字段，其余不动；数组字段整体替换）。版本 +1，下一轮演出生效。用于用户反馈 OOC/不满意后修正 objective/voice/examples/beats 等。",
 		parameters: stageReviseParameters,
 		prepareArguments: (raw) => {
-			// 与 stage_script 同款宽容：数组字段字符串 → split
+			// 与 stage_script 同款宽容：数组字段字符串 → split。
+			// 注意(2026-09-18)：**未提供的字段一律不出现在补丁里**——此前对缺省字段显式
+			// 产出 undefined，被 reviseScript 的合并展开成"把旧值抹掉"：导演只想改上限条数，
+			// 却把整块演出指令(场景/节拍/角色任务/边界)清空了。
 			if (typeof raw !== "object" || raw === null) throw new Error("stage_revise 参数必须是对象");
 			const args = raw as Record<string, unknown>;
 			const text = (args.text ?? {}) as Record<string, unknown>;
@@ -320,21 +323,18 @@ function stageReviseTool(orch: StageOrchestrator): ToolDefinition {
 				if (typeof v === "string") return v.split(/[|\n]/).map((s) => s.trim()).filter(Boolean);
 				return [];
 			};
+			const sharedPatch: Record<string, unknown> = {};
+			if (typeof shared.setting === "string") sharedPatch.setting = shared.setting;
+			if (typeof shared.goal === "string") sharedPatch.goal = shared.goal;
+			if (shared.beats !== undefined) sharedPatch.beats = splitArray(shared.beats);
+			if (typeof shared.tone === "string") sharedPatch.tone = shared.tone;
+			if (shared.forbidden !== undefined) sharedPatch.forbidden = splitArray(shared.forbidden);
+			const textPatch: Record<string, unknown> = {};
+			if (Object.keys(sharedPatch).length > 0) textPatch.shared = sharedPatch;
+			if (text.perActor !== undefined) textPatch.perActor = text.perActor;
 			return {
 				...args,
-				text: {
-					...text,
-					shared: shared
-						? {
-								setting: typeof shared.setting === "string" ? shared.setting : undefined,
-								goal: typeof shared.goal === "string" ? shared.goal : undefined,
-								beats: shared.beats ? splitArray(shared.beats) : undefined,
-								tone: typeof shared.tone === "string" ? shared.tone : undefined,
-								forbidden: shared.forbidden ? splitArray(shared.forbidden) : undefined,
-							}
-						: undefined,
-					perActor: text.perActor ?? undefined,
-				},
+				...(Object.keys(textPatch).length > 0 ? { text: textPatch } : { text: undefined }),
 			} as Static<typeof stageReviseParameters>;
 		},
 		execute: async (_callId, params) => {
@@ -466,7 +466,7 @@ async function validateScriptParams(
  * 用户确认（confirm_script 命令）后，stage_script 才可开演（确认门）。
  */
 function scriptConfirmTool(orch: StageOrchestrator): ToolDefinition {
-	return defineTool({
+	return defineTool<typeof stageScriptParameters, { ok: boolean; sceneId?: string }>({
 		name: "script_confirm",
 		label: "提交剧本等待确认",
 		description:
@@ -474,7 +474,28 @@ function scriptConfirmTool(orch: StageOrchestrator): ToolDefinition {
 		parameters: stageScriptParameters,
 		prepareArguments: prepareStageScriptArgs,
 		execute: async (_callId, params) => {
-			const sceneId = slugify(params.scene);
+			const sceneId = params.scene ? slugify(params.scene) : orch.sceneId;
+			if (!sceneId) {
+				return {
+					content: [{ type: "text", text: "当前没有在演的一幕，无法修订。请先 stage_script 开一幕。" }],
+					details: { ok: false },
+				};
+			}
+			// 正在演的那一幕禁止用 script_confirm 覆写(2026-09-18):buildAndSaveScript 会
+			// 把剧本重写成 version 1 并整体替换,而编排器的内存态剧本只在 startScene 时加载
+			// ——结果是"改了规则/上限，正在演的这一幕仍按旧剧本走"，且旧文本段被 v1 覆盖丢失。
+			// 改正在演的剧本一律走 stage_revise(字段级合并、版本 +1、下一轮生效)。
+			if (orch.isSceneActive(sceneId)) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: `这一幕正在演出中（${sceneId}），不能用 script_confirm 重新提交——那会把剧本重置为 v1 并覆盖现有文本段，且正在演出的进程仍按旧剧本推进（表现出来就是"改了上限/规则却不生效"）。请改用 stage_revise：只传要改的字段（如 rules:{maxLines:8}），字段级合并、版本 +1、下一轮生效。`,
+						},
+					],
+					details: { sceneId, ok: false },
+				};
+			}
 			const errors = await validateScriptParams(orch, params, "script_confirm");
 			if (errors) {
 				return { content: [{ type: "text", text: errors[0] }], details: { sceneId, ok: false } };

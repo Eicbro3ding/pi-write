@@ -102,14 +102,23 @@ export interface RoleSpec {
 	topP?: number;
 }
 
-/** 回合决策（纯函数）：下一轮是继续演、收尾收幕还是强制收幕。 */
+/**
+ * 回合决策（纯函数）：下一轮是继续演、收尾收幕还是强制收幕。
+ *
+ * `wrapDeadline` = 收尾截止的**绝对条数**（`/wrap` 时按当时的条数 + 窗口算出来的）。
+ * 2026-09-18 修复：此前 wrapping 下只看 `lines >= minLines`，而 `wrapUpWindow`
+ * 只是个存在内存里、从不递减的计数——收尾后下一轮立刻收幕（窗口形同虚设），
+ * 演员却被反复告知「剩余约 N 条」。现在窗口是真截止线：到点收束，未到就继续演。
+ * 未传 deadline（历史调用/快照恢复）时退回下限语义：至少演到 minLines。
+ */
 export function decideTurnAction(
 	status: StageStatus,
 	lines: number,
 	rules: SceneRules,
+	wrapDeadline?: number,
 ): "speak" | "wrap-close" | "force-close" {
 	if (lines >= rules.maxLines) return "force-close";
-	if (status === "wrapping" && lines >= rules.minLines) return "wrap-close";
+	if (status === "wrapping" && lines >= (wrapDeadline ?? rules.minLines)) return "wrap-close";
 	return "speak";
 }
 
@@ -277,7 +286,8 @@ export class StageOrchestrator {
 	readonly bookDir: string;
 	phase: ScenePhase = "idle";
 	status: StageStatus = "normal";
-	wrapRemaining: number | undefined;
+	/** 收尾截止的绝对条数（`/wrap` 时 = 当时条数 + 窗口）；undefined = 未收尾。 */
+	wrapDeadline: number | undefined;
 	sceneId: string | null = null;
 	script: SceneScript | null = null;
 
@@ -681,6 +691,15 @@ export class StageOrchestrator {
 
 	// ---- 剧本确认门（script_confirm，2026-08-11） ----
 
+	/**
+	 * 该 sceneId 是否正是**当前在演**的那一幕（running/wrapping）。
+	 * 用于拦住"用 script_confirm 重提剧本改正在演的一幕"：那会把剧本重置为 v1、
+	 * 覆盖文本段，而内存态只在 startScene 时加载 → 表现成"改了上限却不生效"。
+	 */
+	isSceneActive(sceneId: string): boolean {
+		return this.sceneId === sceneId && (this.phase === "running" || this.phase === "wrapping");
+	}
+
 	/** script_confirm 工具回调：剧本已落盘，置待确认状态并广播卡片事件（前端展示 + 用户确认）。 */
 	async submitScript(sceneId: string): Promise<{ ok: boolean; text: string }> {
 		const script = await loadScript(this.bookDir, sceneId);
@@ -856,7 +875,7 @@ export class StageOrchestrator {
 		this.script = script;
 		this.sceneId = sceneId;
 		this.status = "normal";
-		this.wrapRemaining = undefined;
+		this.wrapDeadline = undefined;
 		this.turnIndex = 0;
 		for (const actorId of Object.keys(script.definition.cast)) {
 			if (!this.actorHosts.has(actorId)) {
@@ -931,7 +950,7 @@ export class StageOrchestrator {
 		if (!script || !sceneId) return "closed";
 		const entries = await readStage(this.bookDir, sceneId);
 		const counts = countStage(entries);
-		const action = decideTurnAction(this.status, counts.lines, script.definition.rules);
+		const action = decideTurnAction(this.status, counts.lines, script.definition.rules, this.wrapDeadline);
 		if (action !== "speak") {
 			await this.closeScene(action === "force-close");
 			return "closed";
@@ -1014,8 +1033,11 @@ export class StageOrchestrator {
 		}
 		const entries = await readStage(this.bookDir, this.sceneId);
 		const injection = await resolveWorldInjection(this.bookDir, this.script.definition.inject[actorId]);
+		// 收尾倒计时如实递减：由截止条数减当前条数实时算，不改状态（快照/重连都一致）
+		const wrapRemaining =
+			this.wrapDeadline === undefined ? undefined : Math.max(0, this.wrapDeadline - countStage(entries).lines);
 		const blocks = buildActorContextBlocks(this.script, entries, actorId, this.status, {
-			wrapRemaining: this.wrapRemaining,
+			wrapRemaining,
 			worldInjection: injection?.text ?? null,
 		});
 		const tail: AgentMessage[] = [];
@@ -1050,13 +1072,19 @@ export class StageOrchestrator {
 		return `剧本 v${revised.version} 已生效`;
 	}
 
-	/** /wrap [N]：注入收尾提示（默认剧本 wrapUpWindow）。 */
+	/**
+	 * /wrap [N]：注入收尾提示（默认剧本 wrapUpWindow）。
+	 * 窗口是真截止线：从**当前条数**起算 N 条，到点收束（见 decideTurnAction）；
+	 * 期间演员每轮看到的「剩余 X 条」由截止线实时算出（不是写死的 N）。
+	 */
 	async userWrap(n?: number): Promise<string> {
 		if (!this.script || this.phase !== "running") return "当前没有在演的一幕";
+		const lines = countStage(await readStage(this.bookDir, this.sceneId!)).lines;
+		const window = Math.max(1, n ?? this.script.definition.rules.wrapUpWindow);
 		this.status = "wrapping";
-		this.wrapRemaining = n ?? this.script.definition.rules.wrapUpWindow;
-		this.emit(`收尾提示已注入（剩余约 ${this.wrapRemaining} 条）`);
-		return `收尾提示已注入（剩余约 ${this.wrapRemaining} 条）`;
+		this.wrapDeadline = lines + window;
+		this.emit(`收尾提示已注入（剩余约 ${window} 条）`);
+		return `收尾提示已注入（剩余约 ${window} 条）`;
 	}
 
 	/** /cut：立即收幕（在途轮次自然完成后收）。 */

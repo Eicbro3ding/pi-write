@@ -128,3 +128,41 @@ describe("renderTextFor（结构化渲染）", () => {
 		expect(lines.join("\n")).not.toContain("【基调】");
 	});
 });
+
+describe("reviseScript 忽略显式 undefined（2026-09-18 导演工具清空演出指令的修复）", () => {
+	it("补丁里显式 undefined 视为「本次不改」：只改 maxLines 不碰任何文字段", () => {
+		const revised = reviseScript(baseScript(), {
+			text: {
+				shared: { setting: undefined, goal: undefined, beats: undefined, tone: undefined, forbidden: undefined },
+				perActor: { "actor-1": { objective: undefined, state: undefined, examples: undefined } },
+			},
+			rules: { maxLines: 30 },
+		});
+		// 文字段原样保留（此前会被抹成 undefined/空）
+		expect(revised.text.shared).toEqual({
+			setting: "暮色中的酒馆。",
+			goal: "重逢中揭开三年前的债",
+			beats: ["拍1·寒暄试探", "拍2·冲突点"],
+			tone: "克制、压抑",
+			forbidden: ["禁用现代词汇"],
+		});
+		expect(revised.text.perActor["actor-1"]).toEqual({
+			objective: "证明自己还清了债",
+			state: "愧疚又恼怒",
+			examples: ["王五: 三年了。", "李四: ……嗯。"],
+		});
+		// 规则改动本身照常生效
+		expect(revised.definition.rules).toEqual({ minLines: 10, maxLines: 30, wrapUpWindow: 3, turn: "round-robin" });
+	});
+
+	it("rules 里显式 undefined 不覆盖旧值", () => {
+		const revised = reviseScript(baseScript(), { rules: { maxLines: 8, minLines: undefined, wrapUpWindow: undefined } });
+		expect(revised.definition.rules).toEqual({ minLines: 10, maxLines: 8, wrapUpWindow: 3, turn: "round-robin" });
+	});
+
+	it("新的演员 id 仍然可整块新增（合并不会把没见过的 key 吃掉）", () => {
+		const revised = reviseScript(baseScript(), { text: { perActor: { "actor-2": { objective: "旁观并插话" } } } });
+		expect(revised.text.perActor["actor-2"]).toEqual({ objective: "旁观并插话" });
+		expect(revised.text.perActor["actor-1"].objective).toBe("证明自己还清了债");
+	});
+});

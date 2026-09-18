@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+修 bug：导演改「上限条数」不生效 / 改规则会连演出指令一起清空（2026-09-18，来自实际使用反馈）。
+
+- **stage_revise 会清空剧本文字段**：工具垫片（prepareArguments）对未提供的字段显式产出 `undefined`，而 `reviseScript` 用对象展开合并 → `{...旧值, setting: undefined}` 把旧值抹掉。导演只想改一下上限条数，整块 `text.shared`（场景/目标/节拍/基调/禁区）与 `perActor`（角色任务/**每轮上限 boundary**/风格示例）被一起清空——演出指令凭空消失。两道防线：垫片不再产出 undefined；`reviseScript` 的合并忽略 undefined（`mergeDefined`）。
+- **用 script_confirm 改正在演的一幕不生效**：`buildAndSaveScript` 会把剧本重写成 version 1 并整体替换，而编排器内存态只在 `startScene` 时加载 → 正在演的这一幕仍按旧剧本推进（表现出来就是"改了上限却不生效"），旧文本段还被 v1 覆盖丢失。现在 `script_confirm` 对正在演/收尾中的 sceneId 直接拒绝，错误里指向 `stage_revise`（新增 `isSceneActive`）。
+- **收尾窗口形同虚设**：`wrapUpWindow` / `wrapRemaining` 只是个从不递减的内存计数，而 `decideTurnAction` 在 wrapping 下只看 `lines >= minLines` → 收尾后下一轮立刻收幕，演员却被反复告知「剩余约 N 条」。改为真截止线：`/wrap` 记 `wrapDeadline = 当前条数 + 窗口`，判定按截止线收束，演员每轮的「剩余 X 条」由截止线实时算出（倒计时如实递减，且不改状态、刷新/重连一致）。
+- **测试**：`stage-script`（合并忽略 undefined：只改 maxLines 不碰任何文字段）；`stage-tools`（工具级：只改上限后 shared/perActor 逐字段保留、script_confirm 拒绝覆写正在演的一幕）；`stage-orchestrator`（到上限不发言直接收幕、导演调大/调小上限后按新值推进、收尾窗口按条数收束）。
+
 ## [0.0.6] - 2026-09-18
 
 经典模式(单 Agent)、工作区面板、外部命令与 shell 方言。

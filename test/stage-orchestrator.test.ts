@@ -1,9 +1,10 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { loadCast, saveCast } from "../src/stage/cast.ts";
 import { saveScript } from "../src/stage/script-store.ts";
+import { appendStageEntry, makeStageEntry } from "../src/stage/stage-store.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	buildWriterMessage,
 	classifyActorOutput,
@@ -24,18 +25,52 @@ const rules: SceneRules = { minLines: 10, maxLines: 20, wrapUpWindow: 3, turn: "
 describe("decideTurnAction（收幕决策状态机）", () => {
 	it("正常状态继续演", () => {
 		expect(decideTurnAction("normal", 5, rules)).toBe("speak");
-		expect(decideTurnAction("wrapping", 5, rules)).toBe("speak"); // 未达下限不收
+		expect(decideTurnAction("wrapping", 5, rules)).toBe("speak"); // 未到收尾截止
 	});
 
-	it("收尾中且达到下限 → wrap-close", () => {
+	it("收尾中但没给截止线（历史调用/快照恢复）→ 退回下限语义：至少演到 minLines", () => {
 		expect(decideTurnAction("wrapping", 10, rules)).toBe("wrap-close");
 		expect(decideTurnAction("wrapping", 15, rules)).toBe("wrap-close");
 	});
 
-	it("达到上限强制收幕（优先级最高）", () => {
+	it("收尾窗口是真截止线：到点才收束，未到继续演（2026-09-18 修复：此前下一轮立刻收幕）", () => {
+		// /wrap 时已有 9 条、窗口 3 → 截止 12 条
+		expect(decideTurnAction("wrapping", 10, rules, 12)).toBe("speak");
+		expect(decideTurnAction("wrapping", 11, rules, 12)).toBe("speak");
+		expect(decideTurnAction("wrapping", 12, rules, 12)).toBe("wrap-close");
+		expect(decideTurnAction("wrapping", 13, rules, 12)).toBe("wrap-close");
+	});
+
+	it("达到上限强制收幕（优先级最高，压过收尾窗口）", () => {
 		expect(decideTurnAction("normal", 20, rules)).toBe("force-close");
 		expect(decideTurnAction("wrapping", 20, rules)).toBe("force-close");
 		expect(decideTurnAction("wrapping", 25, rules)).toBe("force-close");
+		expect(decideTurnAction("wrapping", 20, rules, 30)).toBe("force-close");
+	});
+});
+
+describe("isSceneActive（拦住用 script_confirm 覆写正在演的一幕）", () => {
+	let tmp: string;
+	beforeEach(() => {
+		tmp = mkdtempSync(join(tmpdir(), "piw-active-"));
+	});
+	afterEach(() => {
+		rmSync(tmp, { recursive: true, force: true });
+	});
+
+	it("只有当前在演/收尾中的那一幕算活跃（idle/closed 不算）", () => {
+		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
+		expect(orch.isSceneActive("s1")).toBe(false);
+		const inner = orch as unknown as { sceneId: string | null; phase: string };
+		inner.sceneId = "s1";
+		expect(orch.isSceneActive("s1")).toBe(false); // idle：允许提交新剧本
+		inner.phase = "running";
+		expect(orch.isSceneActive("s1")).toBe(true);
+		expect(orch.isSceneActive("s2")).toBe(false);
+		inner.phase = "wrapping";
+		expect(orch.isSceneActive("s1")).toBe(true);
+		inner.phase = "closed";
+		expect(orch.isSceneActive("s1")).toBe(false);
 	});
 });
 
@@ -387,5 +422,102 @@ describe("updateActorSpec（导演 stage_cast 后端）", () => {
 		expect(cast.actors[1]?.temperature).toBeUndefined();
 		// 未传 topP 时不清除演员 topP
 		expect(cast.actors[0]?.topP).toBe(0.9);
+	});
+});
+
+describe("上限条数：到了强制收幕；导演改上限后按新上限推进（2026-09-18 回归）", () => {
+	let tmp: string;
+	beforeEach(() => {
+		tmp = mkdtempSync(join(tmpdir(), "piw-maxturns-"));
+	});
+	afterEach(() => {
+		rmSync(tmp, { recursive: true, force: true });
+	});
+
+	function sceneScript(maxLines: number): SceneScript {
+		return {
+			scene: "s1",
+			chapter: "第一章",
+			version: 1,
+			definition: {
+				cast: { "actor-1": ["李四"] },
+				inject: {},
+				rules: { minLines: 2, maxLines, wrapUpWindow: 3, turn: "round-robin" },
+			},
+			text: {
+				shared: { setting: "酒馆", goal: "", beats: [], tone: "", forbidden: [] },
+				perActor: { "actor-1": { objective: "要债", examples: [] } },
+			},
+		};
+	}
+
+	/** 造一个"正在演"的编排器：剧本 + 已有 N 条转录 + 假演员，并拦下 closeScene。 */
+	async function runningOrch(maxLines: number, entries: number) {
+		const script = sceneScript(maxLines);
+		await saveScript(tmp, "s1", script);
+		for (let i = 0; i < entries; i++) {
+			await appendStageEntry(tmp, makeStageEntry("s1", i + 1, "actor-1", "李四", `第${i + 1}条台词`));
+		}
+		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
+		const inner = orch as unknown as {
+			sceneId: string;
+			script: SceneScript;
+			phase: string;
+			status: string;
+			actorHosts: Map<string, unknown>;
+			closeScene: (forced: boolean) => Promise<void>;
+			runOneTurn: () => Promise<string>;
+		};
+		inner.sceneId = "s1";
+		inner.script = script;
+		inner.phase = "running";
+		inner.status = "normal";
+		const closed: boolean[] = [];
+		inner.closeScene = async (forced: boolean) => {
+			closed.push(forced);
+		};
+		const actor = {
+			sendMessage: vi.fn(async () => {}),
+			getState: () => ({ messages: [{ role: "assistant", text: "三年了。" }] }),
+		};
+		inner.actorHosts.set("actor-1", actor);
+		return { orch, inner, actor, closed };
+	}
+
+	it("已达上限：不开新回合、直接强制收幕", async () => {
+		const { inner, actor, closed } = await runningOrch(4, 4);
+		expect(await inner.runOneTurn()).toBe("closed");
+		expect(closed).toEqual([true]);
+		expect(actor.sendMessage).not.toHaveBeenCalled();
+	});
+
+	it("导演调大上限后：这一幕继续演（不再按旧上限收幕）", async () => {
+		const { orch, inner, actor, closed } = await runningOrch(4, 4);
+		await orch.userRevise({ rules: { maxLines: 10 } });
+		expect(await inner.runOneTurn()).toBe("continue");
+		expect(closed).toEqual([]);
+		expect(actor.sendMessage).toHaveBeenCalled();
+	});
+
+	it("导演调小上限后：立即收幕", async () => {
+		const { orch, inner, closed } = await runningOrch(20, 5);
+		await orch.userRevise({ rules: { maxLines: 5 } });
+		expect(await inner.runOneTurn()).toBe("closed");
+		expect(closed).toEqual([true]);
+	});
+
+	it("收尾窗口：/wrap 后按窗口条数收束，而不是下一轮立刻收幕", async () => {
+		const { inner, actor, closed } = await runningOrch(20, 9);
+		const orch = inner as unknown as { userWrap: (n?: number) => Promise<string> };
+		expect(await orch.userWrap(3)).toContain("剩余约 3 条");
+		// 截止 = 9 + 3 = 12：第 10、11、12 条继续演（旧行为是下一轮立刻收幕）
+		expect(await inner.runOneTurn()).toBe("continue");
+		expect(await inner.runOneTurn()).toBe("continue");
+		expect(await inner.runOneTurn()).toBe("continue");
+		expect(closed).toEqual([]);
+		// 到点收束（非强制=自然收尾）
+		expect(await inner.runOneTurn()).toBe("closed");
+		expect(closed).toEqual([false]);
+		expect(actor.sendMessage).toHaveBeenCalledTimes(3);
 	});
 });
