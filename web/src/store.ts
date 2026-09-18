@@ -17,6 +17,25 @@ export function initialSessionState(): SessionViewState {
 }
 
 /**
+ * 从工具的流式局部结果里取文本。
+ *
+ * 形状来自 vendor 的 `onUpdate(partial)`(bash 的 stdout/stderr 快照):
+ * `{ content: [{ type: "text", text }], details }`。bash 在命令开跑时先发一次
+ * `{ content: [] }`(纯信号、无文本)——这种取不出文本的情况返回 null,
+ * 让调用方保持原值,而不是把已经显示出来的输出清空。
+ */
+function partialTextOf(partial: unknown): string | null {
+	if (typeof partial === "string") return partial;
+	if (!partial || typeof partial !== "object") return null;
+	const content = (partial as { content?: unknown }).content;
+	if (!Array.isArray(content)) return null;
+	const parts = content
+		.map((c) => (c && typeof c === "object" && (c as { type?: unknown }).type === "text" ? (c as { text?: unknown }).text : null))
+		.filter((t): t is string => typeof t === "string");
+	return parts.length > 0 ? parts.join("") : null;
+}
+
+/**
  * 把服务端会话历史(getSession().messages)转为 message_start/message_end 事件序列,
  * 与 SSE 事件走同一条 reducer 路径(整体替换聊天时先 RESET 再逐条 dispatch)。
  * 历史消息带服务端 entry id(entryId),ChatMessage.id 直接用它(稳定,撤回定位依据)。
@@ -188,6 +207,21 @@ export function processAgentEvent(state: SessionViewState, event: AgentEventDto)
 			messages[i] = { ...messages[i], toolCalls: [...messages[i].toolCalls, card] };
 			return { ...state, messages };
 		}
+		case "tool_execution_update": {
+			// 流式局部结果(bash stdout/stderr):**快照整段替换**,不是增量。
+			// 取不出文本(如 bash 的启动信号 {content: []})时保持原值,避免把已出输出清掉。
+			const { toolCallId, partialResult } = event;
+			if (!toolCallId) return state;
+			const text = partialTextOf(partialResult);
+			if (text === null) return state;
+			return {
+				...state,
+				messages: state.messages.map((m) => ({
+					...m,
+					toolCalls: m.toolCalls.map((t) => (t.id === toolCallId ? { ...t, stream: text } : t)),
+				})),
+			};
+		}
 		case "tool_execution_end": {
 			const { toolCallId, result, isError } = event;
 			if (!toolCallId) return state;
@@ -201,6 +235,8 @@ export function processAgentEvent(state: SessionViewState, event: AgentEventDto)
 									...t,
 									result: typeof result === "string" ? result : JSON.stringify(result ?? ""),
 									isError: isError ?? false,
+									// 结束了就以最终结果为准,丢掉流式快照(避免两份内容并存)
+									stream: null,
 								}
 							: t,
 					),

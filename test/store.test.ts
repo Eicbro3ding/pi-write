@@ -276,3 +276,41 @@ describe("contentTextOf", () => {
     expect(contentTextOf(42)).toBe("");
   });
 });
+
+describe("外部命令的流式输出(tool_execution_update)", () => {
+	function bootWithBashCard() {
+		let s = initialSessionState();
+		s = processAgentEvent(s, ev(`{"type":"message_start","message":{"role":"assistant","content":[]}}`));
+		s = processAgentEvent(s, ev(`{"type":"tool_execution_start","toolCallId":"b1","toolName":"bash","args":"{\\"command\\":\\"ls -la\\"}"}`));
+		return s;
+	}
+
+	it("update 把快照写进卡片(快照整段替换,不是增量)", () => {
+		let s = bootWithBashCard();
+		s = processAgentEvent(s, ev(`{"type":"tool_execution_update","toolCallId":"b1","toolName":"bash","partialResult":{"content":[{"type":"text","text":"总用量 4"}]}}`));
+		s = processAgentEvent(s, ev(`{"type":"tool_execution_update","toolCallId":"b1","toolName":"bash","partialResult":{"content":[{"type":"text","text":"总用量 4\\ndrwxr-xr-x draft"}]}}`));
+		expect(s.messages[0].toolCalls[0].stream).toBe("总用量 4\ndrwxr-xr-x draft");
+		// 未结束:结果仍为 null
+		expect(s.messages[0].toolCalls[0].result).toBeNull();
+	});
+
+	it("空内容快照(命令开跑的信号)不清掉已有输出", () => {
+		let s = bootWithBashCard();
+		s = processAgentEvent(s, ev(`{"type":"tool_execution_update","toolCallId":"b1","toolName":"bash","partialResult":{"content":[{"type":"text","text":"一段输出"}]}}`));
+		s = processAgentEvent(s, ev(`{"type":"tool_execution_update","toolCallId":"b1","toolName":"bash","partialResult":{"content":[]}}`));
+		expect(s.messages[0].toolCalls[0].stream).toBe("一段输出");
+	});
+
+	it("结束:以最终结果为准,丢掉流式快照", () => {
+		let s = bootWithBashCard();
+		s = processAgentEvent(s, ev(`{"type":"tool_execution_update","toolCallId":"b1","toolName":"bash","partialResult":{"content":[{"type":"text","text":"运行中输出"}]}}`));
+		s = processAgentEvent(s, ev(`{"type":"tool_execution_end","toolCallId":"b1","result":"最终输出","isError":false}`));
+		expect(s.messages[0].toolCalls[0]).toMatchObject({ result: "最终输出", stream: null, isError: false });
+	});
+
+	it("字符串形式的 partial 也能吃(防御异构实现)", () => {
+		let s = bootWithBashCard();
+		s = processAgentEvent(s, ev(`{"type":"tool_execution_update","toolCallId":"b1","toolName":"bash","partialResult":"直接给文本"}`));
+		expect(s.messages[0].toolCalls[0].stream).toBe("直接给文本");
+	});
+});

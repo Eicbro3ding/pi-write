@@ -86,12 +86,48 @@ function ToolStatusIndicator({ label }: { label: string }) {
 }
 
 /** 工具调用卡片:名称 + 参数 + 运行中/完成/失败状态。 */
+/**
+ * 这一轮要显示哪些工具卡片。
+ *
+ * 「简化输出」把工具卡片整体藏起来(默认开启,绝大多数文件类工具看一眼就够);
+ * **bash 是唯一例外**:它是唯一能越过书目录边界的工具,命令与输出必须始终可见——
+ * 藏了它,「打开外部命令」就等于开了一个看不见的黑箱。
+ */
+export function visibleToolCalls(toolCalls: ToolCallInfo[], simplifiedTools: boolean): ToolCallInfo[] {
+	if (!simplifiedTools) return toolCalls;
+	return toolCalls.filter((t) => t.name === "bash");
+}
+
+/**
+ * 工具卡片。两种形态:
+ * - 普通工具:单行(name + 参数 + 状态),细节在 title 里;
+ * - **bash(外部命令):命令与输出都摊开**——它是唯一能越过书目录边界的工具,
+ *   运行中的 stdout/stderr 经 tool_execution_update 实时流进来(见 store 的归约),
+ *   结束后把最终输出留在卡片上供回看。运行中自动滚到底(输出是快照替换)。
+ */
 function ToolCard({ t }: { t: ToolCallInfo }) {
+	const isShell = t.name === "bash";
+	const running = t.result === null;
+	const detail = running ? (t.stream ?? null) : t.result;
+	const streamRef = useRef<HTMLPreElement | null>(null);
+
+	useEffect(() => {
+		if (running && streamRef.current) streamRef.current.scrollTop = streamRef.current.scrollHeight;
+	}, [t.stream, running]);
+
 	return (
-		<div className={t.isError ? "tool err" : "tool"} title={t.result ?? t.args}>
-			<span className="tool-name">{t.name}</span>
-			<span className="tool-args">{t.args}</span>
-			<span className="tool-result">{t.isError ? "失败" : t.result === null ? "运行中" : "完成"}</span>
+		<div className={t.isError ? "tool err" : "tool"} data-live={running && detail !== null ? "1" : "0"} title={t.args}>
+			<div className="tool-head">
+				<span className="tool-name">{t.name}</span>
+				<span className="tool-args">{t.args}</span>
+				<span className="tool-result">{t.isError ? "失败" : running ? "运行中" : "完成"}</span>
+			</div>
+			{/* bash 始终摊开输出;其他工具只在流式期间显示(结束后单行更省地方) */}
+			{detail !== null && detail !== "" && (isShell || running) && (
+				<pre ref={streamRef} className="tool-stream">
+					{detail}
+				</pre>
+			)}
 		</div>
 	);
 }
@@ -234,9 +270,10 @@ function Message({
 						) : (
 							<div className="record-text record-md" dangerouslySetInnerHTML={{ __html: renderMarkdown(m.text) }} />
 						))}
-					{!simplifiedTools && m.toolCalls.length > 0 && (
+					{/* 简化输出隐藏"看一眼就够"的工具卡片;bash 例外——命令必须可见 */}
+					{visibleToolCalls(m.toolCalls, simplifiedTools).length > 0 && (
 						<div className="tools">
-							{m.toolCalls.map((t) => (
+							{visibleToolCalls(m.toolCalls, simplifiedTools).map((t) => (
 								<ToolCard key={t.id} t={t} />
 							))}
 						</div>
