@@ -1,6 +1,6 @@
 /**
  * WriterServer —— GUI 后端的 HTTP 服务:Node 原生 http,REST 端点
- * (books/chapters/session/chat/models/world/draft/export/import/mcp/stage)
+ * (books/chapters/session/chat/models/world/draft/export/import/mcp/stage/setup/settings)
  * + SSE 事件流;web/dist 存在时对非 /api 的 GET/HEAD 提供静态文件(生产模式
  * 直接加载页面)。
  *
@@ -40,6 +40,8 @@ import {
 	writeSetupState,
 	type SetupState,
 } from "../setup.ts";
+import { readWriterSettings, updateWriterSettings, type WriterSettings } from "../writer-settings.ts";
+import { BOOK_FILE_GROUPS, classifyBookFileKind, isWorkspaceFile, listBookFiles, readWorkspaceText, statWorkspaceFile } from "../book-files.ts";
 import { MAX_ZIP_BYTES, exportBookZip, readImportZip, type BookZipImport } from "./book-zip.ts";
 import { ensureWorld, newId, readWorldEditRecord, saveWorld, WorldValidationError, type WorldData } from "../world-data.ts";
 import { buildChapterContext, DEFAULT_CONTEXT_BUDGET, trimMemory } from "../world-context.ts";
@@ -494,6 +496,10 @@ export class WriterServer {
 			{ method: "PATCH", segments: ["books", ":slug"], handler: (ctx) => this.handlePatchBook(ctx) },
 			{ method: "DELETE", segments: ["books", ":slug"], handler: (ctx) => this.handleDeleteBook(ctx) },
 			{ method: "POST", segments: ["books", ":slug", "session"], handler: (ctx) => this.handlePostBookSession(ctx) },
+			// 工作区文件清单(只读;按语义分组,见 src/book-files.ts)
+			{ method: "GET", segments: ["books", ":slug", "files"], handler: (ctx) => this.handleGetBookFiles(ctx) },
+			// 工作区单文件预览(只读;文本回 JSON、图片回字节,见 handleGetBookFile)
+			{ method: "GET", segments: ["books", ":slug", "file"], handler: (ctx) => this.handleGetBookFile(ctx) },
 			{ method: "POST", segments: ["books", ":slug", "images"], handler: (ctx) => this.handlePostBookImage(ctx) },
 			{ method: "GET", segments: ["books", ":slug", "images", ":file"], handler: (ctx) => this.handleGetBookImage(ctx) },
 			{ method: "DELETE", segments: ["books", ":slug", "images", ":file"], handler: (ctx) => this.handleDeleteBookImage(ctx) },
@@ -564,6 +570,10 @@ export class WriterServer {
 			{ method: "GET", segments: ["setup"], handler: (ctx) => this.handleGetSetup(ctx) },
 			{ method: "POST", segments: ["setup"], handler: (ctx) => this.handlePostSetup(ctx) },
 			{ method: "POST", segments: ["setup", "reset"], handler: (ctx) => this.handlePostSetupReset(ctx) },
+			// settings(服务端设置:~/.pi/writer/settings.json;当前唯一项 = 经典模式。
+			//  放服务端而非 localStorage:切换会改变 agent 装配,多窗口必须一致)
+			{ method: "GET", segments: ["settings"], handler: (ctx) => this.handleGetSettings(ctx) },
+			{ method: "PUT", segments: ["settings"], handler: (ctx) => this.handlePutSettings(ctx) },
 			// 插件路由预留(构造参数;追加在内置路由之后)
 			...(this.options.extraRoutes ?? []),
 		];
@@ -988,6 +998,55 @@ export class WriterServer {
 		const buf = await exportBookZip(getBookDir(slug));
 		ctx.res.writeHead(200, { "content-type": "application/zip", "content-length": buf.length });
 		ctx.res.end(buf);
+	}
+
+	/**
+	 * GET /api/books/:slug/files:书目录文件清单(**只读**)。
+	 *
+	 * 按语义分组返回(草稿 / 资料与笔记 / 图片 / 设定视图 / 其他)+ 分组标签,
+	 * 而不是镜像磁盘树——`draft/`、`.writer/`、`stage/` 是实现细节,不摊给用户。
+	 * 每组条目仍带真实相对路径(想直连磁盘有出口)。
+	 *
+	 * 目前**不带**「谁改的」标记:文件系统只留 mtime,区分人改/AI 改需要一份
+	 * 写入台账(前端可先用 SSE 的 draft_changed + writer_event 内存态近似)。
+	 */
+	private async handleGetBookFiles(ctx: RouteContext): Promise<void> {
+		const slug = ctx.params.slug!;
+		const book = await loadBook(slug);
+		if (!book) throw new HttpError(404, "not_found", `书不存在: ${slug}`);
+		const files = await listBookFiles(
+			getBookDir(slug),
+			book.chapters.map((c) => ({ id: c.id, title: c.title })),
+		);
+		this.send(ctx.res, 200, { slug, groups: BOOK_FILE_GROUPS, files });
+	}
+
+	/**
+	 * GET /api/books/:slug/file?path=<相对路径>:读工作区单个文件(**只读**、**无写入端点**)。
+	 *
+	 * 校验链与清单同源:isWorkspaceFile(路径语法 + 排除规则)→ statWorkspaceFile
+	 * (存在 + 普通文件;符号链接拒绝)→ 越界/隐藏/机器数据一律 400,不存在 404。
+	 *
+	 * 文本文件回 JSON(text 超过 512KB 截断并带 truncated);图片直接回字节流,
+	 * 因为 <img src> 需要 URL,在 JSON 里塞 base64 只是白费内存。
+	 */
+	private async handleGetBookFile(ctx: RouteContext): Promise<void> {
+		const slug = ctx.params.slug!;
+		if (!(await loadBook(slug))) throw new HttpError(404, "not_found", `书不存在: ${slug}`);
+		const rel = ctx.url.searchParams.get("path") ?? "";
+		if (!isWorkspaceFile(rel)) throw new HttpError(400, "bad_path", "路径越界或不在工作区范围内");
+		const bookDir = getBookDir(slug);
+		const info = await statWorkspaceFile(bookDir, rel);
+		if (!info) throw new HttpError(404, "not_found", `文件不存在: ${rel}`);
+		if (classifyBookFileKind(rel) === "image") {
+			const body = await readFile(info.abs);
+			ctx.res.writeHead(200, { "content-type": contentTypeFor(info.abs), "content-length": body.length });
+			ctx.res.end(body);
+			return;
+		}
+		const content = await readWorkspaceText(bookDir, rel);
+		if (!content) throw new HttpError(400, "bad_request", `该文件不能作为文本预览: ${rel}`);
+		this.send(ctx.res, 200, { file: content });
 	}
 
 	/**
@@ -1999,6 +2058,54 @@ export class WriterServer {
 			if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
 		}
 		this.send(ctx.res, 200, { ok: true });
+	}
+
+	// ---- settings 路由(服务端全局设置:经典模式等)----
+
+	/**
+	 * GET /api/settings:全局设置(~/.pi/writer/settings.json)。前端启动时对账
+	 * 本地缓存(经典模式决定顶栏导航显示哪几页),多窗口/换浏览器都读同一份。
+	 */
+	private async handleGetSettings(ctx: RouteContext): Promise<void> {
+		const settings = await readWriterSettings();
+		this.send(ctx.res, 200, { settings });
+	}
+
+	/**
+	 * PUT /api/settings {classicMode?, enableShell?}:更新设置(只收白名单字段,未知字段忽略)。
+	 *
+	 * 这两个开关都改变**服务端 agent 装配**(经典模式换提示词与工具集;外部命令放开 bash),
+	 * 所以落盘后立即应用:
+	 * - WriterHost(编辑页会话)按开关释放已建会话,下次对话按新装配重建;
+	 * - 主 SessionHost 走 reloadRuntime()(与 MCP 配置变更同一路径:复用当前会话文件重建
+	 *   运行时,新工具随之生效,leaf 指针保留)。重建失败不回滚设置——设置已落盘,
+	 *   下次启动仍生效,这里只保证「能重建就重建」。
+	 *
+	 * 变更经 SSE 广播 settings_changed:其他窗口(另一浏览器/Electron)据此同步开关状态。
+	 */
+	private async handlePutSettings(ctx: RouteContext): Promise<void> {
+		const body = (await readJsonBody(ctx.req)) as Record<string, unknown> | null;
+		const rawClassic = body?.classicMode;
+		const rawShell = body?.enableShell;
+		if (rawClassic !== undefined && typeof rawClassic !== "boolean") {
+			throw new HttpError(400, "bad_request", "字段 classicMode 必须是布尔值");
+		}
+		if (rawShell !== undefined && typeof rawShell !== "boolean") {
+			throw new HttpError(400, "bad_request", "字段 enableShell 必须是布尔值");
+		}
+		const settings: WriterSettings = await updateWriterSettings({
+			...(rawClassic === undefined ? {} : { classicMode: rawClassic }),
+			...(rawShell === undefined ? {} : { enableShell: rawShell }),
+		});
+		await this.options.writerHost?.setClassicMode(settings.classicMode);
+		await this.options.writerHost?.setShellEnabled(settings.enableShell);
+		try {
+			await this.options.sessionHost.reloadRuntime();
+		} catch {
+			/* 主会话重建失败:设置已落盘,旧 runtime 继续可用,下次启动生效 */
+		}
+		this.broadcast({ type: "settings_changed", settings });
+		this.send(ctx.res, 200, { settings });
 	}
 
 	// ---- setup 路由(首次启动配置向导)----

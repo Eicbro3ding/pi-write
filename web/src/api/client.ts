@@ -5,12 +5,20 @@
  * 注意:本文件不得在 import 时触碰 DOM 专属 API(EventSource 只在 subscribeEvents 内使用),
  * 以兼容 node 环境的 vitest 单测。
  */
-import type { AgentEventDto, BookDetail, BookMeta, ChapterRef, ContextUsageDto, McpServerInfo, McpServerStatus, PluginInfoDto, PluginSettingsItemDto, ProviderDetailDto, ProviderInfo, SessionState, SessionTreeDto, SetupStateDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, WorldDataDto, WriterStateDto } from "../types.ts";
+import type { AgentEventDto, BookDetail, BookFileTextDto, BookFilesDto, BookMeta, ChapterRef, ContextUsageDto, McpServerInfo, McpServerStatus, PluginInfoDto, PluginSettingsItemDto, ProviderDetailDto, ProviderInfo, SessionState, SessionTreeDto, SetupStateDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, WorldDataDto, WriterSettingsDto, WriterStateDto } from "../types.ts";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
 
 /** 图片访问 URL(同源相对路径;生产/Electron 同源,vite dev 经代理)。 */
 export function imageUrl(slug: string, file: string): string {
 	return `/api/books/${encodeURIComponent(slug)}/images/${encodeURIComponent(file)}`;
+}
+
+/**
+ * 工作区单文件 URL:文本会被服务端按 JSON 回,图片按字节流回——所以文本用
+ * client.getBookFileText 取,图片把本 URL 直接喂 <img src>。
+ */
+export function bookFileUrl(slug: string, path: string): string {
+	return `/api/books/${encodeURIComponent(slug)}/file?path=${encodeURIComponent(path)}`;
 }
 
 /** 带 HTTP 状态码的请求错误;非 2xx 时由 request()/直连 fetch 统一抛出。 */
@@ -269,6 +277,36 @@ export class ApiClient {
 	/** 重置向导为未完成(设置页「重新运行配置向导」)。返回重置后的状态。 */
 	async resetSetup(): Promise<{ completed: boolean; setup: SetupStateDto }> {
 		return this.request<{ completed: boolean; setup: SetupStateDto }>("/api/setup/reset", { method: "POST" });
+	}
+
+	/** 服务端全局设置(经典模式等;存 ~/.pi/writer/settings.json)。 */
+	async getSettings(): Promise<{ settings: WriterSettingsDto }> {
+		return this.request<{ settings: WriterSettingsDto }>("/api/settings");
+	}
+
+	/**
+	 * 更新服务端设置(只传要改的字段)。经典模式/外部命令切换都会重建服务端会话,
+	 * 下次对话按新装配重建;返回落盘后的完整设置。
+	 */
+	async putSettings(patch: { classicMode?: boolean; enableShell?: boolean }): Promise<{ settings: WriterSettingsDto }> {
+		return this.request<{ settings: WriterSettingsDto }>("/api/settings", {
+			method: "PUT",
+			body: JSON.stringify(patch),
+		});
+	}
+
+	/** 书目录文件清单(只读;按语义分组,见 src/book-files.ts)。 */
+	async getBookFiles(slug: string): Promise<BookFilesDto> {
+		return this.request<BookFilesDto>(`/api/books/${encodeURIComponent(slug)}/files`);
+	}
+
+	/** 读工作区单个文本文件(图片不走这里——用 bookFileUrl 直接喂 <img>)。 */
+	async getBookFileText(slug: string, path: string): Promise<BookFileTextDto> {
+		const q = new URLSearchParams({ path });
+		const r = await this.request<{ file: BookFileTextDto }>(
+			`/api/books/${encodeURIComponent(slug)}/file?${q.toString()}`,
+		);
+		return r.file;
 	}
 
 	/** MCP 服务器配置 + 连接状态。 */

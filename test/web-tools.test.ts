@@ -21,3 +21,22 @@ describe("webExcludeTools / webActiveTools", () => {
 		expect(webActiveTools({})).not.toContain("bash");
 	});
 });
+
+describe("外部命令(bash)开关", () => {
+	it("缺省:bash 在黑名单里、不在激活名单", () => {
+		expect(webExcludeTools({})).toContain("bash");
+		expect(webActiveTools({})).not.toContain("bash");
+	});
+
+	it("shell:true 时不再禁用,并追加到激活名单末位(不改变既有顺序)", () => {
+		expect(webExcludeTools({}, { shell: true })).toEqual([]);
+		expect(webActiveTools({}, { shell: true })).toEqual(["read", "write", "edit", "grep", "find", "ls", "bash"]);
+	});
+
+	it("与 PI_WRITER_NO_SPAWN_TOOLS 组合:grep/find 仍剔除,bash 由开关决定", () => {
+		const env = { PI_WRITER_NO_SPAWN_TOOLS: "1" };
+		expect(webExcludeTools(env, { shell: true })).toEqual(["grep", "find"]);
+		expect(webActiveTools(env, { shell: true })).toEqual(["read", "write", "edit", "ls", "bash"]);
+		expect(webActiveTools(env, { shell: false })).toEqual(["read", "write", "edit", "ls"]);
+	});
+});

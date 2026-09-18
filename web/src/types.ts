@@ -149,6 +149,11 @@ export interface ToolCallInfo {
 	args: string;
 	/** 执行结果文本;未结束为 null。 */
 	result: string | null;
+	/**
+	 * 运行中的**流式输出快照**(tool_execution_update;bash 的 stdout/stderr)。
+	 * 是快照不是增量——每次事件直接替换(完整当前输出),结束时清空。
+	 */
+	stream?: string | null;
 	/** 是否执行出错。 */
 	isError: boolean;
 }
@@ -206,6 +211,9 @@ export type AgentEventDto =
 	  }
 	| { type: "message_end"; message: Record<string, unknown>; entryId?: string }
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args?: unknown }
+	// 工具运行中的流式局部结果(bash 的 stdout/stderr 快照;节流后按快照整段发,
+	// 不是增量)。前端据此在有命令跑起来时就能看到输出(2026-09-18)。
+	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args?: unknown; partialResult?: unknown }
 	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: unknown; isError?: boolean }
 	| { type: "compaction_start"; reason?: "manual" | "threshold" | "overflow" }
 	| { type: "compaction_end"; reason?: "manual" | "threshold" | "overflow"; aborted?: boolean }
@@ -240,7 +248,22 @@ export type AgentEventDto =
 	// 前端复用 processAgentEvent 归约,消息/思考/工具卡片零新逻辑)。
 	// chapterFile 标记归属章节:编剧会话按章节隔离(WriterHost 键 = 书+章节),
 	// 前端必须按 slug+chapterFile 过滤,否则切章后其他章节编剧的流式会串进本页(2026-08-13)。
-	| { type: "writer_event"; slug: string; chapterFile: string | null; event: WriterSessionEventDto };
+	| { type: "writer_event"; slug: string; chapterFile: string | null; event: WriterSessionEventDto }
+	// 服务端设置变更(PUT /api/settings 后广播):其他窗口据此同步导航与开关
+	// (经典模式切换会改变可用页面与 agent 装配,不能各窗口各说各话)
+	| { type: "settings_changed"; settings: WriterSettingsDto };
+
+/** 服务端全局设置(~/.pi/writer/settings.json;与 src/writer-settings.ts 对齐)。 */
+export interface WriterSettingsDto {
+	version: number;
+	/** 经典模式:单 agent(只有编辑页),写作 agent 带全量工具。 */
+	classicMode: boolean;
+	/**
+	 * 外部命令(bash):允许 agent 在书目录外执行 shell 命令;缺省关闭。
+	 * 打开后命令以服务进程权限运行(路径守卫对它无效),靠命令与输出实时可见来约束。
+	 */
+	enableShell: boolean;
+}
 
 /** 常驻编剧/导演会话事件(主会话事件的子集,全部可被 processAgentEvent 处理)。 */
 export type WriterSessionEventDto =
@@ -248,6 +271,7 @@ export type WriterSessionEventDto =
 	| Extract<AgentEventDto, { type: "message_update" }>
 	| Extract<AgentEventDto, { type: "message_end" }>
 	| Extract<AgentEventDto, { type: "tool_execution_start" }>
+	| Extract<AgentEventDto, { type: "tool_execution_update" }>
 	| Extract<AgentEventDto, { type: "tool_execution_end" }>
 	| Extract<AgentEventDto, { type: "compaction_start" }>
 	| Extract<AgentEventDto, { type: "compaction_end" }>
@@ -534,4 +558,55 @@ export interface McpServerStatus {
 	ok: boolean;
 	tools: number;
 	error?: string;
+}
+
+// —— 工作区(书目录文件清单与预览;与 src/book-files.ts 对齐,只读) ——
+
+/** 工作区分组 id(草稿 / 资料与笔记 / 图片 / 其他)。 */
+export type BookFileGroupDto = "draft" | "notes" | "image" | "other";
+
+/** 文件可渲染类型:text 走 markdown,image 走 <img>,binary 只给元信息。 */
+export type BookFileKindDto = "text" | "image" | "binary";
+
+/** 分组元信息(标签与说明由服务端给,前端只渲染)。 */
+export interface BookFileGroupInfoDto {
+	id: BookFileGroupDto;
+	label: string;
+	description: string;
+}
+
+/** 一个工作区文件条目。 */
+export interface BookFileEntryDto {
+	/** 书目录相对路径(posix 分隔符),如 "draft/ch01.md"。 */
+	path: string;
+	name: string;
+	/** 行内展示名(草稿 = 章节标题;服务端给)。 */
+	title: string;
+	group: BookFileGroupDto;
+	kind: BookFileKindDto;
+	bytes: number;
+	/** 最后修改时间(ms)。 */
+	mtime: number;
+	/** 草稿组:所属章节 id;其余为 null。 */
+	chapterId: string | null;
+	/** 草稿组:章节标题(未登记时回退章节 id)。 */
+	chapterTitle: string | null;
+}
+
+/** GET /api/books/:slug/files 响应。 */
+export interface BookFilesDto {
+	slug: string;
+	groups: BookFileGroupInfoDto[];
+	files: BookFileEntryDto[];
+}
+
+/** GET /api/books/:slug/file 的文本响应(图片直接回字节流,不走这里)。 */
+export interface BookFileTextDto {
+	path: string;
+	kind: BookFileKindDto;
+	bytes: number;
+	mtime: number;
+	text: string;
+	/** 是否因超过上限被截断。 */
+	truncated: boolean;
 }

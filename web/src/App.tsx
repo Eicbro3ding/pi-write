@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiClient } from "./api/client.ts";
 import { useLibrary } from "./library.ts";
 import { syncPluginScripts } from "./plugin-scripts.ts";
@@ -11,14 +11,25 @@ import { SettingsPage } from "./pages/SettingsPage.tsx";
 import {
 	autoConfirmEditsEnabled,
 	autoExpandThinkingEnabled,
+	classicModeEnabled,
 	setAutoConfirmEdits as persistAutoConfirmEdits,
 	setAutoExpandThinking as persistAutoExpandThinking,
+	setClassicMode as persistClassicMode,
 	setSimplifiedTools as persistSimplifiedTools,
 	simplifiedToolsEnabled,
 } from "./settings.ts";
 
 /** 顶层视图:舞台(默认,导演讨论室/演出现场)| 编辑(正文 + 编剧)| 世界书 | 设置。 */
 type View = "stage" | "edit" | "world" | "settings";
+
+/**
+ * 经典模式(单 agent)下仍然存在的视图:编辑页 + 世界书 + 设置——
+ * 去掉的只有舞台(导演/演员/旁白那套多 agent 共演)。世界书页本身没有 agent,
+ * 只是面向人的设定编辑器,留着自己改设定照样用。
+ */
+function isClassicView(v: View): boolean {
+	return v !== "stage";
+}
 
 /** 顶栏保存状态 → 图标与颜色 class(文案来自 WritePage 上报的 SAVE_LABELS)。 */
 const SAVE_STYLE: Record<string, { icon: string; cls: string }> = {
@@ -34,7 +45,17 @@ type SetupPhase = "checking" | "pending" | "done";
 
 export function App() {
 	const client = useMemo(() => new ApiClient(), []);
-	const [view, setView] = useState<View>("stage");
+	/**
+	 * 经典模式(单 agent):去掉舞台入口(没有导演/演员/旁白的多 agent 共演),
+	 * 编辑页的 AI 换成带全量工具的写作 agent;世界书页与设置页照常。
+	 *
+	 * 权威值在服务端(~/.pi/writer/settings.json,决定 agent 装配),这里读本地
+	 * 缓存供首帧渲染(否则顶栏会先画出舞台入口再收回);挂载后 GET /api/settings
+	 * 对账,并以服务端为准覆盖;其他窗口的切换经 settings_changed SSE 同步。
+	 */
+	const [classicMode, setClassicModeState] = useState<boolean>(() => classicModeEnabled());
+	/** 顶栏视图;经典模式(本地缓存已开启)首帧直接落在编辑页。 */
+	const [view, setView] = useState<View>(() => (classicModeEnabled() ? "edit" : "stage"));
 	const [header, setHeader] = useState<HeaderInfo | null>(null);
 	/** 简化输出(隐藏工具卡片),缺省开启;切换经设置页持久化并同步 state。 */
 	const [simplifiedTools, setSimplifiedToolsState] = useState<boolean>(() => simplifiedToolsEnabled());
@@ -58,6 +79,56 @@ export function App() {
 		persistAutoConfirmEdits(v);
 		setAutoConfirmEditsState(v);
 	};
+	/**
+	 * 落地经典模式状态:写本地缓存 + 置 state;开启时把视图从已隐藏的页
+	 * (舞台)拉回编辑页,避免停在一张不存在的页面上。
+	 */
+	const applyClassicMode = useCallback((enabled: boolean) => {
+		persistClassicMode(enabled);
+		setClassicModeState(enabled);
+		if (enabled) setView((v) => (isClassicView(v) ? v : "edit"));
+	}, []);
+	/**
+	 * 外部命令(bash):agent 能否执行 shell 命令。同样以服务端为准——
+	 * 它不改变页面结构(没有首帧渲染依赖),所以不落 localStorage,直接随服务端对账。
+	 */
+	const [shellEnabled, setShellEnabledState] = useState(false);
+	const applyShellEnabled = useCallback((enabled: boolean) => {
+		setShellEnabledState(enabled);
+	}, []);
+	const changeShellEnabled = useCallback(
+		async (v: boolean) => {
+			const prev = shellEnabled;
+			applyShellEnabled(v);
+			try {
+				const { settings } = await client.putSettings({ enableShell: v });
+				applyShellEnabled(settings.enableShell);
+			} catch (e) {
+				applyShellEnabled(prev);
+				throw e;
+			}
+		},
+		[client, shellEnabled, applyShellEnabled],
+	);
+	/**
+	 * 切换经典模式:先本地落盘 + 置位(开关即时响应),再写服务端;服务端是权威值,
+	 * 以它的返回为准回写(失败回滚本地并抛给调用方展示错误)。服务端写入会释放
+	 * 已建会话,下次对话按新装配重建 agent,所以这一步不能只改本地。
+	 */
+	const changeClassicMode = useCallback(
+		async (v: boolean) => {
+			const prev = classicMode;
+			applyClassicMode(v);
+			try {
+				const { settings } = await client.putSettings({ classicMode: v });
+				applyClassicMode(settings.classicMode);
+			} catch (e) {
+				applyClassicMode(prev);
+				throw e;
+			}
+		},
+		[client, classicMode, applyClassicMode],
+	);
 	/** 首启向导状态:挂载时查一次服务端(~/.pi/writer/setup.json)。 */
 	const [setupPhase, setSetupPhase] = useState<SetupPhase>("checking");
 	/** 设置页「重新运行配置向导」:向导以覆盖层叠加(页面保持挂载,流式状态不丢)。 */
@@ -77,6 +148,32 @@ export function App() {
 			cancelled = true;
 		};
 	}, [client]);
+
+	// 服务端设置对账 + 多窗口同步:挂载时拉一次(~/.pi/writer/settings.json,权威值),
+	// 之后由 settings_changed 广播驱动(另一窗口切了经典模式,本窗口导航跟着变)。
+	// 拉取失败沿用本地缓存——设置读取失败不该把界面卡在未知状态。
+	useEffect(() => {
+		let cancelled = false;
+		client
+			.getSettings()
+			.then(({ settings }) => {
+				if (cancelled) return;
+				applyClassicMode(settings.classicMode);
+				applyShellEnabled(settings.enableShell);
+			})
+			.catch(() => {
+				/* 读取失败:沿用本地缓存 */
+			});
+		const unsub = client.subscribeEvents((e) => {
+			if (e.type !== "settings_changed") return;
+			applyClassicMode(e.settings.classicMode);
+			applyShellEnabled(e.settings.enableShell);
+		});
+		return () => {
+			cancelled = true;
+			unsub();
+		};
+	}, [client, applyClassicMode, applyShellEnabled]);
 
 	// 插件前端 JS:trusted 插件的 frontend.mjs 经 <script module> 注入;状态变化(启停)
 	// 由设置页操作驱动,此处仅挂载+定期对账(30s);插件脚本错误静默不影响主界面。
@@ -114,6 +211,8 @@ export function App() {
 				onAutoExpandThinkingChange={setAutoExpandThinking}
 				autoConfirmEdits={autoConfirmEdits}
 				onAutoConfirmEditsChange={setAutoConfirmEdits}
+				classicMode={classicMode}
+				onClassicModeChange={changeClassicMode}
 				onFinished={() => setSetupPhase("done")}
 			/>
 		);
@@ -152,14 +251,18 @@ export function App() {
 						<span className="stat">未连接</span>
 					)}
 					<span className="top-divider" />
-					<button
-						type="button"
-						className={view === "stage" ? "top-entry active" : "top-entry"}
-						onClick={() => setView("stage")}
-					>
-						<IconStage size={15} />
-						<span className="top-entry-label">舞台</span>
-					</button>
+					{/* 经典模式(单 agent)去掉的只有舞台:导演/演员/旁白那套多 agent 共演。
+					    世界书页没有 agent(面向人的设定编辑器),留着照常用 */}
+					{!classicMode && (
+						<button
+							type="button"
+							className={view === "stage" ? "top-entry active" : "top-entry"}
+							onClick={() => setView("stage")}
+						>
+							<IconStage size={15} />
+							<span className="top-entry-label">舞台</span>
+						</button>
+					)}
 					<button
 						type="button"
 						className={view === "edit" ? "top-entry active" : "top-entry"}
@@ -189,10 +292,15 @@ export function App() {
 			<div className="main">
 				{/* 四页常驻挂载,切换只改 hidden:写作/会话/舞台的流式状态不能随卸载丢失
 				    (流式增量只在客户端,卸载后重水合会丢未完成消息);隐藏页不再重播
-				    入场动画,换取状态连续性 */}
-				<section className={`view ${view === "stage" ? "" : "hidden"}`}>
-					<StagePage client={client} library={library} active={view === "stage"} onGoEdit={() => setView("edit")} simplifiedTools={simplifiedTools} />
-				</section>
+				    入场动画,换取状态连续性。
+				    经典模式下舞台直接不挂载(不是隐藏):它的后台会话与 SSE 订阅正是
+				    多 agent 那套,留着等于「关了还在跑」;切回多 agent 时重新挂载并从
+				    服务端重新水合,状态不丢 */}
+				{!classicMode && (
+					<section className={`view ${view === "stage" ? "" : "hidden"}`}>
+						<StagePage client={client} library={library} active={view === "stage"} onGoEdit={() => setView("edit")} simplifiedTools={simplifiedTools} />
+					</section>
+				)}
 					<section className={`view ${view === "edit" ? "" : "hidden"}`}>
 						<WritePage
 							client={client}
@@ -200,6 +308,7 @@ export function App() {
 							onHeader={setHeader}
 							simplifiedTools={simplifiedTools}
 							autoConfirmEdits={autoConfirmEdits}
+							classicMode={classicMode}
 						/>
 					</section>
 				<section className={`view ${view === "world" ? "" : "hidden"}`}>
@@ -215,6 +324,10 @@ export function App() {
 							onAutoExpandThinkingChange={setAutoExpandThinking}
 							autoConfirmEdits={autoConfirmEdits}
 							onAutoConfirmEditsChange={setAutoConfirmEdits}
+							classicMode={classicMode}
+							onClassicModeChange={changeClassicMode}
+							shellEnabled={shellEnabled}
+							onShellEnabledChange={changeShellEnabled}
 							onRerunSetup={() => setRerunWizard(true)}
 						/>
 					</section>
@@ -229,6 +342,8 @@ export function App() {
 					onAutoExpandThinkingChange={setAutoExpandThinking}
 					autoConfirmEdits={autoConfirmEdits}
 					onAutoConfirmEditsChange={setAutoConfirmEdits}
+					classicMode={classicMode}
+					onClassicModeChange={changeClassicMode}
 					onBooksChanged={() => void library.loadBooks()}
 					onFinished={() => setRerunWizard(false)}
 				/>

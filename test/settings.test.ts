@@ -1,15 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	autoExpandThinkingEnabled,
+	classicModeEnabled,
 	parseAutoExpandThinking,
+	parseClassicMode,
 	parseSimplifiedTools,
 	setAutoExpandThinking,
+	setClassicMode,
 	setSimplifiedTools,
 	simplifiedToolsEnabled,
 } from "../web/src/settings.ts";
 
 const STORAGE_KEY = "pi-writer-simplified-tools";
 const AUTO_EXPAND_KEY = "pi-writer-auto-expand-thinking";
+const CLASSIC_MODE_KEY = "pi-writer-classic-mode";
 
 function stubStorage(init: Record<string, string> = {}) {
 	const store = new Map(Object.entries(init));
@@ -75,5 +79,33 @@ describe("自动展开思考设置", () => {
 		expect(parseAutoExpandThinking("0")).toBe(false);
 		expect(parseAutoExpandThinking("1")).toBe(true);
 		expect(parseAutoExpandThinking("junk")).toBe(true);
+	});
+});
+
+describe("经典模式本地缓存", () => {
+	it("缺省关闭(未存储任何值时不是经典模式)", () => {
+		stubStorage();
+		expect(classicModeEnabled()).toBe(false);
+	});
+	it("开启('1')/关闭('0')往返一致", () => {
+		stubStorage();
+		setClassicMode(true);
+		expect(classicModeEnabled()).toBe(true);
+		setClassicMode(false);
+		expect(classicModeEnabled()).toBe(false);
+	});
+	it("持久化到 localStorage 键", () => {
+		const store = stubStorage();
+		setClassicMode(true);
+		expect(store.get(CLASSIC_MODE_KEY)).toBe("1");
+		setClassicMode(false);
+		expect(store.get(CLASSIC_MODE_KEY)).toBe("0");
+	});
+	it("parseClassicMode:缺省/非法值回退关闭,仅 '1' 开启", () => {
+		expect(parseClassicMode(null)).toBe(false);
+		expect(parseClassicMode(undefined)).toBe(false);
+		expect(parseClassicMode("0")).toBe(false);
+		expect(parseClassicMode("junk")).toBe(false);
+		expect(parseClassicMode("1")).toBe(true);
 	});
 });

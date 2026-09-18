@@ -82,6 +82,8 @@ export function SetupWizard({
 	onAutoExpandThinkingChange,
 	autoConfirmEdits,
 	onAutoConfirmEditsChange,
+	classicMode,
+	onClassicModeChange,
 	onBooksChanged,
 	onFinished,
 }: {
@@ -95,6 +97,10 @@ export function SetupWizard({
 	/** 编辑免确认开关(缺省关闭)。 */
 	autoConfirmEdits: boolean;
 	onAutoConfirmEditsChange: (enabled: boolean) => void;
+	/** 经典模式(单 Agent:只有编辑页 + 全量工具;存服务端 settings.json,缺省关闭)。 */
+	classicMode: boolean;
+	/** 切换经典模式(写服务端;失败抛出由本步显示错误)。 */
+	onClassicModeChange: (enabled: boolean) => Promise<void>;
 	/** 向导创建了书后回调(重运行形态下 App 刷新书库列表;首启形态不需要)。 */
 	onBooksChanged?: () => void | Promise<void>;
 	/** 向导完成(含跳过)后回调;完成标记已写到服务端。 */
@@ -226,6 +232,20 @@ export function SetupWizard({
 		mark("prefs");
 	}
 
+	/**
+	 * 经典模式开关:写服务端(settings.json,决定 agent 装配),失败留在偏好步
+	 * 显示错误——静默失败会让用户以为已经切到单 agent。
+	 */
+	async function toggleClassic(v: boolean) {
+		setStepErr(null);
+		try {
+			await onClassicModeChange(v);
+			mark("prefs");
+		} catch (e) {
+			setStepErr(`经典模式设置失败: ${friendlyError(e)}`);
+		}
+	}
+
 	/** 上一步(回到模型步时保留已选值;错误清除)。 */
 	function back() {
 		setStepErr(null);
@@ -333,18 +353,22 @@ export function SetupWizard({
 							<h1>欢迎使用 pi-writer</h1>
 							<p>AI 长篇写作工作台。只需一分钟完成初始配置:</p>
 							<div className="wz-feature-grid">
-								<div className="wz-feature">
-									<IconStage size={16} />
-									<div>
-										<b>舞台</b>
-										<span>多角色即兴演出,导演控制节奏</span>
+								{/* 经典模式(单 Agent)下没有舞台,不列出来免得与实际界面对不上;
+								    世界书页两种模式都在 */}
+								{!classicMode && (
+									<div className="wz-feature">
+										<IconStage size={16} />
+										<div>
+											<b>舞台</b>
+											<span>多角色即兴演出,导演控制节奏</span>
+										</div>
 									</div>
-								</div>
+								)}
 								<div className="wz-feature">
 									<IconEdit size={16} />
 									<div>
 										<b>编辑</b>
-										<span>章节正文 + 常驻编剧 AI 伙伴</span>
+										<span>{classicMode ? "正文 + 单一写作 agent(全量工具)" : "章节正文 + 常驻编剧 AI 伙伴"}</span>
 									</div>
 								</div>
 								<div className="wz-feature">
@@ -453,7 +477,18 @@ export function SetupWizard({
 
 					{step === 4 && (
 						<>
-							<div className="wz-desc">挑选主题与界面偏好,立即生效,随时可在设置中修改。</div>
+							<div className="wz-desc">挑选主题、写作模式与界面偏好,立即生效,随时可在设置中修改。</div>
+							<div className="s-pref-list">
+								<div className="s-pref-item">
+									<div className="s-pref-text">
+										<div className="s-pref-title">经典模式(单 Agent)</div>
+										<div className="s-pref-desc">
+											开启后去掉舞台(没有导演 / 演员 / 旁白的多 Agent 共演),AI 换成带全量工具的写作 agent;关闭则保留舞台多 agent 形态。世界书页两种模式都在。切换会重建服务端会话,下一次对话生效。
+										</div>
+									</div>
+									<ToggleSwitch checked={classicMode} onChange={(v) => void toggleClassic(v)} ariaLabel="经典模式" />
+								</div>
+							</div>
 							<div className="theme-cards wz-theme-cards">
 								<button
 									key={NIGHT_THEME.id}

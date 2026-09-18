@@ -4,10 +4,10 @@
  * 以及 Fix round 1 的静态服务用例(webDistDir 可注入;未配置时非 /api 保持 404)。
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -1518,5 +1518,292 @@ describe("WriterServer · 编剧上下文与插件路由预留", () => {
 		const res = await fetch(`${base}/api/plugin-ping`);
 		expect(res.status).toBe(200);
 		expect(await res.json()).toEqual({ pong: true });
+	});
+});
+
+describe("WriterServer · /api/settings(全局设置 · 经典模式)", () => {
+	let server: WriterServer;
+	let base = "";
+	/** setClassicMode 调用记录(经典模式切换必须即时应用到 WriterHost)。 */
+	const classicCalls: boolean[] = [];
+	/** setShellEnabled 调用记录(外部命令开关同理)。 */
+	const shellCalls: boolean[] = [];
+	/** SSE 广播帧(验证 settings_changed 会推给其他窗口)。 */
+	const events: Array<{ type: string; settings?: { classicMode: boolean; enableShell: boolean } }> = [];
+
+	beforeAll(async () => {
+		const fake = fakeHost();
+		const writer = {
+			setEventSink: () => {},
+			disposeAll: async () => {},
+			contextUsage: async () => null,
+			compact: async () => ({ summary: "", tokensBefore: 0, estimatedTokensAfter: 0 }),
+			setClassicMode: async (enabled: boolean) => {
+				classicCalls.push(enabled);
+			},
+			setShellEnabled: async (enabled: boolean) => {
+				shellCalls.push(enabled);
+			},
+		};
+		server = new WriterServer({
+			host: "127.0.0.1",
+			port: 0,
+			sessionHost: fake.host,
+			webDistDir: join(tmp, "no-such-dist"),
+			writerHost: writer as never,
+		});
+		const { port } = await server.start();
+		base = `http://127.0.0.1:${port}`;
+		// SSE 事件流:收集广播帧(settings_changed 断言用)
+		const es = await fetch(`${base}/api/events`);
+		const reader = es.body!.getReader();
+		void (async () => {
+			const decoder = new TextDecoder();
+			let buf = "";
+			for (;;) {
+				const { value, done } = await reader.read();
+				if (done) break;
+				buf += decoder.decode(value, { stream: true });
+				const frames = buf.split("\n\n");
+				buf = frames.pop() ?? "";
+				for (const frame of frames) {
+					const line = frame.split("\n").find((l) => l.startsWith("data: "));
+					if (!line) continue;
+					try {
+						events.push(JSON.parse(line.slice(6)) as { type: string });
+					} catch {
+						/* ping / 坏帧忽略 */
+					}
+				}
+			}
+		})();
+	});
+
+	afterAll(async () => {
+		await server.stop();
+		rmSync(join(getWriterDir(), "settings.json"), { force: true });
+	});
+
+	it("缺省 GET /api/settings:经典模式关闭", async () => {
+		const res = await fetch(`${base}/api/settings`);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({ settings: { classicMode: false } });
+	});
+
+	it("PUT 开启:落盘 + 应用到 WriterHost + 广播 settings_changed", async () => {
+		const res = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ classicMode: true }),
+		});
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({ settings: { classicMode: true } });
+		expect(classicCalls).toEqual([true]);
+		// 落盘:同一目录下可被再次读出(跨重启一致)
+		const persisted = JSON.parse(readFileSync(join(getWriterDir(), "settings.json"), "utf8")) as { classicMode: boolean };
+		expect(persisted.classicMode).toBe(true);
+		const again = await (await fetch(`${base}/api/settings`)).json();
+		expect(again).toMatchObject({ settings: { classicMode: true } });
+		// SSE 广播(轮询等待:广播发生在响应之前,通常已就位)
+		for (let i = 0; i < 40 && !events.some((e) => e.type === "settings_changed"); i++) {
+			await new Promise((r) => setTimeout(r, 25));
+		}
+		const changed = events.find((e) => e.type === "settings_changed");
+		expect(changed?.settings).toMatchObject({ classicMode: true });
+	});
+
+	it("PUT 关闭:回到多 agent 形态", async () => {
+		const res = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ classicMode: false }),
+		});
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({ settings: { classicMode: false } });
+		expect(classicCalls).toEqual([true, false]);
+	});
+
+	it("PUT 开启外部命令:落盘 + 应用到 WriterHost(缺省关闭)", async () => {
+		expect(await (await fetch(`${base}/api/settings`)).json()).toMatchObject({ settings: { enableShell: false } });
+		const res = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ enableShell: true }),
+		});
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({ settings: { enableShell: true } });
+		// 每次 PUT 都会把当前值重新应用一遍(幂等,setXxx 内部比对后是 no-op),
+		// 所以断言看最后一次调用,而不是整个序列
+		expect(shellCalls.at(-1)).toBe(true);
+		// 两个字段互不干扰:只传 enableShell 不该把 classicMode 带跑
+		expect(classicCalls.at(-1)).toBe(false);
+		const persisted = JSON.parse(readFileSync(join(getWriterDir(), "settings.json"), "utf8")) as { enableShell: boolean };
+		expect(persisted.enableShell).toBe(true);
+	});
+
+	it("非布尔 enableShell 返回 400", async () => {
+		const res = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ enableShell: 1 }),
+		});
+		expect(res.status).toBe(400);
+		expect(await res.json()).toMatchObject({ error: { code: "bad_request" } });
+	});
+
+	it("非布尔 classicMode 返回 400", async () => {
+		const res = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ classicMode: "yes" }),
+		});
+		expect(res.status).toBe(400);
+		expect(await res.json()).toMatchObject({ error: { code: "bad_request" } });
+	});
+});
+
+describe("WriterServer · /api/books/:slug/files(工作区文件清单)", () => {
+	let server: WriterServer;
+	let base = "";
+
+	beforeAll(async () => {
+		const fake = fakeHost();
+		server = new WriterServer({ host: "127.0.0.1", port: 0, sessionHost: fake.host, webDistDir: join(tmp, "no-such-dist") });
+		const { port } = await server.start();
+		base = `http://127.0.0.1:${port}`;
+	});
+
+	afterAll(async () => {
+		await server.stop();
+	});
+
+	it("未知书 404", async () => {
+		const res = await fetch(`${base}/api/books/${encodeURIComponent("没有这本书")}/files`);
+		expect(res.status).toBe(404);
+		expect(await res.json()).toMatchObject({ error: { code: "not_found" } });
+	});
+
+	it("按语义分组返回,排除机器数据与世界书生成物", async () => {
+		const created = (await (
+			await fetch(`${base}/api/books`, { method: "POST", headers: json, body: JSON.stringify({ title: "文件清单之书" }) })
+		).json()) as { book: { slug: string; chapters: Array<{ id: string; title: string }> } };
+		const slug = created.book.slug;
+		const chapterId = created.book.chapters[0]!.id;
+		const bookDir = getBookDir(slug);
+		const put = (rel: string, content = "x") => {
+			const abs = join(bookDir, rel);
+			mkdirSync(dirname(abs), { recursive: true });
+			writeFileSync(abs, content, "utf8");
+		};
+		put(`draft/${chapterId}.md`, "第一章正文");
+		put("notes/资料.md");
+		put("images/cover.png");
+		put(".writer/characters.md");
+		put("outline.md");
+		put("stage/last-world-edit.json", "{}");
+
+		const res = await fetch(`${base}/api/books/${encodeURIComponent(slug)}/files`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			slug: string;
+			groups: Array<{ id: string; label: string }>;
+			files: Array<{ path: string; group: string; kind: string; chapterTitle: string | null }>;
+		};
+		expect(body.slug).toBe(slug);
+		expect(body.groups.map((g) => g.id)).toEqual(["draft", "notes", "image", "other"]);
+		const paths = body.files.map((f) => f.path).sort();
+		// 世界书生成物(.writer/*.md 与 outline.md)不进工作区:它们的权威视图在世界书页
+		expect(paths).toEqual([`draft/${chapterId}.md`, "images/cover.png", "notes/资料.md"]);
+		const draft = body.files.find((f) => f.path === `draft/${chapterId}.md`)!;
+		expect(draft.group).toBe("draft");
+		expect(draft.chapterTitle).toBe(created.book.chapters[0]!.title);
+		expect(body.files.some((f) => f.path === "outline.md" || f.path.startsWith(".writer/"))).toBe(false);
+	});
+});
+
+describe("WriterServer · /api/books/:slug/file(工作区文件预览)", () => {
+	let server: WriterServer;
+	let base = "";
+	let slug = "";
+
+	beforeAll(async () => {
+		const fake = fakeHost();
+		server = new WriterServer({ host: "127.0.0.1", port: 0, sessionHost: fake.host, webDistDir: join(tmp, "no-such-dist") });
+		const { port } = await server.start();
+		base = `http://127.0.0.1:${port}`;
+		const created = (await (
+			await fetch(`${base}/api/books`, { method: "POST", headers: json, body: JSON.stringify({ title: "文件预览之书" }) })
+		).json()) as { book: { slug: string; chapters: Array<{ id: string }> } };
+		slug = created.book.slug;
+		const chapterId = created.book.chapters[0]!.id;
+		const put = (rel: string, content: string | Buffer) => {
+			const abs = join(getBookDir(slug), rel);
+			mkdirSync(dirname(abs), { recursive: true });
+			writeFileSync(abs, content);
+		};
+		put(`draft/${chapterId}.md`, "# 第一章\n\n正文。");
+		put("notes/资料.md", "资料内容");
+		put("notes/ref.docx", Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+		put("images/cover.png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+	});
+
+	afterAll(async () => {
+		await server.stop();
+	});
+
+	const url = (path: string) => `${base}/api/books/${encodeURIComponent(slug)}/file?path=${encodeURIComponent(path)}`;
+
+	it("文本文件回 JSON(含内容与元信息)", async () => {
+		const res = await fetch(url("notes/资料.md"));
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { file: { path: string; kind: string; text: string; truncated: boolean } };
+		expect(body.file).toMatchObject({ path: "notes/资料.md", kind: "text", text: "资料内容", truncated: false });
+	});
+
+	it("图片回字节流与正确 content-type(不走 JSON)", async () => {
+		const res = await fetch(url("images/cover.png"));
+		expect(res.status).toBe(200);
+		expect(res.headers.get("content-type")).toContain("image/png");
+		expect(Buffer.from(await res.arrayBuffer()).length).toBe(8);
+	});
+
+	it("路径越界 / 机器数据 / 世界书生成物 / 缺参数一律 400", async () => {
+		for (const bad of ["../secrets.md", "draft/../../x.md", "world.json", "book.json", ".hidden.md", "outline.md", ".writer/characters.md", ""]) {
+			const res = await fetch(url(bad));
+			expect(res.status, bad).toBe(400);
+			expect(await res.json()).toMatchObject({ error: { code: "bad_path" } });
+		}
+		const missing = await fetch(`${base}/api/books/${encodeURIComponent(slug)}/file`);
+		expect(missing.status).toBe(400);
+	});
+
+	it("文件不存在 404;目录 404", async () => {
+		expect((await fetch(url("notes/none.md"))).status).toBe(404);
+		expect((await fetch(url("notes"))).status).toBe(404);
+	});
+
+	it("二进制文件请求 JSON 预览返回 400(不能当文本读)", async () => {
+		const res = await fetch(url("notes/ref.docx"));
+		expect(res.status).toBe(400);
+		expect(await res.json()).toMatchObject({ error: { code: "bad_request" } });
+	});
+
+	it("符号链接逃逸(含中间目录)读不到书目录外的内容", async () => {
+		const outside = mkdtempSync(join(tmpdir(), "piw-leak-"));
+		writeFileSync(join(outside, "secret.md"), "外部机密", "utf8");
+		try {
+			mkdirSync(join(getBookDir(slug), "notes"), { recursive: true });
+			symlinkSync(join(outside, "secret.md"), join(getBookDir(slug), "leak.md"), "file");
+			symlinkSync(outside, join(getBookDir(slug), "notes", "linked"), "dir");
+			expect((await fetch(url("leak.md"))).status).toBe(404);
+			expect((await fetch(url("notes/linked/secret.md"))).status).toBe(404);
+		} finally {
+			rmSync(outside, { recursive: true, force: true });
+		}
+	});
+
+	it("未知书 404", async () => {
+		const res = await fetch(`${base}/api/books/${encodeURIComponent("没有这本书")}/file?path=draft/ch01.md`);
+		expect(res.status).toBe(404);
 	});
 });

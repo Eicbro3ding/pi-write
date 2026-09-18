@@ -16,6 +16,13 @@
  * 事件:SessionHost.subscribe 的原生会话事件(含 message_end 附加的 entryId)
  * 原样转发给 eventSink,由 server 经 /api/events 广播为 writer_event { slug, event };
  * 前端复用 processAgentEvent 归约(消息/思考/工具卡片与主会话同款逻辑)。
+ *
+ * **经典模式(2026-09-18,classicMode = 单 agent)**:同一个会话宿主换成
+ * 「写作 agent」装配——系统提示取 prompts/writer-main.md(buildWriterSystemPrompt,
+ * 与 TUI/主会话同款),工具集配全(read/write/edit/grep/find/ls +
+ * word_count/world_update/world_find + MCP;bash 在 web 一律禁用),且不再限制
+ * 只能写当前章节草稿(要能写 outline.md / memory.md / notes/)。界面上只有编辑页,
+ * 没有编剧/导演/演员之分。切换模式时已建会话全部释放,新工具集在下次对话时生效。
  */
 
 import { existsSync } from "node:fs";
@@ -41,7 +48,8 @@ import {
 import { ensureWorld } from "../world-data.ts";
 import { buildStorylineView, constraintTargetMatches, NOTICE_INJECT_LIMIT } from "../world-context.ts";
 import { loadPromptText } from "../prompts.ts";
-import { worldFindTool } from "../tools.ts";
+import { buildWriterSystemPrompt } from "../prompt.ts";
+import { wordCountTool, worldFindTool, worldUpdateTool } from "../tools.ts";
 import { SessionHost } from "./session-host.ts";
 import { formatStageLines } from "../stage/assembler.ts";
 import { countStage } from "../stage/counters.ts";
@@ -49,6 +57,9 @@ import { readStage } from "../stage/stage-store.ts";
 
 /** 常驻编剧系统提示(外置 prompts/writer-editor.md):讨论为主、修改为辅,改动说明意图;收幕委托为正式写作任务。 */
 const EDITOR_PROMPT = loadPromptText("writer-editor.md");
+
+/** 经典模式(单 agent)的内置工具:web 无 bash,其余全量(与 webActiveTools 同集)。 */
+const CLASSIC_ACTIVE_TOOLS = ["read", "write", "edit", "grep", "find", "ls"];
 
 /** 注入块长度上限(草稿/世界书正文截断,防上下文膨胀)。 */
 const DRAFT_LIMIT = 4000;
@@ -67,6 +78,14 @@ export interface WriterHostOptions {
 	topP?: number;
 	/** MCP 外部工具惰性获取(web 注入,编剧会话可用;导演同款,2026-08-11)。 */
 	getMcpTools?: () => ToolDefinition[];
+	/** 经典模式(单 agent):会话装配换成全量工具的写作 agent;缺省 false。 */
+	classicMode?: boolean;
+	/**
+	 * 外部命令(bash):把 bash 从禁用名单里放出来并激活;缺省 false。
+	 * 与设置项 enableShell 同源——放开后命令以服务进程权限运行,路径守卫对它无效,
+	 * 靠"命令与输出实时可见"来约束(见 web/src/store.ts 的 tool_execution_update)。
+	 */
+	enableShell?: boolean;
 	/** 测试注入:自定义宿主工厂(缺省创建真实会话)。 */
 	createHost?: (slug: string) => Promise<SessionHost>;
 }
@@ -106,11 +125,37 @@ export class WriterHost {
 	/** 事件转发(server 构造时注入 → broadcast 为 writer_event);注入前静默丢弃。
 	 *  chapterFile 随事件透传(编剧会话按章节隔离,前端据此过滤,2026-08-13)。 */
 	private eventSink: (slug: string, chapterFile: string | null, event: AgentSessionEvent) => void = () => {};
+	/** 经典模式(单 agent):影响系统提示与工具集;切换时释放全部会话。 */
+	private classicMode: boolean;
+	/** 外部命令(bash)是否放开;切换时同样释放全部会话。 */
+	private shellEnabled: boolean;
 
 	constructor(options: WriterHostOptions) {
 		this.options = options;
 		this.temperature = options.temperature;
 		this.topP = options.topP;
+		this.classicMode = options.classicMode ?? false;
+		this.shellEnabled = options.enableShell ?? false;
+	}
+
+	/**
+	 * 切换经典模式。变化时释放全部已建会话——系统提示与工具集在会话创建时装配,
+	 * 复用旧会话意味着新工具集不生效(切了开关却还是受限编剧)。下次对话惰性重建。
+	 */
+	async setClassicMode(enabled: boolean): Promise<void> {
+		if (this.classicMode === enabled) return;
+		this.classicMode = enabled;
+		await this.disposeAll();
+	}
+
+	/**
+	 * 开关外部命令(bash)。变化时释放全部会话:bash 的有无改变工具集与系统提示
+	 * (提示词末尾的 shell 行按 hasBash 注入),旧会话不带新工具。
+	 */
+	async setShellEnabled(enabled: boolean): Promise<void> {
+		if (this.shellEnabled === enabled) return;
+		this.shellEnabled = enabled;
+		await this.disposeAll();
 	}
 
 	/** server 构造时注入事件转发(WriterHost 在 web.ts 先于 server 创建)。 */
@@ -146,7 +191,8 @@ export class WriterHost {
 	}
 
 	/** 装配常驻编剧会话(复用 createSessionRuntimeFactory;工具 = write/read,无 bash)。
-	 *  会话文件按章节隔离(sessions/<slug>/writer-<chapterId>.jsonl)。 */
+	 *  会话文件按章节隔离(sessions/<slug>/writer-<chapterId>.jsonl)。
+	 *  经典模式(单 agent)同款宿主,但工具集与提示词由 roleFactory 换成写作 agent。 */
 	private async createHost(slug: string, chapterFile: string | null): Promise<SessionHost> {
 		const agentDir = getAgentDir();
 		const { model, thinkingLevel } = this.options;
@@ -157,7 +203,10 @@ export class WriterHost {
 		await initChapterFile(abs, bookDir);
 		const runtimeFactory = this.roleFactory(slug, chapterFile);
 		const sessionManager = SessionManager.open(abs, sessionsDir, bookDir);
-		const draftFile = chapterFile ? chapterFile.replace(/\.jsonl$/, ".md") : undefined;
+		// 正文白名单必须与 roleFactory 一致:工具的 ALS 上下文(draftFile)优先于
+		// installToolPathGuard 的兜底值,这里不清掉的话经典模式仍会被拦住写
+		// outline.md / memory.md(切了模式却写不了别的文件)。
+		const draftFile = !this.classicMode && chapterFile ? chapterFile.replace(/\.jsonl$/, ".md") : undefined;
 		const host = new SessionHost({
 			createRuntime: runtimeFactory,
 			cwd: bookDir,
@@ -169,21 +218,27 @@ export class WriterHost {
 		return host;
 	}
 
-	/** 会话装配工厂(与 stage 角色同款样板;context 钩子注入本会话章节/世界书/文风采样)。 */
+	/** 会话装配工厂(与 stage 角色同款样板;context 钩子注入本会话章节/世界书/文风采样)。
+	 *  经典模式走「写作 agent」装配(全量工具 + writer-main 提示,见类注释)。 */
 	private roleFactory(slug: string, chapterFile: string | null): CreateAgentSessionRuntimeFactory {
 		const agentDir = getAgentDir();
 		const { model, thinkingLevel } = this.options;
 		const { temperature, topP } = this;
 		const inject = (messages: AgentMessage[]): Promise<AgentMessage[] | undefined> => this.editorContext(slug, chapterFile, messages);
 		// 正文文件白名单:write 只允许写当前章节文件(agent 自创文件名会把正文写到
-		// 前端读不到的路径——2026-08-11 编剧乱写 draft/第一章.md 的根因)
-		const draftFile = chapterFile ? chapterFile.replace(/\.jsonl$/, ".md") : undefined;
+		// 前端读不到的路径——2026-08-11 编剧乱写 draft/第一章.md 的根因)。
+		// 经典模式不设白名单:单一写作 agent 要能写 memory.md / notes/ 等中间产物
+		// (正文落点由 writer-main.md 的章节约定约束,不再靠路径守卫兜底)。
+		const draftFile = !this.classicMode && chapterFile ? chapterFile.replace(/\.jsonl$/, ".md") : undefined;
+		const mcpTools = this.options.getMcpTools?.() ?? [];
 		return createSessionRuntimeFactory({
 			agentDir,
 			// skills 目录只读放行(与 web.ts 同款):模型经 read 工具加载 skill 文件时不被守卫误拦
 			readOnlyDirs: [resolveSkillsDir()],
 			draftFile,
-			systemPromptOverride: () => EDITOR_PROMPT,
+			systemPromptOverride: this.classicMode
+				? () => buildWriterSystemPrompt(mcpTools.map((t) => ({ name: t.name, description: t.description })), this.shellEnabled)
+				: () => EDITOR_PROMPT,
 			extensionFactories: [
 				{
 					name: `writer-resident-${slug}-${writerSessionFile(chapterFile)}`,
@@ -199,11 +254,19 @@ export class WriterHost {
 			thinkingLevel: thinkingLevel as ThinkingLevel | undefined,
 			temperature,
 			topP,
-			excludeTools: ["bash"],
-			initialActiveToolNames: ["write", "read"],
-			// world_find(只读检索世界书):编剧无 world_update,但可结构化查条目——
-			// 长篇小说条目多时,read 全文翻找成本高(2026-08-12,审计后补)
-			customTools: [worldFindTool, ...(this.options.getMcpTools?.() ?? [])],
+			// bash:web 默认禁用(web 子集语义,见 web.ts webExcludeTools);设置里
+			// 放开「外部命令」后不再禁用,并在下面补进激活名单
+			excludeTools: this.shellEnabled ? [] : ["bash"],
+			initialActiveToolNames: [
+				...(this.classicMode ? CLASSIC_ACTIVE_TOOLS : ["write", "read"]),
+				...(this.shellEnabled ? ["bash"] : []),
+			],
+			// 编剧:world_find(只读检索世界书),无 world_update——长篇小说条目多时,
+			// read 全文翻找成本高(2026-08-12,审计后补);世界书建议写进 advice.md。
+			// 经典模式(单一写作 agent):补上 word_count 与 world_update,即完整写作工具集。
+			customTools: this.classicMode
+				? [wordCountTool, worldUpdateTool, worldFindTool, ...mcpTools]
+				: [worldFindTool, ...mcpTools],
 		});
 	}
 
@@ -247,8 +310,10 @@ export class WriterHost {
 			/* 世界书缺失:跳过注入,不阻断对话 */
 		}
 		// 最近一幕舞台转录(评戏与 advice.md 的依据;收幕委托回合消息内已含【舞台转录】,
-		// 此处会重复注入同源内容——截断上限兜底,可接受)
-		const transcript = await latestStageTranscript(getBookDir(slug));
+		// 此处会重复注入同源内容——截断上限兜底,可接受)。
+		// 经典模式无舞台(页面隐藏、不会有新一幕),不注入:省 token,也避免单 agent
+		// 上下文里出现它无从操作的概念。
+		const transcript = this.classicMode ? null : await latestStageTranscript(getBookDir(slug));
 		if (transcript) blocks.push(`【最近一幕舞台转录】\n${transcript}`);
 		if (blocks.length === 0) return undefined;
 		return [...messages, { role: "user", content: blocks.join("\n\n"), timestamp: Date.now() }];
@@ -280,8 +345,11 @@ export class WriterHost {
 				const body = style.length > STYLE_LIMIT ? `${style.slice(0, STYLE_LIMIT)}…(截断)` : style;
 				blocks.push(`【文风采样】（作者文风基准：模仿语感与句式，不抄写、不复用具体内容）\n${body}`);
 			}
-			// 写作约束(按 target 过滤:编剧收 writer/all)——酒馆式规则包(2026-08-12)
-			const editorConstraints = world.constraints.filter((c) => c.enabled && constraintTargetMatches(c.target, "writer"));
+			// 写作约束(按 target 过滤:编剧收 writer/main——酒馆式规则包,2026-08-12;
+			// 经典模式是单一写作 agent,writer 与 main 两类目标的约束都该生效)
+			const editorConstraints = world.constraints.filter(
+				(c) => c.enabled && (constraintTargetMatches(c.target, "writer") || (this.classicMode && constraintTargetMatches(c.target, "main"))),
+			);
 			if (editorConstraints.length > 0) {
 				blocks.push(`【写作约束】\n${editorConstraints.map((c) => `- ${c.name}: ${c.text}`).join("\n")}`);
 			}
@@ -309,7 +377,7 @@ export class WriterHost {
 			this.stableInjected.set(key, fp);
 			return;
 		}
-		await host.injectContext(`【编剧稳定上下文 · 指纹 ${fp}】以下是世界观与写作基准,长期有效:\n\n${stable}`);
+		await host.injectContext(`【${this.classicMode ? "写作" : "编剧"}稳定上下文 · 指纹 ${fp}】以下是世界观与写作基准,长期有效:\n\n${stable}`);
 		this.stableInjected.set(key, fp);
 	}
 

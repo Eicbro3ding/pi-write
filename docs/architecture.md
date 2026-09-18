@@ -12,7 +12,9 @@
 | `src/web.ts` | web 子命令装配:`parseWebArgs` / `startWebServer` |
 | `src/web/server.ts` | `WriterServer`:Node 原生 http,**路由表驱动**(method + 路径段模式)+ SSE 事件流 + 静态服务;`/api/world` 支持按 `slug` 读写 |
 | `src/web/session-host.ts` | `SessionHost`:agent 会话 headless 封装(事件扇出、prompt/abort、撤回/分支/导航/树、上下文占用与手动压缩;工具路径守卫用 AsyncLocalStorage 按会话隔离;删除当前书后支持空态并按需重建) |
-| `src/web/writer-host.ts` | 常驻编剧会话(每书每章一个;收幕成文与编辑页「编剧」标签同一份记忆;`/api/writer/:slug/context|compact`) |
+| `src/web/writer-host.ts` | 常驻编剧会话(每书每章一个;收幕成文与编辑页「编剧」标签同一份记忆;`/api/writer/:slug/context|compact`);**经典模式**下同一宿主换成单一写作 agent 装配(全量工具 + writer-main 提示) |
+| `src/writer-settings.ts` | 服务端全局设置(`~/.pi/writer/settings.json`):当前唯一项 = 经典模式;`GET|PUT /api/settings` |
+| `src/book-files.ts` | 书目录文件清单与读取(**只读**):放的是 **AI 产出的中间产物**(草稿 / 资料与笔记 / 图片 / 其他),不镜像磁盘树;排除实现文件与机器数据(`book.json`/`world.json`/`cast.json`/`stage/`/`*.jsonl`/隐藏文件)与世界书**生成物**(`outline.md`/`.writer/*.md`,权威视图在世界书页,见 `isGeneratedView`);`GET /api/books/:slug/files`(清单)、`GET /api/books/:slug/file?path=`(文本回 JSON、图片回字节) |
 | `src/web/stage-host.ts` | 舞台区 web 宿主(每书每章一个编排器,惰性创建;快照带导演上下文占用,`compact` 舞台命令) |
 | `src/plugins.ts` | 插件系统预留类型:前端声明式斜杠命令 + 后端 ExtensionFactory / HTTP 路由缝 |
 | `src/web/file-watcher.ts` | `WorldWatcher`:world.json / draft 外部变更轮询(无缝同步) |
@@ -37,6 +39,8 @@
 │   ├── world.json             # 世界书(单一真相源)
 │   ├── memory.md              # 跨章记忆(~1500 token)
 │   ├── draft/<chapter>.md     # 草稿
+│   ├── notes/**               # AI 的中间产物:资料摘录 / 研究笔记 / 场景备选 / 废弃片段
+│   ├── images/**              # 图片资产(世界书条目主图等)
 │   ├── .writer/*.md           # world.json 导出视图(只读,编辑走界面)
 │   └── stage/*.jsonl          # 舞台转录(每幕一个文件)
 └── sessions/<slug>/
@@ -48,6 +52,7 @@
 
 - 会话文件:条目有 `id` / `parentId` / `timestamp`;`branch()` / `resetLeaf()` 移动 leaf 指针决定当前分支;分支位置只在内存,不落盘。
 - 世界书:类型化条目(character / world / timeline / outline)+ 关系网 + 约束 + 采样 + Notice + 发展线 + 时间线 + 世界观概述(`worldSummary`)。
+- **交付物与中间产物分家**:散文只落 `draft/<章节id>.md`(草稿面板/正文区镜像它);资料、研究、备选、废弃片段落 `notes/**`(工作区面板列它)。两边的提示词纪律见 `prompts/writer-main.md`(写作 agent)与 `prompts/director.md`(导演);`writer-editor.md`(常驻编剧)不承担资料收集,故未写 `notes/` 纪律。
 
 ## 3. 会话与事件链
 
@@ -93,9 +98,24 @@ agent 会话事件(pi vendor AgentSessionEvent)
 
 四页顶层视图(顶栏入口,四页常驻挂载、切换只改 hidden,保流式状态):**舞台**(默认;演出前 = 导演讨论室,演出中同页)｜**编辑**(章节侧栏 + 正文常驻 DraftWorkspace,CodeMirror 6 + 右栏 AI 伙伴「编剧」对话单栏,选中正文自动预填输入框;批注已退役并入编剧)｜**世界书**｜**设置**。书库栏(`web/src/library.ts` `useLibrary`,App 持有)在舞台 / 编辑两页常驻且状态同步,可折叠 56px 图标条;主题三套(night / paper / parchment,26 色 token)。
 
+**经典模式(单 Agent,2026-09-18)**:设置页「界面 → 模式」与首启向导偏好步可切换。开启后去掉的只有**舞台**(顶栏入口隐藏、StagePage 不挂载——它带着后台编排会话与 SSE 订阅,留着等于「关了还在跑」);编辑页、世界书页、设置页照常(世界书页没有 agent,只是面向人的设定编辑器)。编辑页的 AI 换成**带全量工具的写作 agent**——系统提示取 `prompts/writer-main.md`(`buildWriterSystemPrompt`,与 TUI / 主会话同款),工具集 `read/write/edit/grep/find/ls` + `word_count/world_update/world_find` + MCP(bash 在 web 一律禁用),且不再限制只写当前章节草稿(要能写 `memory.md` / `notes/**` 这类中间产物)。开关是**服务端设置**(`~/.pi/writer/settings.json`,`GET|PUT /api/settings`):它改变 agent 装配,必须多窗口一致,且切换后 `WriterHost.setClassicMode` 会释放已建会话,下一次对话按新装配重建;变更经 `settings_changed` SSE 广播给其他窗口。前端只把状态缓存在 localStorage 供首帧渲染(避免顶栏先画四个入口再收回),挂载后以服务端为准对账。
+
 舞台对话与编剧 / 主会话同款归约(2026-08-11 统一重构):导演回复经 `stage_director_event`(内层主会话同款事件)→ `processAgentEvent` + MessageList;舞台流(feed,`StageFeedItem`)只剩舞台条目与系统行,不再含对话气泡。
 
-### 7.1 `/` 命令(前端插件预留缝)
+### 7.1 工作区面板(左栏「章节 / 工作区」切换,2026-09-18)
+
+入口在**编辑页左栏顶部**(原来章节栏那一列):分段切换「章节 | 工作区」——工作区与章节列表是同一层级的两块内容,所以不占顶栏、不新增页面。折叠态(56px 图标条)整条隐藏。
+
+**定位:这里放的是 AI 产出的中间产物**(收集的资料、笔记片段、参考图,以及各章草稿),回答"工作台上摊着哪些东西"——不是"把这本书记录了一遍"。世界书生成物(`outline.md` / `.writer/*.md`)因此**不列**:时间线、人物档案、大纲的权威视图在世界书页,摆进来会被当成可以编辑的稿子(改了还会被下一次 `world_update` 覆盖)。排除逻辑在 `isGeneratedView`,清单与读取端点同源。
+
+- 数据:`GET /api/books/:slug/files`(语义分组 + 展示名,`src/book-files.ts`);切书、切到该模式、以及 SSE `draft_changed`/`world_changed`(去抖 400ms)时重拉。
+- 点**草稿**条目 → 切回「章节」模式并选中该章(`chapterId` → `bookDetail.chapters` 里的 `file`);草稿不在工作区开只读预览,编辑页本来就是它的编辑器。
+- 点**其他**条目 → `FilePreview` 只读覆盖层压在纸张区上(正文编辑器不卸载,关掉即回原样;Esc 可关)。文本走 marked 管线复用 `.record-md` 样式,图片直接吃 `/api/books/:slug/file` 的字节流,二进制只给元信息。
+- 「AI 写过 · N 个文件」台账:来源是 `writer_event` 的 `tool_execution_start` 参数里的 `path`(`WritePage` 内存态,刷新即空;要跨刷新保留需在服务端落写入台账)。
+- **只读、无 CRUD**:重命名/删除/移动会同时打断 `book.json` 章节索引、会话文件名与 `world.json` 的 outline 引用,UI 层不碰。
+- **左栏布局**:三段式(顶部切换控件固定 / 中间 `rail-scroll` 滚动 / 底部「收起」钮固定)。切换控件在滚动区之外——它是"这一栏现在装什么"的开关,滚走就找不回来。
+
+### 7.2 `/` 命令(前端插件预留缝)
 
 `web/src/slash-commands.ts` 是命令注册表;`InputBar` 接受 `commands + context`,输入 `/` 弹出候选面板(`↑/↓` + `Enter/Tab` 选择,`Esc` 关闭),页面按场景注册内置命令:
 
@@ -105,7 +125,7 @@ agent 会话事件(pi vendor AgentSessionEvent)
 
 命令是前端声明 + 受信任执行器,渲染进程不执行用户任意 JS。未来用户插件先以 `src/plugins.ts` 的 `PluginManifest`(声明式 `slashCommands`)接入;后端插件使用 vendor `ExtensionAPI`(注入 `createSessionRuntimeFactory.extensionFactories`),HTTP 扩展用 `WriterServerOptions.extraRoutes` + `broadcastEvent()`。
 
-### 7.2 上下文占用与压缩
+### 7.3 上下文占用与压缩
 
 - 后端:`SessionHost.getContextUsage()`(vendor `getContextUsage`)与 `SessionHost.compact()`(vendor `compact`,自动 abort 当前回合 → 模型总结 → append 压缩条目)。
 - 端点:`GET /api/writer/:slug/context`;`POST /api/writer/:slug/compact`;舞台侧走 `POST /api/stage/:slug/command { cmd: "compact" }`,快照携带 `directorUsage`。

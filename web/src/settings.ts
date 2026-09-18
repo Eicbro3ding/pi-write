@@ -59,3 +59,30 @@ export function autoConfirmEditsEnabled(): boolean {
 export function setAutoConfirmEdits(enabled: boolean): void {
 	localStorage.setItem(AUTO_CONFIRM_EDIT_KEY, enabled ? "1" : "0");
 }
+
+/**
+ * 经典模式开关的 localStorage 键。
+ *
+ * 经典模式是**服务端设置**(~/.pi/writer/settings.json,决定 agent 装配),
+ * 这里只留一份本地缓存:首帧渲染就能决定顶栏显示哪几页,不必等服务端往返;
+ * App 挂载后拉 GET /api/settings 对账,以服务端为准覆盖本地值。
+ */
+const CLASSIC_MODE_KEY = "pi-writer-classic-mode";
+
+/**
+ * 解析存储值:仅显式 "1" 表示开启,缺省/其他值一律视为关闭(默认关闭——
+ * 缺省形态是多 agent:舞台 + 编辑 + 世界书)。
+ */
+export function parseClassicMode(raw: string | null | undefined): boolean {
+	return raw === "1";
+}
+
+/** 本地缓存的经典模式状态(权威值在服务端)。 */
+export function classicModeEnabled(): boolean {
+	return parseClassicMode(localStorage.getItem(CLASSIC_MODE_KEY));
+}
+
+/** 缓存经典模式状态(服务端写入成功 / 启动对账后调用)。 */
+export function setClassicMode(enabled: boolean): void {
+	localStorage.setItem(CLASSIC_MODE_KEY, enabled ? "1" : "0");
+}

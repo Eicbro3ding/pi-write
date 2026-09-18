@@ -89,6 +89,10 @@ export function SettingsPage({
 	onAutoExpandThinkingChange,
 	autoConfirmEdits,
 	onAutoConfirmEditsChange,
+	classicMode,
+	onClassicModeChange,
+	shellEnabled,
+	onShellEnabledChange,
 	onRerunSetup,
 }: {
 	client: ApiClient;
@@ -103,6 +107,14 @@ export function SettingsPage({
 	/** 编辑免确认开关状态(编剧编辑落盘即归档;缺省关闭,默认走待确认卡)。 */
 	autoConfirmEdits: boolean;
 	onAutoConfirmEditsChange: (enabled: boolean) => void;
+	/** 经典模式(单 agent:只有编辑页,agent 带全量工具;存服务端 settings.json)。 */
+	classicMode: boolean;
+	/** 切换经典模式(写服务端并释放已建会话;失败抛出由本页展示)。 */
+	onClassicModeChange: (enabled: boolean) => Promise<void>;
+	/** 外部命令(bash):agent 能否执行 shell 命令(存服务端 settings.json,缺省关闭)。 */
+	shellEnabled: boolean;
+	/** 开关外部命令(写服务端并重建会话;失败抛出由本页展示)。 */
+	onShellEnabledChange: (enabled: boolean) => Promise<void>;
 	/** 重新运行首次启动配置向导(App 弹覆盖层;缺省不显示入口)。 */
 	onRerunSetup?: () => void;
 }) {
@@ -255,6 +267,42 @@ export function SettingsPage({
 			setActErr(`世界书注入设置失败: ${friendlyError(e)}`);
 		} finally {
 			setWorldBusy(false);
+		}
+	}
+
+	/**
+	 * 切换经典模式:App 侧落盘 + 置位(开关即时响应),服务端写失败会回滚状态,
+	 * 这里只负责把错误摆到页面上(服务端切换会释放已建会话,下次对话才生效,
+	 * 失败不能静默——用户会以为已经切了)。
+	 */
+	async function toggleClassicMode(checked: boolean) {
+		setActErr(null);
+		try {
+			await onClassicModeChange(checked);
+		} catch (e) {
+			setActErr(`切换经典模式失败: ${friendlyError(e)}`);
+		}
+	}
+
+	/** 外部命令的开启确认条(关:直接生效,无风险;开:先弹确认)。 */
+	const [shellConfirm, setShellConfirm] = useState(false);
+
+	function askShellEnable(checked: boolean) {
+		setActErr(null);
+		if (checked) {
+			setShellConfirm(true);
+			return;
+		}
+		void toggleShell(false);
+	}
+
+	async function toggleShell(enabled: boolean) {
+		setShellConfirm(false);
+		setActErr(null);
+		try {
+			await onShellEnabledChange(enabled);
+		} catch (e) {
+			setActErr(`切换外部命令失败: ${friendlyError(e)}`);
 		}
 	}
 
@@ -819,6 +867,45 @@ export function SettingsPage({
 							</div>
 
 							<div className="s-card">
+								<div className="s-card-head">模式</div>
+								<div className="s-pref-list">
+									<div className="s-pref-item">
+										<div className="s-pref-text">
+											<div className="s-pref-title">经典模式(单 Agent)</div>
+											<div className="s-pref-desc">
+												开启后去掉舞台(没有导演 / 演员 / 旁白的多 Agent 共演);编辑页的 AI 换成带全量工具的写作 agent(读写、字数统计、世界书维护与 MCP 工具齐备)。世界书页与设置页照常。切换会重建服务端会话,下一次对话生效。
+											</div>
+										</div>
+										<ToggleSwitch checked={classicMode} onChange={(v) => void toggleClassicMode(v)} ariaLabel="经典模式" />
+									</div>
+									<div className="s-pref-item">
+										<div className="s-pref-text">
+											<div className="s-pref-title">外部命令(bash)</div>
+											<div className="s-pref-desc">
+												允许 AI 执行 shell 命令(默认关闭)。适合让它调 pandoc、git、脚本这类本机工具;开启后命令与输出会实时显示在对话里(开着「简化输出」也可见)。风险见下方确认条。
+											</div>
+										</div>
+										<ToggleSwitch checked={shellEnabled} onChange={askShellEnable} ariaLabel="外部命令" />
+									</div>
+									{shellConfirm && (
+										<div className="s-plugin-trust-confirm">
+											<div className="s-plugin-trust-warn">
+												开启后,命令以与 pi-writer 相同的权限在真实 shell 里运行:可以读写整台磁盘、访问网络,书目录的路径限制对它无效。它只能被「看得见」约束——每条命令与输出都会实时显示在对话里。确认开启吗?
+											</div>
+											<div style={{ display: "flex", gap: 8 }}>
+												<button type="button" className="btn-ghost danger" onClick={() => void toggleShell(true)}>
+													确认启用
+												</button>
+												<button type="button" className="btn-ghost" onClick={() => setShellConfirm(false)}>
+													取消
+												</button>
+											</div>
+										</div>
+									)}
+								</div>
+							</div>
+
+							<div className="s-card">
 								<div className="s-card-head">界面偏好</div>
 								<div className="s-pref-list">
 									<div className="s-pref-item">
@@ -837,8 +924,12 @@ export function SettingsPage({
 									</div>
 									<div className="s-pref-item">
 										<div className="s-pref-text">
-											<div className="s-pref-title">编辑免确认</div>
-											<div className="s-pref-desc">开启后编剧的修改落盘即生效,不再弹「待确认」卡。</div>
+										<div className="s-pref-title">编辑免确认</div>
+										<div className="s-pref-desc">
+											{classicMode
+												? "开启后 AI 的修改落盘即生效,不再弹「待确认」卡。"
+												: "开启后编剧的修改落盘即生效,不再弹「待确认」卡。"}
+										</div>
 										</div>
 										<ToggleSwitch checked={autoConfirmEdits} onChange={onAutoConfirmEditsChange} ariaLabel="编辑免确认" />
 									</div>

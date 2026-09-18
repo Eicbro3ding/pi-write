@@ -28,6 +28,7 @@ import { McpManager } from "./mcp/manager.ts";
 import { loadPlugins } from "./plugin-loader.ts";
 import { createSessionRuntimeFactory } from "./session-factory.ts";
 import { buildWriterSystemPrompt } from "./prompt.ts";
+import { readWriterSettings } from "./writer-settings.ts";
 import { WriterServer } from "./web/server.ts";
 import { SessionHost } from "./web/session-host.ts";
 import { StageHost } from "./web/stage-host.ts";
@@ -58,20 +59,29 @@ export interface WebCliOptions {
  * MCP 工具连不上会话——这是 2026-08-08 查出的根因。改用 excludeTools 只禁
  * bash(无 bash 的 web 子集语义),MCP 工具自然放行。
  */
-export function webExcludeTools(env: Record<string, string | undefined>): string[] {
-	const excluded = ["bash"];
+/**
+ * web 模式禁用的工具(黑名单)。
+ *
+ * `bash` 默认禁用——web 没有终端可看,历史上也一直按"只给文件工具"约束。
+ * 现在可由设置项 `enableShell`(设置页「外部命令」)显式放开:那时它不再进黑名单,
+ * 并在 webActiveTools 里被激活。放开后命令以服务进程权限运行,路径守卫对它无效,
+ * 所以必须配合"命令与输出实时可见"(见前端 tool_execution_update 归约)。
+ */
+export function webExcludeTools(env: Record<string, string | undefined>, opts: { shell?: boolean } = {}): string[] {
+	const excluded = opts.shell ? [] : ["bash"];
 	if (env.PI_WRITER_NO_SPAWN_TOOLS) excluded.push("grep", "find");
 	return excluded;
 }
 
 /**
  * web 模式初始激活的内置工具(不含扩展/MCP 工具——它们经 includeAllExtensionTools
- * 自动激活)。PI_WRITER_NO_SPAWN_TOOLS 时 grep/find 一并剔除。
+ * 自动激活)。PI_WRITER_NO_SPAWN_TOOLS 时 grep/find 一并剔除;
+ * opts.shell 为真时追加 bash(顺序保证既有调用方/断言不受影响)。
  */
-export function webActiveTools(env: Record<string, string | undefined>): string[] {
+export function webActiveTools(env: Record<string, string | undefined>, opts: { shell?: boolean } = {}): string[] {
 	const builtin = ["read", "write", "edit", "grep", "find", "ls"];
-	if (env.PI_WRITER_NO_SPAWN_TOOLS) return builtin.filter((t) => t !== "grep" && t !== "find");
-	return builtin;
+	const filtered = env.PI_WRITER_NO_SPAWN_TOOLS ? builtin.filter((t) => t !== "grep" && t !== "find") : builtin;
+	return opts.shell ? [...filtered, "bash"] : filtered;
 }
 
 /** 解析 `pi-writer web` 的子参数;未知选项或非法端口抛错。 */
@@ -211,6 +221,10 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 
 	const agentDir = getAgentDir();
 	const skillsDir = resolveSkillsDir();
+	// 服务端全局设置(经典模式 / 外部命令):必须在装配 createRuntime 之前读——
+	// 工具集与系统提示(有没有 bash)都在这里定下来,晚读会让开关"下次重启才生效"
+	const writerSettings = await readWriterSettings();
+	const shellEnabled = writerSettings.enableShell;
 	const sessionManager = SessionManager.open(chapterAbsPath, sessionsDir, bookDir);
 	// MCP 服务器:读 mcp.json → 连接各 server → 工具定义注入 createRuntime 的
 	// customTools(单个 server 失败隔离,状态经 /api/mcp 展示;配置变更后由
@@ -234,7 +248,7 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 		systemPromptOverride: () =>
 			buildWriterSystemPrompt(
 				mcpManager.getTools().map((t) => ({ name: t.name, description: t.description })),
-				false,
+				shellEnabled,
 			),
 		extensionFactories: [writerExtension],
 		pluginFactories,
@@ -242,9 +256,10 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 		thinkingLevel: opts.thinking as ThinkingLevel | undefined,
 		temperature: opts.temperature,
 		topP: opts.topP,
-		// 黑名单禁 bash(web 子集),显式激活内置工具;白名单会滤掉 MCP customTools
-		excludeTools: webExcludeTools(process.env),
-		initialActiveToolNames: webActiveTools(process.env),
+		// 黑名单禁 bash(web 子集;设置里放开「外部命令」后不再禁),显式激活内置工具;
+		// 白名单会滤掉 MCP customTools
+		excludeTools: webExcludeTools(process.env, { shell: shellEnabled }),
+		initialActiveToolNames: webActiveTools(process.env, { shell: shellEnabled }),
 		// MCP 工具(经 customTools 注册;配置为空时是空数组,行为与之前一致)
 		customTools: mcpManager.getTools(),
 	});
@@ -258,8 +273,17 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 	});
 	await host.start();
 	// 常驻编剧宿主:每本书一个 writer 会话,惰性创建;model/thinking 同 stage
-	// (writer 端点未装配时由 server 侧 404,与 MCP/stage 同款)
-	const writerHost = new WriterHost({ model: opts.model, thinkingLevel: opts.thinking, temperature: opts.temperature, topP: opts.topP, getMcpTools: () => mcpManager.getTools() });
+	// (writer 端点未装配时由 server 侧 404,与 MCP/stage 同款)。
+	// 设置(经典模式 / 外部命令)在启动时读一次,之后切换走 PUT /api/settings。
+	const writerHost = new WriterHost({
+		model: opts.model,
+		thinkingLevel: opts.thinking,
+		temperature: opts.temperature,
+		topP: opts.topP,
+		getMcpTools: () => mcpManager.getTools(),
+		classicMode: writerSettings.classicMode,
+		enableShell: shellEnabled,
+	});
 	// 舞台区宿主:每本书每个章节一个编排器,惰性创建;model/thinking 复用 web 的 CLI 选项
 	// (stage 端点未装配时由 server 侧 404,与 MCP 同款);writerHost 注入用于收幕委托
 	// (常驻编剧 === 收幕编剧,2026-08-11)
