@@ -3,11 +3,12 @@ import { AnimatePresence, motion } from "framer-motion";
 import type { ChatMessage, ToolCallInfo } from "../types.ts";
 import { DUR, EASE, EDGE_IN, STAGGER } from "../motion.ts";
 import { renderMarkdown } from "../markdown.ts";
+import { blocksText, formatDuration, turnDurationMs } from "../blocks.ts";
 import { ConfirmCard, type ConfirmCardItem } from "./ConfirmCard.tsx";
 import { FoldablePre } from "./FoldablePre.tsx";
 import { Lu } from "./Lu.tsx";
 import { ToolIcon } from "./ToolIcon.tsx";
-import { actionFlowTools, toolActionRow, toolIcon } from "../tool-status.ts";
+import { toolActionRow, toolIcon, toolRenderForm } from "../tool-status.ts";
 import { autoExpandThinkingEnabled } from "../settings.ts";
 
 /**
@@ -68,23 +69,10 @@ function CompactingIndicator() {
 
 /** 工具调用卡片:名称 + 参数 + 运行中/完成/失败状态。 */
 /**
- * 这一轮要显示哪些工具卡片。
- *
- * 「简化输出」把工具卡片整体藏起来(默认开启,绝大多数文件类工具看一眼就够);
- * **bash 是唯一例外**:它是唯一能越过书目录边界的工具,命令与输出必须始终可见——
- * 藏了它,「打开外部命令」就等于开了一个看不见的黑箱。
- */
-export function visibleToolCalls(toolCalls: ToolCallInfo[], simplifiedTools: boolean): ToolCallInfo[] {
-	if (!simplifiedTools) return toolCalls;
-	return toolCalls.filter((t) => t.name === "bash");
-}
-
-/**
- * 工具卡片(非简化输出)。两种形态:
- * - 普通工具:单行(状态点 + 名称 + 参数 + 状态胶囊),细节在 title 里;
- * - **bash(外部命令):命令与输出都摊开**——它是唯一能越过书目录边界的工具,
- *   运行中的 stdout/stderr 经 tool_execution_update 实时流进来(见 store 的归约),
- *   结束后把最终输出留在卡片上供回看。运行中自动滚到底(输出是快照替换)。
+ * 工具卡片(调试形态 / bash US):单行(状态点 + 名称 + 参数 + 状态胶囊),
+ * 细节在 title 里;**bash(外部命令)把命令与输出都摊开**——它是唯一能越过书目录
+ * 边界的工具,运行中的 stdout/stderr 经 tool_execution_update 实时流进来(见 store
+ * 的归约),结束后把最终输出留在卡片上供回看。运行中自动滚到底(输出是快照替换)。
  *
  * 设计稿 03-组件规范/03:四张卡统一外壳;状态改胶囊;**工具卡正文不再是绿色**
  * (绿色是状态色,不是装饰色)。
@@ -127,7 +115,7 @@ function ToolCard({ t }: { t: ToolCallInfo }) {
 	);
 }
 
-/** 完成/失败/进行中的状态小图标(动作流用;不用 emoji,见设计稿 03-组件规范/05)。 */
+/** 完成/失败/进行中的状态小图标(动作行用;不用 emoji,见设计稿 03-组件规范/05)。 */
 function ActionStateIcon({ state }: { state: "run" | "ok" | "err" }) {
 	if (state === "run") {
 		return (
@@ -142,30 +130,41 @@ function ActionStateIcon({ state }: { state: "run" | "ok" | "err" }) {
 }
 
 /**
- * 简化输出的工具动作流(设计稿 03-组件规范/05):不是「什么都不显示」,而是把工具
- * 调用压成一行可读的动作——**带宾语**(在改哪个文件)、**完成的行留在流水里**
- * (最近 3 条)、不用 emoji。bash 不在这里出现(它始终渲染完整卡片,命令必须可见)。
+ * 读取型工具的**一行**(设计稿 03-组件规范/05):不是「什么都不显示」,而是把工具
+ * 调用压成一行可读的动作——**带宾语**(在改哪个文件)、**不用 emoji**。
+ *
+ * 与改造前的区别:那时是一整块「动作流」(所有工具挤在一处、只留最近 3 条),
+ * 现在每个工具块各占一行、落在它真实发生的位置上,历史行不再被丢弃
+ * (行有了位置,要省地方自己折)。
  */
-function ToolActionFlow({ tools }: { tools: ToolCallInfo[] }) {
-	const rows = actionFlowTools(tools.filter((t) => t.name !== "bash"));
-	if (rows.length === 0) return null;
+function ToolActionRow({ t }: { t: ToolCallInfo }) {
+	const r = toolActionRow(t);
+	const state = r.isError ? "err" : r.running ? "run" : "ok";
 	return (
-		<div className="act-flow">
-			{rows.map((t) => {
-				const r = toolActionRow(t);
-				const state = r.isError ? "err" : r.running ? "run" : "ok";
-				return (
-					<div key={t.id} className={`act-row ${state}`}>
-						<span className="act-icon">
-							<ActionStateIcon state={state} />
-						</span>
-						<span className="act-verb">{r.verb}</span>
-						{r.object && <span className="act-object">{r.object}</span>}
-					</div>
-				);
-			})}
+		<div className={`act-row ${state}`} title={t.args}>
+			<span className="act-icon">
+				<ActionStateIcon state={state} />
+			</span>
+			<span className="act-verb">{r.verb}</span>
+			{r.object && <span className="act-object">{r.object}</span>}
 		</div>
 	);
+}
+
+/**
+ * 工具块的渲染分发(块渲染表见 tool-status.ts 的 toolRenderForm)。
+ *
+ * `preview`(产出型工具)目前还没有卡片数据可挂——把预览卡从「锚定在消息下的独立
+ * 层」改成「工具块自己的渲染结果」是下一步改造,那时这里会收到按 toolCallId 索引的
+ * 卡片并把 PreviewCard 渲染出来。在那之前一律降级为动作行:**降级不是异常态**
+ * (取数失败、无实质变化、非编辑类工具都走这里),所以不需要额外的错误分支。
+ */
+function ToolBlock({ t, debug }: { t: ToolCallInfo; debug: boolean }) {
+	const form = toolRenderForm(t.name, debug);
+	// 默认不显示的工具失败时强制露出:静默会让「AI 好像什么都没干」,而失败恰恰是要看的东西
+	if (form === "hidden") return t.isError ? <ToolActionRow t={t} /> : null;
+	if (form === "terminal" || form === "card") return <ToolCard t={t} />;
+	return <ToolActionRow t={t} />;
 }
 
 /**
@@ -204,6 +203,8 @@ function useThinkingTimer(text: string, done: boolean): number {
  * 思考胶囊(设计稿 03-组件规范/04):**元信息行内**的一颗药丸——`› 思考 · 1,606 字`,
  * 展开时箭头翻转。字数带千分位、与「思考」之间用 `·` 分隔;秒数只在流式中出现
  * (结束后字数才是有效信息,设计稿收起来的也是这一种)。
+ *
+ * 改造后每个思考块各有一颗(不再把整轮思考拼成一颗)——顺序交错得以成立。
  */
 export function ThinkingToggle({
 	text,
@@ -249,7 +250,7 @@ export function ThinkingBody({ text, open }: { text: string; open: boolean }) {
 	);
 }
 
-/** 思考块 = 胶囊 + 展开体(自管开合;消息流直接用上面两个部件把胶囊放进元信息行)。 */
+/** 思考块 = 胶囊 + 展开体(自管开合;消息流按块逐个挂)。 */
 export function ThinkingBlock({ text, done }: { text: string; done: boolean }) {
 	// 自动展开思考:挂载时读一次设置,之后点击由用户接管
 	const [open, setOpen] = useState(() => autoExpandThinkingEnabled());
@@ -261,11 +262,16 @@ export function ThinkingBlock({ text, done }: { text: string; done: boolean }) {
 	);
 }
 
-/** 一条稿件记录:无气泡,小号元信息标签 + 思考折叠块 + 正文 + 工具卡片。
- *  user 整行浅色背景 + 左侧琥珀边条(一眼区分);assistant 正文渲染 markdown。
- *  simplifiedTools 开启时工具卡片整体隐藏(只保留模型文本输出)。
- *  用户消息 hover 操作:每条显示「编辑」(撤回该消息及之后,以新文本重发——
- *  重发即新分支;AI 流式中隐藏)。 */
+/**
+ * 一条稿件记录:无气泡,小号元信息标签 + **按到达顺序排列的块** + 回合级过程折叠。
+ *
+ * 改造要点(2026-09-19):
+ * - 思考 / 正文 / 工具不再是三段平铺,而是遍历 message.blocks 原样渲染 —— 工具卡
+ *   落在它真正发生的位置(第 N 段思考与第 N+1 段思考之间),不再全堆在正文末尾;
+ * - 每个思考块自带折叠胶囊,每个工具块自带渲染形态(见 ToolBlock);
+ * - 元信息行多一颗**回合折叠胶囊**「› 已工作 2 分 53 秒」:一键把整轮过程
+ *   (思考 + 工具)收起来,只留正文结论。流式中强制展开(过程正在发生,收起来没意义)。
+ */
 function Message({
 	m,
 	simplifiedTools,
@@ -279,24 +285,40 @@ function Message({
 }) {
 	const [editing, setEditing] = useState(false);
 	const [editText, setEditText] = useState("");
-	/** 思考展开态(缺省读设置里的「自动展开思考」,之后点击由用户接管)。 */
-	const [thinkOpen, setThinkOpen] = useState(() => autoExpandThinkingEnabled());
-	const hasThink = m.thinking.length > 0;
+	/** 过程折叠(整轮思考 + 工具)。缺省展开;流式中强制展开。 */
+	const [procOpen, setProcOpen] = useState(true);
+	const debug = !simplifiedTools;
+	const text = blocksText(m.blocks);
+	const duration = turnDurationMs(m);
+	/** 本轮是否有「过程」(思考或工具);没有就不给折叠胶囊。 */
+	const hasProcess = m.blocks.some((b) => b.kind !== "text");
+	const procShown = procOpen || !m.done;
 	// 编辑需要服务端 entry id 定位:历史水合与 message_end 后都有,乐观气泡(发送瞬间)没有
 	const canAct = m.role === "user" && !streaming && m.entryId !== undefined;
 	// data-who:气泡差分(舞台)用它给头像渲染首字,不必让消息流认识舞台/角色
 	return (
 		<div className={m.role === "user" ? "record user" : "record assistant"} data-who={m.role === "user" ? "你" : "PI"}>
-			{/* 元信息行:发言人 + 思考胶囊 + 操作(设计稿 03-组件规范/04——
+			{/* 元信息行:发言人 + 回合折叠胶囊 + 操作(设计稿 03-组件规范/04——
 			    胶囊就在这一行里,不再自占一行) */}
 			<div className="record-meta">
 				<span className="record-who">{m.role === "user" ? "你" : "PI"}</span>
-				{hasThink && (
-					<ThinkingToggle text={m.thinking} done={m.done} open={thinkOpen} onToggle={() => setThinkOpen((v) => !v)} />
+				{hasProcess && m.done && duration !== null && (
+					<button
+						type="button"
+						className="think-toggle turn-fold"
+						aria-expanded={procShown}
+						title={procShown ? "收起这一轮的过程" : "展开这一轮的过程"}
+						onClick={() => setProcOpen((v) => !v)}
+					>
+						<span className="think-arrow" aria-hidden="true">
+							<Lu icon={procShown ? "chevron-down" : "chevron-right"} size={12} strokeWidth={1.8} />
+						</span>
+						<span className="think-label">已工作 {formatDuration(duration)}</span>
+					</button>
 				)}
 				{/* 操作行:常驻可见(设计稿 03-组件规范/04——原来 hover-only,触屏不可达)。
 				    user:编辑(撤回并重发)+ 复制;assistant:复制。AI 流式中隐藏 */}
-				{(canAct || (m.role === "assistant" && !streaming && m.text.length > 0)) && !editing && (
+				{(canAct || (m.role === "assistant" && !streaming && text.length > 0)) && !editing && (
 					<span className="record-actions">
 						{canAct && (
 							<button
@@ -305,7 +327,7 @@ function Message({
 								title="撤回此消息及其后对话,以新文本重发"
 								onClick={() => {
 									setEditing(true);
-									setEditText(m.text);
+									setEditText(text);
 								}}
 							>
 								编辑
@@ -315,14 +337,13 @@ function Message({
 							type="button"
 							className="record-act"
 							title="复制这条消息的正文"
-							onClick={() => void navigator.clipboard?.writeText(m.text)}
+							onClick={() => void navigator.clipboard?.writeText(text)}
 						>
 							复制
 						</button>
 					</span>
 				)}
 			</div>
-			{hasThink && <ThinkingBody text={m.thinking} open={thinkOpen} />}
 			{editing ? (
 				<div className="record-edit">
 					<textarea
@@ -351,59 +372,52 @@ function Message({
 				</div>
 			) : (
 				<>
-					{m.text.length > 0 &&
-						(m.role === "user" ? (
-							<div className="record-text">{m.text}</div>
-						) : (
-							<div className="record-text record-md" dangerouslySetInnerHTML={{ __html: renderMarkdown(m.text) }} />
-						))}
-					{/* 工具区:简化输出走「动作流 + bash 完整卡片」(设计稿 03-组件规范/05),
-					    否则每张卡完整渲染。简化输出隐藏的只是「看一眼就够」的卡片;
-					    bash 例外——命令必须可见 */}
-					{simplifiedTools ? (
-						<>
-							<ToolActionFlow tools={m.toolCalls} />
-							{m.toolCalls.filter((t) => t.name === "bash").length > 0 && (
-								<div className="tools">
-									{m.toolCalls
-										.filter((t) => t.name === "bash")
-										.map((t) => (
-											<ToolCard key={t.id} t={t} />
-										))}
-								</div>
-							)}
-						</>
-					) : (
-						m.toolCalls.length > 0 && (
-							<div className="tools">
-								{m.toolCalls.map((t) => (
-									<ToolCard key={t.id} t={t} />
-								))}
+					{/* 块按到达顺序渲染:思考 / 正文 / 工具交错。折叠只作用于过程块(思考 + 工具),
+					    正文是结论,永远保留 */}
+					{m.blocks.map((b, i) => {
+						if (b.kind === "thinking") {
+							if (!procShown || b.text.length === 0) return null;
+							return <ThinkingBlock key={i} text={b.text} done={m.done} />;
+						}
+						if (b.kind === "tool") {
+							if (!procShown) return null;
+							return <ToolBlock key={b.call.id} t={b.call} debug={debug} />;
+						}
+						if (b.text.length === 0) return null;
+						return m.role === "user" ? (
+							<div key={i} className="record-text">
+								{b.text}
 							</div>
-						)
-					)}
+						) : (
+							<div key={i} className="record-text record-md" dangerouslySetInnerHTML={{ __html: renderMarkdown(b.text) }} />
+						);
+					})}
 				</>
 			)}
 		</div>
 	);
 
 	function submitEdit() {
-		const text = editText.trim();
+		const text2 = editText.trim();
 		setEditing(false);
 		// 空文本不发(与主输入框一致);文本未修改也照样发送——编辑 = 分支 + 重发
-		if (text.length === 0) return;
-		onEdit?.(m, text);
+		if (text2.length === 0) return;
+		onEdit?.(m, text2);
 	}
 }
 
 /**
- * Message 渲染相等性(memo 比较器,P2,2026-08):流式对话每 delta 触发列表重渲染,
- * 已结束消息重复 marked.parse 是主要成本——memo 后流式 delta 只重渲染「进行中的
- * 消息」。注意 toolCalls 数组每次 reducer 更新都是新身份(tool_execution_end 会
- * map 整列表),不能做引用比较,必须逐字段比内容;onEdit 是经 ref 调用的稳定包装
- * (editWriterMessage 内部只读 refs),身份变化不影响渲染结果,忽略。
- * 比较器返回 true = 跳过重渲染;任何渲染字段(role/text/thinking/done/toolCalls/
- * simplifiedTools/streaming)变化都返回 false 照常重渲染。 */
+ * Message 渲染相等性(memo 比较器,P2,2026-08):
+ * 流式对话每 delta 触发列表重渲染,已结束消息重复 marked.parse 是主要成本——
+ * memo 后流式 delta 只重渲染「进行中的消息」。
+ *
+ * 块化后必须**逐块按内容比较**:blocks 数组每次归约都是新身份(appendDelta 造新
+ * 数组),引用比较会让每个 delta 都判定为变化(退化成没有 memo);反过来漏比某个
+ * 字段会让流式内容静默不更新。两者都难查,所以这里显式列全渲染相关字段。
+ * onEdit 是经 ref 调用的稳定包装(editWriterMessage 内部只读 refs),身份变化不影响
+ * 渲染结果,忽略。
+ * 比较器返回 true = 跳过重渲染。
+ */
 function messagePropsEqual(
 	prev: { m: ChatMessage; simplifiedTools: boolean; streaming: boolean },
 	next: { m: ChatMessage; simplifiedTools: boolean; streaming: boolean },
@@ -413,14 +427,31 @@ function messagePropsEqual(
 	const b = next.m;
 	if (a === b) return true;
 	if (a.id !== b.id || a.entryId !== b.entryId || a.role !== b.role) return false;
-	if (a.text !== b.text || a.thinking !== b.thinking || a.done !== b.done) return false;
-	const ca = a.toolCalls;
-	const cb = b.toolCalls;
-	if (ca.length !== cb.length) return false;
-	for (let i = 0; i < ca.length; i++) {
-		const x = ca[i]!;
-		const y = cb[i]!;
-		if (x.id !== y.id || x.name !== y.name || x.args !== y.args || x.result !== y.result || x.isError !== y.isError) return false;
+	if (a.done !== b.done || a.startedAt !== b.startedAt || a.endedAt !== b.endedAt) return false;
+	const ba = a.blocks;
+	const bb = b.blocks;
+	if (ba.length !== bb.length) return false;
+	for (let i = 0; i < ba.length; i++) {
+		const x = ba[i]!;
+		const y = bb[i]!;
+		if (x.kind !== y.kind) return false;
+		if (x.kind === "tool" || y.kind === "tool") {
+			if (x.kind !== "tool" || y.kind !== "tool") return false;
+			const cx = x.call;
+			const cy = y.call;
+			if (
+				cx.id !== cy.id ||
+				cx.name !== cy.name ||
+				cx.args !== cy.args ||
+				cx.result !== cy.result ||
+				cx.isError !== cy.isError ||
+				cx.stream !== cy.stream
+			) {
+				return false;
+			}
+			continue;
+		}
+		if (x.text !== y.text) return false;
 	}
 	return true;
 }

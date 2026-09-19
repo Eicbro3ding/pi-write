@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-	ACTION_FLOW_KEEP,
-	actionFlowTools,
 	DEFAULT_TOOL_DONE,
 	DEFAULT_TOOL_STATUS,
 	TOOL_DONE,
@@ -69,29 +67,5 @@ describe("工具动作流(03-组件规范/05:带宾语、完成的行留在流�
     expect(toolIcon("word_count")).toBe("count");
     expect(toolIcon("world_update")).toBe("world");
     expect(toolIcon("bash")).toBe("other");
-  });
-
-  it("actionFlowTools:进行中全留 + 最近 3 条已完成,保持原顺序", () => {
-    const tools = [
-      { name: "read", result: "ok" },
-      { name: "read", result: "ok" },
-      { name: "read", result: "ok" },
-      { name: "read", result: "ok" },
-      { name: "edit", result: "ok" },
-      { name: "write", result: null },
-    ];
-    const shown = actionFlowTools(tools);
-    // 5 条已完成里只留最后 3 条(第 3、4 条 read + edit),进行中的 write 全留
-    expect(shown.map((t) => t.name)).toEqual(["read", "read", "edit", "write"]);
-    expect(shown).toHaveLength(ACTION_FLOW_KEEP + 1);
-  });
-
-  it("actionFlowTools:少于阈值时全部保留;空数组返回空", () => {
-    const tools = [
-      { name: "a", result: "x" },
-      { name: "b", result: null },
-    ];
-    expect(actionFlowTools(tools).map((t) => t.name)).toEqual(["a", "b"]);
-    expect(actionFlowTools([])).toEqual([]);
   });
 });

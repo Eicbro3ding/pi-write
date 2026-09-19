@@ -5,6 +5,7 @@ import type { Library } from "../library.ts";
 import { useMediaQuery } from "../useMediaQuery.ts";
 import { useDragResize } from "../use-drag-resize.ts";
 import { initialSessionState, messagesToEvents, processAgentEvent, RESET, sessionReducer } from "../store.ts";
+import { blocksText, blocksThinking } from "../blocks.ts";
 import type { AgentEventDto, BookFileEntryDto, ChapterRef, ScriptPatchDto, StageModeDto, StagePhaseDto, StageScriptDto, StageSnapshotDto, WorldDataDto } from "../types.ts";
 import { formatCounts, initialStageState, reduceStage, stageEntryText } from "../stage-web.ts";
 import { contextUsageHint } from "../context-usage.ts";
@@ -313,14 +314,17 @@ export function StagePage({
 		const local = directorSession.messages;
 		const localLast = local[local.length - 1];
 		const snapLast = chat[chat.length - 1];
+		// 本地消息是块序列,与快照(纯文本/思考)比对取派生值(见 blocks.ts)
+		const localText = localLast ? blocksText(localLast.blocks) : "";
+		const localThinking = localLast ? blocksThinking(localLast.blocks) : "";
 		const sameOngoingTurn =
 			directorSession.isStreaming &&
 			localLast !== undefined &&
 			snapLast !== undefined &&
 			localLast.role === snapLast.role &&
-			(localLast.text.startsWith(snapLast.text) || snapLast.text.startsWith(localLast.text)) &&
-			((localLast.thinking ?? "").startsWith(snapLast.thinking ?? "") ||
-				(snapLast.thinking ?? "").startsWith(localLast.thinking ?? ""));
+			(localText.startsWith(snapLast.text) || snapLast.text.startsWith(localText)) &&
+			(localThinking.startsWith(snapLast.thinking ?? "") ||
+				(snapLast.thinking ?? "").startsWith(localThinking));
 		if (!sameOngoingTurn) alignDirector(snapshot);
 		if (snapshot.pendingScript) {
 			setScriptConfirm(snapshot.pendingScript);

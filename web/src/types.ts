@@ -125,20 +125,36 @@ export interface WorldDataDto {
 	timeline: TimelineEventDto[];
 }
 
+/**
+ * 消息内的一个有序块。**顺序即到达顺序**(2026-09-19)。
+ *
+ * 改造前 ChatMessage 是 `{text, thinking, toolCalls}` 三个平铺字段,一个回合里
+ * 多段「思考 → 工具 → 思考 → 工具 → 正文」被 reducer 用 `\n\n` 拼成「全部思考 +
+ * 全部正文 + 全部工具」,顺序在归约那一刻就丢了。现在顺序本身就是数据:
+ * 块按事件到达次序追加,渲染原样遍历。
+ */
+export type MessageBlock =
+	| { kind: "thinking"; text: string }
+	| { kind: "text"; text: string }
+	| { kind: "tool"; call: ToolCallInfo };
+
 /** 会话视图中的一条聊天消息。 */
 export interface ChatMessage {
 	id: string;
 	/** 会话 entry 稳定 id(服务端下发的编辑/分支定位依据;实时消息在 message_end 时补上)。 */
 	entryId?: string;
 	role: "user" | "assistant";
-	/** 已累积的文本内容。 */
-	text: string;
-	/** 已累积的思考内容(assistant 的 thinking 块/thinking_delta;无则空串)。 */
-	thinking: string;
+	/** 有序块序列(思考 / 正文 / 工具调用按到达顺序穿插)。 */
+	blocks: MessageBlock[];
 	/** 消息是否已结束(收到 message_end)。 */
 	done: boolean;
-	/** 该消息触发的工具调用卡片。 */
-	toolCalls: ToolCallInfo[];
+	/**
+	 * 回合计时(ms 时间戳):该 assistant 气泡的首个事件到达时为 startedAt,
+	 * agent_settled / 历史水合的最后一条 entry 时间为 endedAt。
+	 * 供「已工作 X 分 Y 秒」折叠头显示;两者都有才是有效时长。
+	 */
+	startedAt?: number;
+	endedAt?: number;
 }
 
 /** 工具调用卡片。 */
@@ -181,6 +197,12 @@ export interface CacheHitInfo {
 export interface SessionViewState {
 	messages: ChatMessage[];
 	isStreaming: boolean;
+	/**
+	 * 本轮首个 turn_start 的到达时刻(ms);后续 turn_start(多轮工具调用)不覆盖。
+	 * 用于给本轮 assistant 气泡落 startedAt —— 「已工作 X 分 Y 秒」的计时起点,
+	 * 从用户发出那一刻算,而不是从第一个 token 算。
+	 */
+	turnStartedAt?: number;
 	/** 上下文压缩中(自动/手动触发):对话末尾显示「正在压缩上下文」提示。 */
 	compacting: boolean;
 	/** 最近一轮提示词缓存命中(message_end 的 assistant usage);provider 未上报缓存字段或尚无响应为 null。 */

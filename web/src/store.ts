@@ -8,12 +8,22 @@
  * 不依赖 message.id。message_start 只追加 user/assistant 消息,role=toolResult
  * 等非气泡角色直接跳过,不渲染为气泡。
  */
-import type { AgentEventDto, ChatMessage, SessionViewState, ToolCallInfo } from "./types.ts";
+import type { AgentEventDto, ChatMessage, MessageBlock, SessionViewState, ToolCallInfo } from "./types.ts";
 import { extractCacheHit } from "./context-usage.ts";
 
 /** 初始会话视图状态。 */
 export function initialSessionState(): SessionViewState {
 	return { messages: [], isStreaming: false, compacting: false, cacheHit: null };
+}
+
+/** 本地随机消息 id(实时消息在 message_end 到达时换成服务端 entryId)。 */
+function localId(): string {
+	return Math.random().toString(36).slice(2);
+}
+
+/** 工具参数 → 展示字符串(对象序列化;与改造前同口径)。 */
+function argsToString(args: unknown): string {
+	return typeof args === "string" ? args : JSON.stringify(args ?? {});
 }
 
 /**
@@ -75,7 +85,9 @@ export function sessionReducer(s: SessionViewState, e: AgentEventDto | typeof RE
 	return e.type === RESET.type ? initialSessionState() : processAgentEvent(s, e);
 }
 
-/** 把 message.content(字符串或 block 数组)拆为正文与思考文本。 */
+/**
+ * 把 message.content(字符串或 block 数组)拆为正文与思考文本。
+ * 仅用于兼容消费点(回显配对);渲染路径走 blocksFromContent。 */
 function splitContent(content: unknown): { text: string; thinking: string } {
 	if (typeof content === "string") return { text: content, thinking: "" };
 	if (!Array.isArray(content)) return { text: "", thinking: "" };
@@ -91,6 +103,95 @@ function splitContent(content: unknown): { text: string; thinking: string } {
 /** 提取 message.content 的正文文本(与 splitContent 的 text 部分一致,供回显配对)。 */
 export function contentTextOf(content: unknown): string {
 	return splitContent(content).text;
+}
+
+/**
+ * message.content(有序块数组)→ MessageBlock 序列。**顺序原样保留**。
+ *
+ * 契约来源是 vendor 的 AssistantMessage.content:`(TextContent | ThinkingContent
+ * | ToolCall)[]`,按模型输出顺序排列。实时路径下 message_start 的 content 恒为空
+ * (provider 的 output.content 初始化为 [],见 pi-ai 各 api 实现),因此这条路径
+ * 实际只服务历史水合与测试;实时路径的块由 *_start/delta 与 tool_execution_start
+ * 逐个开出来。
+ *
+ * 空文本块跳过(不产出空的可折叠行);工具块用 vendor 的 ToolCall.id 建,
+ * 与 tool_execution_start.toolCallId 同源,后续结果按 id 归位。
+ */
+export function blocksFromContent(content: unknown): MessageBlock[] {
+	if (typeof content === "string") return content.length > 0 ? [{ kind: "text", text: content }] : [];
+	if (!Array.isArray(content)) return [];
+	const out: MessageBlock[] = [];
+	for (const part of content) {
+		const p = part as { type?: string; text?: string; thinking?: string; id?: string; name?: string; arguments?: unknown };
+		if (p.type === "text") {
+			if (typeof p.text === "string" && p.text.length > 0) out.push({ kind: "text", text: p.text });
+		} else if (p.type === "thinking") {
+			// 落盘形态可能是 { thinking } 也可能是 { text }(见 src/session-text.ts 同款兜底)
+			const t = typeof p.thinking === "string" ? p.thinking : typeof p.text === "string" ? p.text : "";
+			if (t.length > 0) out.push({ kind: "thinking", text: t });
+		} else if (p.type === "toolCall" && typeof p.id === "string") {
+			out.push({
+				kind: "tool",
+				call: { id: p.id, name: p.name ?? "", args: argsToString(p.arguments), result: null, isError: false },
+			});
+		}
+	}
+	return out;
+}
+
+/**
+ * 开一个同类型空块。**已有同类型且仍为空的末块则复用**——provider 的
+ * `*_start` 与 message_start 的 content 可能指同一个块(前者兜底后者),
+ * 不去重会长出双空块。
+ */
+function openBlock(blocks: MessageBlock[], kind: "text" | "thinking"): MessageBlock[] {
+	const last = blocks[blocks.length - 1];
+	if (last && last.kind === kind && last.text.length === 0) return blocks;
+	return [...blocks, { kind, text: "" }];
+}
+
+/**
+ * 把 delta 追加到末块。末块类型相同即就地追加,否则新开一块。
+ *
+ * 为什么不需要额外的「段」标记:一次 assistant 段内同类块至多一个
+ * (thinking → text → toolCall),且相邻两段之间必然隔着工具块(多轮工具调用),
+ * 所以「末块同类型 = 本段的块」。唯一的例外是中断后不带工具调用的续写,
+ * 那种情况下两段同类文本会并成一块(可接受,不产生错误内容)。
+ */
+function appendDelta(blocks: MessageBlock[], kind: "text" | "thinking", delta: string): MessageBlock[] {
+	if (delta.length === 0) return blocks;
+	const last = blocks[blocks.length - 1];
+	if (last && last.kind === kind) {
+		return [...blocks.slice(0, -1), { kind, text: last.text + delta }];
+	}
+	return [...blocks, { kind, text: delta }];
+}
+
+/** 新段块的接入:追加到气泡末尾,末块若为同类型空块则被本段取代(避免双空块)。 */
+function mergeSegment(blocks: MessageBlock[], seg: readonly MessageBlock[]): MessageBlock[] {
+	let out = blocks;
+	for (const b of seg) {
+		const last = out[out.length - 1];
+		if (last && last.kind === b.kind && last.kind !== "tool" && last.text.length === 0) {
+			out = [...out.slice(0, -1), b];
+		} else {
+			out = [...out, b];
+		}
+	}
+	return out;
+}
+
+/** 按 toolCallId 就地更新工具块(返回值与原数组同身份表示无改动)。 */
+function mapToolBlocks(blocks: MessageBlock[], toolCallId: string, fn: (t: ToolCallInfo) => ToolCallInfo): MessageBlock[] {
+	let changed = false;
+	const next = blocks.map((b) => {
+		if (b.kind !== "tool" || b.call.id !== toolCallId) return b;
+		const call = fn(b.call);
+		if (call === b.call) return b;
+		changed = true;
+		return { kind: "tool" as const, call };
+	});
+	return changed ? next : blocks;
 }
 
 /**
@@ -137,9 +238,11 @@ export function processAgentEvent(state: SessionViewState, event: AgentEventDto)
 			if (!m) return state;
 			// 非 user/assistant 角色(如 toolResult)不渲染为气泡,直接跳过
 			if (m.role !== "user" && m.role !== "assistant") return state;
-			const { text, thinking } = splitContent(m.content);
+			// 思考块只属于 assistant;user 消息的 content 里即便混进 thinking 块也丢掉
+			// (防御式,渲染侧不该给用户消息画思考折叠块)
+			const seg = m.role === "user" ? blocksFromContent(m.content).filter((b) => b.kind === "text") : blocksFromContent(m.content);
 			// 同轮回复合并:一轮 user 消息之后的多条 assistant 消息(多轮工具调用)并入
-			// 同一条气泡,与 extractMessages 的分组规则一致(思考/正文拼接、卡片顺序保留)。
+			// 同一条气泡。**块按顺序追加,不再用 \n\n 拼成平铺字符串** —— 顺序就是数据。
 			// 新的一轮从 user 消息开始,因此最后一条是 assistant 才合并。
 			if (m.role === "assistant") {
 				const last = state.messages[state.messages.length - 1];
@@ -147,11 +250,7 @@ export function processAgentEvent(state: SessionViewState, event: AgentEventDto)
 					const messages = [...state.messages];
 					messages[messages.length - 1] = {
 						...last,
-						text:
-							last.text.length > 0 && text.length > 0
-								? `${last.text}\n\n${text}`
-								: last.text + text,
-						thinking: last.thinking.length > 0 && thinking.length > 0 ? `${last.thinking}\n\n${thinking}` : last.thinking + thinking,
+						blocks: mergeSegment(last.blocks, seg),
 						// 上一条的 message_end 已置 done,合并后继续流式,等本段 message_end 再置 done
 						done: false,
 					};
@@ -161,50 +260,57 @@ export function processAgentEvent(state: SessionViewState, event: AgentEventDto)
 			const msg: ChatMessage = {
 				// 历史水合(带 entryId)直接用服务端稳定 id;实时消息先用本地随机 id,
 				// message_end 到达时替换成真 id(entryId)
-				id: event.entryId ?? Math.random().toString(36).slice(2),
+				id: event.entryId ?? localId(),
 				...(event.entryId ? { entryId: event.entryId } : {}),
 				role: m.role,
-				text,
-				// 思考块只属于 assistant;user 消息防御式置空,渲染侧不显示思考折叠块
-				thinking: m.role === "user" ? "" : thinking,
+				blocks: seg,
 				done: false,
-				toolCalls: [],
+				// 计时起点取本轮 turn_start(用户发出那一刻),而不是首个 token 到达时刻
+				...(m.role === "assistant" ? { startedAt: state.turnStartedAt ?? Date.now() } : {}),
 			};
 			return { ...state, messages: [...state.messages, msg] };
 		}
 			case "message_update": {
 				const deltaEvent = event.assistantMessageEvent;
-				if (!deltaEvent || (deltaEvent.type !== "text_delta" && deltaEvent.type !== "thinking_delta")) {
-					return state;
-				}
-				// 按序匹配:delta 拼到最后一条未 done 的 assistant 消息上(没有则忽略)
+				if (!deltaEvent) return state;
+				// 按序匹配:delta 落到最后一条未 done 的 assistant 消息(没有则忽略)
 				const i = lastPendingAssistantIndex(state.messages);
 				if (i === -1) return state;
-				const delta = deltaEvent.delta ?? "";
 				const messages = [...state.messages];
-				if (deltaEvent.type === "thinking_delta") {
-					messages[i] = { ...messages[i], thinking: messages[i].thinking + delta };
-				} else {
-					messages[i] = { ...messages[i], text: messages[i].text + delta };
-				}
+				const cur = messages[i]!;
+				const t = deltaEvent.type;
+				let blocks: MessageBlock[];
+				if (t === "thinking_start") blocks = openBlock(cur.blocks, "thinking");
+				else if (t === "text_start") blocks = openBlock(cur.blocks, "text");
+				else if (t === "thinking_delta") blocks = appendDelta(cur.blocks, "thinking", deltaEvent.delta ?? "");
+				else if (t === "text_delta") blocks = appendDelta(cur.blocks, "text", deltaEvent.delta ?? "");
+				// toolcall_start/delta/end 不建块:工具块由 tool_execution_start 开
+				// (那时才有 toolCallId/toolName/完整 args),位置天然落在本段正文之后、
+				// 下一段思考之前 —— 正是它该在的地方
+				else return state;
+				if (blocks === cur.blocks) return state;
+				messages[i] = { ...cur, blocks };
 				return { ...state, messages };
 			}
 		case "tool_execution_start": {
 			const { toolCallId, toolName, args } = event;
 			if (!toolCallId || !toolName) return state;
-			const card: ToolCallInfo = {
-				id: toolCallId,
-				name: toolName,
-				args: typeof args === "string" ? args : JSON.stringify(args ?? {}),
-				result: null,
-				isError: false,
-			};
-			// 工具卡片必然属于 assistant 轮:挂到最后一条 assistant 消息
+			// 工具块必然属于 assistant 轮:挂到最后一条 assistant 消息
 			// (真实事件流中工具执行紧随 assistant 的 message_end,最后一条即该 assistant)
 			const i = lastAssistantIndex(state.messages);
 			if (i === -1) return state;
+			const cur = state.messages[i]!;
+			// 幂等:同一 toolCallId 重复 start(SSE 重放 / 水合已建块)不再追加
+			if (cur.blocks.some((b) => b.kind === "tool" && b.call.id === toolCallId)) return state;
+			const card: ToolCallInfo = {
+				id: toolCallId,
+				name: toolName,
+				args: argsToString(args),
+				result: null,
+				isError: false,
+			};
 			const messages = [...state.messages];
-			messages[i] = { ...messages[i], toolCalls: [...messages[i].toolCalls, card] };
+			messages[i] = { ...cur, blocks: [...cur.blocks, { kind: "tool", call: card }] };
 			return { ...state, messages };
 		}
 		case "tool_execution_update": {
@@ -216,10 +322,10 @@ export function processAgentEvent(state: SessionViewState, event: AgentEventDto)
 			if (text === null) return state;
 			return {
 				...state,
-				messages: state.messages.map((m) => ({
-					...m,
-					toolCalls: m.toolCalls.map((t) => (t.id === toolCallId ? { ...t, stream: text } : t)),
-				})),
+				messages: state.messages.map((m) => {
+					const blocks = mapToolBlocks(m.blocks, toolCallId, (t) => ({ ...t, stream: text }));
+					return blocks === m.blocks ? m : { ...m, blocks };
+				}),
 			};
 		}
 		case "tool_execution_end": {
@@ -227,20 +333,16 @@ export function processAgentEvent(state: SessionViewState, event: AgentEventDto)
 			if (!toolCallId) return state;
 			return {
 				...state,
-				messages: state.messages.map((m) => ({
-					...m,
-					toolCalls: m.toolCalls.map((t) =>
-						t.id === toolCallId
-							? {
-									...t,
-									result: typeof result === "string" ? result : JSON.stringify(result ?? ""),
-									isError: isError ?? false,
-									// 结束了就以最终结果为准,丢掉流式快照(避免两份内容并存)
-									stream: null,
-								}
-							: t,
-					),
-				})),
+				messages: state.messages.map((m) => {
+					const blocks = mapToolBlocks(m.blocks, toolCallId, (t) => ({
+						...t,
+						result: typeof result === "string" ? result : JSON.stringify(result ?? ""),
+						isError: isError ?? false,
+						// 结束了就以最终结果为准,丢掉流式快照(避免两份内容并存)
+						stream: null,
+					}));
+					return blocks === m.blocks ? m : { ...m, blocks };
+				}),
 			};
 		}
 		case "message_end": {
@@ -269,9 +371,23 @@ export function processAgentEvent(state: SessionViewState, event: AgentEventDto)
 			return { ...state, messages, ...(hit ? { cacheHit: hit } : {}) };
 		}
 		case "turn_start":
-			return { ...state, isStreaming: true };
-		case "agent_settled":
-			return { ...state, isStreaming: false };
+			// isStreaming 已为 true 说明本轮已在进行中(多轮工具调用的后续 turn):
+			// 保留首轮的计时起点,不重开表
+			return { ...state, isStreaming: true, turnStartedAt: state.isStreaming ? state.turnStartedAt : Date.now() };
+		case "agent_settled": {
+			// 回合真正结束:给本轮 assistant 气泡落结束时间,「已工作 X 分 Y 秒」据此定稿。
+			// 无 startedAt 的气泡(历史水合)不补 —— 没有起点的时长是假的
+			const messages = [...state.messages];
+			for (let i = messages.length - 1; i >= 0; i--) {
+				const m = messages[i]!;
+				if (m.role !== "assistant") continue;
+				if (m.startedAt !== undefined && m.endedAt === undefined) {
+					messages[i] = { ...m, endedAt: Date.now() };
+				}
+				break;
+			}
+			return { ...state, isStreaming: false, messages };
+		}
 		// 上下文压缩(自动阈值/溢出或手动触发):开始/结束事件驱动 compacting 标记,
 		// 对话末尾据此显示「正在压缩上下文」(压缩发生在流式回合内或回合之间,与 isStreaming 独立)
 		case "compaction_start":

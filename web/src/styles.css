@@ -530,6 +530,12 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .think-label { letter-spacing: 0.06em; }
 .think-time { color: var(--amber); font-variant-numeric: tabular-nums; }
 .think-len { font-variant-numeric: tabular-nums; }
+/* 回合折叠胶囊「› 已工作 2 分 53 秒」(2026-09-19):元信息行里,一键把整轮过程
+   (思考 + 工具)收起来只留正文结论。比思考胶囊轻一档 —— 它是这一轮的总控,
+   不是某一个块,所以不填底色,靠描边和字色区分 */
+.think-toggle.turn-fold { background: transparent; border: 1px solid var(--line); }
+.think-toggle.turn-fold:hover { background: var(--bg-elev-2); }
+.turn-fold .think-label { color: var(--ink-2); }
 /* 展开体:缩进对齐胶囊内的文字,左侧一条细线表示「这是思考」 */
 .think-body {
   font-family: var(--prose); font-size: 13px; line-height: 1.75; color: var(--muted);
@@ -595,6 +601,17 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .act-row.run .act-object { color: var(--ink-2); }
+/* —— 块序列的纵向节奏(2026-09-19 块化)——
+   思考 / 正文 / 工具卡 / 动作行现在都是 .record 的直接子元素(不再各占一整段)。
+   .think 自带 margin-bottom,其余块由相邻兄弟规则补间距,避免两者叠加成 20px */
+.record > * + .act-row { margin-top: 8px; }
+.record > .act-row + .act-row { margin-top: 2px; }
+.record > .tool + .tool,
+.record > .tool + .record-text,
+.record > .record-text + .tool,
+.record > .record-text + .record-text,
+.record > .act-row + .tool,
+.record > .act-row + .record-text { margin-top: 10px; }
 
 /* —— 长内容折叠分档(设计稿 03-组件规范/04) ——
    短内容不折叠(组件侧直接铺开);中/长内容收到 12 行 + 底部渐隐 + 展开入口,

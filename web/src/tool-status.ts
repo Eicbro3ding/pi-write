@@ -130,23 +130,37 @@ export function toolActionRow(t: { name: string; args: string; result: string | 
 	};
 }
 
-/** 简化输出下保留几条已完成动作(设计稿「保留最近 3 条已完成动作,随消息一起留在会话里」)。 */
-export const ACTION_FLOW_KEEP = 3;
+// —— 块渲染表(2026-09-19)——
 
 /**
- * 流水筛选:进行中的全部保留 + 最近 N 条已完成/失败,其余丢弃;保持原有先后顺序。
- * bash 不在这里显示(它始终渲染完整卡片,见 MessageList)。
+ * 一个工具块该长什么样。
+ *
+ * - `terminal`:bash——唯一能越过书目录边界的工具,命令与输出必须始终摊开;
+ * - `preview`:产出型工具(write/edit 写草稿或世界书、world_update、script_confirm),
+ *   渲染成**预览卡**。卡片数据取不到时降级为动作行——取数失败、无实质变化、
+ *   还没接上预览链路,都不是异常态,不该摆一张裸工具卡出来;
+ * - `action`:读取型工具,压成一行「动词 + 宾语」;
+ * - `hidden`:word_count / world_find——既不产生编辑也没有值得看一眼的读取内容,
+ *   默认不占版面;**失败时强制露出**(静默会让「AI 好像什么都没干」,见 MessageList);
+ * - `card`:原始完整卡(工具名 + 完整参数 + 完整结果),只在调试模式下出现。
  */
-export function actionFlowTools<T extends { name: string; result: string | null }>(tools: readonly T[], keep = ACTION_FLOW_KEEP): T[] {
-	const shown = new Set<number>();
-	for (let i = 0; i < tools.length; i++) if (tools[i]!.result === null) shown.add(i);
-	let done = 0;
-	for (let i = tools.length - 1; i >= 0; i--) {
-		if (tools[i]!.result === null) continue;
-		if (done < keep) {
-			shown.add(i);
-			done++;
-		}
+export type ToolRenderForm = "terminal" | "preview" | "action" | "hidden" | "card";
+
+/** 按工具名判定渲染形态。debug(调试模式)下一切退回原始完整卡。 */
+export function toolRenderForm(name: string, debug: boolean): ToolRenderForm {
+	if (debug) return "card";
+	switch (name) {
+		case "bash":
+			return "terminal";
+		case "write":
+		case "edit":
+		case "world_update":
+		case "script_confirm":
+			return "preview";
+		case "word_count":
+		case "world_find":
+			return "hidden";
+		default:
+			return "action";
 	}
-	return tools.filter((_, i) => shown.has(i));
 }
