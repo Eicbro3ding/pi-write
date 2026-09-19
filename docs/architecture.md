@@ -97,7 +97,7 @@ agent 会话事件(pi vendor AgentSessionEvent)
 
 ## 7. Web 前端
 
-四页顶层视图(顶栏入口,四页常驻挂载、切换只改 hidden,保流式状态):**舞台**(默认;演出前 = 导演讨论室,演出中同页)｜**编辑**(章节侧栏 + 正文常驻 DraftWorkspace,CodeMirror 6 + 右栏 AI 伙伴「编剧」对话单栏,选中正文自动预填输入框;批注已退役并入编剧)｜**世界书**｜**设置**。书库栏(`web/src/library.ts` `useLibrary`,App 持有)在舞台 / 编辑两页常驻且状态同步,可折叠 56px 图标条;主题三套(night / paper / parchment,26 色 token)。
+四页顶层视图(顶栏入口,四页常驻挂载、切换只改 hidden,保流式状态):**舞台**(默认;演出前 = 导演讨论室,演出中同页)｜**编辑**(章节侧栏 + 正文常驻 DraftWorkspace,CodeMirror 6 + 右栏 AI 伙伴「编剧」对话单栏,选中正文自动预填输入框;批注已退役并入编剧)｜**世界书**｜**设置**。书库栏(`web/src/library.ts` `useLibrary`,App 持有)在舞台 / 编辑两页常驻且状态同步,可折叠 56px 图标条;主题按资产文件自动发现(night 默认 + paper / parchment / mono / mono-dark / morandi / morandi-dark,30 色 token),设置页与向导里按「浅深合并」成 5 张卡。
 
 **经典模式(单 Agent,2026-09-18)**:设置页「界面 → 模式」与首启向导偏好步可切换。开启后去掉的只有**舞台**(顶栏入口隐藏、StagePage 不挂载——它带着后台编排会话与 SSE 订阅,留着等于「关了还在跑」);编辑页、世界书页、设置页照常(世界书页没有 agent,只是面向人的设定编辑器)。编辑页的 AI 换成**带全量工具的写作 agent**——系统提示取 `prompts/writer-main.md`(`buildWriterSystemPrompt`,与 TUI / 主会话同款),工具集 `read/write/edit/grep/find/ls` + `word_count/world_update/world_find` + MCP(shell 默认不给,可由设置页「外部命令」显式放开,方言可选 bash / PowerShell),且不再限制只写当前章节草稿(要能写 `memory.md` / `notes/**` 这类中间产物)。开关是**服务端设置**(`~/.pi/writer/settings.json`,`GET|PUT /api/settings`):它改变 agent 装配,必须多窗口一致,且切换后 `WriterHost.setClassicMode` 会释放已建会话,下一次对话按新装配重建;变更经 `settings_changed` SSE 广播给其他窗口。前端只把状态缓存在 localStorage 供首帧渲染(避免顶栏先画四个入口再收回),挂载后以服务端为准对账。
 
@@ -114,7 +114,19 @@ agent 会话事件(pi vendor AgentSessionEvent)
 - 点**其他**条目 → `FilePreview` 只读覆盖层压在纸张区上(正文编辑器不卸载,关掉即回原样;Esc 可关)。文本走 marked 管线复用 `.record-md` 样式,图片直接吃 `/api/books/:slug/file` 的字节流,二进制只给元信息。
 - 「AI 写过 · N 个文件」台账:来源是 `writer_event` 的 `tool_execution_start` 参数里的 `path`(`WritePage` 内存态,刷新即空;要跨刷新保留需在服务端落写入台账)。
 - **只读、无 CRUD**:重命名/删除/移动会同时打断 `book.json` 章节索引、会话文件名与 `world.json` 的 outline 引用,UI 层不碰。
-- **左栏布局**:三段式(顶部切换控件固定 / 中间 `rail-scroll` 滚动 / 底部「收起」钮固定)。切换控件在滚动区之外——它是"这一栏现在装什么"的开关,滚走就找不回来。
+- **左栏布局**:三段式(顶部切换控件固定 / 中间 `rail-scroll` 滚动 / 底部「＋ 新建章节」+ 新建书/导入 + 「收起」固定)。切换控件在滚动区之外——它是"这一栏现在装什么"的开关,滚走就找不回来。
+
+### 7.1.1 界面改版 v1(2026-09-19)
+
+设计稿在 `~/pi-writer-redesign`(24 张图 + README)。这一版先把尺度与控件收敛,再重排页面——设计原则见 `docs/design.md §11`,这里只记结构落点:
+
+- **样式文件按页拆分**:`web/src/styles.css`(token / 应用壳 / 编辑页 / 消息流与卡片)+ `web/src/styles/{world,stage,settings,wizard,dialog}.css`,由 `main.tsx` 按 world → stage → settings → wizard → dialog 顺序 import(后者同名选择器覆盖前者)。**归属规则**:改哪一页就改哪个文件;共用的(token / 基础类 / 消息流)才动 `styles.css`。
+- **左栏(书库)**宽 168 → 240(默认值在 `web/src/library.ts`,`ChapterSidebar` 的拖拽区间 200–340 不变);书行只显示书名,章节数挪到行右端,slug 进 title 提示。
+- **中栏(纸张)**:`.paper-surface` 固定 `min(728px, 100% - 44px)` 居中(原来是铺满 + 编辑器内部限宽 800);页头一行放章节名 + 状态胶囊 + 草稿路径 + 字数 + 全屏编辑。
+- **右栏(AI 伙伴)**:默认 380 → 340(`WritePage` 的 `companionWidth`),标签条从「分段胶囊」改**下划线式**,并加 `»` 收起(localStorage `pi-writer:companion-collapsed`,收起成 48px 竖条,由 `.writing-workspace-shell.companion-collapsed` 换 grid 轨宽)。
+- **舞台右栏**同理(340 + 48px 竖条),外层页签改「图标 + 下划线」,内层 `ScriptView` 保留胶囊;新增 `ReviseScriptModal`(860px)与气泡差分(`web/src/stage-preferences.ts`,localStorage)。
+- **统一下拉** `web/src/components/Select.tsx` + `select-logic.ts` 取代原生 `<select>`(12 处);**主题卡** `ThemeCards.tsx` + `themes.ts` 的 `buildThemeFamilies`/`themeFamilyPick` 做浅深合并;**长内容折叠** `fold.ts` + `FoldablePre.tsx`;**工具动作流** 在 `tool-status.ts`。
+- **对话框与向导分家**:`.wz-overlay/.wz-panel` 归首启向导的整屏形态;设置页的「模型提供商」「添加模型」等居中弹窗改用 `web/src/styles/dialog.css` 的 `.dlg-overlay/.dlg-panel`——两者曾共用同一组类,向导改成整屏后会把对话框一起拉成整屏布局。
 
 ### 7.2 `/` 命令(前端插件预留缝)
 
