@@ -1,0 +1,183 @@
+/* ════════════════════════════════════════════════════════════════
+   pi-writer · 设置页样式(设计稿 v1 重做)
+   本文件在 styles.css 之后加载:同名选择器在此处的声明覆盖 styles.css 里的旧值。
+   只用 :root 的设计 token(颜色 / 字号 8 档 / 圆角 8·12·16·999 / 间距 sp-1..6),
+   不写死颜色与字号。作用域集中在 .settings 内,避免影响舞台 / 编辑 / 世界书。
+   ════════════════════════════════════════════════════════════════ */
+
+/* —— 整体:左分类栏 180 + 内容列 1160 —— */
+.settings-side { width: 180px; padding: var(--sp-4) var(--sp-2) var(--sp-5); }
+.settings-side-title { padding: 0 var(--sp-3) var(--sp-3); }
+/* 分组的第二段(插件设置)顶上一条细分隔线 */
+.settings-nav-sep { height: 1px; background: var(--line); margin: var(--sp-3) var(--sp-3); }
+.st-cat { padding: 9px var(--sp-3); }
+.st-cat svg { flex: none; opacity: 0.9; }
+
+.settings-inner { max-width: 1160px; padding: var(--sp-6) var(--sp-6) 48px; }
+
+/* —— 页头(标题 22 + 说明 13;保存状态在顶栏,这里不重复) —— */
+.st-head { margin-bottom: var(--sp-5); }
+.st-head-title { font-size: var(--fs-22); font-weight: 600; color: var(--ink); letter-spacing: 0.01em; margin: 0; }
+.st-head-desc { font-size: var(--fs-13); color: var(--muted); line-height: 1.7; margin: var(--sp-2) 0 0; max-width: 720px; }
+
+/* —— 两栏卡片:左主列 + 右窄列(设计稿 11-13) —— */
+.st-cols { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: var(--sp-4); align-items: start; }
+.st-col-main, .st-col-side { min-width: 0; display: flex; flex-direction: column; gap: var(--sp-4); }
+.st-col-main > .s-card, .st-col-side > .s-card { margin-bottom: 0; }
+@media (max-width: 1080px) {
+  .st-cols { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* —— 卡片内的行 / 头部 / 表头 —— */
+.st-card-head { display: flex; align-items: center; gap: var(--sp-2); }
+.st-card-head .s-card-head { margin-bottom: 0; flex: 1; min-width: 0; }
+.st-card-head + .s-card-desc, .st-card-head + .st-row { margin-top: var(--sp-3); }
+.st-card-meta { flex: none; display: flex; align-items: center; gap: var(--sp-2); }
+.st-meta-dim { font-size: var(--fs-11); color: var(--faint); }
+
+/* 表单行(标签左 / 控件右;主列里控件占满剩余宽度) */
+.st-row { display: flex; align-items: center; gap: var(--sp-3); }
+.st-row-stack { display: flex; align-items: stretch; flex-direction: column; gap: var(--sp-2); }
+.st-row-label { flex: none; font-size: var(--fs-13); color: var(--muted); min-width: 72px; }
+.st-row-stack .sel { width: 100%; }
+.st-row-ctl { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--sp-2); }
+.st-row-ctl .sel { flex: 1; min-width: 0; }
+.st-input-full { width: 100%; flex: none; }
+.st-path-ctl { flex: none; display: flex; align-items: center; gap: var(--sp-2); }
+.st-path-ctl .s-input { width: 220px; flex: none; }
+
+.st-actions { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-4); }
+.st-btn-apply { padding: 6px 18px; font-size: var(--fs-13); }
+.st-desc-tight { margin-top: var(--sp-3); margin-bottom: 0; }
+.st-mono { font-family: var(--mono); font-size: var(--fs-12); color: var(--ink-2); }
+
+/* —— 胶囊(分类元信息 / 高风险 / 开发者) —— */
+.st-chip {
+  flex: none; display: inline-flex; align-items: center; gap: var(--sp-1);
+  font-size: var(--fs-11); line-height: 1; padding: 3px 10px; border-radius: var(--r-full);
+  color: var(--amber); background: var(--amber-tint); border: 1px solid var(--amber-tint-strong);
+}
+.st-chip-dim { color: var(--muted); background: var(--hover-tint); border-color: var(--line); }
+.st-chip-danger { color: var(--red); background: var(--red-tint); border-color: var(--red-tint-strong); }
+
+/* —— 高级:红色警示块 + 关闭时的次级态 —— */
+.st-warn {
+  display: flex; gap: var(--sp-2); align-items: flex-start;
+  font-size: var(--fs-12); line-height: 1.7; color: var(--red);
+  background: var(--red-tint); border: 1px solid var(--red-tint-strong);
+  border-radius: var(--r-sm); padding: 10px var(--sp-3); margin: 0 0 var(--sp-2);
+}
+/* 开关关闭:以下方言 / 路径是禁用与次要态 */
+.st-shell-body .s-pref-item { transition: opacity var(--dur-base) var(--ease-out); }
+.st-shell-off .s-pref-item:not(:first-child) { opacity: 0.55; }
+.st-shell-off .s-pref-item:not(:first-child) .s-pref-title { color: var(--faint); }
+
+/* —— 界面:自定义主题折叠区(默认收起) —— */
+.st-collapse-head {
+  display: flex; align-items: center; gap: var(--sp-2); width: 100%;
+  padding: 10px var(--sp-3); border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--bg-elev-2); color: var(--ink-2); font-size: var(--fs-13);
+  text-align: left; cursor: pointer; transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.st-collapse-head:hover { border-color: var(--line-strong); background: var(--hover-tint); }
+.st-collapse-head[aria-expanded="true"] { border-color: var(--line-strong); }
+.st-collapse-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-collapse-body { display: flex; flex-direction: column; gap: var(--sp-2); padding-top: var(--sp-3); }
+.st-field-block { display: flex; margin-top: var(--sp-1); }
+.st-edit-head { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
+.st-edit-file { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+
+/* ════════════════════════════════════════════════════════════════
+   模型提供商弹窗(pvc-*)—— 设计稿 14:左栏只留「已配置」,
+   只读信息去掉输入框外观,模型按族聚合
+   ════════════════════════════════════════════════════════════════ */
+
+/* 弹窗本体:932 宽(与 README 的组件规格一致) */
+.pvd-panel { width: min(932px, 94vw); }
+.pvd-head { align-items: flex-start; }
+.pvd-head-text { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
+.pvd-sub { font-size: var(--fs-12); color: var(--muted); }
+.pvd-body .pvc-card { min-height: 460px; }
+.pvd-body .pvc-detail { max-height: 520px; }
+
+.pvc-card { display: flex; gap: var(--sp-3); }
+.pvc-side { width: 208px; }
+
+/* 左栏:标题计数 + 搜索 + 已配置列表 + 添加 + 计数脚注 */
+.pvc-side-title { font-size: var(--fs-11); color: var(--faint); letter-spacing: 0.06em; padding: 2px 2px var(--sp-2); }
+.pvc-side-foot { font-size: var(--fs-11); color: var(--faint); text-align: center; padding-top: var(--sp-2); }
+.pvc-item { display: flex; align-items: center; gap: var(--sp-2); padding: 9px var(--sp-3); border-radius: var(--r-sm); }
+.pvc-item-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; text-align: left; }
+.pvc-item-name { font-size: var(--fs-13); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pvc-item-sub { font-size: var(--fs-11); font-family: var(--mono); color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pvc-item.sel .pvc-item-sub { color: var(--muted); }
+
+/* 右栏详情头部:测试连接 / 移除凭据 */
+.pvc-d-head { gap: var(--sp-2); flex-wrap: wrap; }
+.pvc-head-btn { padding: 4px 12px; font-size: var(--fs-12); }
+.pvc-test-msg { font-size: var(--fs-12); color: var(--muted); line-height: 1.6; margin-top: var(--sp-2); }
+
+/* 只读信息行:没有输入框外观,只在悬停时显出一层底 */
+.pvc-info {
+  font-size: var(--fs-13); color: var(--ink-2); line-height: 1.6;
+  padding: 5px var(--sp-2); margin-left: calc(var(--sp-2) * -1);
+  border-radius: var(--r-sm); word-break: break-all;
+}
+.pvc-info:hover { background: var(--hover-tint); }
+.pvc-key-mask { letter-spacing: 2px; flex: 1; min-width: 0; }
+.pvc-label { font-size: var(--fs-12); color: var(--muted); }
+
+/* 模型列表:表头 + 视图切换 + 族行 + 子版本 */
+.pvc-field-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.pvc-count { color: var(--faint); font-weight: 400; }
+.pvc-seg { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg); }
+.pvc-seg button {
+  padding: 3px 10px; font-size: var(--fs-11); color: var(--muted); border-radius: var(--r-sm);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.pvc-seg button:hover { color: var(--ink); }
+.pvc-seg button.on { color: var(--amber); background: var(--amber-tint); }
+
+.pvc-m-list { gap: 2px; }
+.pvc-fam { display: flex; flex-direction: column; }
+.pvc-m-item {
+  gap: var(--sp-3); padding: 9px var(--sp-3); border-radius: var(--r-sm);
+  border: 1px solid transparent; background: var(--bg-elev-2);
+}
+.pvc-m-item + .pvc-m-item { margin-top: 2px; }
+.pvc-fam-head { width: 100%; text-align: left; transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
+.pvc-fam-head:hover { border-color: var(--line-strong); }
+.pvc-fam-head.open { border-color: var(--amber-tint-strong); background: var(--amber-tint); }
+.pvc-fam-head.static { cursor: default; }
+.pvc-fam-head .pvc-m-name { color: var(--ink); font-size: var(--fs-13); }
+.pvc-ver { flex: none; font-size: var(--fs-11); color: var(--faint); }
+.pvc-arrow { flex: none; font-size: var(--fs-11); color: var(--faint); transition: transform var(--dur-fast) var(--ease-out); }
+.pvc-arrow.open { transform: rotate(180deg); }
+.pvc-m-sub {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: 8px var(--sp-3) 8px calc(var(--sp-3) * 2);
+  border-radius: var(--r-sm); background: var(--bg); margin-top: 2px;
+}
+.pvc-m-sub .pvc-m-name { color: var(--muted); font-size: var(--fs-12); }
+.pvc-tag.latest { color: var(--amber); background: var(--amber-tint); border-color: var(--amber-tint-strong); }
+
+/* 添加供应商按钮(虚线;图标 + 文案居中) */
+.pvc-add-provider { gap: var(--sp-2); justify-content: center; }
+
+/* —— 添加模型弹窗:必填提示 —— */
+.amd-label-hint { font-size: var(--fs-11); color: var(--amber); margin-left: var(--sp-2); padding: 1px 8px; border-radius: var(--r-full); background: var(--amber-tint); }
+
+/* —— 纯图标按钮(眼睛 / 铅笔 / 弹窗关闭):本页用到的一处基础兜底 ——
+   限定在设置页与供应商弹窗内,避免影响其他页面(其余页面自管这套按钮) —— */
+.settings .icon-btn,
+.pvd-panel .icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: none; width: 28px; height: 28px; padding: 0;
+  border-radius: var(--r-sm); border: 1px solid transparent;
+  background: transparent; color: var(--muted); cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.settings .icon-btn:hover:not(:disabled),
+.pvd-panel .icon-btn:hover:not(:disabled) { color: var(--ink); background: var(--hover-tint); border-color: var(--line); }
+.settings .icon-btn:disabled,
+.pvd-panel .icon-btn:disabled { opacity: 0.4; cursor: default; }

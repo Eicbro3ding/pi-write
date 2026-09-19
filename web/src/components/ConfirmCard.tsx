@@ -53,16 +53,21 @@ export function ConfirmCard({
 			animate={{ opacity: 1, x: 0 }}
 			transition={{ duration: DUR.base, ease: EASE.out }}
 		>
+			{/* 状态改胶囊(设计稿 03-组件规范/03):待确认 / 已应用(免确认模式) */}
 			<div className="cc-head">
-				编剧 · {title}
+				<span className="cc-title">编剧 · {title}</span>
 				{firstPath && <span className="cc-file">{firstPath}</span>}
+				<span className={`cc-state ${auto ? "applied" : "pending"}`}>
+					<span className="cc-state-dot" />
+					{auto ? "已应用" : "待确认"}
+				</span>
 			</div>
 			<div className="cc-body">
 				<PreviewBody data={data} />
 			</div>
 			{auto ? (
 				<div className="cc-actions auto">
-					<span className="cc-applied">✓ 已应用(免确认模式)</span>
+					<span className="cc-applied">修改已落盘归档,可随时在会话树里回退</span>
 				</div>
 			) : (
 				<div className="cc-actions">

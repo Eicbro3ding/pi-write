@@ -1,4 +1,4 @@
-/* pi-writer 主题 · 莫兰迪深色(morandi-dark) */
+/* pi-writer 主题 · 莫兰迪(morandi-dark) */
 :root {
   --bg: #1d1b19; --bg-elev: #26231f; --bg-elev-2: #2f2b26;
   --ink: #e8e3da; --ink-2: #c8c2b7; --muted: #9b958a; --faint: #8a8276;
@@ -12,6 +12,7 @@
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.32), 0 1px 4px rgba(0, 0, 0, 0.2);
   --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.38), 0 1px 3px rgba(0, 0, 0, 0.24);
   --shadow-3: 0 16px 44px rgba(0, 0, 0, 0.58), 0 4px 12px rgba(0, 0, 0, 0.34);
+  --type-character: #cf9a6a; --type-world: #8fa9c6; --type-timeline: #a794bf; --type-outline: #8a8276;
 }
 /* —— 亚克力毛玻璃(暗色暖陶玻)—— */
 [data-theme="morandi-dark"] {

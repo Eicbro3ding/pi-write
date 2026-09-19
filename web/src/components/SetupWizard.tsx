@@ -1,13 +1,18 @@
 /**
- * 首次启动配置向导(五步:功能介绍 → 接入模型服务商 → 选默认模型+思考级别 →
- * 建第一本书 → 界面偏好)。完成后经 client.completeSetup 把标记写到服务端
- * ~/.pi/writer/setup.json(跨窗口/跨浏览器一致),onFinished 交还控制权。
+ * 首次启动配置向导(五步:介绍 → 接入模型服务 → 默认模型 → 建第一本书 → 界面偏好)。
+ * 完成后经 client.completeSetup 把标记写到服务端 ~/.pi/writer/setup.json(跨窗口/跨浏览器
+ * 一致),onFinished 交还控制权。
  *
- * 两种打开形态(由 App 控制):
+ * 两种打开形态(由 App 控制,**组件不分叉**,只靠 CSS 区分):
  * - 首次启动:向导独占渲染,主界面四页尚未挂载——完成后才挂载,WritePage 的
  *   挂载效应会拉书列表并自动打开第一本书(向导建的书一进界面就打开);
- * - 设置页「重新运行配置向导」:作为全屏覆盖层叠加在已挂载页面上,不打断
- *   流式状态;此时建的书经 onBooksChanged 通知 App 刷新书库列表。
+ *   此时根节点是 #root 的直接子节点(`#root > .wz-overlay`)→ 铺满整屏($bg 底);
+ * - 设置页「重新运行配置向导」:作为覆盖层叠加在已挂载页面上(`.app > .wz-overlay`),
+ *   不打断流式状态 → 加一层 $mask 遮罩;此时建的书经 onBooksChanged 通知 App 刷新书库列表。
+ *
+ * 版式(设计稿 v1:整屏引导,取代旧的 680px 弹窗):顶栏(品牌 + 跳过向导)→ 五步进度条
+ * (等宽 900,当前 $amber / 已过 $green / 未到 $line)→ 内容列(720,步骤号 + 34 号标题 +
+ * 说明 + 卡片)→ 页脚(左侧提示 + 右侧主按钮,与内容列同宽对齐)。
  *
  * 各步骤「真正做过」的标记(点了什么、存了什么)随完成请求一并上报;
  * 「跳过向导」同样置完成标记(空 steps),避免每次启动重复弹。
@@ -15,12 +20,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
-import type { UserThemeInfo } from "../types.ts";
-import { NIGHT_THEME, themeLabelFromCss, type ThemeId } from "../themes.ts";
+import type { ProviderInfo, UserThemeInfo } from "../types.ts";
+import type { SelectGroup } from "../select-logic.ts";
+import type { ThemeId } from "../themes.ts";
 import { applyTheme, currentTheme } from "../theme.ts";
-import { ProviderList } from "./ProviderList.tsx";
+import { Select } from "./Select.tsx";
+import { ThemeCardsFromManifest } from "./ThemeCards.tsx";
 import { ToggleSwitch } from "./ToggleSwitch.tsx";
 import { IconEdit, IconGear, IconGlobe, IconStage } from "./Icons.tsx";
+import { Lu } from "./Lu.tsx";
 
 /** 思考级别选项(与后端 session-host 的 ThinkingLevel 对齐;同 SettingsPage)。 */
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -35,6 +43,24 @@ const WIZARD_STEPS = [
 ] as const;
 
 type WizardStepId = (typeof WIZARD_STEPS)[number]["id"];
+
+/** 各步骤的大标题(34 号英雄标题;文案取自设计稿)。 */
+const STEP_TITLE: Record<WizardStepId, string> = {
+	intro: "欢迎使用 pi-writer",
+	provider: "接入模型服务",
+	model: "选择默认模型",
+	book: "创建第一本书",
+	prefs: "界面偏好",
+};
+
+/** 页脚左侧的一行提示(与各步语境对应)。 */
+const STEP_FOOT_HINT: Record<WizardStepId, string> = {
+	intro: "共 5 步,随时可以跳过,稍后在设置里补",
+	provider: "key 只存在本地,不会上传。稍后可在「设置 → 模型」中修改",
+	model: "保存后立即生效;稍后可在「设置 → 模型」里修改",
+	book: "书名留空即跳过,之后随时在编辑页新建",
+	prefs: "完成后可在「设置」里随时修改这些偏好",
+};
 
 /** 各步骤是否真正走过(完成请求的 steps 载荷)。 */
 type StepFlags = Record<WizardStepId, boolean>;
@@ -63,15 +89,6 @@ function extractModels(models: readonly unknown[]): ModelInfo[] {
 		if (typeof o.id === "string" && typeof o.provider === "string") out.push({ id: o.id, provider: o.provider });
 	}
 	return out;
-}
-
-/** 从主题 CSS 抽取 [背景, 强调, 文字] 三色做卡片预览;缺失回退中性色(同 SettingsPage)。 */
-function swatchFromCss(css: string): [string, string, string] {
-	const pick = (name: string): string => {
-		const m = css.match(new RegExp(`${name}\\s*:\\s*([^;]+);`));
-		return m ? m[1]!.trim() : "";
-	};
-	return [pick("--bg") || "#141414", pick("--amber") || "#d9a84e", pick("--ink") || "#e8e6e1"];
 }
 
 export function SetupWizard({
@@ -117,6 +134,17 @@ export function SetupWizard({
 	const [finishing, setFinishing] = useState(false);
 	const [finishErr, setFinishErr] = useState<string | null>(null);
 
+	// —— 服务商步状态(设计稿:一列单选 + 一行 key,不再内嵌「管理供应商」双栏组件) ——
+	/** null = 未加载(进入该步时拉取)。 */
+	const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
+	/** 列表展开了全部服务商(默认只列前几个)。 */
+	const [showAllProviders, setShowAllProviders] = useState(false);
+	const [providerId, setProviderId] = useState<string | null>(null);
+	const [keyValue, setKeyValue] = useState("");
+	const [keyBusy, setKeyBusy] = useState(false);
+	const [keyErr, setKeyErr] = useState<string | null>(null);
+	const [keySaved, setKeySaved] = useState(false);
+
 	// —— 模型步状态 ——
 	/** null = 未加载(进入模型步时拉取;provider 认证变化后置空重拉)。 */
 	const [models, setModels] = useState<ModelInfo[] | null>(null);
@@ -156,6 +184,82 @@ export function SetupWizard({
 			cancelled = true;
 		};
 	}, [client]);
+
+	/** 拉取服务商清单(返回最新列表,便于保存 key 后就地刷新「已配置」胶囊)。 */
+	const loadProviders = useCallback(async () => {
+		const list = await client.getProviders();
+		setProviders(list);
+		return list;
+	}, [client]);
+
+	/** 进入服务商步且未加载过 → 拉取;默认选中第一个已配置的(没有则第一个)。 */
+	useEffect(() => {
+		if (step !== 1 || providers !== null) return;
+		let cancelled = false;
+		setStepErr(null);
+		void loadProviders()
+			.then((list) => {
+				if (cancelled) return;
+				setProviderId((cur) =>
+					cur && list.some((p) => p.id === cur) ? cur : list.find((p) => p.configured)?.id ?? list[0]?.id ?? null,
+				);
+			})
+			.catch((e) => {
+				if (cancelled) return;
+				setProviders([]);
+				setStepErr(`服务商加载失败: ${friendlyError(e)}`);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [step, providers, loadProviders]);
+
+	/** 列表默认只列前 5 个(与设计稿一致),展开后列全部;已选中项一定可见。 */
+	const providerRows = useMemo(() => {
+		const list = providers ?? [];
+		if (showAllProviders) return list;
+		const head = list.slice(0, 5);
+		const cur = list.find((p) => p.id === providerId);
+		if (cur && !head.includes(cur)) return [...head.slice(0, 4), cur];
+		return head;
+	}, [providers, showAllProviders, providerId]);
+
+	const selectedProvider = useMemo(
+		() => (providers ?? []).find((p) => p.id === providerId) ?? null,
+		[providers, providerId],
+	);
+
+	/**
+	 * 保存 API key:写凭据 → 刷新列表(「已配置」胶囊)→ 通知 provider 步走过并把模型
+	 * 列表置空(下一步重拉)。请求序列与原 ProviderList 内的保存流程一致。
+	 */
+	async function saveKey() {
+		if (!providerId || keyBusy) return;
+		setKeyBusy(true);
+		setKeyErr(null);
+		setKeySaved(false);
+		try {
+			await client.setProviderApiKey(providerId, keyValue);
+		} catch (e) {
+			setKeyErr(`保存失败: ${friendlyError(e)}`);
+			setKeyBusy(false);
+			return;
+		}
+		setKeyValue("");
+		setKeySaved(true);
+		window.setTimeout(() => setKeySaved(false), 3000);
+		try {
+			await loadProviders();
+		} catch {
+			/* 列表刷新失败不阻塞(下次进入该步会重新拉) */
+		}
+		try {
+			await handleAuthChanged();
+		} catch (e) {
+			setKeyErr(`认证状态刷新失败: ${friendlyError(e)}`);
+		}
+		setKeyBusy(false);
+	}
 
 	/** 拉取模型列表/当前模型/思考级别并回填选择器。 */
 	const loadModels = useCallback(async () => {
@@ -201,6 +305,12 @@ export function SetupWizard({
 		}
 		return [...byProvider.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 	}, [models]);
+
+	/** 统一 Select 的分组选项(provider = 组标题,模型 id = 选项)。 */
+	const modelGroups = useMemo<SelectGroup[]>(
+		() => groups.map(([provider, list]) => ({ label: provider, options: list.map((m) => ({ value: `${m.provider}/${m.id}`, label: m.id })) })),
+		[groups],
+	);
 
 	/** 联网刷新模型目录(远程 catalog / 动态 provider),成功后回填选择器。 */
 	async function refreshModels() {
@@ -325,238 +435,280 @@ export function SetupWizard({
 	}
 
 	const busy = finishing || modelBusy || bookBusy;
+	const stepId = WIZARD_STEPS[step]!.id;
 	const isLast = step === WIZARD_STEPS.length - 1;
+
+	/** 主按钮文案:完成/下一步 + 各异步步的进行态。 */
+	const primaryLabel = isLast
+		? finishing
+			? "保存中…"
+			: "完成 ✓"
+		: modelBusy && step === 2
+			? "设置中…"
+			: bookBusy && step === 3
+				? "创建中…"
+				: "下一步 →";
 
 	return (
 		<div className="wz-overlay" role="dialog" aria-modal="true" aria-label="首次启动配置向导">
-			<div className="wz-panel">
-				<header className="wz-head">
-					<div className="wz-title">首次启动配置</div>
-					<div className="wz-steps">
-						{WIZARD_STEPS.map((s, i) => (
-							<div key={s.id} className={`wz-step${i === step ? " active" : ""}${i < step ? " done" : ""}`}>
-								<span className="wz-step-dot">{i < step ? "✓" : i + 1}</span>
-								<span className="wz-step-label">{s.label}</span>
-							</div>
-						))}
-					</div>
-				</header>
+			{/* 顶栏:与主界面同语言(品牌 + 右侧次要动作);整屏引导下无边框 */}
+			<header className="wz-top">
+				<div className="brand">
+					pi<i>·writer</i>
+				</div>
+				<button type="button" className="wz-skip" disabled={finishing} onClick={() => void finish()}>
+					跳过向导
+				</button>
+			</header>
 
-				<div className="wz-body">
-					{stepErr && <div className="notice err">{stepErr}</div>}
+			{/* 五步进度条:每步等宽,线上色即状态(当前 $amber / 已过 $green / 未到 $line) */}
+			<nav className="wz-steps" aria-label="配置向导步骤">
+				{WIZARD_STEPS.map((s, i) => (
+					<div key={s.id} className={`wz-step${i === step ? " on" : ""}${i < step ? " done" : ""}`}>
+						<span className="wz-step-bar" />
+						<span className="wz-step-label">{s.label}</span>
+					</div>
+				))}
+			</nav>
+
+			<div className="wz-main">
+				<div className="wz-col">
+					<div className="wz-kicker">
+						步骤 {step + 1} / {WIZARD_STEPS.length}
+					</div>
+					<h1 className="wz-h1">{STEP_TITLE[stepId]}</h1>
 
 					{step === 0 && (
-						<div className="wz-intro">
-							<div className="wz-intro-brand">
-								pi<i>·writer</i>
-							</div>
-							<h1>欢迎使用 pi-writer</h1>
-							<p>AI 长篇写作工作台。只需一分钟完成初始配置:</p>
-							<div className="wz-feature-grid">
+						<>
+							<p className="wz-lead">AI 长篇写作工作台。只需一分钟完成初始配置,之后随时可以在设置里修改。</p>
+							<div className="wz-feats">
 								{/* 经典模式(单 Agent)下没有舞台,不列出来免得与实际界面对不上;
 								    世界书页两种模式都在 */}
 								{!classicMode && (
-									<div className="wz-feature">
-										<IconStage size={16} />
-										<div>
-											<b>舞台</b>
-											<span>多角色即兴演出,导演控制节奏</span>
+									<div className="wz-feat">
+										<span className="wz-feat-ico">
+											<IconStage size={18} />
+										</span>
+										<div className="wz-feat-text">
+											<div className="wz-feat-title">舞台</div>
+											<div className="wz-feat-desc">多角色即兴演出,导演控制节奏</div>
 										</div>
 									</div>
 								)}
-								<div className="wz-feature">
-									<IconEdit size={16} />
-									<div>
-										<b>编辑</b>
-										<span>{classicMode ? "正文 + 单一写作 agent(全量工具)" : "章节正文 + 常驻编剧 AI 伙伴"}</span>
+								<div className="wz-feat">
+									<span className="wz-feat-ico">
+										<IconEdit size={18} />
+									</span>
+									<div className="wz-feat-text">
+										<div className="wz-feat-title">编辑</div>
+										<div className="wz-feat-desc">
+											{classicMode ? "正文 + 单一写作 agent(全量工具)" : "章节正文 + 常驻编剧 AI 伙伴"}
+										</div>
 									</div>
 								</div>
-								<div className="wz-feature">
-									<IconGlobe size={16} />
-									<div>
-										<b>世界书</b>
-										<span>人物、设定、时间线与关系图</span>
+								<div className="wz-feat">
+									<span className="wz-feat-ico">
+										<IconGlobe size={18} />
+									</span>
+									<div className="wz-feat-text">
+										<div className="wz-feat-title">世界书</div>
+										<div className="wz-feat-desc">人物、设定、时间线与关系图</div>
 									</div>
 								</div>
-								<div className="wz-feature">
-									<IconGear size={16} />
-									<div>
-										<b>设置</b>
-										<span>模型、主题与 MCP 集成</span>
+								<div className="wz-feat">
+									<span className="wz-feat-ico">
+										<IconGear size={18} />
+									</span>
+									<div className="wz-feat-text">
+										<div className="wz-feat-title">设置</div>
+										<div className="wz-feat-desc">模型、主题与 MCP 集成</div>
 									</div>
 								</div>
 							</div>
-						</div>
+						</>
 					)}
 
 					{step === 1 && (
 						<>
-							<div className="wz-desc">
-								为你的模型提供商添加 API key,其模型即可在下一步选为默认。key 存储在本地
-								~/.pi/writer/agent/auth.json,不会上传。也可以稍后在「设置 → 模型」中配置。
+							<p className="wz-lead">
+								选一个服务商,填入 API key,它的模型就能在下一步选为默认。key 只保存在本地{" "}
+								<code className="wz-mono">~/.pi/writer/agent/auth.json</code>。
+							</p>
+							<div className="wz-card wz-prov">
+								<div className="wz-prov-list" role="radiogroup" aria-label="模型服务商">
+									{providerRows.length === 0 && (
+										<div className="wz-prov-empty">{providers === null ? "加载中…" : "暂无可选服务商,稍后可在「设置 → 模型」中添加"}</div>
+									)}
+									{providerRows.map((p) => (
+										<button
+											key={p.id}
+											type="button"
+											role="radio"
+											aria-checked={p.id === providerId}
+											className={`wz-prov-row${p.id === providerId ? " on" : ""}`}
+											onClick={() => {
+												setProviderId(p.id);
+												setKeyErr(null);
+												setKeySaved(false);
+											}}
+										>
+											<span className="wz-radio" aria-hidden="true" />
+											<span className="wz-prov-name">{p.name}</span>
+											{p.configured && (
+												<span className="wz-pill">
+													<span className="wz-pill-dot" aria-hidden="true" />
+													已配置
+												</span>
+											)}
+										</button>
+									))}
+									{providers !== null && providers.length > providerRows.length && (
+										<button type="button" className="wz-prov-more" onClick={() => setShowAllProviders((v) => !v)}>
+											{showAllProviders ? "收起列表 ‹" : `搜索或展开全部 ${providers.length} 个服务商 ›`}
+										</button>
+									)}
+								</div>
 							</div>
-							<ProviderList client={client} onAuthChanged={handleAuthChanged} />
+							<div className="wz-field">
+								<label className="wz-label" htmlFor="wz-provider-key">
+									{selectedProvider?.name ?? "服务商"} API Key
+								</label>
+								<div className="wz-field-row">
+									<span className="wz-input-wrap">
+										<span className="wz-input-ico" aria-hidden="true">
+											<IconLock />
+										</span>
+										<input
+											id="wz-provider-key"
+											className="wz-input wz-input-mono"
+											type="password"
+											autoComplete="off"
+											placeholder={selectedProvider?.id === "anthropic" ? "sk-ant-…" : "粘贴 API key"}
+											value={keyValue}
+											disabled={keyBusy}
+											onChange={(e) => setKeyValue(e.target.value)}
+											onKeyDown={(e) => {
+												if (e.key === "Enter" && keyValue.trim().length > 0) void saveKey();
+											}}
+										/>
+									</span>
+									<button
+										type="button"
+										className="wz-primary wz-save"
+										disabled={keyBusy || keyValue.trim().length === 0}
+										onClick={() => void saveKey()}
+									>
+										{keyBusy ? "保存中…" : "保存"}
+									</button>
+								</div>
+								{keyErr && <div className="wz-key-err">{keyErr}</div>}
+								{keySaved && !keyErr && <div className="wz-key-ok">已保存</div>}
+								<div className="wz-hint">保存后会自动拉取该服务商的模型列表。没有 key 也可以先跳过这一步。</div>
+							</div>
 						</>
 					)}
 
 					{step === 2 && (
 						<>
-							<div className="wz-desc">选择默认模型与思考级别;列表为空时请先配置服务商或联网刷新。</div>
-							<div className="s-field">
-								<label className="s-field-label">默认模型</label>
-								<div className="s-field-row">
-									<select
-										className="s-select s-select-full"
-										value={modelSel}
-										onChange={(e) => setModelSel(e.target.value)}
-										disabled={modelBusy || models === null}
-									>
-										<option value="">{models === null ? "加载中…" : "暂不设置"}</option>
-										{groups.map(([provider, list]) => (
-											<optgroup key={provider} label={provider}>
-												{list.map((m) => (
-													<option key={`${m.provider}/${m.id}`} value={`${m.provider}/${m.id}`}>
-														{m.provider} · {m.id}
-													</option>
-												))}
-											</optgroup>
-										))}
-									</select>
-									<button type="button" className="btn-ghost" disabled={modelBusy} onClick={() => void refreshModels()}>
-										{modelBusy ? "刷新中…" : "联网刷新"}
-									</button>
+							<p className="wz-lead">选择默认模型与思考级别;列表为空时请先配置服务商或联网刷新。</p>
+							<div className="wz-card">
+								<div className="wz-field">
+									<label className="wz-label">默认模型</label>
+									<div className="wz-field-row">
+										<Select
+											className="wz-sel"
+											value={modelSel}
+											onChange={setModelSel}
+											options={models === null ? [{ value: "", label: "加载中…" }] : [{ value: "", label: "暂不设置" }]}
+											groups={modelGroups}
+											disabled={modelBusy || models === null}
+											ariaLabel="默认模型"
+										/>
+										<button type="button" className="wz-ghost" disabled={modelBusy} onClick={() => void refreshModels()}>
+											{modelBusy ? "刷新中…" : "联网刷新"}
+										</button>
+									</div>
 								</div>
-							</div>
-							<div className="s-field" style={{ marginBottom: 0 }}>
-								<label className="s-field-label">思考级别</label>
-								<div className="s-field-row">
-									<select
-										className="s-select s-select-full"
+								<div className="wz-field">
+									<label className="wz-label">思考级别</label>
+									<Select
+										className="wz-sel"
 										value={thinkingSel}
-										onChange={(e) => setThinkingSel(e.target.value)}
+										onChange={setThinkingSel}
+										options={[{ value: "", label: "保持现状" }, ...THINKING_LEVELS.map((l) => ({ value: l, label: l }))]}
 										disabled={modelBusy}
-									>
-										<option value="">保持现状</option>
-										{THINKING_LEVELS.map((l) => (
-											<option key={l} value={l}>
-												{l}
-											</option>
-										))}
-									</select>
+										ariaLabel="思考级别"
+									/>
+									<div className="wz-hint">off = 关闭思考;max = 最强思考深度</div>
 								</div>
-								<div className="s-field-desc">off = 关闭思考; max = 最强思考深度</div>
 							</div>
 						</>
 					)}
 
 					{step === 3 && (
 						<>
-							<div className="wz-desc">创建你的第一本书;标题留空则跳过,之后随时在编辑页新建。</div>
-							<div className="s-field">
-								<label className="s-field-label">书名</label>
-								<input
-									className="s-input"
-									placeholder="如:星槎远航志"
-									value={bookTitle}
-									disabled={bookBusy}
-									onChange={(e) => setBookTitle(e.target.value)}
-								/>
-							</div>
-							<div className="s-field" style={{ marginBottom: 0 }}>
-								<label className="s-field-label">首章标题(可选)</label>
-								<input
-									className="s-input"
-									placeholder="如:第一章 · 夜航船"
-									value={chapterTitle}
-									disabled={bookBusy}
-									onChange={(e) => setChapterTitle(e.target.value)}
-								/>
+							<p className="wz-lead">创建你的第一本书;标题留空则跳过,之后随时在编辑页新建。</p>
+							<div className="wz-card">
+								<div className="wz-field">
+									<label className="wz-label" htmlFor="wz-book-title">
+										书名
+									</label>
+									<input
+										id="wz-book-title"
+										className="wz-input"
+										placeholder="如:星槎远航志"
+										value={bookTitle}
+										disabled={bookBusy}
+										onChange={(e) => setBookTitle(e.target.value)}
+									/>
+								</div>
+								<div className="wz-field">
+									<label className="wz-label" htmlFor="wz-book-chapter">
+										首章标题(可选)
+									</label>
+									<input
+										id="wz-book-chapter"
+										className="wz-input"
+										placeholder="如:第一章 · 夜航船"
+										value={chapterTitle}
+										disabled={bookBusy}
+										onChange={(e) => setChapterTitle(e.target.value)}
+									/>
+								</div>
 							</div>
 						</>
 					)}
 
 					{step === 4 && (
 						<>
-							<div className="wz-desc">挑选主题、写作模式与界面偏好,立即生效,随时可在设置中修改。</div>
-							<div className="s-pref-list">
-								<div className="s-pref-item">
-									<div className="s-pref-text">
-										<div className="s-pref-title">经典模式(单 Agent)</div>
-										<div className="s-pref-desc">
-											开启后去掉舞台(没有导演 / 演员 / 旁白的多 Agent 共演),AI 换成带全量工具的写作 agent;关闭则保留舞台多 agent 形态。世界书页两种模式都在。切换会重建服务端会话,下一次对话生效。
-										</div>
+							<p className="wz-lead">挑选主题与界面偏好,立即生效,随时可在设置中修改。</p>
+							<div className="wz-sec">
+								<div className="wz-sec-head">
+									<span className="wz-sec-label">主题</span>
+									<span className="wz-sec-hint">深浅已合并 · 点已选中的卡可切换明暗</span>
+								</div>
+								{/* 深浅配对/落点规则在 themes.ts + ThemeCards 内部,这里不重复实现 */}
+								<ThemeCardsFromManifest builtin={builtinThemes} user={userThemes} current={theme} onPick={selectTheme} />
+							</div>
+							<div className="wz-prefs">
+								<div className="wz-pref-row">
+									<div className="wz-pref-text">
+										<div className="wz-pref-title">经典模式(单 Agent)</div>
+										<div className="wz-pref-desc">开启后去掉舞台,编辑页换成带全量工具的唯一写作 agent。</div>
 									</div>
 									<ToggleSwitch checked={classicMode} onChange={(v) => void toggleClassic(v)} ariaLabel="经典模式" />
 								</div>
-							</div>
-							<div className="theme-cards wz-theme-cards">
-								<button
-									key={NIGHT_THEME.id}
-									type="button"
-									className={`theme-card${theme === NIGHT_THEME.id ? " active" : ""}`}
-									onClick={() => selectTheme(NIGHT_THEME.id)}
-								>
-									<span className="theme-swatch">
-										{NIGHT_THEME.swatch.map((c) => (
-											<i key={c} style={{ background: c }} />
-										))}
-									</span>
-									<span className="theme-label">{NIGHT_THEME.label}</span>
-									<span className="theme-desc">内置 · 默认</span>
-								</button>
-								{builtinThemes.map((bt) => {
-									const id = bt.file.replace(/\.css$/, "");
-									const swatch = swatchFromCss(bt.css);
-									return (
-										<button
-											key={bt.file}
-											type="button"
-											className={`theme-card${theme === id ? " active" : ""}`}
-											onClick={() => selectTheme(id)}
-										>
-											<span className="theme-swatch">
-												{swatch.map((c) => (
-													<i key={c} style={{ background: c }} />
-												))}
-											</span>
-											<span className="theme-label">{themeLabelFromCss(bt.css, bt.file)}</span>
-											<span className="theme-desc">内置</span>
-										</button>
-									);
-								})}
-								{userThemes.map((ut) => {
-									const id = `user:${ut.file.replace(/\.css$/, "")}`;
-									const swatch = swatchFromCss(ut.css);
-									return (
-										<button
-											key={ut.file}
-											type="button"
-											className={`theme-card${theme === id ? " active" : ""}`}
-											onClick={() => selectTheme(id)}
-										>
-											<span className="theme-swatch">
-												{swatch.map((c) => (
-													<i key={c} style={{ background: c }} />
-												))}
-											</span>
-											<span className="theme-label">{ut.file.replace(/\.css$/, "")}</span>
-											<span className="theme-desc">自定义</span>
-										</button>
-									);
-								})}
-							</div>
-							<div className="s-pref-list">
-								<div className="s-pref-item">
-									<div className="s-pref-text">
-										<div className="s-pref-title">简化输出</div>
-										<div className="s-pref-desc">开启后对话中不显示工具调用卡片,以「正在阅读 / 正在编辑」等动态提示代替。</div>
+								<div className="wz-pref-row">
+									<div className="wz-pref-text">
+										<div className="wz-pref-title">简化输出</div>
+										<div className="wz-pref-desc">对话中不显示工具调用卡片,以「正在阅读 / 正在编辑」等动态提示代替。</div>
 									</div>
 									<ToggleSwitch checked={simplifiedTools} onChange={(v) => togglePref("simplified", v)} ariaLabel="简化输出" />
 								</div>
-								<div className="s-pref-item">
-									<div className="s-pref-text">
-										<div className="s-pref-title">自动展开思考</div>
-										<div className="s-pref-desc">开启后思考块默认展开,无需逐条点击;关闭后回到手动展开。</div>
+								<div className="wz-pref-row">
+									<div className="wz-pref-text">
+										<div className="wz-pref-title">自动展开思考</div>
+										<div className="wz-pref-desc">思考块默认展开,无需逐条点击。</div>
 									</div>
 									<ToggleSwitch
 										checked={autoExpandThinking}
@@ -564,10 +716,10 @@ export function SetupWizard({
 										ariaLabel="自动展开思考"
 									/>
 								</div>
-								<div className="s-pref-item">
-									<div className="s-pref-text">
-										<div className="s-pref-title">编辑免确认</div>
-										<div className="s-pref-desc">开启后编剧的修改落盘即生效,不再弹「待确认」卡。</div>
+								<div className="wz-pref-row">
+									<div className="wz-pref-text">
+										<div className="wz-pref-title">编辑免确认</div>
+										<div className="wz-pref-desc">编剧的修改落盘即生效,不再弹「待确认」卡。</div>
 									</div>
 									<ToggleSwitch
 										checked={autoConfirmEdits}
@@ -578,44 +730,46 @@ export function SetupWizard({
 							</div>
 						</>
 					)}
+
+					{stepErr && <div className="notice err wz-step-err">{stepErr}</div>}
 				</div>
-
-				{finishErr && (
-					<div className="notice err wz-finish-err">
-						<span>{finishErr}</span>
-						<button type="button" className="btn-ghost notice-action" onClick={() => void finish()}>
-							重试
-						</button>
-						<button type="button" className="btn-ghost notice-action" onClick={onFinished}>
-							仍要进入
-						</button>
-					</div>
-				)}
-
-				<footer className="wz-foot">
-					<button type="button" className="wz-skip" disabled={finishing} onClick={() => void finish()}>
-						跳过向导
-					</button>
-					<div className="wz-foot-actions">
-						{step > 0 && (
-							<button type="button" className="btn-ghost" disabled={busy} onClick={back}>
-								上一步
-							</button>
-						)}
-						<button type="button" className="wz-primary" disabled={busy} onClick={() => void next()}>
-							{isLast
-								? finishing
-									? "保存中…"
-									: "完成"
-								: modelBusy && step === 2
-									? "设置中…"
-									: bookBusy && step === 3
-										? "创建中…"
-										: "下一步"}
-						</button>
-					</div>
-				</footer>
 			</div>
+
+			<footer className="wz-foot">
+				<div className="wz-foot-inner">
+					{finishErr && (
+						<div className="notice err wz-finish-err">
+							<span>{finishErr}</span>
+							<button type="button" className="btn-ghost notice-action" onClick={() => void finish()}>
+								重试
+							</button>
+							<button type="button" className="btn-ghost notice-action" onClick={onFinished}>
+								仍要进入
+							</button>
+						</div>
+					)}
+					<div className="wz-foot-row">
+						<div className="wz-foot-hint">{STEP_FOOT_HINT[stepId]}</div>
+						<div className="wz-foot-actions">
+							{step > 0 && (
+								<button type="button" className="wz-ghost" disabled={busy} onClick={back}>
+									← 上一步
+								</button>
+							)}
+							<button type="button" className="wz-primary" disabled={busy} onClick={() => void next()}>
+								{primaryLabel}
+							</button>
+						</div>
+					</div>
+				</div>
+			</footer>
 		</div>
+	);
+}
+
+/** 锁图标(API key 输入框左侧):与 Icons.tsx 同细线语言,只在本文件用。 */
+function IconLock() {
+	return (
+		<Lu icon="key-round" size={13} strokeWidth={1.6} />
 	);
 }

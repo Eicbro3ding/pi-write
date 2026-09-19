@@ -1,11 +1,13 @@
 import { useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import type { PreviewData } from "../preview.ts";
+import { draftDiffStats, type DiffLine, type PreviewData } from "../preview.ts";
 import type { WorldDiff } from "../preview.ts";
 import { DUR, EASE, EDGE_IN } from "../motion.ts";
+import { FOLD_COLLAPSED_LINES, FOLD_EXPANDED_MAX_PX, foldLabel, isFoldable } from "../fold.ts";
 import { PreviewGraph } from "./PreviewGraph.tsx";
 import { PreviewEntryCard } from "./PreviewEntryCard.tsx";
 import { ScriptView } from "./ScriptView.tsx";
+import { Lu } from "./Lu.tsx";
 
 /** 世界树变更摘要行(图模式):新增/修改/删除的条目与关系;无变更返回 null。 */
 export function worldSummary(diff: WorldDiff): string | null {
@@ -19,6 +21,29 @@ export function worldSummary(diff: WorldDiff): string | null {
 	return parts.length > 0 ? parts.join(" · ") : null;
 }
 
+/** diff 行:按行数分档折叠(设计稿 03-组件规范/04——写死 max-height 时短内容被截、
+ *  长内容看不到全貌,展开入口也没意义)。>12 行折到 12 行 + 底部渐隐 + 展开入口。 */
+function DiffLines({ lines }: { lines: DiffLine[] }) {
+	const [open, setOpen] = useState(false);
+	const foldable = isFoldable(lines.length);
+	const shown = foldable && !open ? lines.slice(0, FOLD_COLLAPSED_LINES) : lines;
+	return (
+		<div className={`diff-fold${open ? " open" : ""}`} style={open ? { maxHeight: FOLD_EXPANDED_MAX_PX } : undefined}>
+			{shown.map((l, j) => (
+				<div key={j} className={`diff-${l.kind}`}>
+					{l.text || "\u00A0"}
+				</div>
+			))}
+			{foldable && !open && <div className="fold-mask" aria-hidden="true" />}
+			{foldable && (
+				<button type="button" className="fold-more" onClick={() => setOpen((v) => !v)}>
+					{open ? "收起" : foldLabel(lines.length)}
+				</button>
+			)}
+		</div>
+	);
+}
+
 /** AI 编辑预览内容(卡片主体):草稿 diff / 世界图 / 词条百科 / 剧本确认。
  *  PreviewCard 与编剧编辑确认卡(ConfirmCard)共用——确认队列复用同一渲染,零副本。 */
 export function PreviewBody({ data }: { data: PreviewData }) {
@@ -29,11 +54,7 @@ export function PreviewBody({ data }: { data: PreviewData }) {
 			{data.sections.map((s, i) => (
 				<div key={i}>
 					<div className="preview-file">{s.path}</div>
-					{s.diff.map((l, j) => (
-						<div key={j} className={`diff-${l.kind}`}>
-							{l.text || "\u00A0"}
-						</div>
-					))}
+					<DiffLines lines={s.diff} />
 				</div>
 			))}
 		</div>
@@ -76,6 +97,8 @@ export function PreviewCard({ data, actions }: { data: PreviewData; actions?: Re
 				: data.mode === "graph"
 					? "预览 · 世界树"
 					: "预览 · 词条";
+	// 草稿卡折叠头改成「路径 + 增删行数」(设计稿 03-组件规范/03),其余类型保留标题
+	const stats = draftDiffStats(data);
 	return (
 		<motion.div
 			className="preview-card"
@@ -84,8 +107,20 @@ export function PreviewCard({ data, actions }: { data: PreviewData; actions?: Re
 			transition={{ duration: DUR.base, ease: EASE.out }}
 		>
 			<button type="button" className="preview-toggle" onClick={() => setOpen((v) => !v)}>
-				<span className="preview-arrow">{open ? "▾" : "▸"}</span>
-				<span className="preview-title">{title}</span>
+				<span className="preview-arrow">
+					<Lu icon={open ? "chevron-down" : "chevron-right"} size={12} strokeWidth={1.8} />
+				</span>
+				{stats ? (
+					<>
+						<span className="preview-path">{stats.path}</span>
+						<span className="preview-counts">
+							<span className="add">+{stats.add}</span>
+							<span className="del">-{stats.del}</span>
+						</span>
+					</>
+				) : (
+					<span className="preview-title">{title}</span>
+				)}
 			</button>
 			<AnimatePresence initial={false}>
 				{open && (

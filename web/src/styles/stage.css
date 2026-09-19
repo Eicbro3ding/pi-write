@@ -1,0 +1,325 @@
+/* ════════════════════════════════════════════════════════════════
+   pi-writer · 舞台页专属样式(设计稿 01-主流程/04·05 + 02-模态与面板/01·02)
+
+   本文件在 styles.css 之后加载(main.tsx):同名选择器在此处的声明覆盖旧值。
+   全部尺寸/颜色走 styles.css 的 :root token,不写死颜色与字号;字号只用
+   11 / 12 / 13 / 14 / 15 / 18 / 22 / 34,圆角只用 8 / 12 / 16 / 999。
+   ════════════════════════════════════════════════════════════════ */
+
+/* ── 按钮基线 ──────────────────────────────────────────────────────
+   .btn / .btn.primary 在本仓库只有 .stage-done-bar / .preview-actions 作用域版,
+   裸 .btn 无全局定义;舞台控制条、修订模态、反馈行都用裸 .btn,故在此补基线
+   (设计稿:主要按钮 = 琥珀实心)。
+
+   **作用域限定**:只作用于舞台页自己的按钮宿主(.stage-controls / .stage-scroll /
+   .rsm-*)——不能写成全局 .btn 覆盖,否则 .stage-done-bar .btn.primary(收幕完成条的
+   绿实心按钮)会被这里的琥珀色顶掉(同特异性、本文件后加载)。 */
+.stage-controls .btn,
+.stage-scroll .btn,
+.rsm-panel .btn {
+	display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+	padding: 6px 14px; font-size: var(--fs-13); line-height: 1.5; white-space: nowrap;
+	color: var(--ink); background: var(--bg); border: 1px solid var(--line-strong);
+	border-radius: var(--r-sm); cursor: pointer;
+	transition: color var(--dur-fast), background var(--dur-fast), border-color var(--dur-fast);
+}
+.stage-controls .btn:hover:not(:disabled),
+.stage-scroll .btn:hover:not(:disabled),
+.rsm-panel .btn:hover:not(:disabled) { background: var(--hover-tint); }
+.stage-controls .btn:disabled,
+.stage-scroll .btn:disabled,
+.rsm-panel .btn:disabled { opacity: 0.5; cursor: default; }
+.stage-controls .btn.primary,
+.stage-scroll .btn.primary,
+.rsm-panel .btn.primary {
+	color: var(--bg); background: var(--amber); border-color: var(--amber); font-weight: 500;
+}
+.stage-controls .btn.primary:hover:not(:disabled),
+.stage-scroll .btn.primary:hover:not(:disabled),
+.rsm-panel .btn.primary:hover:not(:disabled) { background: var(--amber-tint-strong); color: var(--ink); }
+/* 收幕条按钮保持原有绿系配色(设计稿:绿 = 完成态;不参与上面的琥珀基线) */
+.stage-done-bar .btn { background: transparent; }
+.stage-done-bar .btn.primary { color: var(--bg); background: var(--green); border-color: var(--green); }
+.stage-done-bar .btn.primary:hover:not(:disabled) { background: var(--green-tint-strong); color: var(--bg); }
+/* 控制条按钮变体写在基线**之后**(同特异性、后者胜,见上):
+   下一步 = 琥珀描边;自动演中 = 琥珀淡底;收幕 = 危险红。 */
+.stage-controls .btn.st-next { color: var(--amber); border-color: var(--amber); background: var(--bg); }
+.stage-controls .btn.st-next:hover:not(:disabled) { color: var(--bg); background: var(--amber); }
+.stage-controls .btn.st-auto.on { color: var(--amber); background: var(--amber-tint); border-color: var(--amber-tint-strong); }
+.stage-controls .btn.danger { color: var(--red); border-color: var(--red-tint-strong); background: var(--bg); }
+.stage-controls .btn.danger:hover:not(:disabled) { color: var(--red); background: var(--red-tint-strong); }
+
+/* ── 场景头(设计稿 04:一行;导演最近一句收进下方可折叠次要行) ─────── */
+.stage-head {
+	flex: none; display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
+	padding: 10px var(--sp-4); border-bottom: 1px solid var(--line);
+}
+.sh-scene { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.sh-title {
+	font-size: var(--fs-18); font-weight: 500; color: var(--ink);
+	line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sh-title.idle { color: var(--muted); }
+.sh-right { margin-left: auto; display: flex; align-items: center; gap: var(--sp-3); }
+/* 模式显示:样式做成下拉语言,但模式由编排驱动(不可从 UI 切换),点击给出解释 */
+.sh-mode {
+	display: inline-flex; align-items: center; gap: 6px;
+	font-size: var(--fs-12); color: var(--muted);
+	padding: 4px 10px; border: 1px solid var(--line); border-radius: var(--r-sm);
+	background: var(--bg-elev); transition: color var(--dur-fast), background var(--dur-fast);
+}
+.sh-mode:hover { color: var(--ink); background: var(--hover-tint); }
+.sh-mode-caret { font-size: var(--fs-11); color: var(--faint); }
+.stage-head .st-counts { font-family: var(--mono); font-size: var(--fs-11); color: var(--faint); margin-left: 0; }
+
+/* 导演最近一句:折叠次要行 */
+.stage-dir-last { flex: none; padding: 6px var(--sp-4); border-bottom: 1px solid var(--line); }
+.stage-dir-last > summary {
+	cursor: pointer; list-style: none; font-size: var(--fs-11); letter-spacing: 0.08em;
+	color: var(--faint); transition: color var(--dur-fast);
+}
+.stage-dir-last > summary::-webkit-details-marker { display: none; }
+.stage-dir-last > summary::before { content: "▸ "; }
+.stage-dir-last[open] > summary::before { content: "▾ "; }
+.stage-dir-last > summary:hover { color: var(--muted); }
+.stage-dir-last .sdl-text {
+	font-family: var(--prose); font-size: var(--fs-13); line-height: 1.7; color: var(--muted);
+	padding: 6px 0 2px;
+}
+
+/* 演出控制条:与场景头合并成一块(去掉重复的分隔线,不再各占一行观感的堆叠) */
+.stage-controls { padding: 8px var(--sp-4); }
+.st-force { flex: none; width: 148px; }
+
+/* ── 右栏:宽度与收起(48px 竖条,设计稿 04) ─────────────────────── */
+.stage-grid.panel-shut { grid-template-columns: auto minmax(0, 1fr) 48px; }
+.stage-grid.panel-shut .stage-panel { align-items: stretch; }
+/* 收起态 = 图标栏(设计稿 04 右缘):每项「图标 + 小标签」竖排,当前项带琥珀圆角底 */
+.stp-rail {
+	flex: 1; display: flex; flex-direction: column; align-items: center; gap: var(--sp-2);
+	padding: var(--sp-3) 0; background: var(--bg-elev);
+}
+.stp-rail-item {
+	width: 40px; padding: 6px 0 5px;
+	display: flex; flex-direction: column; align-items: center; gap: 3px;
+	color: var(--muted); border-radius: var(--r-md);
+	transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.stp-rail-item:hover { color: var(--ink); background: var(--hover-tint); }
+.stp-rail-item.active { color: var(--amber); background: var(--amber-tint); }
+.stp-rail-label { font-size: var(--fs-11); line-height: 1; }
+
+/* ── 外层页签:图标 + 下划线(内层 ScriptView 仍是胶囊,两层不同款) ── */
+.stp-head {
+	flex: none; display: flex; align-items: stretch; gap: 2px;
+	padding: 0 var(--sp-2); min-height: 42px; border-bottom: 1px solid var(--line);
+}
+.stp-tab {
+	flex: 1; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+	padding: 0 4px; font-size: var(--fs-13); color: var(--muted);
+	border-bottom: 2px solid transparent;
+	/* 340px 里四个页签刚好排下:不允许折行(否则「备忘录」会竖着断成两行) */
+	white-space: nowrap;
+	transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.stp-tab:hover { color: var(--ink); }
+.stp-tab.active { color: var(--amber); border-bottom-color: var(--amber); }
+.stp-ico { width: 15px; height: 15px; flex: none; }
+.stp-head-spacer { flex: none; width: var(--sp-1); }
+.stp-head .companion-collapse { align-self: center; }
+
+/* 面板内小节标题(演员池 / 备忘录) */
+.stp-cap {
+	font-size: var(--fs-11); letter-spacing: 0.1em; color: var(--faint);
+	padding: var(--sp-4) 0 var(--sp-2);
+}
+.stp-foot-note { font-size: var(--fs-11); color: var(--faint); line-height: 1.7; padding: var(--sp-3) 0 0; }
+.stp-note { font-size: var(--fs-12); color: var(--muted); line-height: 1.8; margin-bottom: var(--sp-3); }
+.stp-pill {
+	flex: none; font-size: var(--fs-11); color: var(--muted);
+	background: var(--bg-elev-2); border: 1px solid var(--line);
+	border-radius: var(--r-full); padding: 2px 10px; white-space: nowrap;
+}
+
+/* 选角:头像 + 名字/模型两行 + 右端「角色」胶囊 */
+.st-cast-row { align-items: center; gap: var(--sp-3); padding: 10px 0; }
+.st-cast-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.st-cast-name { font-size: var(--fs-13); color: var(--ink); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-cast-meta {
+	font-family: var(--mono); font-size: var(--fs-11); color: var(--faint);
+	white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* 修订页签:说明 + 琥珀实心大按钮 + 「最近一次修订」卡片 */
+.stp-revise { display: flex; flex-direction: column; padding-top: var(--sp-3); }
+.stp-revise-btn { width: 100%; padding: 11px 16px; font-size: var(--fs-14); }
+.stp-card {
+	margin-top: var(--sp-5); padding: var(--sp-3) var(--sp-4);
+	background: var(--bg-elev-2); border: 1px solid var(--line); border-radius: var(--r-md);
+}
+.stp-card-label { font-size: var(--fs-11); letter-spacing: 0.1em; color: var(--faint); margin-bottom: var(--sp-2); }
+.stp-card-ver { font-family: var(--mono); font-size: var(--fs-13); color: var(--amber); margin-bottom: 6px; }
+.stp-card-text { display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-12); color: var(--ink-2); line-height: 1.7; }
+.stp-card-foot { margin-top: var(--sp-2); font-size: var(--fs-11); color: var(--faint); }
+.stp-card-ok { color: var(--green); }
+
+/* ── 剧本字段卡片(ScriptView):标签 + 值 + 右端铅笔 ─────────────── */
+.sf-card {
+	border: 1px solid var(--line); border-radius: var(--r-md);
+	background: var(--bg-elev-2); padding: 0 var(--sp-3) var(--sp-1);
+}
+.sf-head {
+	font-family: var(--mono); font-size: var(--fs-11); color: var(--faint);
+	padding: var(--sp-3) 0 var(--sp-2); border-bottom: 1px solid var(--line);
+}
+.sf-row {
+	display: grid; grid-template-columns: 1fr 15px; align-items: start;
+	gap: 2px var(--sp-2); padding: 9px 0; border-bottom: 1px solid var(--line);
+}
+.sf-row:last-child { border-bottom: none; }
+.sf-k { grid-column: 1; font-size: var(--fs-11); color: var(--faint); letter-spacing: 0.04em; }
+.sf-v {
+	grid-column: 1; grid-row: 2; font-size: var(--fs-13); color: var(--ink-2); line-height: 1.7;
+	overflow-wrap: break-word;
+}
+.sf-pen {
+	grid-column: 2; grid-row: 1 / span 2; align-self: center; justify-self: end;
+	display: inline-flex; align-items: center; justify-content: center;
+	width: 22px; height: 22px; border-radius: var(--r-sm); color: var(--faint);
+	transition: color var(--dur-fast), background var(--dur-fast);
+}
+.sf-pen svg { width: 15px; height: 15px; }
+.sf-pen:hover { color: var(--amber); background: var(--amber-tint); }
+.sf-pen.quiet { cursor: default; opacity: 0.5; }
+.sf-list { display: flex; flex-direction: column; gap: 3px; }
+.sf-card .pa-block { border: none; padding: 0; margin: 0; }
+.sf-card .pa-block + .pa-block { border-top: 1px solid var(--line); }
+.sf-card .pa-block .pa-name { padding-top: var(--sp-3); }
+.sf-card .sc-table { font-size: var(--fs-13); }
+
+/* ── 备忘录页签(NoticeBoard minimal) ────────────────────────────
+   条目与添加行都沿用 NoticeBoard 自己的样式(方形勾选框 + $bg-elev-2 卡片 +
+   「＋ 记一条待办…」输入行,设计稿 02-模态与面板/02);舞台侧只去掉外框内边距
+   ——面板已经给了左右留白,再套一层会缩进两次 */
+.notice-board.minimal { padding: 0; gap: var(--sp-2); overflow: visible; }
+.notice-board.minimal .notice-add { margin-top: var(--sp-3); }
+
+/* ── 底部输入条:琥珀实心圆形发送钮 + mono 键位提示 ──────────────── */
+.stage-main .inputbar { padding-bottom: var(--sp-5); }
+/* 发送钮不再是舞台专属:琥珀圆形 ↑ 已收进 styles.css 的 .btn-send(两处输入条共用) */
+/* 键位提示行(mono,输入条下方一行) */
+.stage-main .inputbar::after {
+	content: "Enter 换行 · Ctrl+Enter 发送 · / 打开命令面板";
+	display: block; text-align: center; margin-top: 6px;
+	font-family: var(--mono); font-size: var(--fs-11); color: var(--faint);
+}
+
+/* ── 气泡差分(设计稿 05;默认文档流,在设置里切换) ─────────────────
+   用户:右对齐气泡(bg-elev-2)+ 右侧 28px 圆头像;
+   AI:左侧 28px 圆头像 + 名字行,气泡底 bg-elev,圆角 12,最大宽度约 78%。 */
+.stage-scroll.chat-bubble .record {
+	width: auto; max-width: min(78%, 620px); padding: 10px var(--sp-4) var(--sp-3);
+	border-bottom: none; margin-bottom: var(--sp-4);
+	border-left: none; border-radius: var(--r-md); position: relative;
+}
+/* 头像挂在气泡外侧(-38px),所以气泡本身要离容器边缘留出这段距离,
+   否则会被 .chat-scroll 的 overflow 裁掉(实测 AI 侧头像原本整颗不可见) */
+.stage-scroll.chat-bubble .record.assistant { align-self: flex-start; margin-left: 40px; background: var(--bg-elev); }
+.stage-scroll.chat-bubble .record.user { align-self: flex-end; margin-right: 40px; background: var(--bg-elev-2); }
+.stage-scroll.chat-bubble .record-text { font-size: var(--fs-15); }
+.stage-scroll.chat-bubble .record.user .record-text { font-size: var(--fs-14); color: var(--ink); }
+/* 头像:28px 圆,圆内是发言者首字(MessageList 的 data-who:你 / PI;
+   舞台侧若换成角色头像,覆盖这条规则即可) */
+.stage-scroll.chat-bubble .record::before {
+	content: attr(data-who);
+	position: absolute; bottom: 8px; width: 28px; height: 28px;
+	display: flex; align-items: center; justify-content: center;
+	font-size: var(--fs-11); color: var(--muted);
+	border-radius: var(--r-full); background: var(--bg-elev-2);
+}
+.stage-scroll.chat-bubble .record.assistant::before { left: -38px; }
+.stage-scroll.chat-bubble .record.user::before { right: -38px; }
+/* AI 名字行:PI · 导演(角色名由舞台侧补,消息流本体不感知舞台)。
+   挂在 .record-who 上而不是整行 ::after —— 元信息行里还有思考胶囊与操作按钮,挂整行会跑到最右端 */
+.stage-scroll.chat-bubble .record.assistant .record-who::after { content: " · 导演"; }
+.stage-scroll.chat-bubble .record-meta { letter-spacing: 0.04em; }
+
+/* ── 修订剧本模态(设计稿 02-模态与面板/01):860px 独立窗口 ───────── */
+.rsm-mask {
+	position: fixed; inset: 0; z-index: 300; display: flex; align-items: center; justify-content: center;
+	padding: var(--sp-6); background: var(--mask);
+	backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+	animation: rsm-fade var(--dur-base) var(--ease-out);
+}
+@keyframes rsm-fade { from { opacity: 0; } }
+.rsm-panel {
+	width: min(860px, 96vw); max-height: 88vh; display: flex; flex-direction: column; overflow: hidden;
+	background: var(--bg-elev); border: 1px solid var(--line-strong);
+	border-radius: var(--r-lg); box-shadow: var(--shadow-3);
+	animation: rsm-pop var(--dur-slow) var(--ease-out);
+}
+@keyframes rsm-pop { from { opacity: 0; transform: translateY(14px) scale(0.985); } }
+.rsm-head {
+	flex: none; display: flex; align-items: baseline; gap: var(--sp-2);
+	padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--line);
+}
+.rsm-title { font-size: var(--fs-14); font-weight: 500; color: var(--ink); }
+.rsm-ver { font-family: var(--mono); font-size: var(--fs-11); color: var(--amber); }
+.rsm-desc { flex: 1; min-width: 0; font-size: var(--fs-12); color: var(--muted); }
+.rsm-close {
+	flex: none; align-self: flex-start; width: 24px; height: 24px; border-radius: var(--r-sm);
+	font-size: var(--fs-13); color: var(--faint); transition: color var(--dur-fast), background var(--dur-fast);
+}
+.rsm-close:hover { color: var(--ink); background: var(--hover-tint); }
+.rsm-body {
+	flex: 1; min-height: 0; overflow-y: auto;
+	display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	gap: var(--sp-6); padding: var(--sp-5);
+}
+.rsm-col { display: flex; flex-direction: column; min-width: 0; }
+.rsm-group { font-size: var(--fs-11); letter-spacing: 0.1em; color: var(--faint); padding: 0 0 var(--sp-2); }
+.rsm-group + .rsm-group, .rsm-nums + .rsm-group { padding-top: var(--sp-4); }
+.rsm-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: var(--sp-3); }
+.rsm-field-grow { flex: 1; min-height: 0; margin-bottom: 0; }
+.rsm-label { font-size: var(--fs-11); color: var(--faint); }
+.rsm-field input, .rsm-field textarea {
+	width: 100%; background: var(--bg-elev-2); border: 1px solid var(--line);
+	border-radius: var(--r-sm); color: var(--ink); font-size: var(--fs-13);
+	padding: 7px 10px; outline: none; transition: border-color var(--dur-fast);
+}
+.rsm-field input:focus, .rsm-field textarea:focus { border-color: var(--amber); }
+.rsm-field textarea { min-height: 76px; resize: vertical; line-height: 1.7; }
+.rsm-field textarea.rsm-tall { min-height: 92px; }
+.rsm-field-grow textarea { flex: 1; min-height: 120px; }
+.rsm-nums { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); }
+.rsm-foot {
+	flex: none; display: flex; align-items: center; gap: var(--sp-4);
+	padding: var(--sp-3) var(--sp-5); border-top: 1px solid var(--line);
+}
+.rsm-note { flex: 1; min-width: 0; font-size: var(--fs-11); color: var(--faint); }
+.rsm-foot-actions { display: flex; align-items: center; gap: var(--sp-2); }
+.rsm-submit { padding: 7px 18px; }
+
+/* ── 统一 Select 在舞台页的两处用法 ──────────────────────────────
+   .sel 基线是「表单里的宽下拉」(min-width 240 / height 38),舞台控制条要的是
+   紧凑内联控件,右栏 340px 内必须能自己收窄(否则撑破面板)。 */
+.st-force.sel { min-width: 0; width: 148px; height: 30px; padding: 0 8px 0 10px; font-size: var(--fs-12); }
+.stp-revise .rsm-sel,
+.rsm-field .sel { min-width: 0; width: 100%; height: 34px; font-size: var(--fs-13); }
+
+/* ── 窄屏(≤900px):面板整体隐藏,收起钮随之不参与(面板不挂载) ────── */
+@media (max-width: 900px) {
+	.stage-grid.panel-shut { grid-template-columns: minmax(0, 1fr); }
+	.stage-head { padding: 8px 10px; gap: var(--sp-2); }
+	.sh-title { font-size: var(--fs-15); }
+	.sh-right .st-counts { display: none; }
+	.stage-controls { padding: 8px 10px; }
+	.stage-main .inputbar::after { font-size: var(--fs-11); }
+	.rsm-body { grid-template-columns: minmax(0, 1fr); }
+	.rsm-mask { padding: 0; align-items: stretch; }
+	.rsm-panel { width: 100%; max-height: 100%; border-radius: 0; border: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.rsm-mask, .rsm-panel { animation: none; }
+}

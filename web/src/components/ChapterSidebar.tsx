@@ -4,6 +4,8 @@ import { DUR, EASE } from "../motion.ts";
 import { useMediaQuery } from "../useMediaQuery.ts";
 import { useDragResize } from "../use-drag-resize.ts";
 import type { BookMeta, ChapterRef } from "../types.ts";
+import { IconBook } from "./Icons.tsx";
+import { Lu } from "./Lu.tsx";
 
 interface ChapterSidebarProps {
 	books: BookMeta[];
@@ -92,6 +94,8 @@ export function ChapterSidebar({
 	/** 重命名中的书 slug:非空时该书按钮下方渲染内联输入条。 */
 	const [renamingSlug, setRenamingSlug] = useState<string | null>(null);
 	const [renameTitle, setRenameTitle] = useState("");
+	/** 打开操作菜单(⋯)的章节 id:非空时该章节行渲染弹出菜单。 */
+	const [menuChapterId, setMenuChapterId] = useState<string | null>(null);
 	/** 重命名中的章节 id:非空时该章节行渲染内联输入。 */
 	const [renamingChapterId, setRenamingChapterId] = useState<string | null>(null);
 	const [chapterRenameTitle, setChapterRenameTitle] = useState("");
@@ -105,11 +109,14 @@ export function ChapterSidebar({
 	// 同步 flush passive effects,若不阻止冒泡,「点 ⋯ 打开菜单」的同一事件会
 	// 在冒泡到 document 时触发 close,菜单开即关。
 	useEffect(() => {
-		if (!menuSlug) return;
-		const close = () => setMenuSlug(null);
+		if (!menuSlug && !menuChapterId) return;
+		const close = () => {
+			setMenuSlug(null);
+			setMenuChapterId(null);
+		};
 		document.addEventListener("click", close);
 		return () => document.removeEventListener("click", close);
-	}, [menuSlug]);
+	}, [menuSlug, menuChapterId]);
 
 	const activeBook = books.find((b) => b.slug === slug) ?? null;
 
@@ -252,13 +259,16 @@ export function ChapterSidebar({
 														title={`${b.title} · ${b.slug} · ${b.chapters} 章`}
 														onClick={() => onSelectBook(b.slug)}
 													>
+														{/* 设计稿 06:书行 = 书本图标 + 书名 + ⋯。
+														    章节数挪到「章节」标题右端(它在那边才是有用的上下文),
+														    slug 保留在 title 提示里 */}
+														<span className="c-book-icon"><IconBook size={14} /></span>
 														<span className="c-book-title">{b.title}</span>
-														<span className="c-book-slug">{b.slug}</span>
 													</button>
-													<span className="c-book-more">
+													<span className="c-more">
 														<button
 															type="button"
-															className="c-book-more-btn"
+															className="c-more-btn"
 															aria-label={`操作 ${b.title}`}
 															title="重命名 / 导出 / 删除"
 															disabled={busySlug === b.slug}
@@ -269,10 +279,10 @@ export function ChapterSidebar({
 															setMenuSlug((cur) => (cur === b.slug ? null : b.slug));
 														}}
 														>
-															⋯
+															<Lu icon="ellipsis" size={15} />
 														</button>
 														{menuSlug === b.slug && (
-															<div className="c-book-menu">
+															<div className="c-menu">
 																<button
 																	type="button"
 																	onClick={() => {
@@ -355,7 +365,10 @@ export function ChapterSidebar({
 								</div>
 							</>
 						)}
-						<div className="c-head">章节</div>
+						<div className="c-head">
+							章节
+							{chapters.length > 0 && <span className="c-head-count">{chapters.length}</span>}
+						</div>
 						<nav className="c-list">
 							{chapters.length === 0 && <div className="c-empty">还没有章节</div>}
 							<AnimatePresence initial={false}>
@@ -404,67 +417,88 @@ export function ChapterSidebar({
 												<span className="c-title">{ch.title}</span>
 												{ch.label && <span className="c-label">{ch.label}</span>}
 											</button>
-											{/* 章节操作按钮:hover 行时显示 */}
+											{/* 章节操作:⋯ 常驻(原来 hover 才出现的「重命名」文字按钮,
+											    触屏不可达),菜单与书行同一套 */}
 											<span className="c-chapter-actions" onClick={(e) => e.stopPropagation()}>
 												<button
 													type="button"
-													className="c-book-act"
-													aria-label={`重命名章节 ${ch.title}`}
-													onClick={() => {
-														setRenamingChapterId(ch.id);
-														setChapterRenameTitle(ch.title);
+													className="c-more-btn"
+													aria-label={`操作章节 ${ch.title}`}
+													title="重命名章节"
+													onClick={(e) => {
+														// 与书行同理:必须阻止冒泡,否则同一 click 触发 document 上的关闭
+														e.stopPropagation();
+														e.nativeEvent.stopPropagation();
+														setMenuChapterId((cur) => (cur === ch.id ? null : ch.id));
 													}}
 												>
-													重命名
+													<Lu icon="ellipsis" size={15} />
 												</button>
+												{menuChapterId === ch.id && (
+													<div className="c-menu">
+														<button
+															type="button"
+															onClick={() => {
+																setMenuChapterId(null);
+																setRenamingChapterId(ch.id);
+																setChapterRenameTitle(ch.title);
+															}}
+														>
+															重命名
+														</button>
+													</div>
+												)}
 											</span>
 										</motion.div>
 									),
 								)}
 							</AnimatePresence>
 						</nav>
-						<button className="c-new" onClick={onNewChapter}>
-							＋ 新建章节
+						{/* 主行动作:琥珀实心按钮(设计稿 06/07 左下角),次级动作收成一行小字 */}
+						<button className="c-new primary" onClick={onNewChapter}>
+							<Lu icon="plus" size={15} /> 新建章节
 						</button>
-						{addingBook ? (
-							<input
-								className="c-new-input"
-								autoFocus
-								placeholder="书名,回车创建"
-								value={bookTitle}
-								onChange={(e) => setBookTitle(e.target.value)}
-								onKeyDown={(e) => {
-									if (e.key === "Enter") submitBook();
-									else if (e.key === "Escape") {
+						<div className="c-new-row">
+							{addingBook ? (
+								<input
+									className="c-new-input"
+									autoFocus
+									placeholder="书名,回车创建"
+									value={bookTitle}
+									onChange={(e) => setBookTitle(e.target.value)}
+									onKeyDown={(e) => {
+										if (e.key === "Enter") submitBook();
+										else if (e.key === "Escape") {
+											setAddingBook(false);
+											setBookTitle("");
+										}
+									}}
+									onBlur={() => {
 										setAddingBook(false);
 										setBookTitle("");
-									}
-								}}
-								onBlur={() => {
-									setAddingBook(false);
-									setBookTitle("");
+									}}
+								/>
+							) : (
+								<button className="c-new" onClick={() => setAddingBook(true)}>
+									新建书
+								</button>
+							)}
+							{/* 导入书:隐藏文件框 + 底部按钮(导入中禁用) */}
+							<input
+								ref={fileRef}
+								type="file"
+								accept=".zip"
+								style={{ display: "none" }}
+								onChange={(e) => {
+									const f = e.target.files?.[0];
+									if (f) onImportBook?.(f);
+									e.target.value = "";
 								}}
 							/>
-						) : (
-							<button className="c-new" onClick={() => setAddingBook(true)}>
-								＋ 新建书
+							<button className="c-new" disabled={importing} onClick={() => fileRef.current?.click()}>
+								{importing ? "导入中…" : "导入"}
 							</button>
-						)}
-						{/* 导入书:隐藏文件框 + 底部按钮(导入中禁用) */}
-						<input
-							ref={fileRef}
-							type="file"
-							accept=".zip"
-							style={{ display: "none" }}
-							onChange={(e) => {
-								const f = e.target.files?.[0];
-								if (f) onImportBook?.(f);
-								e.target.value = "";
-							}}
-						/>
-						<button className="c-new" disabled={importing} onClick={() => fileRef.current?.click()}>
-							{importing ? "导入中…" : "＋ 导入书"}
-						</button>
+						</div>
 						</>
 						)}
 						</div>
@@ -472,7 +506,7 @@ export function ChapterSidebar({
 					)}
 					{onToggleCollapse && (
 					<button type="button" className="c-collapse" onClick={onToggleCollapse} title={collapsed ? "展开书库" : "收起书库"}>
-						<span aria-hidden="true">{collapsed ? "›" : "‹"}</span>
+						<span aria-hidden="true"><Lu icon={collapsed ? "chevrons-right" : "chevrons-left"} size={14} /></span>
 						<span className="c-collapse-text">{collapsed ? "展开" : "收起"}</span>
 					</button>
 				)}

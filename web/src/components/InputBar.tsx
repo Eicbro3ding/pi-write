@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { Lu } from "./Lu.tsx";
 import {
 	composeMessageWithAttachments,
 	parseSlashQuery,
@@ -64,7 +65,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 		streaming,
 		onSend,
 		onAbort,
-		placeholder = "向 pi 发一句话(Ctrl+Enter 发送,Enter 换行,流式中可插话)",
+		placeholder = "说点什么…",
 		ariaLabel = "消息输入",
 		commands,
 		context,
@@ -365,8 +366,15 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 						中断
 					</button>
 				) : (
-					<button className="btn-send" aria-label="发送" disabled={text.trim().length === 0 && chips.length === 0} onClick={send}>
-						发送
+					<button
+						className="btn-send"
+						aria-label="发送"
+						title="发送(Ctrl+Enter)"
+						disabled={text.trim().length === 0 && chips.length === 0}
+						onClick={send}
+					>
+						{/* 设计稿 04/06:两处输入条都是「琥珀圆形 ↑」,不再用「发送」文字按钮 */}
+						<Lu icon="arrow-up" size={14} strokeWidth={1.8} />
 					</button>
 				)}
 			</div>

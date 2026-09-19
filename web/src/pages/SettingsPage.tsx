@@ -1,15 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { ApiError, type ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
 import type { PluginInfoDto, ResolvedShellDto, ShellDialectDto, ShellKindDto, UserThemeInfo, WorldDataDto } from "../types.ts";
-import { NIGHT_THEME, themeLabelFromCss, themeStarterCss, USER_THEME_PREFIX, userThemeFile, type ThemeId } from "../themes.ts";
+import { themeStarterCss, USER_THEME_PREFIX, userThemeFile, type ThemeId } from "../themes.ts";
 import { applyTheme, currentTheme } from "../theme.ts";
 import { ProviderList } from "../components/ProviderList.tsx";
 import { McpServerList } from "../components/McpServerList.tsx";
 import { PluginList } from "../components/PluginList.tsx";
 import { PluginSettings } from "../components/PluginSettings.tsx";
 import { ToggleSwitch } from "../components/ToggleSwitch.tsx";
-import { IconBook, IconDoc, IconGear, IconGlobe, IconX } from "../components/Icons.tsx";
+import { Select } from "../components/Select.tsx";
+import { ThemeCardsFromManifest } from "../components/ThemeCards.tsx";
+import { IconBook, IconDoc, IconGear, IconGlobe, IconStage, IconX } from "../components/Icons.tsx";
+import { Lu } from "../components/Lu.tsx";
 
 /** 思考级别选项(与后端 session-host 的 ThinkingLevel 对齐)。 */
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -20,16 +23,36 @@ interface ModelInfo {
 	provider: string;
 }
 
-/** 设置分类(左侧导航):模型 / 界面 / 世界书 / 集成。 */
+/** 设置侧栏分类图标(名字取自设计稿 pi-writer · 设置 v1 的 lucide icon 节点)。 */
+const LuSliders = ({ size = 15 }: { size?: number }) => <Lu icon="sliders-horizontal" size={size} />;
+const LuLayout = ({ size = 15 }: { size?: number }) => <Lu icon="layout-dashboard" size={size} />;
+const LuBookOpen = ({ size = 15 }: { size?: number }) => <Lu icon="book-open" size={size} />;
+const LuPuzzle = ({ size = 15 }: { size?: number }) => <Lu icon="puzzle" size={size} />;
+const LuWrench = ({ size = 15 }: { size?: number }) => <Lu icon="wrench" size={size} />;
+
+/**
+ * 设置分类(左侧导航):模型 / 界面 / 世界书 / 集成 / 高级。
+ * 设计稿 v1 把「危险设置」(外部命令 / Shell)从「界面」移出,单独成组。
+ */
 const SETTING_CATS = [
-	{ id: "model", label: "模型", icon: IconGear },
-	{ id: "ui", label: "界面", icon: IconDoc },
-	{ id: "world", label: "世界书", icon: IconBook },
-	{ id: "integrations", label: "集成", icon: IconGlobe },
+	{ id: "model", label: "模型", icon: LuSliders },
+	{ id: "ui", label: "界面", icon: LuLayout },
+	{ id: "world", label: "世界书", icon: LuBookOpen },
+	{ id: "integrations", label: "集成", icon: LuPuzzle },
+	{ id: "advanced", label: "高级", icon: LuWrench },
 ] as const;
 type SettingCat = (typeof SETTING_CATS)[number]["id"];
 /** 插件动态分类 id(plugin:<id>);类型上并入 SettingCat 判断分支。 */
 const pluginCatPrefix = "plugin:";
+
+/** 各分类页面头(标题 + 一句话说明;设计稿 11-13 的页头文案)。 */
+const CAT_HEAD: Record<string, { title: string; desc: string }> = {
+	model: { title: "模型", desc: "选择写作与演出使用的模型、思考强度与采样参数。修改都即时生效,无需保存。" },
+	ui: { title: "界面", desc: "主题与日常偏好。会改变 AI 在你机器上行为的选项,已移到「高级」。" },
+	world: { title: "世界书", desc: "决定 AI 每次对话时自动带上哪些世界书内容。" },
+	integrations: { title: "集成", desc: "为 AI 接入外部工具与扩展写作能力。" },
+	advanced: { title: "高级", desc: "会改变 AI 在你机器上行为的选项。这类设置的影响范围超出 pi-writer 自己,请在开启前读完说明。" },
+};
 
 /**
  * shell 解析结果的可读名(与服务端 src/shell-kind.ts 的 SHELL_DIALECT_LABELS 对齐;
@@ -41,6 +64,12 @@ const SHELL_DIALECT_TEXT: Record<ShellDialectDto, string> = {
 	pwsh: "PowerShell 7(pwsh)",
 	powershell: "Windows PowerShell 5.1",
 };
+
+/** shell 方言下拉项(设计稿 13:bash / PowerShell,标签精简)。 */
+const SHELL_KIND_OPTIONS = [
+	{ value: "bash", label: "bash" },
+	{ value: "pwsh", label: "PowerShell" },
+];
 
 /**
  * 归一模型引用为 "provider/id"(与服务端 resolveCliModel 的 canonical 格式一致)。
@@ -77,19 +106,13 @@ function extractModels(models: readonly unknown[]): ModelInfo[] {
 	return out;
 }
 
-/** 从用户主题 CSS 抽取 [背景, 强调, 文字] 三色做卡片预览;缺失回退中性色。 */
-function swatchFromCss(css: string): [string, string, string] {
-	const pick = (name: string): string => {
-		const m = css.match(new RegExp(`${name}\\s*:\\s*([^;]+);`));
-		return m ? m[1]!.trim() : "";
-	};
-	return [pick("--bg") || "#141414", pick("--amber") || "#d9a84e", pick("--ink") || "#e8e6e1"];
-}
-
 /**
- * 设置页(2026-08-12 分类导航布局):左侧分类栏(模型/界面/世界书/集成)+
- * 右侧分组设置项。数据源为 GET /api/models、GET /api/providers 与 GET /api/world;
- * 切换模型/思考级别/认证后重新拉取;注入开关读写 world.json(无会话 404 → 分组提示)。
+ * 设置页(v1 重做:左分类栏 + 「左主列 + 右窄列」两栏卡片)。
+ *
+ * 左栏(约 180)按组列出分类:模型 / 界面 / 世界书 / 集成 / 高级,再是插件设置分类;
+ * 内容列 1160,主列放宽卡片、右列(min 300)放次级信息(思考级别、供应商入口、
+ * 配置向导、依赖说明)。数据与写操作全部沿用原逻辑:
+ * GET /api/models、GET /api/providers、GET /api/world、主题读写与 settings 读写。
  */
 export function SettingsPage({
 	client,
@@ -190,6 +213,8 @@ export function SettingsPage({
 	const [themeBusy, setThemeBusy] = useState(false);
 	/** 主题操作错误文案。 */
 	const [themeErr, setThemeErr] = useState<string | null>(null);
+	/** 「编辑主题 CSS」折叠区(设计稿 12:默认收起,展开后才是自定义主题界面)。 */
+	const [themeEditorOpen, setThemeEditorOpen] = useState(false);
 	const [notice, setNotice] = useState<string | null>(null);
 	/** 世界书注入分组:null = 未加载成功(加载中/失败);worldErr 为分组加载错误;noBook = 无打开书(404)。 */
 	const [world, setWorld] = useState<WorldDataDto | null>(null);
@@ -406,6 +431,8 @@ export function SettingsPage({
 			const ut = userThemes.find((x) => x.file === file);
 			setEditingFile(file);
 			setEditCss(cssOverride ?? ut?.css ?? "");
+			// 选中自定义主题时自动展开折叠区,否则用户看不到刚打开的编辑器
+			setThemeEditorOpen(true);
 		} else {
 			setEditingFile(null);
 		}
@@ -439,8 +466,8 @@ export function SettingsPage({
 		setThemeBusy(true);
 		setThemeErr(null);
 		try {
-		await client.putUserTheme(editingFile, editCss);
-		await refreshThemes();
+			await client.putUserTheme(editingFile, editCss);
+			await refreshThemes();
 		} catch (e) {
 			setThemeErr(`保存主题失败: ${friendlyError(e)}`);
 		} finally {
@@ -598,46 +625,68 @@ export function SettingsPage({
 		return [...byProvider.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 	}, [models]);
 
+	/** 下拉用分组选项(Select 的 groups;标签为 "provider · id")。 */
+	const modelGroups = useMemo(
+		() =>
+			groups.map(([provider, list]) => ({
+				label: provider,
+				options: list.map((m) => ({ value: `${m.provider}/${m.id}`, label: `${m.provider} · ${m.id}` })),
+			})),
+		[groups],
+	);
+
+	/** 当前模型 id(去掉 provider 前缀;无值时占位)。 */
+	const currentModelId = current ? current.split("/").slice(1).join("/") || current : "未设置";
+	const currentProviderId = current ? current.split("/")[0] ?? "" : "";
+
+	/** 编辑器是否打开着「当前正在使用的用户主题」(右侧折叠区标题用)。 */
+	const editingIsCurrent = !!editingFile && theme === userIdOf(editingFile);
+
+	/** 插件设置分类 id → 插件(左栏第二组)。 */
+	const pluginCatItems = (pluginCats ?? []).map((p) => ({ id: `${pluginCatPrefix}${p.id}`, label: p.name }));
+
+	/** 分类导航按钮(组内复用)。 */
+	function catButton(id: string, label: string, Icon: (p: { size?: number }) => ReactElement) {
+		return (
+			<button
+				key={id}
+				type="button"
+				role="tab"
+				aria-selected={cat === id}
+				className={cat === id ? "st-cat active" : "st-cat"}
+				onClick={() => setCat(id)}
+			>
+				<Icon size={15} />
+				<span>{label}</span>
+			</button>
+		);
+	}
+
 	return (
 		<div className="settings">
-			{/* 左侧分类导航(窄屏横排胶囊) */}
+			{/* 左侧分类导航(约 180;设计稿 11:模型 / 界面 / 世界书 / 集成 / 高级 + 插件组) */}
 			<aside className="settings-side">
 				<div className="settings-side-title">设置</div>
 				<nav className="settings-nav" role="tablist" aria-label="设置分类">
-					{SETTING_CATS.map((c) => (
-						<button
-							key={c.id}
-							type="button"
-							role="tab"
-							aria-selected={cat === c.id}
-							className={cat === c.id ? "st-cat active" : "st-cat"}
-							onClick={() => setCat(c.id)}
-						>
-							<c.icon size={15} />
-							<span>{c.label}</span>
-						</button>
-					))}
-					{/* 插件设置分类:声明了设置菜单的插件各自一个分类(标签=插件名) */}
-					{(pluginCats ?? []).map((p) => {
-						const id = `${pluginCatPrefix}${p.id}`;
-						return (
-							<button
-								key={id}
-								type="button"
-								role="tab"
-								aria-selected={cat === id}
-								className={cat === id ? "st-cat active" : "st-cat"}
-								onClick={() => setCat(id)}
-							>
-								<IconGear size={15} />
-								<span>{p.name}</span>
-							</button>
-						);
-					})}
+					{SETTING_CATS.map((c) => catButton(c.id, c.label, c.icon))}
 				</nav>
+				{pluginCatItems.length > 0 && (
+					<>
+						<div className="settings-nav-sep" />
+						<nav className="settings-nav" role="tablist" aria-label="插件设置">
+							{pluginCatItems.map((p) => catButton(p.id, p.label, IconGear))}
+						</nav>
+					</>
+				)}
 			</aside>
 			<main className="settings-main">
 				<div className="settings-inner">
+					{/* 页头:标题 + 分类说明(设计稿 11-13;保存状态留在顶栏,这里不重复) */}
+					<header className="st-head">
+						<h1 className="st-head-title">{headOf(cat).title}</h1>
+						<p className="st-head-desc">{headOf(cat).desc}</p>
+					</header>
+
 					{/* 全局提示(加载/操作错误、成功通知):所有分类顶部可见 */}
 					{models === null && !loadErr && <div className="notice">设置加载中…</div>}
 					{loadErr && (
@@ -664,494 +713,501 @@ export function SettingsPage({
 					{notice && <div className="notice">{notice}</div>}
 
 					{cat === "model" && (
-						<>
-							{/* 模型选择(含当前模型信息行) */}
-							<div className="s-card">
-								<div className="s-card-head">模型</div>
-								<div className="s-current-model-row">
-									<span className="s-key">当前</span>
-									<span className="s-current-model-name">{current ? current.split("/")[1] ?? current : "未设置"}</span>
-									<span className="s-current-model-provider">
-										{current && <span className="s-badge">{current.split("/")[0]}</span>}
-									</span>
-								</div>
-								<div className="s-field" style={{ marginBottom: 0 }}>
-									<label className="s-field-label">切换模型</label>
-									<div className="s-field-row">
-										<select
-											className="s-select s-select-full"
-											value={current ?? ""}
-											onChange={(e) => {
-												setNotice(null);
-												void changeModel(e.target.value);
-											}}
-											disabled={busy || modelRefreshBusy || models === null}
-											title="按 provider 分组选择模型"
-										>
-											<option value="" disabled>
-												{models === null ? "加载中…" : "请选择模型"}
-											</option>
-											{groups.map(([provider, list]) => (
-												<optgroup key={provider} label={provider}>
-													{list.map((m) => (
-														<option key={`${m.provider}/${m.id}`} value={`${m.provider}/${m.id}`}>
-															{m.provider} · {m.id}
-														</option>
-													))}
-												</optgroup>
-											))}
-										</select>
-										{busy && <span className="s-busy">设置中…</span>}
-										<button
-											type="button"
-											className="btn-ghost"
-											disabled={busy || modelRefreshBusy || models === null}
-											onClick={() => void refreshModelList()}
-											title="重新联网拉取模型目录"
-										>
-											{modelRefreshBusy ? "刷新中…" : "联网刷新"}
-										</button>
-									</div>
-								</div>
-							</div>
-
-							{/* 思考级别 */}
-							<div className="s-card">
-								<div className="s-card-head">思考级别</div>
-								<div className="s-field" style={{ marginBottom: 0 }}>
-									<label className="s-field-label">强度</label>
-									<div className="s-field-row">
-										<select
-											className="s-select s-select-full"
-											value={thinking ?? ""}
-											onChange={(e) => {
-												setNotice(null);
-												void changeThinking(e.target.value);
-											}}
-											disabled={busy || thinking === null}
-											title="思考强度(off 关闭;max 最强)"
-										>
-											<option value="" disabled>
-												{thinking === null ? "未设置" : "请选择"}
-											</option>
-											{THINKING_LEVELS.map((l) => (
-												<option key={l} value={l}>
-													{l}
-												</option>
-											))}
-										</select>
-										{busy && <span className="s-busy">设置中…</span>}
-									</div>
-									<div className="s-field-desc">off = 关闭思考; max = 最强思考深度</div>
-								</div>
-							</div>
-
-							{/* 采样参数 */}
-							<div className="s-card">
-								<div className="s-card-head">采样参数</div>
-								<div className="s-field-grid">
-									<div className="s-field">
-										<label className="s-field-label">temperature</label>
-										<input
-											className="s-input s-input-short"
-											placeholder="默认"
-											type="number"
-											min="0"
-											max="2"
-											step="0.1"
-											value={temperature}
-											disabled={busy}
-											onChange={(e) => setTemperature(e.target.value)}
-										/>
-									</div>
-									<div className="s-field">
-										<label className="s-field-label">top_p</label>
-										<input
-											className="s-input s-input-short"
-											placeholder="默认"
-											type="number"
-											min="0"
-											max="1"
-											step="0.05"
-											value={topP}
-											disabled={busy}
-											onChange={(e) => setTopP(e.target.value)}
-										/>
-									</div>
-								</div>
-								<div className="s-field-row" style={{ marginTop: 10 }}>
-									<button type="button" className="btn-ghost" disabled={busy} onClick={() => void changeSampling()}>
-										{busy ? "设置中…" : "应用"}
-									</button>
-									<button type="button" className="btn-ghost" disabled={busy} onClick={() => void resetTemperature()}>
-										{busy ? "处理中…" : "恢复默认温度"}
-									</button>
-								</div>
-								<div className="s-card-desc" style={{ marginTop: 8 }}>
-									「恢复默认温度」会清除全局与所有演员的 temperature 覆盖，所有 agent 恢复 provider 默认；top_p 不受影响。留空表示不修改对应项。
-								</div>
-							</div>
-
-								{/* 模型提供商 — 入口卡(点击弹出双栏管理卡) */}
-								<div className="s-card">
-									<div className="s-card-head">模型提供商</div>
-									<div className="s-card-desc">
-										管理模型提供商与 API key;为 provider 添加 key 后其模型即可在「切换模型」中使用。新增自定义模型/供应商也在此完成。
-									</div>
-									<div className="s-field-row" style={{ marginBottom: 0 }}>
-										<button type="button" className="btn-ghost" onClick={() => setProvidersOpen(true)}>
-											管理供应商
-										</button>
-									</div>
-								</div>
-							</>
-						)}
-
-					{cat === "ui" && (
-						<>
-							<div className="s-card">
-								<div className="s-card-head">主题</div>
-								<div className="theme-cards">
-									{/* night:默认内置,无资产文件(token 收敛在 styles.css :root 防闪) */}
-									<button
-										key={NIGHT_THEME.id}
-										className={`theme-card${theme === NIGHT_THEME.id ? " active" : ""}`}
-										onClick={() => selectTheme(NIGHT_THEME.id)}
-									>
-										<span className="theme-swatch">
-											{NIGHT_THEME.swatch.map((c) => (
-												<i key={c} style={{ background: c }} />
-											))}
+						<div className="st-cols">
+							<div className="st-col-main">
+								{/* 模型:当前使用模型 + 切换下拉 + 刷新 */}
+								<section className="s-card">
+									<div className="st-card-head">
+										<span className="s-card-head">模型</span>
+										<span className="st-card-meta">
+											{current && <span className="st-chip">{currentProviderId}</span>}
 										</span>
-										<span className="theme-label">{NIGHT_THEME.label}</span>
-										<span className="theme-desc">内置 · 默认</span>
-									</button>
-									{/* 内置主题:资产文件自动发现(id = 文件名,名字取首行注释,色板取 token) */}
-									{builtinThemes.map((bt) => {
-										const id = bt.file.replace(/\.css$/, "");
-										const swatch = swatchFromCss(bt.css);
-										return (
-											<button
-												key={bt.file}
-												className={`theme-card${theme === id ? " active" : ""}`}
-												onClick={() => selectTheme(id)}
-											>
-												<span className="theme-swatch">
-													{swatch.map((c) => (
-														<i key={c} style={{ background: c }} />
-													))}
-												</span>
-												<span className="theme-label">{themeLabelFromCss(bt.css, bt.file)}</span>
-												<span className="theme-desc">内置</span>
-											</button>
-											);
-										})}
-									{userThemes.map((ut) => {
-										const id = userIdOf(ut.file);
-										const swatch = swatchFromCss(ut.css);
-										return (
-											<button
-												key={ut.file}
-												className={`theme-card${theme === id ? " active" : ""}`}
-												onClick={() => selectTheme(id)}
-											>
-												<span className="theme-swatch">
-													{swatch.map((c) => (
-														<i key={c} style={{ background: c }} />
-													))}
-												</span>
-												<span className="theme-label">{ut.file.replace(/\.css$/, "")}</span>
-												<span className="theme-desc">自定义</span>
-											</button>
-											);
-										})}
 									</div>
-									<div className="s-card-desc">主题即 CSS 文件:内置为 web/public/themes/*.css,自定义为 ~/.pi/writer/themes/*.css,放入即自动出现在列表。</div>
-								</div>
-
-							<div className="s-card">
-								<div className="s-card-head">自定义主题</div>
-								<div className="s-field-row">
-									<input
-										className="s-input"
-										placeholder="主题名(如 moon,仅字母数字._-)"
-										value={newThemeName}
-										onChange={(e) => setNewThemeName(e.target.value)}
-									/>
-									<button type="button" className="btn-ghost" disabled={themeBusy || !newThemeName.trim()} onClick={() => void createTheme()}>
-										新建
-									</button>
-									{userThemes.length > 0 && (
-										<select
-											className="s-select"
-											value={editingFile ?? ""}
-											onChange={(e) => {
-												const f = e.target.value;
-												if (f) selectTheme(userIdOf(f));
-												else setEditingFile(null);
-											}}
-										>
-											<option value="">编辑已有主题…</option>
-											{userThemes.map((ut) => (
-												<option key={ut.file} value={ut.file}>
-													{ut.file.replace(/\.css$/, "")}
-												</option>
-											))}
-										</select>
-									)}
-								</div>
-								{themeErr && <div className="notice err">{themeErr}</div>}
-								{editingFile && (
-									<>
-										<div className="s-field-row" style={{ marginTop: 8 }}>
-											<span className="s-key">编辑 {editingFile}</span>
-											<span className="s-val muted">保存后生效</span>
-										</div>
-										<textarea
-											className="theme-css-editor"
-											value={editCss}
-											spellCheck={false}
-											onChange={(e) => setEditCss(e.target.value)}
-										/>
-										<div className="s-field-row">
-											<button type="button" className="btn-ghost" disabled={themeBusy} onClick={() => void saveTheme()}>
-												{themeBusy ? "保存中…" : "保存"}
-											</button>
-											<button type="button" className="btn-ghost" disabled={themeBusy} onClick={() => void deleteTheme()}>
-												删除
-											</button>
-										</div>
-									</>
-								)}
-							</div>
-
-							<div className="s-card">
-								<div className="s-card-head">模式</div>
-								<div className="s-pref-list">
-									<div className="s-pref-item">
-										<div className="s-pref-text">
-											<div className="s-pref-title">经典模式(单 Agent)</div>
-											<div className="s-pref-desc">
-												开启后去掉舞台(没有导演 / 演员 / 旁白的多 Agent 共演);编辑页的 AI 换成带全量工具的写作 agent(读写、字数统计、世界书维护与 MCP 工具齐备)。世界书页与设置页照常。切换会重建服务端会话,下一次对话生效。
-											</div>
-										</div>
-										<ToggleSwitch checked={classicMode} onChange={(v) => void toggleClassicMode(v)} ariaLabel="经典模式" />
-									</div>
-									<div className="s-pref-item">
-										<div className="s-pref-text">
-											<div className="s-pref-title">外部命令(bash)</div>
-											<div className="s-pref-desc">
-												允许 AI 执行 shell 命令(默认关闭)。适合让它调 pandoc、git、脚本这类本机工具;开启后命令与输出会实时显示在对话里(开着「简化输出」也可见)。风险见下方确认条。
-											</div>
-										</div>
-										<ToggleSwitch checked={shellEnabled} onChange={askShellEnable} ariaLabel="外部命令" />
-									</div>
-									<div className="s-pref-item">
-										<div className="s-pref-text">
-											<div className="s-pref-title">Shell 方言</div>
-											<div className="s-pref-desc">
-												决定 AI 实际执行哪种 shell 语法。Windows 上 bash 需要 Git Bash;选 PowerShell 则命令按 PowerShell 语法执行,系统提示词也会照实说明(工具名仍显示为 bash)。
-											</div>
-										</div>
-										<select
-											className="s-select"
-											value={shellKind}
-											disabled={shellBusy}
-											onChange={(e) => void changeShellKind(e.target.value as ShellKindDto)}
-										>
-											<option value="bash">bash</option>
-											<option value="pwsh">PowerShell</option>
-										</select>
-									</div>
-									<div className="s-pref-item">
-										<div className="s-pref-text">
-											<div className="s-pref-title">Shell 可执行文件路径</div>
-											<div className="s-pref-desc">
-												留空则自动探测:PowerShell 依次找 Program Files\PowerShell\7\pwsh.exe → PATH → 回退系统自带 Windows PowerShell 5.1(不支持 && / ||);bash 交给 pi 自带的探测链(Git Bash → PATH bash → /bin/bash)。也可指定 Cygwin/MSYS2 的 bash.exe。
-											</div>
-										</div>
-										<div style={{ display: "flex", gap: 8 }}>
-											<input
-												className="s-input"
-												style={{ minWidth: 220 }}
-												placeholder="留空 = 自动探测"
-												value={shellPathDraft}
-												onChange={(e) => setShellPathDraft(e.target.value)}
+									<div className="s-card-desc">当前使用的模型。切换后对下一次对话生效。</div>
+									<div className="st-row">
+										<span className="st-row-label">模型</span>
+										<div className="st-row-ctl">
+											<Select
+												className="sel-block"
+												value={current ?? ""}
+												groups={modelGroups}
+												placeholder={models === null ? "加载中…" : "请选择模型"}
+												disabled={busy || modelRefreshBusy || models === null}
+												ariaLabel="切换模型"
+												onChange={(v) => {
+													setNotice(null);
+													void changeModel(v);
+												}}
 											/>
 											<button
 												type="button"
 												className="btn-ghost"
-												disabled={shellBusy || shellPathDraft.trim() === shellPath}
-												onClick={() => void saveShellPath()}
+												disabled={busy || modelRefreshBusy || models === null}
+												onClick={() => void refreshModelList()}
+												title="重新联网拉取模型目录"
 											>
-												保存
+												{modelRefreshBusy ? "刷新中…" : "刷新"}
 											</button>
+											{busy && <span className="s-busy">设置中…</span>}
+										</div>
+									</div>
+									<div className="s-card-desc st-desc-tight">
+										按供应商分组。{current && <>当前为 <span className="st-mono">{currentModelId}</span>。</>}列表来自本地配置,点「刷新」即可重新拉取。
+									</div>
+								</section>
+
+								{/* 采样参数:temperature / top_p + 应用 / 恢复默认 */}
+								<section className="s-card">
+									<div className="s-card-head">采样参数</div>
+									<div className="s-card-desc">留空表示沿用模型默认值。</div>
+									<div className="s-field-grid">
+										<div className="s-field">
+											<label className="s-field-label">temperature</label>
+											<input
+												className="s-input st-input-full"
+												placeholder="默认"
+												type="number"
+												min="0"
+												max="2"
+												step="0.1"
+												value={temperature}
+												disabled={busy}
+												onChange={(e) => setTemperature(e.target.value)}
+											/>
+										</div>
+										<div className="s-field">
+											<label className="s-field-label">top_p</label>
+											<input
+												className="s-input st-input-full"
+												placeholder="默认"
+												type="number"
+												min="0"
+												max="1"
+												step="0.05"
+												value={topP}
+												disabled={busy}
+												onChange={(e) => setTopP(e.target.value)}
+											/>
+										</div>
+									</div>
+									<div className="st-actions">
+										<button type="button" className="wz-primary st-btn-apply" disabled={busy} onClick={() => void changeSampling()}>
+											{busy ? "设置中…" : "应用"}
+										</button>
+										<button type="button" className="btn-ghost" disabled={busy} onClick={() => void resetTemperature()}>
+											{busy ? "处理中…" : "恢复默认采样参数"}
+										</button>
+									</div>
+									<div className="s-card-desc st-desc-tight">
+										「恢复默认采样参数」会清除全局与所有演员的 temperature 覆盖,所有 agent 恢复 provider 默认;top_p 不受影响。
+									</div>
+								</section>
+							</div>
+
+							<aside className="st-col-side">
+								{/* 思考级别 */}
+								<section className="s-card">
+									<div className="s-card-head">思考级别</div>
+									<div className="st-row st-row-stack">
+										<span className="st-row-label">强度</span>
+										<Select
+											className="sel-block"
+											value={thinking ?? ""}
+											options={THINKING_LEVELS.map((l) => ({ value: l, label: l }))}
+											placeholder={thinking === null ? "未设置" : "请选择"}
+											disabled={busy}
+											ariaLabel="思考强度"
+											onChange={(v) => {
+												setNotice(null);
+												void changeThinking(v);
+											}}
+										/>
+									</div>
+									<div className="s-card-desc st-desc-tight">
+										off = 关闭思考；max = 最强思考深度。{busy && " 设置中…"}
+									</div>
+								</section>
+
+								{/* 模型供应商入口 */}
+								<section className="s-card">
+									<div className="s-card-head">模型供应商</div>
+									<div className="s-card-desc">管理供应商与 API key。添加 key 后,其模型自动出现在上方的模型列表里。</div>
+									<div className="st-actions">
+										<button type="button" className="btn-ghost" onClick={() => setProvidersOpen(true)}>
+											管理供应商
+										</button>
+									</div>
+								</section>
+							</aside>
+						</div>
+					)}
+
+					{cat === "ui" && (
+						<div className="st-cols">
+							<div className="st-col-main">
+								{/* 主题(浅深合并的 5 张卡) */}
+								<section className="s-card">
+									<div className="st-card-head">
+										<span className="s-card-head">主题</span>
+										<span className="st-card-meta st-meta-dim">深浅已合并 · 点已选中的卡可切换</span>
+									</div>
+									<ThemeCardsFromManifest
+										builtin={builtinThemes}
+										user={userThemes}
+										current={theme}
+										onPick={(id) => selectTheme(id)}
+									/>
+								</section>
+
+								{/* 界面偏好(只留外观与日常偏好) */}
+								<section className="s-card">
+									<div className="s-card-head">界面偏好</div>
+									<div className="s-pref-list">
+										<div className="s-pref-item">
+											<div className="s-pref-text">
+												<div className="s-pref-title">简化输出</div>
+												<div className="s-pref-desc">对话中不显示工具调用卡片,以「正在阅读 / 正在编辑」等动态提示代替。</div>
+											</div>
+											<ToggleSwitch checked={simplifiedTools} onChange={onSimplifiedToolsChange} ariaLabel="简化输出" />
+										</div>
+										<div className="s-pref-item">
+											<div className="s-pref-text">
+												<div className="s-pref-title">自动展开思考</div>
+												<div className="s-pref-desc">思考块默认展开,无需逐条点击。</div>
+											</div>
+											<ToggleSwitch checked={autoExpandThinking} onChange={onAutoExpandThinkingChange} ariaLabel="自动展开思考" />
+										</div>
+										<div className="s-pref-item">
+											<div className="s-pref-text">
+												<div className="s-pref-title">编辑免确认</div>
+												<div className="s-pref-desc">
+													{classicMode ? "AI 的修改落盘即生效,不再弹「待确认」卡。" : "编剧的修改落盘即生效,不再弹「待确认」卡。"}
+												</div>
+											</div>
+											<ToggleSwitch checked={autoConfirmEdits} onChange={onAutoConfirmEditsChange} ariaLabel="编辑免确认" />
+										</div>
+									</div>
+								</section>
+							</div>
+
+							<aside className="st-col-side">
+								{/* 自定义主题:代码编辑器下沉成折叠区(默认收起) */}
+								<section className="s-card">
+									<div className="s-card-head">自定义主题</div>
+									<div className="s-card-desc">
+										主题就是一份 CSS 文件。放进 ~/pi/writer/themes/ 会自动出现在左边的列表里;文件名以 <span className="st-mono">-dark</span> 结尾会自动和同名浅色主题配成一对。
+									</div>
+									<button
+										type="button"
+										className="st-collapse-head"
+										aria-expanded={themeEditorOpen}
+										onClick={() => setThemeEditorOpen((v) => !v)}
+									>
+										<span className={`s-collapsible-arrow${themeEditorOpen ? " open" : ""}`}>▶</span>
+										<span className="st-collapse-label">
+											{themeEditorOpen && editingFile ? `编辑主题 CSS · ${editingFile}` : "编辑主题 CSS"}
+										</span>
+										<span className="st-chip st-chip-dim">开发者</span>
+									</button>
+									{themeEditorOpen ? (
+										<div className="st-collapse-body">
+											<div className="s-field-row">
+												<input
+													className="s-input"
+													placeholder="主题名(如 moon,仅字母数字._-)"
+													value={newThemeName}
+													onChange={(e) => setNewThemeName(e.target.value)}
+												/>
+												<button
+													type="button"
+													className="btn-ghost"
+													disabled={themeBusy || !newThemeName.trim()}
+													onClick={() => void createTheme()}
+												>
+													新建
+												</button>
+											</div>
+											{userThemes.length > 0 && (
+												<div className="st-field-block">
+													<Select
+														className="sel-block"
+														value={editingFile ?? ""}
+														options={userThemes.map((ut) => ({ value: ut.file, label: ut.file.replace(/\.css$/, "") }))}
+														placeholder="编辑已有主题…"
+														ariaLabel="编辑已有主题"
+														onChange={(f) => {
+															if (f) selectTheme(userIdOf(f));
+															else setEditingFile(null);
+														}}
+													/>
+												</div>
+											)}
+											{themeErr && <div className="notice err">{themeErr}</div>}
+											{editingFile ? (
+												<>
+													<div className="st-edit-head">
+														<span className="st-mono st-edit-file">编辑 {editingFile}</span>
+														<span className="s-val muted">{editingIsCurrent ? "保存后生效" : "未在使用"}</span>
+													</div>
+													<textarea
+														className="theme-css-editor"
+														value={editCss}
+														spellCheck={false}
+														onChange={(e) => setEditCss(e.target.value)}
+													/>
+													<div className="s-field-row">
+														<button type="button" className="btn-ghost" disabled={themeBusy} onClick={() => void saveTheme()}>
+															{themeBusy ? "保存中…" : "保存"}
+														</button>
+														<button type="button" className="btn-ghost danger" disabled={themeBusy} onClick={() => void deleteTheme()}>
+															删除
+														</button>
+													</div>
+												</>
+											) : (
+												<div className="s-card-desc st-desc-tight">展开后可新建 / 编辑 / 删除自定义主题文件。</div>
+											)}
+										</div>
+									) : (
+										<div className="s-card-desc st-desc-tight">展开后可新建 / 编辑 / 删除自定义主题文件。</div>
+									)}
+								</section>
+							</aside>
+						</div>
+					)}
+
+					{cat === "advanced" && (
+						<div className="st-cols">
+							<div className="st-col-main">
+								{/* 执行命令(shell):高风险胶囊 + 红色警示块 + 关闭时次级态 */}
+								<section className="s-card">
+									<div className="st-card-head">
+										<span className="s-card-head">执行命令(shell)</span>
+										<span className="st-chip st-chip-danger">⚠ 高风险</span>
+									</div>
+									<div className="s-card-desc">给 AI 放开本机 shell,适合让它调 pandoc、git 这类工具。</div>
+									<div className="st-warn">
+										⚠ 命令以与 pi-writer 相同的权限在真实 shell 里运行:可以读写整盘磁盘、访问网络,书目录的路径限制对它无效。它只能被「看得见」约束——每条命令与输出都会实时显示在对话里。
+									</div>
+									<div className={`s-pref-list st-shell-body${shellEnabled ? "" : " st-shell-off"}`}>
+										<div className="s-pref-item">
+											<div className="s-pref-text">
+												<div className="s-pref-title">启用外部命令</div>
+												<div className="s-pref-desc">默认关闭。开启后命令与输出会实时显示在对话里(开着「简化输出」也可见)。</div>
+											</div>
+											<ToggleSwitch checked={shellEnabled} onChange={askShellEnable} ariaLabel="外部命令" />
+										</div>
+										{shellConfirm && (
+											<div className="s-plugin-trust-confirm">
+												<div className="s-plugin-trust-warn">
+													开启后,命令以与 pi-writer 相同的权限在真实 shell 里运行:可以读写整台磁盘、访问网络,书目录的路径限制对它无效。它只能被「看得见」约束——每条命令与输出都会实时显示在对话里。确认开启吗?
+												</div>
+												<div className="st-actions">
+													<button type="button" className="btn-ghost danger" onClick={() => void toggleShell(true)}>
+														确认启用
+													</button>
+													<button type="button" className="btn-ghost" onClick={() => setShellConfirm(false)}>
+														取消
+													</button>
+												</div>
+											</div>
+										)}
+										<div className="s-pref-item">
+											<div className="s-pref-text">
+												<div className="s-pref-title">Shell 方言</div>
+												<div className="s-pref-desc">
+													决定 AI 实际执行哪种 shell 语法。Windows 上 bash 需要 Git Bash;选 PowerShell 则命令按 PowerShell 语法执行,系统提示词也会照实说明。
+												</div>
+											</div>
+											<Select
+												className="sel-row"
+												value={shellKind}
+												options={SHELL_KIND_OPTIONS}
+												disabled={shellBusy || !shellEnabled}
+												ariaLabel="Shell 方言"
+												onChange={(v) => void changeShellKind(v as ShellKindDto)}
+											/>
+										</div>
+										<div className="s-pref-item">
+											<div className="s-pref-text">
+												<div className="s-pref-title">Shell 可执行文件路径</div>
+												<div className="s-pref-desc">
+													留空则自动探测。也可指定 Cygwin / MSYS2 的 bash.exe(Windows 上 bash 依次找 Git Bash → PATH → /bin/bash)。
+												</div>
+											</div>
+											<div className="st-path-ctl">
+												<input
+													className="s-input"
+													placeholder="留空 = 自动探测"
+													value={shellPathDraft}
+													disabled={shellBusy || !shellEnabled}
+													onChange={(e) => setShellPathDraft(e.target.value)}
+												/>
+												<button
+													type="button"
+													className="btn-ghost"
+													disabled={shellBusy || !shellEnabled || shellPathDraft.trim() === shellPath}
+													onClick={() => void saveShellPath()}
+												>
+													{shellBusy ? "保存中…" : "保存"}
+												</button>
+											</div>
 										</div>
 									</div>
 									{(shellEnabled || shellKind === "pwsh") && resolvedShell && (
-										<div className="s-card-desc">
+										<div className="s-card-desc st-desc-tight">
 											实际使用:{SHELL_DIALECT_TEXT[resolvedShell.dialect]}
 											{resolvedShell.path ? `(${resolvedShell.path})` : ""}
 											{resolvedShell.warning ? ` — ${resolvedShell.warning}` : ""}
 											{resolvedShell.dialect === "none" ? ";此时不会给 AI 放开 shell 工具" : ""}
 										</div>
 									)}
-									{shellConfirm && (
-										<div className="s-plugin-trust-confirm">
-											<div className="s-plugin-trust-warn">
-												开启后,命令以与 pi-writer 相同的权限在真实 shell 里运行:可以读写整台磁盘、访问网络,书目录的路径限制对它无效。它只能被「看得见」约束——每条命令与输出都会实时显示在对话里。确认开启吗?
+								</section>
+
+								{/* Agent 形态:经典模式(单 Agent) */}
+								<section className="s-card">
+									<div className="s-card-head">Agent 形态</div>
+									<div className="s-pref-list">
+										<div className="s-pref-item">
+											<div className="s-pref-text">
+												<div className="s-pref-title">经典模式(单 Agent)</div>
+												<div className="s-pref-desc">
+													开启后去掉舞台(没有导演 / 演员 / 旁白),编辑页换成带全量工具的单一写作 agent。切换会重建服务端会话,下一次对话生效。
+												</div>
 											</div>
-											<div style={{ display: "flex", gap: 8 }}>
-												<button type="button" className="btn-ghost danger" onClick={() => void toggleShell(true)}>
-													确认启用
-												</button>
-												<button type="button" className="btn-ghost" onClick={() => setShellConfirm(false)}>
-													取消
-												</button>
-											</div>
+											<ToggleSwitch checked={classicMode} onChange={(v) => void toggleClassicMode(v)} ariaLabel="经典模式" />
 										</div>
-									)}
-								</div>
+									</div>
+								</section>
 							</div>
 
-							<div className="s-card">
-								<div className="s-card-head">界面偏好</div>
-								<div className="s-pref-list">
-									<div className="s-pref-item">
-										<div className="s-pref-text">
-											<div className="s-pref-title">简化输出</div>
-											<div className="s-pref-desc">开启后对话中不显示工具调用卡片,以「正在阅读 / 正在编辑」等动态提示代替。</div>
+							<aside className="st-col-side">
+								{onRerunSetup && (
+									<section className="s-card">
+										<div className="s-card-head">配置向导</div>
+										<div className="st-actions">
+											<button type="button" className="btn-ghost" onClick={onRerunSetup}>
+												重新运行配置向导
+											</button>
 										</div>
-										<ToggleSwitch checked={simplifiedTools} onChange={onSimplifiedToolsChange} ariaLabel="简化输出" />
-									</div>
-									<div className="s-pref-item">
-										<div className="s-pref-text">
-											<div className="s-pref-title">自动展开思考</div>
-											<div className="s-pref-desc">开启后思考块默认展开,无需逐条点击;关闭后回到手动展开。</div>
-										</div>
-										<ToggleSwitch checked={autoExpandThinking} onChange={onAutoExpandThinkingChange} ariaLabel="自动展开思考" />
-									</div>
-									<div className="s-pref-item">
-										<div className="s-pref-text">
-										<div className="s-pref-title">编辑免确认</div>
-										<div className="s-pref-desc">
-											{classicMode
-												? "开启后 AI 的修改落盘即生效,不再弹「待确认」卡。"
-												: "开启后编剧的修改落盘即生效,不再弹「待确认」卡。"}
-										</div>
-										</div>
-										<ToggleSwitch checked={autoConfirmEdits} onChange={onAutoConfirmEditsChange} ariaLabel="编辑免确认" />
-									</div>
-								</div>
-							</div>
+										<div className="s-card-desc st-desc-tight">重新走一遍模型服务 / 默认模型 / 第一本书 / 界面偏好。</div>
+									</section>
+								)}
 
-							{onRerunSetup && (
-								<div className="s-card">
-									<div className="s-card-head">配置向导</div>
-									<div className="s-field-row">
-										<span className="s-val muted">重新走一遍首次启动配置(模型服务、默认模型、第一本书、界面偏好)。</span>
-										<button type="button" className="btn-ghost" onClick={onRerunSetup}>
-											重新运行配置向导
-										</button>
-									</div>
-								</div>
-							)}
-						</>
+								<section className="s-card">
+									<div className="s-card-head">依赖</div>
+									<div className="s-card-desc">「执行命令」需要本机已装好的 shell;「插件」与「MCP」在「集成」分类里。</div>
+								</section>
+							</aside>
+						</div>
 					)}
 
 					{cat === "world" && (
-						<div className="s-card">
-							<div className="s-card-head">世界书注入</div>
-							{worldErr ? (
-								<div className="notice err">
-									{worldErr}
-									<button type="button" className="btn-ghost" onClick={() => setWorldReloadKey((k) => k + 1)}>
-										重试
-									</button>
-								</div>
-							) : noBook ? (
-								<div className="s-card-desc">
-									未打开书,无法读取世界书注入设置。请先在写作页打开一本书,再到此页切换开关。
-								</div>
-							) : world === null ? (
-								<div className="s-card-desc">世界书注入设置加载中…</div>
-							) : (
-								<div className="s-pref-list">
-									<div className="s-pref-item">
-										<div className="s-pref-text">
-											<div className="s-pref-title">Notice 注入</div>
-											<div className="s-pref-desc">背景包包含当前剧情指引</div>
+						<div className="st-cols">
+							<div className="st-col-main">
+								<section className="s-card">
+									<div className="s-card-head">世界书注入</div>
+									{worldErr ? (
+										<div className="notice err">
+											{worldErr}
+											<button type="button" className="btn-ghost" onClick={() => setWorldReloadKey((k) => k + 1)}>
+												重试
+											</button>
 										</div>
-										<ToggleSwitch
-											checked={world.notice.enabled}
-											onChange={(v) => void toggleInjection("notice", v)}
-											disabled={worldBusy}
-											ariaLabel="Notice 注入"
-										/>
-									</div>
-									<div className="s-pref-item">
-										<div className="s-pref-text">
-											<div className="s-pref-title">发展线注入</div>
-											<div className="s-pref-desc">背景包包含剧情进度与下一步</div>
+									) : noBook ? (
+										<div className="s-card-desc">
+											未打开书,无法读取世界书注入设置。请先在写作页打开一本书,再到此页切换开关。
 										</div>
-										<ToggleSwitch
-											checked={world.storyline.enabled}
-											onChange={(v) => void toggleInjection("storyline", v)}
-											disabled={worldBusy}
-											ariaLabel="发展线注入"
-										/>
-									</div>
-								</div>
-							)}
+									) : world === null ? (
+										<div className="s-card-desc">世界书注入设置加载中…</div>
+									) : (
+										<div className="s-pref-list">
+											<div className="s-pref-item">
+												<div className="s-pref-text">
+													<div className="s-pref-title">Notice 注入</div>
+													<div className="s-pref-desc">背景包包含当前剧情指引</div>
+												</div>
+												<ToggleSwitch
+													checked={world.notice.enabled}
+													onChange={(v) => void toggleInjection("notice", v)}
+													disabled={worldBusy}
+													ariaLabel="Notice 注入"
+												/>
+											</div>
+											<div className="s-pref-item">
+												<div className="s-pref-text">
+													<div className="s-pref-title">发展线注入</div>
+													<div className="s-pref-desc">背景包包含剧情进度与下一步</div>
+												</div>
+												<ToggleSwitch
+													checked={world.storyline.enabled}
+													onChange={(v) => void toggleInjection("storyline", v)}
+													disabled={worldBusy}
+													ariaLabel="发展线注入"
+												/>
+											</div>
+										</div>
+									)}
+								</section>
+							</div>
+							<aside className="st-col-side" />
 						</div>
 					)}
 
-				{cat === "integrations" && (
-					<>
-						<div className="s-card">
-							<div className="s-card-head">MCP 服务器</div>
-							<div className="s-card-desc">
-								为 AI 接入外部工具(如文件系统、资料库、计算器)。配置存 ~/.pi/writer/agent/mcp.json。
+					{cat === "integrations" && (
+						<div className="st-cols">
+							<div className="st-col-main">
+								<section className="s-card">
+									<div className="s-card-head">MCP 服务器</div>
+									<div className="s-card-desc">
+										为 AI 接入外部工具(如文件系统、资料库、计算器)。配置存 ~/.pi/writer/agent/mcp.json。
+									</div>
+									<McpServerList client={client} />
+								</section>
+								<section className="s-card">
+									<div className="s-card-head">插件</div>
+									<div className="s-card-desc">
+										扩展写作能力(工具/事件/命令)。插件目录 ~/.pi/writer/plugins/&lt;id&gt;,内含 plugin.json 与入口 index.mjs;切换启用后会话重建生效。
+									</div>
+									<PluginList client={client} />
+								</section>
 							</div>
-							<McpServerList client={client} />
+							<aside className="st-col-side" />
 						</div>
-						<div className="s-card">
-							<div className="s-card-head">插件</div>
-							<div className="s-card-desc">
-								扩展写作能力(工具/事件/命令)。插件目录 ~/.pi/writer/plugins/&lt;id&gt;,内含 plugin.json 与入口 index.mjs;切换启用后会话重建生效。
-							</div>
-							<PluginList client={client} />
-						</div>
-					</>
-				)}
-				{/* 插件设置分类:声明了设置菜单的插件各占一个分类(左侧导航 plugin:<id>) */}
-				{cat.startsWith(pluginCatPrefix) && (() => {
-					const plugin = (pluginCats ?? []).find((p) => `${pluginCatPrefix}${p.id}` === cat);
-					if (!plugin) {
-						return (
-							<div className="s-card">
-								<div className="s-empty-row">
-									<span className="s-val muted">插件不存在或已删除。</span>
+					)}
+
+					{/* 插件设置分类:声明了设置菜单的插件各占一个分类(左侧导航 plugin:<id>) */}
+					{cat.startsWith(pluginCatPrefix) &&
+						(() => {
+							const plugin = (pluginCats ?? []).find((p) => `${pluginCatPrefix}${p.id}` === cat);
+							if (!plugin) {
+								return (
+									<div className="s-card">
+										<div className="s-empty-row">
+											<span className="s-val muted">插件不存在或已删除。</span>
+										</div>
+									</div>
+								);
+							}
+							return (
+								<div className="s-card" data-plugin-mount={plugin.id}>
+									<div className="s-card-head">{plugin.name}</div>
+									{plugin.description && <div className="s-card-desc">{plugin.description}</div>}
+									<PluginSettings client={client} plugin={plugin} />
 								</div>
-							</div>
-						);
-					}
-					return (
-						<div className="s-card" data-plugin-mount={plugin.id}>
-							<div className="s-card-head">{plugin.name}</div>
-							{plugin.description && <div className="s-card-desc">{plugin.description}</div>}
-							<PluginSettings client={client} plugin={plugin} />
-						</div>
-					);
-				})()}
+							);
+						})()}
 				</div>
 			</main>
 			{/* 模型提供商管理弹窗:双栏卡片悬浮层(关闭即卸载,列表状态在下一次打开时重建) */}
 			{providersOpen && (
-				<div className="wz-overlay" role="dialog" aria-modal="true" aria-label="模型提供商">
-					<div className="wz-panel pvd-panel">
+				<div className="dlg-overlay" role="dialog" aria-modal="true" aria-label="模型提供商">
+					<div className="dlg-panel pvd-panel">
 						<header className="pvd-head">
-							<span className="pvd-title">模型提供商</span>
+							<div className="pvd-head-text">
+								<span className="pvd-title">模型提供商</span>
+								<span className="pvd-sub">配置 API key 后,其模型会出现在设置页的模型列表里。</span>
+							</div>
 							<button type="button" className="icon-btn" aria-label="关闭" onClick={() => setProvidersOpen(false)}>
 								<IconX size={16} />
 							</button>
@@ -1164,4 +1220,9 @@ export function SettingsPage({
 			)}
 		</div>
 	);
+}
+
+/** 分类页面头(插件分类用插件名占位,由内容区首行标题补足)。 */
+function headOf(cat: string): { title: string; desc: string } {
+	return CAT_HEAD[cat] ?? { title: "插件设置", desc: "该插件声明的设置项。" };
 }

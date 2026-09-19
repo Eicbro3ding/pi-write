@@ -4,7 +4,10 @@ import type { ChatMessage, ToolCallInfo } from "../types.ts";
 import { DUR, EASE, EDGE_IN, STAGGER } from "../motion.ts";
 import { renderMarkdown } from "../markdown.ts";
 import { ConfirmCard, type ConfirmCardItem } from "./ConfirmCard.tsx";
-import { activeToolName, DEFAULT_TOOL_STATUS, TOOL_STATUS } from "../tool-status.ts";
+import { FoldablePre } from "./FoldablePre.tsx";
+import { Lu } from "./Lu.tsx";
+import { ToolIcon } from "./ToolIcon.tsx";
+import { actionFlowTools, toolActionRow, toolIcon } from "../tool-status.ts";
 import { autoExpandThinkingEnabled } from "../settings.ts";
 
 /**
@@ -63,28 +66,6 @@ function CompactingIndicator() {
 	);
 }
 
-/**
- * 简化输出下的工具状态提示:spinner + 「正在编辑/正在阅读…」。
- * 工具执行期间取代轮换的思考文案,让用户知道模型此刻在做什么
- * (非简化模式下工具卡片可见,提示不重复出现)。
- */
-function ToolStatusIndicator({ label }: { label: string }) {
-	const [tick, setTick] = useState(0);
-	useEffect(() => {
-		const t = setInterval(() => setTick((v) => v + 1), 150);
-		return () => clearInterval(t);
-	}, []);
-	const dots = ".".repeat((Math.floor(tick / 6) % 3) + 1);
-	return (
-		<div className="thinking tool-status">
-			<span className="thinking-spin">{SPINNER_FRAMES[tick % SPINNER_FRAMES.length]}</span>
-			<span className="thinking-face">🔧</span>
-			<span className="thinking-label">{label}</span>
-			<span className="thinking-dots">{dots}</span>
-		</div>
-	);
-}
-
 /** 工具调用卡片:名称 + 参数 + 运行中/完成/失败状态。 */
 /**
  * 这一轮要显示哪些工具卡片。
@@ -99,11 +80,14 @@ export function visibleToolCalls(toolCalls: ToolCallInfo[], simplifiedTools: boo
 }
 
 /**
- * 工具卡片。两种形态:
- * - 普通工具:单行(name + 参数 + 状态),细节在 title 里;
+ * 工具卡片(非简化输出)。两种形态:
+ * - 普通工具:单行(状态点 + 名称 + 参数 + 状态胶囊),细节在 title 里;
  * - **bash(外部命令):命令与输出都摊开**——它是唯一能越过书目录边界的工具,
  *   运行中的 stdout/stderr 经 tool_execution_update 实时流进来(见 store 的归约),
  *   结束后把最终输出留在卡片上供回看。运行中自动滚到底(输出是快照替换)。
+ *
+ * 设计稿 03-组件规范/03:四张卡统一外壳;状态改胶囊;**工具卡正文不再是绿色**
+ * (绿色是状态色,不是装饰色)。
  */
 function ToolCard({ t }: { t: ToolCallInfo }) {
 	const isShell = t.name === "bash";
@@ -115,38 +99,84 @@ function ToolCard({ t }: { t: ToolCallInfo }) {
 		if (running && streamRef.current) streamRef.current.scrollTop = streamRef.current.scrollHeight;
 	}, [t.stream, running]);
 
+	const state = t.isError ? "err" : running ? "run" : "ok";
+	const stateLabel = t.isError ? "失败" : running ? "运行中" : "完成";
 	return (
 		<div className={t.isError ? "tool err" : "tool"} data-live={running && detail !== null ? "1" : "0"} title={t.args}>
 			<div className="tool-head">
+				<ToolIcon kind={toolIcon(t.name)} />
 				<span className="tool-name">{t.name}</span>
 				<span className="tool-args">{t.args}</span>
-				<span className="tool-result">{t.isError ? "失败" : running ? "运行中" : "完成"}</span>
+				<span className={`tool-state ${state}`}>
+					<span className="tool-state-dot" />
+					{stateLabel}
+				</span>
 			</div>
-			{/* bash 始终摊开输出;其他工具只在流式期间显示(结束后单行更省地方) */}
-			{detail !== null && detail !== "" && (isShell || running) && (
-				<pre ref={streamRef} className="tool-stream">
-					{detail}
-				</pre>
-			)}
+			{/* bash 始终摊开输出;其他工具只在流式期间显示(结束后单行更省地方)。
+			    流式中不折叠(折叠会把最新几行藏起来,而运行中要看的正是尾部),
+			    结束后才按行数分档(见 FoldablePre) */}
+			{detail !== null && detail !== "" && (isShell || running) &&
+				(running ? (
+					<pre ref={streamRef} className="tool-stream">
+						{detail}
+					</pre>
+				) : (
+					<FoldablePre text={detail} className="tool-stream" />
+				))}
+		</div>
+	);
+}
+
+/** 完成/失败/进行中的状态小图标(动作流用;不用 emoji,见设计稿 03-组件规范/05)。 */
+function ActionStateIcon({ state }: { state: "run" | "ok" | "err" }) {
+	if (state === "run") {
+		return (
+			<svg className="act-spin" width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+				<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.6" opacity="0.28" />
+				<path d="M8 2a6 6 0 0 1 6 6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+			</svg>
+		);
+	}
+	if (state === "err") return <Lu icon="x" size={13} />;
+	return <Lu icon="check" size={13} />;
+}
+
+/**
+ * 简化输出的工具动作流(设计稿 03-组件规范/05):不是「什么都不显示」,而是把工具
+ * 调用压成一行可读的动作——**带宾语**(在改哪个文件)、**完成的行留在流水里**
+ * (最近 3 条)、不用 emoji。bash 不在这里出现(它始终渲染完整卡片,命令必须可见)。
+ */
+function ToolActionFlow({ tools }: { tools: ToolCallInfo[] }) {
+	const rows = actionFlowTools(tools.filter((t) => t.name !== "bash"));
+	if (rows.length === 0) return null;
+	return (
+		<div className="act-flow">
+			{rows.map((t) => {
+				const r = toolActionRow(t);
+				const state = r.isError ? "err" : r.running ? "run" : "ok";
+				return (
+					<div key={t.id} className={`act-row ${state}`}>
+						<span className="act-icon">
+							<ActionStateIcon state={state} />
+						</span>
+						<span className="act-verb">{r.verb}</span>
+						{r.object && <span className="act-object">{r.object}</span>}
+					</div>
+				);
+			})}
 		</div>
 	);
 }
 
 /**
- * 思考折叠块:斜体灰,自动展开(设置页「界面偏好」开关,缺省开启)或点击展开/收起。
- * 带「思考 x 秒」计时:thinking 文本从空变非空时起表;流式中每秒刷新
- * (「思考中 x 秒」),消息结束(done)后固定显示最终秒数。历史水合的消息
- * (挂载即已结束,无计时起点)不显示秒数(elapsed 保持 0)。
- * 导出供舞台页导演气泡复用(思考链折叠查看)。
+ * 思考计时:thinking 文本从空变非空时起表;流式中每秒刷新,消息结束(done)后
+ * 固定最终秒数。历史水合的消息(挂载即已结束,无计时起点)保持 0(不显示秒数)。
  */
-export function ThinkingBlock({ text, done }: { text: string; done: boolean }) {
-	// 自动展开思考:缺省开启;挂载时读一次,之后点击由用户接管
-	const [open, setOpen] = useState(() => autoExpandThinkingEnabled());
+function useThinkingTimer(text: string, done: boolean): number {
 	const startRef = useRef<number | null>(null);
 	const [elapsed, setElapsed] = useState(0);
 
-	// 起表:thinking 从空变非空的那一刻(消息开始思考);水合消息(done=true)不起表——
-	// 重载思维链无计时起点,不显示秒数(2026-08-11)
+	// 起表:thinking 从空变非空的那一刻(消息开始思考);水合消息(done=true)不起表(2026-08-11)
 	useEffect(() => {
 		if (!done && text.length > 0 && startRef.current === null) {
 			startRef.current = Date.now();
@@ -167,29 +197,66 @@ export function ThinkingBlock({ text, done }: { text: string; done: boolean }) {
 		return () => clearInterval(t);
 	}, [done]);
 
+	return elapsed;
+}
+
+/**
+ * 思考胶囊(设计稿 03-组件规范/04):**元信息行内**的一颗药丸——`› 思考 · 1,606 字`,
+ * 展开时箭头翻转。字数带千分位、与「思考」之间用 `·` 分隔;秒数只在流式中出现
+ * (结束后字数才是有效信息,设计稿收起来的也是这一种)。
+ */
+export function ThinkingToggle({
+	text,
+	done,
+	open,
+	onToggle,
+}: {
+	text: string;
+	done: boolean;
+	open: boolean;
+	onToggle(): void;
+}) {
+	const elapsed = useThinkingTimer(text, done);
+	return (
+		<button type="button" className="think-toggle" aria-expanded={open} onClick={onToggle}>
+			<span className="think-arrow" aria-hidden="true">
+				<Lu icon={open ? "chevron-down" : "chevron-right"} size={12} strokeWidth={1.8} />
+			</span>
+			<span className="think-label">{done ? "思考" : "思考中"}</span>
+			{!done && elapsed > 0 && <span className="think-time">· {elapsed} 秒</span>}
+			<span className="think-len">· {text.length.toLocaleString("zh-CN")} 字</span>
+		</button>
+	);
+}
+
+/** 思考展开体(高度 auto 动画,180ms ease-inOut)。 */
+export function ThinkingBody({ text, open }: { text: string; open: boolean }) {
+	return (
+		<AnimatePresence initial={false}>
+			{open && (
+				<motion.div
+					key="body"
+					className="think-body"
+					initial={{ height: 0, opacity: 0 }}
+					animate={{ height: "auto", opacity: 1 }}
+					exit={{ height: 0, opacity: 0 }}
+					transition={{ duration: DUR.base, ease: EASE.inOut }}
+				>
+					{text}
+				</motion.div>
+			)}
+		</AnimatePresence>
+	);
+}
+
+/** 思考块 = 胶囊 + 展开体(自管开合;消息流直接用上面两个部件把胶囊放进元信息行)。 */
+export function ThinkingBlock({ text, done }: { text: string; done: boolean }) {
+	// 自动展开思考:挂载时读一次设置,之后点击由用户接管
+	const [open, setOpen] = useState(() => autoExpandThinkingEnabled());
 	return (
 		<div className="think">
-			<button className="think-toggle" onClick={() => setOpen((v) => !v)}>
-				<span className="think-arrow">{open ? "▾" : "▸"}</span>
-				<span className="think-label">{done ? "思考" : "思考中"}</span>
-				{elapsed > 0 && <span className="think-time">{elapsed} 秒</span>}
-				<span className="think-len">{text.length} 字</span>
-			</button>
-			{/* 展开/收起:高度 auto 动画,180ms ease-inOut */}
-			<AnimatePresence initial={false}>
-				{open && (
-					<motion.div
-						key="body"
-						className="think-body"
-						initial={{ height: 0, opacity: 0 }}
-						animate={{ height: "auto", opacity: 1 }}
-						exit={{ height: 0, opacity: 0 }}
-						transition={{ duration: DUR.base, ease: EASE.inOut }}
-					>
-						{text}
-					</motion.div>
-				)}
-			</AnimatePresence>
+			<ThinkingToggle text={text} done={done} open={open} onToggle={() => setOpen((v) => !v)} />
+			<ThinkingBody text={text} open={open} />
 		</div>
 	);
 }
@@ -212,30 +279,50 @@ function Message({
 }) {
 	const [editing, setEditing] = useState(false);
 	const [editText, setEditText] = useState("");
+	/** 思考展开态(缺省读设置里的「自动展开思考」,之后点击由用户接管)。 */
+	const [thinkOpen, setThinkOpen] = useState(() => autoExpandThinkingEnabled());
+	const hasThink = m.thinking.length > 0;
 	// 编辑需要服务端 entry id 定位:历史水合与 message_end 后都有,乐观气泡(发送瞬间)没有
 	const canAct = m.role === "user" && !streaming && m.entryId !== undefined;
+	// data-who:气泡差分(舞台)用它给头像渲染首字,不必让消息流认识舞台/角色
 	return (
-		<div className={m.role === "user" ? "record user" : "record assistant"}>
+		<div className={m.role === "user" ? "record user" : "record assistant"} data-who={m.role === "user" ? "你" : "PI"}>
+			{/* 元信息行:发言人 + 思考胶囊 + 操作(设计稿 03-组件规范/04——
+			    胶囊就在这一行里,不再自占一行) */}
 			<div className="record-meta">
-				{m.role === "user" ? "你" : "PI"}
-				{/* 操作按钮:hover 消息时显示;AI 流式中隐藏(服务端拒绝流式中操作) */}
-				{canAct && !editing && (
+				<span className="record-who">{m.role === "user" ? "你" : "PI"}</span>
+				{hasThink && (
+					<ThinkingToggle text={m.thinking} done={m.done} open={thinkOpen} onToggle={() => setThinkOpen((v) => !v)} />
+				)}
+				{/* 操作行:常驻可见(设计稿 03-组件规范/04——原来 hover-only,触屏不可达)。
+				    user:编辑(撤回并重发)+ 复制;assistant:复制。AI 流式中隐藏 */}
+				{(canAct || (m.role === "assistant" && !streaming && m.text.length > 0)) && !editing && (
 					<span className="record-actions">
+						{canAct && (
+							<button
+								type="button"
+								className="record-act"
+								title="撤回此消息及其后对话,以新文本重发"
+								onClick={() => {
+									setEditing(true);
+									setEditText(m.text);
+								}}
+							>
+								编辑
+							</button>
+						)}
 						<button
 							type="button"
 							className="record-act"
-							title="撤回此消息及其后对话,以新文本重发"
-							onClick={() => {
-								setEditing(true);
-								setEditText(m.text);
-							}}
+							title="复制这条消息的正文"
+							onClick={() => void navigator.clipboard?.writeText(m.text)}
 						>
-							编辑
+							复制
 						</button>
 					</span>
 				)}
 			</div>
-			{m.thinking.length > 0 && <ThinkingBlock text={m.thinking} done={m.done} />}
+			{hasThink && <ThinkingBody text={m.thinking} open={thinkOpen} />}
 			{editing ? (
 				<div className="record-edit">
 					<textarea
@@ -254,7 +341,7 @@ function Message({
 						}}
 					/>
 					<div className="record-edit-actions">
-						<button type="button" className="btn-send" disabled={editText.trim().length === 0} onClick={submitEdit}>
+						<button type="button" className="btn-primary" disabled={editText.trim().length === 0} onClick={submitEdit}>
 							更新并重发
 						</button>
 						<button type="button" className="record-act" onClick={() => setEditing(false)}>
@@ -270,13 +357,30 @@ function Message({
 						) : (
 							<div className="record-text record-md" dangerouslySetInnerHTML={{ __html: renderMarkdown(m.text) }} />
 						))}
-					{/* 简化输出隐藏"看一眼就够"的工具卡片;bash 例外——命令必须可见 */}
-					{visibleToolCalls(m.toolCalls, simplifiedTools).length > 0 && (
-						<div className="tools">
-							{visibleToolCalls(m.toolCalls, simplifiedTools).map((t) => (
-								<ToolCard key={t.id} t={t} />
-							))}
-						</div>
+					{/* 工具区:简化输出走「动作流 + bash 完整卡片」(设计稿 03-组件规范/05),
+					    否则每张卡完整渲染。简化输出隐藏的只是「看一眼就够」的卡片;
+					    bash 例外——命令必须可见 */}
+					{simplifiedTools ? (
+						<>
+							<ToolActionFlow tools={m.toolCalls} />
+							{m.toolCalls.filter((t) => t.name === "bash").length > 0 && (
+								<div className="tools">
+									{m.toolCalls
+										.filter((t) => t.name === "bash")
+										.map((t) => (
+											<ToolCard key={t.id} t={t} />
+										))}
+								</div>
+							)}
+						</>
+					) : (
+						m.toolCalls.length > 0 && (
+							<div className="tools">
+								{m.toolCalls.map((t) => (
+									<ToolCard key={t.id} t={t} />
+								))}
+							</div>
+						)
 					)}
 				</>
 			)}
@@ -421,32 +525,6 @@ export function MessageList({
 		stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
 	}
 
-	// 当前正在执行的工具(简化输出下显示「正在编辑/正在阅读…」;无工具回退思考轮换)
-	const activeTool = activeToolName(messages);
-	/**
-	 * 工具状态最小展示时长:本地工具(读/写/统计/世界书)执行极快(<1s),
-	 * 若只随执行窗口渲染,提示闪烁一瞬、人眼捕捉不到。工具结束后仍停留
-	 * 至 until,保证每个工具状态至少可见该时长;新工具开始则重新计时。
-	 */
-	const MIN_TOOL_STATUS_MS = 1200;
-	const [toolStatus, setToolStatus] = useState<{ name: string; until: number } | null>(null);
-
-	// 工具变化(新工具开始)时重置最小展示计时;同一工具持续执行中不重置
-	useEffect(() => {
-		if (activeTool) setToolStatus({ name: activeTool, until: Date.now() + MIN_TOOL_STATUS_MS });
-	}, [activeTool]);
-
-	// 最小展示时长到期:清掉状态,回退思考轮换(deps 变化时 cleanup 先清旧定时器)
-	useEffect(() => {
-		if (!toolStatus) return;
-		const remain = toolStatus.until - Date.now();
-		const t = setTimeout(() => setToolStatus(null), Math.max(0, remain));
-		return () => clearTimeout(t);
-	}, [toolStatus]);
-
-	// 展示优先级:仍在执行的工具 > 刚结束、仍在最小展示窗内的工具 > 思考轮换
-	const toolToShow = activeTool ?? (toolStatus && Date.now() < toolStatus.until ? toolStatus.name : null);
-
 	return (
 		<div className="chat-scroll" ref={scrollRef} onScroll={handleScroll}>
 			{/* 空态仅当无消息且无恢复卡片(服务端持久化预读的卡片在空会话下也要可见) */}
@@ -501,11 +579,9 @@ export function MessageList({
 						{compacting ? (
 							<CompactingIndicator />
 						) : streaming ? (
-							simplifiedTools && toolToShow ? (
-								<ToolStatusIndicator label={TOOL_STATUS[toolToShow] ?? DEFAULT_TOOL_STATUS} />
-							) : (
-								<ThinkingIndicator />
-							)
+							/* 简化输出下不再另起一条「🔧 正在编辑…」状态行:进行中的那一行就在
+							   动作流里(带宾语、不用 emoji,见设计稿 03-组件规范/05) */
+							<ThinkingIndicator />
 						) : null}
 					</div>
 				)}

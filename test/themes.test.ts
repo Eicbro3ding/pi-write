@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { isUserTheme, NIGHT_THEME, sanitizeTheme, THEME_TOKENS, themeCssUrl, themeLabelFromCss, userThemeFile } from "../web/src/themes.ts";
+import { buildThemeFamilies, isUserTheme, NIGHT_THEME, sanitizeTheme, swatchFromCss, THEME_TOKENS, themeCssUrl, themeFamilyPick, themeLabelFromCss, userThemeFile } from "../web/src/themes.ts";
 
 /** 解析 CSS 里 :root 块的 token 键集。 */
 function rootTokenKeys(css: string): Set<string> {
@@ -67,5 +67,62 @@ describe("主题定义(资产文件驱动,零 ts 注册)", () => {
 		expect(isUserTheme("paper")).toBe(false);
 		expect(userThemeFile("user:moon")).toBe("moon.css");
 		expect(userThemeFile("paper")).toBeNull();
+	});
+});
+
+/** 造一份最简主题 CSS:三色 swatch 可辨。 */
+function fakeTheme(bg: string, amber: string, ink: string): string {
+	return `/* pi-writer 主题 · 陪跑(${bg}) */\n:root { --bg: ${bg}; --amber: ${amber}; --ink: ${ink}; }\n`;
+}
+
+describe("主题家族:浅深合并(03-组件规范/02)", () => {
+	const builtin = [
+		{ file: "mono-dark.css", css: fakeTheme("#0c0c0e", "#9ca3af", "#d4d4d8") },
+		{ file: "mono.css", css: fakeTheme("#f5f5f4", "#171717", "#1a1a1a") },
+		{ file: "paper.css", css: fakeTheme("#f4f0e8", "#9a6524", "#26221c") },
+	];
+	const user = [
+		{ file: "moon-dark.css", css: fakeTheme("#101014", "#c9b8ff", "#e8e6f0") },
+		{ file: "moon.css", css: fakeTheme("#f6f6fb", "#5b4b9e", "#1c1a26") },
+	];
+
+	it("同族浅深合成一张:night 领头、组内浅色在前、只有深色的族 dark 为 null", () => {
+		const fams = buildThemeFamilies(builtin, user);
+		expect(fams.map((f) => f.key)).toEqual(["night", "mono", "paper", "moon"]);
+		expect(fams[0]!.light.id).toBe("night");
+		expect(fams[0]!.dark).toBeNull();
+		expect(fams[1]!.light.id).toBe("mono");
+		expect(fams[1]!.dark?.id).toBe("mono-dark");
+		expect(fams[2]!.light.id).toBe("paper");
+		expect(fams[2]!.dark).toBeNull();
+		// 用户主题同规则(user: 前缀不参与配对)
+		expect(fams[3]!.light.id).toBe("user:moon");
+		expect(fams[3]!.dark?.id).toBe("user:moon-dark");
+	});
+
+	it("家族名去掉结尾的浅色/深色,不重复标注", () => {
+		const fams = buildThemeFamilies(
+			[{ file: "solo.css", css: "/* pi-writer 主题 · 纸上书房浅色(solo) */\n:root{}" }],
+			[],
+		);
+		expect(fams.find((f) => f.key === "solo")!.label).toBe("纸上书房");
+	});
+
+	it("落点:未选中取浅色;再点已选中浅⇄深;单变体家族不响应", () => {
+		const fams = buildThemeFamilies(builtin, user);
+		const mono = fams.find((f) => f.key === "mono")!;
+		const paper = fams.find((f) => f.key === "paper")!;
+		const night = fams[0]!;
+		expect(themeFamilyPick(mono, "paper")).toBe("mono"); // 点未选中 → 浅色
+		expect(themeFamilyPick(mono, "mono")).toBe("mono-dark"); // 再点 → 深色
+		expect(themeFamilyPick(mono, "mono-dark")).toBe("mono"); // 再点 → 浅色
+		expect(themeFamilyPick(paper, "paper")).toBe("paper"); // 单变体不响应
+		expect(themeFamilyPick(night, "night")).toBe("night");
+		expect(themeFamilyPick(night, "paper")).toBe("night");
+	});
+
+	it("swatchFromCss 抽三色,缺 token 回退中性色", () => {
+		expect(swatchFromCss(fakeTheme("#111111", "#222222", "#333333"))).toEqual(["#111111", "#222222", "#333333"]);
+		expect(swatchFromCss(":root{}")).toEqual(["#141414", "#d9a84e", "#e8e6e1"]);
 	});
 });

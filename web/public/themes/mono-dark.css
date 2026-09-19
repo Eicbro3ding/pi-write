@@ -1,4 +1,4 @@
-/* pi-writer 主题 · 黑白深色(mono-dark)——冷烟灰 */
+/* pi-writer 主题 · 黑白(mono-dark)——冷烟灰 */
 :root {
   --bg: #0c0c0e; --bg-elev: #131316; --bg-elev-2: #1a1a1e;
   --ink: #d4d4d8; --ink-2: #a9a9af; --muted: #8e8e93; --faint: #73737b;
@@ -12,6 +12,7 @@
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 0 24px rgba(212, 212, 216, 0.02);
   --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.42), 0 0 36px rgba(212, 212, 216, 0.035);
   --shadow-3: 0 16px 44px rgba(0, 0, 0, 0.52), 0 0 64px rgba(212, 212, 216, 0.055);
+  --type-character: #c9ced6; --type-world: #8f9aa8; --type-timeline: #b0a8bd; --type-outline: #73737b;
 }
 /* 「淡雅」结构:小圆角(克制裁切)+ 细字(雾里呼吸感) */
 [data-theme="mono-dark"] { --r-sm: 2px; --r-md: 4px; --r-lg: 6px; }

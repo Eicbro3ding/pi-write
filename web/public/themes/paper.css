@@ -12,6 +12,7 @@
   --shadow-1: 0 1px 2px rgba(60, 52, 40, 0.08), 0 1px 4px rgba(60, 52, 40, 0.05);
   --shadow-2: 0 4px 14px rgba(60, 52, 40, 0.14), 0 1px 3px rgba(60, 52, 40, 0.08);
   --shadow-3: 0 16px 44px rgba(60, 52, 40, 0.24), 0 4px 12px rgba(60, 52, 40, 0.14);
+  --type-character: #97581f; --type-world: #4f7396; --type-timeline: #7a6b99; --type-outline: #7a7162;
 }
 /* 浅色代码块/diff(默认 night 深色块在亮底上过重) */
 [data-theme="paper"] .record-md pre { background: #f3eee2; }

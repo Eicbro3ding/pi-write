@@ -72,6 +72,7 @@ export const THEME_TOKENS = [
 	"--hover-tint", "--hover-tint-strong", "--amber-tint", "--amber-tint-strong",
 	"--red-tint", "--red-tint-strong", "--green-tint", "--green-tint-strong",
 	"--mask", "--shadow-1", "--shadow-2", "--shadow-3",
+	"--type-character", "--type-world", "--type-timeline", "--type-outline",
 ] as const;
 
 /**
@@ -84,9 +85,9 @@ export function themeLabelFromCss(css: string, file: string): string {
 	return label || file.replace(/\.css$/, "");
 }
 
-/** 新建用户主题的骨架 CSS(26 token 全量注释,便于用户改)。 */
+/** 新建用户主题的骨架 CSS(全量 token 注释,便于用户改)。 */
 export function themeStarterCss(): string {
-	return `/* 自定义主题骨架:覆盖任意颜色 token(完整 26 色见 THEME_TOKENS)。 */
+	return `/* 自定义主题骨架:覆盖任意颜色 token(完整清单见 THEME_TOKENS)。 */
 :root {
   --bg: #101010; --bg-elev: #161616; --bg-elev-2: #1d1d1d;
   --ink: #e8e6e1; --ink-2: #c6c2b9; --muted: #989287; --faint: #8f8779;
@@ -100,6 +101,99 @@ export function themeStarterCss(): string {
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 4px rgba(0, 0, 0, 0.18);
   --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.32), 0 1px 3px rgba(0, 0, 0, 0.22);
   --shadow-3: 0 16px 44px rgba(0, 0, 0, 0.5), 0 4px 12px rgba(0, 0, 0, 0.3);
+  --type-character: #d9a84e; --type-world: #7b9ec9; --type-timeline: #a08cc0; --type-outline: #9a9184;
 }
 `;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   主题家族:浅深合并(设计稿 03-组件规范/02)
+   —— 同一家族的浅色/深色合并成一张卡(点未选中的卡取浅色,再点已选中的卡
+   浅 ⇄ 深),配对规则沿用文件名约定:`<family>.css` / `<family>-dark.css`。
+   识别只按 id 形状,不动任何数据:家族名 = id 去掉 `-dark` 后缀。
+   ════════════════════════════════════════════════════════════════ */
+
+/** 主题卡渲染所需最小形状(内置与用户主题同构)。 */
+export interface ThemeCardOption {
+	id: ThemeId;
+	label: string;
+	/** [背景, 强调, 文字] 三色预览。 */
+	swatch: [string, string, string];
+	kind: "builtin" | "user";
+}
+
+/** 主题家族:一个浅色卡 + 可选深色卡(单变体家族 dark 为 null)。 */
+export interface ThemeFamily {
+	/** 家族 key(id 去掉 user: 前缀与 -dark 后缀)。 */
+	key: string;
+	label: string;
+	light: ThemeCardOption;
+	dark: ThemeCardOption | null;
+}
+
+/** 主题 CSS → [背景, 强调, 文字] 三色预览;缺失回退中性色。 */
+export function swatchFromCss(css: string): [string, string, string] {
+	const pick = (name: string): string => {
+		const m = css.match(new RegExp(`${name}\\s*:\\s*([^;]+);`));
+		return m ? m[1]!.trim() : "";
+	};
+	return [pick("--bg") || "#141414", pick("--amber") || "#d9a84e", pick("--ink") || "#e8e6e1"];
+}
+
+/** 家族名:id 去掉 user: 前缀与 -dark 后缀。 */
+export function themeFamilyKey(id: string): string {
+	return id.replace(USER_THEME_PREFIX, "").replace(/-dark$/, "");
+}
+
+/** 显示名去重后的人工名:去掉结尾的「浅色 / 深色」,避免合并卡上重复标注。 */
+function familyLabel(label: string): string {
+	const stripped = label.replace(/[（(]浅色[)）]$/, "").replace(/[（(]深色[)）]$/, "").replace(/(浅色|深色)$/, "");
+	return stripped.trim() || label;
+}
+
+/**
+ * 主题清单 → 家族列表(设置页与向导共用的唯一分组实现)。
+ * 顺序:night(内置默认,无资产文件)→ 其余内置 → 用户自定义;组内浅色在前。
+ */
+export function buildThemeFamilies(builtin: readonly { file: string; css: string }[], user: readonly { file: string; css: string }[]): ThemeFamily[] {
+	const options: ThemeCardOption[] = [
+		{ id: NIGHT_THEME.id, label: NIGHT_THEME.label, swatch: [...NIGHT_THEME.swatch] as [string, string, string], kind: "builtin" },
+		...builtin.map((t): ThemeCardOption => {
+			const id = t.file.replace(/\.css$/, "");
+			return { id, label: themeLabelFromCss(t.css, t.file), swatch: swatchFromCss(t.css), kind: "builtin" };
+		}),
+		...user.map((t): ThemeCardOption => {
+			const name = t.file.replace(/\.css$/, "");
+			return { id: `${USER_THEME_PREFIX}${name}`, label: themeLabelFromCss(t.css, t.file), swatch: swatchFromCss(t.css), kind: "user" };
+		}),
+	];
+	const order: string[] = [];
+	const groups = new Map<string, ThemeCardOption[]>();
+	for (const o of options) {
+		const key = themeFamilyKey(o.id);
+		if (!groups.has(key)) {
+			groups.set(key, []);
+			order.push(key);
+		}
+		groups.get(key)!.push(o);
+	}
+	const families: ThemeFamily[] = [];
+	for (const key of order) {
+		const members = groups.get(key)!;
+		// 浅色当主卡:家族里非 -dark 的那个;整族只有深色时(如 night)也占浅色位
+		const light = members.find((m) => !m.id.endsWith("-dark")) ?? members[0]!;
+		const dark = members.find((m) => m.id !== light.id) ?? null;
+		families.push({ key, label: familyLabel(light.label), light, dark });
+	}
+	return families;
+}
+
+/**
+ * 点击主题卡的落点:未选中的家族 → 取浅色(没有浅色取深色);
+ * 再点已选中的家族 → 第二动作「浅 ⇄ 深」(单变体家族不响应)。
+ */
+export function themeFamilyPick(family: ThemeFamily, current: ThemeId): ThemeId {
+	if (current !== family.light.id && current !== family.dark?.id) return family.light.id;
+	if (!family.dark) return current;
+	return current === family.light.id ? family.dark.id : family.light.id;
 }

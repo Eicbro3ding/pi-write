@@ -25,6 +25,7 @@ import {
 } from "../slash-commands.ts";
 import { BranchBar } from "../components/BranchBar.tsx";
 import { ChapterSidebar } from "../components/ChapterSidebar.tsx";
+import { IconEdit } from "../components/Icons.tsx";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
 import { DraftWorkspace } from "../components/DraftWorkspace.tsx";
 import { FilePreview } from "../components/FilePreview.tsx";
@@ -40,6 +41,7 @@ import type { Library } from "../library.ts";
 import { DUR, EASE } from "../motion.ts";
 import { useMediaQuery } from "../useMediaQuery.ts";
 import { useDragResize } from "../use-drag-resize.ts";
+import { Lu } from "../components/Lu.tsx";
 
 /** 顶栏信息(由 App 顶栏展示)。 */
 export interface HeaderInfo {
@@ -83,7 +85,7 @@ function EmptyBooks({ onCreate }: { onCreate: (title: string) => void }) {
 						if (e.key === "Enter" && trimmed.length > 0) onCreate(trimmed);
 					}}
 				/>
-				<button className="btn-send" disabled={trimmed.length === 0} onClick={() => onCreate(trimmed)}>
+				<button className="btn-primary" disabled={trimmed.length === 0} onClick={() => onCreate(trimmed)}>
 					创建
 				</button>
 			</div>
@@ -148,8 +150,27 @@ export function WritePage({
 	const setImporting = applyImporting;
 	const onBookChange = reportBookChange;
 	const [error, setError] = useState<string | null>(null);
-	/** AI 伙伴栏宽度(px,默认 380),左缘拖拽手柄调整(300–520)。 */
-	const [companionWidth, setCompanionWidth] = useState(380);
+	/** AI 伙伴栏宽度(px,默认 340),左缘拖拽手柄调整(300–520)。 */
+	const [companionWidth, setCompanionWidth] = useState(340);
+	/** AI 伙伴栏收起态(48px 竖条):localStorage 持久化,与左栏折叠同一套语言。 */
+	const [companionCollapsed, setCompanionCollapsed] = useState<boolean>(() => {
+		try {
+			return localStorage.getItem("pi-writer:companion-collapsed") === "1";
+		} catch {
+			return false;
+		}
+	});
+	const toggleCompanionCollapsed = useCallback(() => {
+		setCompanionCollapsed((v) => {
+			const next = !v;
+			try {
+				localStorage.setItem("pi-writer:companion-collapsed", next ? "1" : "0");
+			} catch {
+				/* 隐私模式下 localStorage 不可用:本次会话内仍然生效 */
+			}
+			return next;
+		});
+	}, []);
 	/** 全屏编辑器(设计 §5.4):非空时渲染覆盖层。 */
 	const [fsEditor, setFsEditor] = useState<{ file: string; title: string } | null>(null);
 	/** 左栏内容模式:章节(默认)/ 工作区(书目录文件清单)。 */
@@ -1088,7 +1109,7 @@ export function WritePage({
 		// 三栏壳:书库(轨 1 auto,宽度由 ChapterSidebar 决定并随折叠/拖拽动画)
 		// | 纸张 | AI 伙伴(轨 3 经 --companion-w 跟随左缘拖拽调宽);窄屏断点见 styles.css
 		<div
-			className="writing-workspace-shell"
+			className={companionCollapsed && !isNarrow ? "writing-workspace-shell companion-collapsed" : "writing-workspace-shell"}
 			style={{ "--companion-w": `${companionWidth}px` } as React.CSSProperties}
 		>
 			<ChapterSidebar
@@ -1149,7 +1170,8 @@ export function WritePage({
 					<EmptyBooks onCreate={(title) => void newBook(title)} />
 				) : (
 					<>
-						{/* 纸张头部:章节名大字 + 移动端书库/伙伴抽屉开关 + 全屏编辑入口 */}
+						{/* 纸张头部:章节名 + 状态胶囊 | 草稿路径 + 字数 + 全屏编辑
+						    (设计稿 06-编辑-v1:路径与字数从标题下方挪到右端一行,标题只留章节名) */}
 						<div className="paper-head">
 							<button
 								type="button"
@@ -1160,8 +1182,17 @@ export function WritePage({
 								书库
 							</button>
 							<div className="paper-title-wrap">
-								<div className="paper-title">{currentChapter?.title ?? "草稿"}</div>
-								<div className="paper-title-sub">{draftFile}</div>
+								<span className="paper-title">{currentChapter?.title ?? "草稿"}</span>
+								<span className="paper-state">草稿</span>
+							</div>
+							<div className="paper-status">
+								<span className="paper-file">{draftFile}</span>
+								<span className="paper-words">{words.toLocaleString("zh-CN")} 字</span>
+								{currentChapter && (
+									<button className="paper-fs" onClick={openEditor} title="全屏编辑(Alt+E)" aria-label="全屏编辑">
+										<Lu icon="maximize-2" size={14} />
+									</button>
+								)}
 							</div>
 							<button
 								type="button"
@@ -1171,11 +1202,6 @@ export function WritePage({
 							>
 								伙伴
 							</button>
-							{currentChapter && (
-								<button className="paper-fs" onClick={openEditor} title="Alt+E">
-									全屏编辑
-								</button>
-							)}
 						</div>
 						{/* 纸张:正文编辑器常驻挂载(不再 hidden),文字/选区/保存状态/自动保存定时器全部保留 */}
 						<div className="paper-surface">
@@ -1231,13 +1257,38 @@ export function WritePage({
 					}}
 					transition={{ duration: DUR.slow, ease: EASE.out }}
 				>
-					{/* 左缘拖拽调宽手柄(窄屏抽屉模式隐藏) */}
-					{!isNarrow && <div className="comp-resize" onMouseDown={onCompanionResizeStart} title="拖拽调整宽度" />}
+					{/* 左缘拖拽调宽手柄(窄屏抽屉模式隐藏;收起态无宽度可调) */}
+					{!isNarrow && !companionCollapsed && <div className="comp-resize" onMouseDown={onCompanionResizeStart} title="拖拽调整宽度" />}
+					{companionCollapsed ? (
+						/* 收起态 = 与舞台右栏同一套图标/标签栏:点别的标签只换选中,
+						   点当前标签才展开(设计稿的「再点一次已选中的项 = 第二动作」) */
+						<div className="companion-rail" role="tablist" aria-label="AI 伙伴(已收起)">
+							{([["chat", classicMode ? "AI" : "编剧"], ["memo", "备忘录"]] as const).map(([id, label]) => (
+								<button
+									key={id}
+									type="button"
+									role="tab"
+									aria-selected={memoTab === id}
+									className={memoTab === id ? "companion-rail-item active" : "companion-rail-item"}
+									title={memoTab === id ? `展开${label}` : label}
+									aria-label={memoTab === id ? `展开${label}` : label}
+									onClick={() => {
+										if (memoTab === id) toggleCompanionCollapsed();
+										else changeMemoTab(id);
+									}}
+								>
+									{label}
+								</button>
+							))}
+						</div>
+					) : (
+					<>
 					<div className="companion-head">
-						<span className="companion-label">AI 伙伴</span>
 						{/* 标签:编剧对话 | 备忘录(全局 Notice 待办板,2026-08-12 从书库栏移来);
-						    外观与舞台页 st-tabs 分段控件同款(data-active 驱动滑动指示器) */}
-						<div className="c-tabs" role="tablist" data-active={memoTab === "memo" ? "1" : "0"}>
+						    设计稿 06:外层改下划线式(与舞台右栏面板同一套语言),
+						    外层与内层不再都是胶囊控件。data-active 是旧的滑动指示器协议,
+						    下划线式不需要,已去掉 */}
+						<div className="c-tabs" role="tablist">
 							<button type="button" className={memoTab === "chat" ? "c-tab active" : "c-tab"} onClick={() => changeMemoTab("chat")}>
 								{classicMode ? "AI" : "编剧"}
 							</button>
@@ -1250,6 +1301,15 @@ export function WritePage({
 							<span className="companion-badge">{confirmCards.filter((c) => !c.auto).length}</span>
 						)}
 						{memoTab === "chat" && writerSession.isStreaming && <span className="companion-live" title="生成中" aria-label="生成中" />}
+						<button
+							type="button"
+							className="companion-collapse"
+							onClick={toggleCompanionCollapsed}
+							title="收起 AI 伙伴"
+							aria-label="收起 AI 伙伴"
+						>
+							<Lu icon="chevrons-right" size={14} />
+						</button>
 					</div>
 					<div className="companion-body">
 							{memoTab === "memo" ? (
@@ -1299,11 +1359,8 @@ export function WritePage({
 									const s = bookDetailRef.current?.slug;
 									if (s) void client.writerAbort(s);
 								}}
-								placeholder={
-									classicMode
-										? "向 AI 说话…(/ 命令面板；选中正文自动填入，Ctrl+Enter 发送，Enter 换行)"
-										: "向编剧说话…(/ 命令面板；选中正文自动填入，Ctrl+Enter 发送，Enter 换行)"
-								}
+								/* 占位符只留短句(设计稿 06);键位与 / 命令的说明不再塞进输入框 */
+								placeholder={classicMode ? "向 AI 说话…" : "向编剧说话…"}
 								ariaLabel={classicMode ? "向 AI 说话" : "向编剧说话"}
 								commands={writerSlashCommands}
 								context={writerSlashContext}
@@ -1312,6 +1369,8 @@ export function WritePage({
 						</div>
 						)}
 					</div>
+					</>
+					)}
 				</motion.aside>
 			</>
 			{/* 全屏编辑器覆盖层(设计 §5.4) */}

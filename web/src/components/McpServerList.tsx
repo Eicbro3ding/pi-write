@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import type { ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
 import type { McpServerInfo, McpServerStatus } from "../types.ts";
+import { Select } from "./Select.tsx";
+import { Lu } from "./Lu.tsx";
 
 /** 表单草稿:与 McpServerInfo 一致,args/env 在表单层用逗号分隔字符串。 */
 interface Draft {
@@ -227,7 +229,7 @@ export function McpServerList({ client }: { client: ApiClient }) {
 						配置后 AI 可以使用外部工具，如文件系统、资料库、搜索等。
 					</div>
 					<button className="btn-ghost" disabled={busy} onClick={startAdd}>
-						＋ 添加 MCP 服务器
+						<Lu icon="plus" size={14} /> 添加 MCP 服务器
 					</button>
 				</div>
 			)}
@@ -281,15 +283,16 @@ export function McpServerList({ client }: { client: ApiClient }) {
 			{formOpen && (
 					<div className="s-provider-form">
 						<input className="s-input" placeholder="名称" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
-						<select
+						<Select
 							className="s-input"
 							value={draft.type}
-							onChange={(e) => setDraft({ ...draft, type: e.target.value === "stdio" ? "stdio" : e.target.value === "sse" ? "sse" : "http" })}
-						>
-							<option value="stdio">stdio(本地命令)</option>
-							<option value="http">http(streamable，现行标准)</option>
-							<option value="sse">sse(旧版，兼容)</option>
-						</select>
+							onChange={(v) => setDraft({ ...draft, type: v === "stdio" ? "stdio" : v === "sse" ? "sse" : "http" })}
+							options={[
+								{ value: "stdio", label: "stdio(本地命令)" },
+								{ value: "http", label: "http(streamable，现行标准)" },
+								{ value: "sse", label: "sse(旧版，兼容)" },
+							]}
+						/>
 						{draft.type === "stdio" ? (
 							<>
 								<input className="s-input" placeholder="命令，如 npx" value={draft.command} onChange={(e) => setDraft({ ...draft, command: e.target.value })} />
@@ -312,7 +315,7 @@ export function McpServerList({ client }: { client: ApiClient }) {
 			{!formOpen && hasServers && (
 				<div className="s-actions">
 					<button className="btn-ghost" disabled={busy} onClick={startAdd}>
-						＋ 添加 MCP 服务器
+						<Lu icon="plus" size={14} /> 添加 MCP 服务器
 					</button>
 					<button className="btn-ghost" disabled={busy} onClick={() => void openRaw()}>
 						✎ 直接编辑文件

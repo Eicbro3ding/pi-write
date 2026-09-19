@@ -22,11 +22,13 @@ export function setSimplifiedTools(enabled: boolean): void {
 const AUTO_EXPAND_THINKING_KEY = "pi-writer-auto-expand-thinking";
 
 /**
- * 解析存储值:仅显式 "0" 表示关闭,缺省/其他值一律视为开启(默认开启——
- * 「自动展开思考」是默认行为,可在设置页关闭)。
+ * 解析存储值:仅显式 "1" 表示开启,缺省/其他值一律视为关闭。
+ *
+ * 设计稿 04/06 定稿:**思考块默认收起**(原来展开时一条思考能撑到 2230px,把回复
+ * 推到屏幕外);想常看思维链的人在设置里打开「自动展开思考」。
  */
 export function parseAutoExpandThinking(raw: string | null | undefined): boolean {
-	return raw !== "0";
+	return raw === "1";
 }
 
 /** 当前是否自动展开思考块。 */
@@ -59,6 +61,15 @@ export function autoConfirmEditsEnabled(): boolean {
 export function setAutoConfirmEdits(enabled: boolean): void {
 	localStorage.setItem(AUTO_CONFIRM_EDIT_KEY, enabled ? "1" : "0");
 }
+
+/**
+ * 对话形态偏好(设计稿 04 文档流 / 05 气泡,舞台页消息流按它切换 className)。
+ *
+ * 定义与实现在 `stage-preferences.ts`(舞台页专属偏好,避免与设置页其它偏好
+ * 的定义互相踩);此处转发,设置页照旧从 settings.ts 取用。
+ */
+export { BUBBLE_CHAT_KEY, conversationStyle, parseBubbleChat, setConversationStyle } from "./stage-preferences.ts";
+export type { ConversationStyle } from "./stage-preferences.ts";
 
 /**
  * 经典模式开关的 localStorage 键。

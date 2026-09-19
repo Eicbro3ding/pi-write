@@ -62,7 +62,7 @@ export function useLibrary(client: ApiClient, onBookChange?: (slug: string | nul
 	const [busySlug, setBusySlug] = useState<string | null>(null);
 	const [importing, setImporting] = useState(false);
 	/** 侧栏宽度(px),拖拽手柄调整。 */
-	const [sidebarWidth, setSidebarWidth] = useState(168);
+	const [sidebarWidth, setSidebarWidth] = useState(240);
 	/** 书库栏折叠态(56px 图标条):localStorage 持久化。 */
 	const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
 		try {

@@ -106,8 +106,8 @@ export function AddModelDialog({
 	const title = mode === "provider" ? "自定义供应商" : "添加模型";
 
 	return (
-		<div className="wz-overlay" role="dialog" aria-modal="true" aria-label={title}>
-			<div className="wz-panel amd-panel">
+		<div className="dlg-overlay" role="dialog" aria-modal="true" aria-label={title}>
+			<div className="dlg-panel amd-panel">
 				<header className="amd-head">
 					<span className="amd-title">{title}</span>
 					<button type="button" className="icon-btn" aria-label="关闭" onClick={onClose}>
@@ -162,7 +162,10 @@ export function AddModelDialog({
 						/>
 					</div>
 					<div className="s-field">
-						<label className="s-field-label">API Key</label>
+						<label className="s-field-label">
+							API Key
+							{apiKeyRequired && mode === "provider" && <span className="amd-label-hint">必填</span>}
+						</label>
 						<input
 							className="s-input mono"
 							placeholder={apiKeyRequired && mode === "provider" ? "必填(占位 sk-custom 亦可)" : "可选"}

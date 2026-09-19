@@ -13,6 +13,7 @@ import type { ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
 import { useMediaQuery } from "../useMediaQuery.ts";
 import { useCrossWindowReload } from "../cross-window-sync.ts";
+import { Select } from "./Select.tsx";
 
 /** 常用文件快捷下拉(相对书根路径)。 */
 const QUICK_FILES = [
@@ -175,22 +176,18 @@ export function FullScreenEditor({ client, slug, initialFile, title, onClose }: 
 						}
 					}}
 				/>
-				<select
+				<Select
 					className="fs-quick"
 					value=""
-					onChange={(e) => {
-						const v = e.target.value;
+					onChange={(v) => {
 						if (v) setFile(v);
 					}}
-				>
-					<option value="">常用文件…</option>
-					<option value={initialFile}>本章草稿</option>
-					{QUICK_FILES.filter((q) => q.file.length > 0).map((q) => (
-						<option key={q.file} value={q.file}>
-							{q.label}
-						</option>
-					))}
-				</select>
+					options={[
+						{ value: "", label: "常用文件…" },
+						{ value: initialFile, label: "本章草稿" },
+						...QUICK_FILES.filter((q) => q.file.length > 0).map((q) => ({ value: q.file, label: q.label })),
+					]}
+				/>
 				<span className="fs-stats">{words} 字{dirty ? " · 未保存" : " · 已保存"}</span>
 				{!narrow && (
 					<button className={vim ? "fs-btn active" : "fs-btn"} onClick={() => setVim((v) => !v)} title="切换 vim 键位">

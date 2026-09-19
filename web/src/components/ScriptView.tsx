@@ -1,20 +1,53 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type { StageScriptDto } from "../types.ts";
 import { castNameMap } from "../stage-web.ts";
+import { Lu } from "./Lu.tsx";
 
 type ScriptTab = "summary" | "beats" | "actors";
 const TAB_INDEX: Record<ScriptTab, number> = { summary: 0, beats: 1, actors: 2 };
 
+/** 字段行右端铅笔(15px 线性图标)。 */
+function PenIcon() {
+	return (
+		<Lu icon="pencil" size={13} />
+	);
+}
+
 /**
  * 剧本只读展示(共享):右侧「剧本」面板(StagePanel)与剧本确认预览卡
  * (PreviewBody 的 script 分支)共用——一套渲染,零副本(2026-08-11 抽象)。
- * 内容按类别分标签页(概要 / 节拍 / 演员指令)+ 表格形式;演员指令按角色分块,
- * 中文标签 + 示例逐条成行(标签列窄宽,与概要页的宽标签区分)。
+ *
+ * 设计稿 02-模态与面板/02:外层舞台面板已改下划线式,这一层**保留胶囊分段控件**
+ * (概要 / 节拍 / 演员指令,两层不再同款,层级看得出区别);内容从表格改成
+ * **卡片化字段行**(标签 + 值 + 右端铅笔)。
+ *
+ * 铅笔是**编辑入口提示,不是就地编辑**:点击落到「修订」页签(整幕修订走提交式
+ * 表单,版本 +1)。故用 button + aria-label 表达可达性,不假装有就地编辑。
  */
-export function ScriptView({ script }: { script: StageScriptDto }) {
+export function ScriptView({ script, onEdit }: { script: StageScriptDto; onEdit?: () => void }) {
 	const [tab, setTab] = useState<ScriptTab>("summary");
 	/** 演员 id → 角色名(definition.cast 首名;perActor 同键)——仅展示用。 */
 	const names = useMemo(() => castNameMap(script.definition.cast), [script]);
+	/** 字段行右端铅笔:onEdit 缺省(预览卡场景,只读)时降级为不可点的纯图标。 */
+	const pencil = (label: string) =>
+		onEdit ? (
+			<button type="button" className="sf-pen" title={`修订「${label}」`} aria-label={`修订${label}`} onClick={onEdit}>
+				<PenIcon />
+			</button>
+		) : (
+			<span className="sf-pen quiet" aria-hidden="true">
+				<PenIcon />
+			</span>
+		);
+	/** 卡片化字段行(标签 + 值 + 铅笔)。 */
+	const row = (label: string, value: ReactNode, key?: string) => (
+		<div className="sf-row" key={key ?? label}>
+			<span className="sf-k">{label}</span>
+			<span className="sf-v">{value}</span>
+			{pencil(label)}
+		</div>
+	);
+
 	return (
 		<>
 			{/* tabs-equal:标签文案不等长(演员指令 4 字),指示块位移前提是等宽——
@@ -30,104 +63,56 @@ export function ScriptView({ script }: { script: StageScriptDto }) {
 					演员指令
 				</button>
 			</div>
-			<div className="s-head">
-				剧本 v{script.version} · {script.chapter}
-			</div>
-			{tab === "summary" && (
-				<table className="sc-table">
-					<tbody>
-						<tr>
-							<td className="k">场景意象</td>
-							<td>{script.text.shared.setting}</td>
-						</tr>
-						<tr>
-							<td className="k">本幕任务</td>
-							<td>{script.text.shared.goal}</td>
-						</tr>
-						<tr>
-							<td className="k">基调</td>
-							<td>{script.text.shared.tone}</td>
-						</tr>
-						<tr>
-							<td className="k">规则</td>
-							<td>
-								{script.definition.rules.minLines}-{script.definition.rules.maxLines} 条 · 收尾窗口 {script.definition.rules.wrapUpWindow}
-							</td>
-						</tr>
-						{script.text.shared.forbidden.length > 0 && (
-							<tr>
-								<td className="k">禁区</td>
-								<td>{script.text.shared.forbidden.map((f) => `· ${f}`).join("\n")}</td>
-							</tr>
+
+			<div className="sf-card">
+				<div className="sf-head">
+					剧本 v{script.version} · {script.chapter}
+				</div>
+				{tab === "summary" && (
+					<>
+						{row("场景意象", script.text.shared.setting)}
+						{row("本幕任务", script.text.shared.goal)}
+						{row("基调", script.text.shared.tone)}
+						{row(
+							"规则",
+							`${script.definition.rules.minLines}-${script.definition.rules.maxLines} 条 · 收尾窗口 ${script.definition.rules.wrapUpWindow}`,
 						)}
-					</tbody>
-				</table>
-			)}
-			{tab === "beats" && (
-				<table className="sc-table">
-					<tbody>
-						{script.text.shared.beats.map((b, i) => (
-							<tr key={i}>
-								<td className="k">{i + 1}</td>
-								<td>{b}</td>
-							</tr>
-						))}
-					</tbody>
-				</table>
-			)}
-			{tab === "actors" && (
-				<div>
-					{Object.entries(script.text.perActor).map(([actorId, a]) => (
+						{script.text.shared.forbidden.length > 0 &&
+							row(
+								"禁区",
+								<span className="sf-list">
+									{script.text.shared.forbidden.map((f, i) => (
+										<span key={i}>· {f}</span>
+									))}
+								</span>,
+							)}
+					</>
+				)}
+				{tab === "beats" &&
+					script.text.shared.beats.map((b, i) => row(String(i + 1), b, `beat-${i}`))}
+				{tab === "actors" &&
+					Object.entries(script.text.perActor).map(([actorId, a]) => (
 						<div key={actorId} className="pa-block">
 							<div className="pa-name">{names[actorId] ?? actorId}</div>
-							<table className="sc-table">
-								<tbody>
-									<tr>
-										<td className="k">欲望</td>
-										<td>{a.objective}</td>
-									</tr>
-									{a.state && (
-										<tr>
-											<td className="k">状态</td>
-											<td>{a.state}</td>
-										</tr>
-									)}
-									{a.relation && (
-										<tr>
-											<td className="k">关系</td>
-											<td>{a.relation}</td>
-										</tr>
-									)}
-									{a.voice && (
-										<tr>
-											<td className="k">声口</td>
-											<td>{a.voice}</td>
-										</tr>
-									)}
-									{a.boundary && (
-										<tr>
-											<td className="k">边界</td>
-											<td>{a.boundary}</td>
-										</tr>
-									)}
-									{a.examples.length > 0 && (
-										<tr>
-											<td className="k">示例</td>
-											<td className="st-examples">
-												{a.examples.map((ex, i) => (
-													<div key={i} className="pa-ex">
-														{ex}
-													</div>
-												))}
-											</td>
-										</tr>
-									)}
-								</tbody>
-							</table>
+							{row("欲望", a.objective)}
+							{a.state && row("状态", a.state)}
+							{a.relation && row("关系", a.relation)}
+							{a.voice && row("声口", a.voice)}
+							{a.boundary && row("边界", a.boundary)}
+							{a.examples.length > 0 &&
+								row(
+									"示例",
+									<span className="sf-list">
+										{a.examples.map((ex, i) => (
+											<span key={i} className="pa-ex">
+												{ex}
+											</span>
+										))}
+									</span>,
+								)}
 						</div>
 					))}
-				</div>
-			)}
+			</div>
 		</>
 	);
 }

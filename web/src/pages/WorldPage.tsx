@@ -6,22 +6,26 @@ import { useCrossWindowReload } from "../cross-window-sync.ts";
 import type { ChapterRef, WorldDataDto, WorldEntryDto } from "../types.ts";
 import { DUR, EASE } from "../motion.ts";
 import { newId } from "../components/id.ts";
-import { ENTRY_TYPES, ENTRY_TYPE_LABELS, WorldTree } from "../components/WorldTree.tsx";
-import { EntryForm } from "../components/EntryForm.tsx";
+import { WorldTree } from "../components/WorldTree.tsx";
+import { Lu } from "../components/Lu.tsx";
+import { EntryForm, EntryInfoPanel } from "../components/EntryForm.tsx";
 import { RelationGraph } from "../components/RelationGraph.tsx";
 import { EntryCard } from "../components/EntryCard.tsx";
 import { WorldSummaryPanel } from "../components/WorldSummaryPanel.tsx";
 import { StorylinePanel } from "../components/StorylinePanel.tsx";
 import { TimelinePanel } from "../components/TimelinePanel.tsx";
-import { ConstraintsPanel } from "../components/ConstraintsPanel.tsx";
+import { ConstraintsPanel, StyleSamplePanel } from "../components/ConstraintsPanel.tsx";
 import { deleteEntryWithRelations } from "../graph-logic.ts";
 
+/** 世界书三个视图(设计稿 08/09/10 右上角分段胶囊)。 */
+type WorldView = "entries" | "graph" | "settings";
+
 /**
- * 世界书页(条目化管理后台):「列表」视图 = 左侧分类树(按 type 分组 + parent 层级)
- * + 右侧条目表单(增删改)+ Notice/发展线/时间线/约束/采样面板;
- * 「关系图」视图 = cytoscape 关系图 + 词条面板(百度百科式,跳转联动高亮),
- * 连线/关系编辑同样落到本地工作副本。所有修改置脏,「保存」整体走 putWorld;
- * 保存后服务端自动重渲染 md 视图,无需前端处理。无源文件编辑入口。
+ * 世界书页:「条目」视图 = 左侧分类树(240)+ 中间条目表单 + 右侧信息栏(300);
+ * 「关系图」视图 = cytoscape 关系图 + 选中条目详情卡;「设定」视图 = 独立一屏两栏
+ * 卡片(简要世界观/发展线/采样 | 时间线/约束)。
+ * 数据侧不变:world.json 读写、条目增删改、关系增删、图位置持久化全部原样,
+ * 所有修改置脏后整体走 putWorld(自动保存 + Ctrl+S),保存后服务端重渲染 md 视图。
  */
 export function WorldPage({
 	client,
@@ -44,31 +48,33 @@ export function WorldPage({
 	/** 当前书章节(条目关联章节多选 / 时间线 chapter 下拉)。 */
 	const [chapters, setChapters] = useState<ChapterRef[]>([]);
 	const [chaptersOk, setChaptersOk] = useState(false);
+	/** 新建条目(入口在分类树底部):类型 + 标题内联创建行。 */
+	const [creating, setCreating] = useState(false);
 	const [createType, setCreateType] = useState<WorldEntryDto["type"]>("character");
 	const [createTitle, setCreateTitle] = useState("");
-	/** 视图切换:列表(分类树 + 表单)⇄ 关系图(cytoscape + 词条面板)。 */
-	const [view, setView] = useState<"list" | "graph">("list");
+	/** 删除二次确认模态(设计稿 04)的目标条目;ref 供 keydown(Escape)读取最新值。 */
+	const [confirmDelete, setConfirmDelete] = useState<WorldEntryDto | null>(null);
+	const confirmDeleteRef = useRef<WorldEntryDto | null>(confirmDelete);
+	confirmDeleteRef.current = confirmDelete;
+	/** 视图:条目 / 关系图 / 设定。 */
+	const [view, setView] = useState<WorldView>("entries");
 	/** 关系图视图懒挂载(P7,2026-08):首次切到关系图才构建 cytoscape——大世界书
-	 *  只开列表页时省去建图 + 布局成本。已挂载后保持常驻(切走再切回不丢图内
+	 *  只开条目页时省去建图 + 布局成本。已挂载后保持常驻(切走再切回不丢图内
 	 *  选中/连线/右键态;缩放平移另有 localStorage 持久化,见 graph-persistence)。 */
 	const [graphMounted, setGraphMounted] = useState(false);
-	/** 简要世界观面板折叠态(localStorage 持久化;折叠时整块隐藏,开关在顶栏)。 */
-	const [summaryCollapsed, setSummaryCollapsed] = useState(() => localStorage.getItem("pi-writer:world-summary-collapsed") === "1");
-	useEffect(() => {
-		localStorage.setItem("pi-writer:world-summary-collapsed", summaryCollapsed ? "1" : "0");
-	}, [summaryCollapsed]);
 	/** 正在滑出的旧视图(切换动画期间置位,240ms 后清理;内容双常驻保留状态)。 */
-	const [leaving, setLeaving] = useState<"list" | "graph" | null>(null);
+	const [leaving, setLeaving] = useState<WorldView | null>(null);
 	/** 视图切换:旧视图播放向左滑出,新视图自右滑入。首次切到关系图时挂载图视图。 */
-	function switchView(v: "list" | "graph") {
+	function switchView(v: WorldView) {
 		if (v === view || leaving !== null) return;
 		if (v === "graph") setGraphMounted(true);
 		setLeaving(view);
 		setView(v);
 		setTimeout(() => setLeaving(null), DUR.base * 1000 + 40);
 	}
-	/** 撤销栈深度(渲染信号:工具栏撤销按钮禁用态)。 */
+	/** 撤销/重做栈深度(渲染信号:工具栏按钮禁用态)。 */
 	const [undoCount, setUndoCount] = useState(0);
+	const [redoCount, setRedoCount] = useState(0);
 
 	const worldRef = useRef<WorldDataDto | null>(null);
 	worldRef.current = world;
@@ -78,6 +84,8 @@ export function WorldPage({
 	const lastWorldMtimeRef = useRef(0);
 	/** 撤销栈:保存"修改前"的世界快照;编辑会话(干净→脏)开始时入栈。 */
 	const undoStack = useRef<WorldDataDto[]>([]);
+	/** 重做栈:撤销时把"撤销前"的快照压入;任何新编辑清空。 */
+	const redoStack = useRef<WorldDataDto[]>([]);
 	/** 自动保存防抖计时器(输入停止后提交)。 */
 	const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 	const MAX_UNDO = 50;
@@ -99,7 +107,9 @@ export function WorldPage({
 					lastWorldMtimeRef.current = r.mtime; // 磁盘版本,保存时作 If-Match
 					// 换书/重载后旧撤销快照失效:清空
 					undoStack.current = [];
+					redoStack.current = [];
 					setUndoCount(0);
+					setRedoCount(0);
 				// 保持选中;被删/不存在则清空
 				setSelId((prev) => (prev && r.world.entries.some((e) => e.id === prev) ? prev : null));
 			})
@@ -184,11 +194,14 @@ export function WorldPage({
 
 	/** 不可变更新工作副本并置脏;任何失败提示随下次编辑清除。 */
 	function updateWorld(fn: (w: WorldDataDto) => WorldDataDto) {
-		// 从干净状态进入编辑:记录撤销点(修改前的快照),输入会话合并为一个撤销步骤
+		// 从干净状态进入编辑:记录撤销点(修改前的快照),输入会话合并为一个撤销步骤;
+		// 新编辑使重做栈失效
 		if (!dirtyRef.current && worldRef.current) {
 			undoStack.current.push(structuredClone(worldRef.current));
 			if (undoStack.current.length > MAX_UNDO) undoStack.current.shift();
 			setUndoCount(undoStack.current.length);
+			redoStack.current = [];
+			setRedoCount(0);
 		}
 		setWorld((w) => (w ? fn(w) : w));
 		setDirty(true);
@@ -202,27 +215,52 @@ export function WorldPage({
 		autoSaveTimer.current = setTimeout(() => void saveRef.current(), 800);
 	}
 
-	/** 撤销最近一次编辑会话(恢复快照并立即保存)。 */
-	function undo() {
-		const prev = undoStack.current.pop();
-		if (!prev) return;
+	/**
+	 * 应用一份世界快照并立即保存(撤销/重做共用)。React 状态异步生效:
+	 * save() 的守卫读 ref,必须先同步 refs,否则 worldRef 还是旧副本、
+	 * dirtyRef 还是 false,立即保存会被跳过。
+	 */
+	function applySnapshot(snap: WorldDataDto) {
 		if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
-		// React 状态异步生效:save() 的守卫读 ref,必须先同步 refs,否则
-		// worldRef 还是旧副本、dirtyRef 还是 false,立即保存会被跳过
-		worldRef.current = prev;
+		worldRef.current = snap;
 		dirtyRef.current = true;
-		setWorld(prev);
+		setWorld(snap);
 		setDirty(true);
 		setSaveErr(null);
 		setUndoCount(undoStack.current.length);
-		// 恢复的快照里可能没有当前选中条目:清空失效选中
-		setSelId((cur) => (cur && prev.entries.some((e) => e.id === cur) ? cur : null));
+		setRedoCount(redoStack.current.length);
+		// 快照里可能没有当前选中条目:清空失效选中
+		setSelId((cur) => (cur && snap.entries.some((e) => e.id === cur) ? cur : null));
 		void saveRef.current();
 	}
 
-	/** Ctrl+Z 处理器经 ref 传递:keydown 监听只注册一次,始终调用最新 undo。 */
+	/** 撤销最近一次编辑会话(恢复快照并立即保存);当前副本压入重做栈。 */
+	function undo() {
+		const prev = undoStack.current.pop();
+		if (!prev) return;
+		if (worldRef.current) {
+			redoStack.current.push(structuredClone(worldRef.current));
+			if (redoStack.current.length > MAX_UNDO) redoStack.current.shift();
+		}
+		applySnapshot(prev);
+	}
+
+	/** 重做(撤销的反向;工具栏按钮与 Ctrl+Shift+Z)。 */
+	function redo() {
+		const next = redoStack.current.pop();
+		if (!next) return;
+		if (worldRef.current) {
+			undoStack.current.push(structuredClone(worldRef.current));
+			if (undoStack.current.length > MAX_UNDO) undoStack.current.shift();
+		}
+		applySnapshot(next);
+	}
+
+	/** Ctrl+Z/Ctrl+Shift+Z 处理器经 ref 传递:keydown 监听只注册一次,始终调用最新实现。 */
 	const undoRef = useRef(undo);
 	undoRef.current = undo;
+	const redoRef = useRef(redo);
+	redoRef.current = redo;
 
 	/** 条目字段变更(表单行内编辑)。 */
 	function changeEntry(next: WorldEntryDto) {
@@ -254,6 +292,7 @@ export function WorldPage({
 		updateWorld((w) => ({ ...w, entries: [...w.entries, entry] }));
 		setSelId(entry.id);
 		setCreateTitle("");
+		setCreating(false);
 	}
 
 	/** 删除条目:其子条目的 parent 清空(转根条目),相关关系一并移除(后端校验要求)。 */
@@ -265,7 +304,7 @@ export function WorldPage({
 		setSelId((prev) => (prev === id ? null : prev));
 	}
 
-	// Ctrl+S 立即保存;Ctrl+Z 撤销(输入框聚焦时交给浏览器原生撤销,不拦截)
+	// Ctrl+S 立即保存;Ctrl+Z 撤销 / Ctrl+Shift+Z 重做(输入框聚焦时交给浏览器原生撤销)
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			const t = e.target as HTMLElement | null;
@@ -273,9 +312,15 @@ export function WorldPage({
 			if (e.ctrlKey && e.key === "s") {
 				e.preventDefault();
 				void saveRef.current();
-			} else if (e.ctrlKey && e.key === "z" && !inField && undoStack.current.length > 0) {
+			} else if (e.ctrlKey && (e.key === "z" || e.key === "Z") && !inField) {
 				e.preventDefault();
-				undoRef.current();
+				if (e.shiftKey) redoRef.current();
+				else undoRef.current();
+			} else if (e.ctrlKey && (e.key === "y" || e.key === "Y") && !inField) {
+				e.preventDefault();
+				redoRef.current();
+			} else if (e.key === "Escape" && confirmDeleteRef.current) {
+				setConfirmDelete(null);
 			}
 		};
 		window.addEventListener("keydown", onKey);
@@ -296,6 +341,10 @@ export function WorldPage({
 
 	const selEntry = world ? (world.entries.find((e) => e.id === selId) ?? null) : null;
 
+	/** 视图容器 class(与 styles.css 的 .world-stage 双常驻叠放/滑入滑出规则对齐)。 */
+	const viewCls = (v: WorldView, base: string) =>
+		view === v ? `${base} active` : leaving === v ? `${base} leaving` : base;
+
 	return (
 		<>
 			{world === null ? (
@@ -313,7 +362,7 @@ export function WorldPage({
 				</div>
 			) : (
 				<AnimatePresence initial={false}>
-					{view === "list" && (
+					{view === "entries" && (
 						/* 树随视图切换:宽度收缩滑出/滑入(flex 布局下纸张区平滑让位) */
 						<motion.div
 							key="world-tree"
@@ -323,164 +372,210 @@ export function WorldPage({
 							exit={{ width: 0, opacity: 0 }}
 							transition={{ duration: DUR.base, ease: EASE.out }}
 						>
-							<WorldTree entries={world.entries} selId={selId} onSelect={setSelId} />
+							<WorldTree
+								entries={world.entries}
+								selId={selId}
+								onSelect={setSelId}
+								relations={world.relations}
+								creating={creating}
+								onCreatingChange={setCreating}
+								createType={createType}
+								onCreateType={setCreateType}
+								createTitle={createTitle}
+								onCreateTitle={setCreateTitle}
+								onCreate={createEntry}
+							/>
 						</motion.div>
 					)}
 				</AnimatePresence>
 			)}
 			<section className="world-body">
 				<div className="w-bar">
-					<span className="w-file">世界书 · 条目管理</span>
-					<button
-						type="button"
-						className={summaryCollapsed ? "w-summary-toggle" : "w-summary-toggle on"}
-						onClick={() => setSummaryCollapsed((c) => !c)}
-						title={summaryCollapsed ? "展开简要世界观" : "折叠简要世界观"}
-					>
-						简要世界观 {summaryCollapsed ? "▸" : "▾"}
-					</button>
-					<div className="w-view-tabs">
-						<button
-							type="button"
-							className={view === "list" ? "w-view-tab active" : "w-view-tab"}
-							onClick={() => switchView("list")}
-						>
-							列表
-						</button>
-						<button
-							type="button"
-							className={view === "graph" ? "w-view-tab active" : "w-view-tab"}
-							onClick={() => switchView("graph")}
-						>
-							关系图
-						</button>
+					<h1 className="w-page-title">世界书</h1>
+					<span className="w-count-pill">{world?.entries.length ?? 0} 条目</span>
+					<div className="w-bar-right">
+						{dirty && <span className="w-dirty on">● 未保存</span>}
+						{(dirty || saving) && (
+							<button type="button" className="w-save" disabled={saving} onClick={() => void save()}>
+								{saving ? "保存中…" : "保存"}
+							</button>
+						)}
+						<div className="w-seg" role="tablist" aria-label="世界书视图">
+							{(
+								[
+									["entries", "条目"],
+									["graph", "关系图"],
+									["settings", "设定"],
+								] as ReadonlyArray<[WorldView, string]>
+							).map(([v, label]) => (
+								<button
+									key={v}
+									type="button"
+									role="tab"
+									aria-selected={view === v}
+									className={view === v ? "w-seg-btn active" : "w-seg-btn"}
+									onClick={() => switchView(v)}
+								>
+									{label}
+								</button>
+							))}
+						</div>
 					</div>
-					<span className={dirty ? "w-dirty on" : "w-dirty"}>{dirty ? "● 未保存" : "✓ 已保存"}</span>
-					<button type="button" className="w-save" disabled={!dirty || saving} onClick={() => void save()}>
-						{saving ? "保存中…" : "保存"}
-					</button>
 				</div>
-				{world !== null && !summaryCollapsed && (
-					<WorldSummaryPanel
-						summary={world.worldSummary}
-						onChange={(v) => updateWorld((w) => ({ ...w, worldSummary: v }))}
-					/>
-				)}
 				{saveErr && <div className="notice err">{saveErr}</div>}
 				{world === null ? (
 					<div className="world-scroll">
 						<div className="w-empty">世界书加载中…</div>
 					</div>
 				) : (
-					/* 视图舞台:列表/关系图双常驻叠放(切换保留表单输入与滚动位置,
-					   关系图 cytoscape 容器恒有尺寸),active 自右滑入、leaving 向左滑出 */
+					/* 视图舞台:三视图叠加常驻(切换保留表单输入与滚动位置,关系图
+					   cytoscape 容器恒有尺寸),active 自右滑入、leaving 向左滑出 */
 					<div className="world-stage">
-						<div
-							className={
-								view === "list" ? "world-scroll active" : leaving === "list" ? "world-scroll leaving" : "world-scroll"
-							}
-						>
-							<>
-								<form
-									className="w-add"
-									onSubmit={(e) => {
-										e.preventDefault();
-										createEntry();
-									}}
-								>
-									<span className="w-add-head">新增条目</span>
-									<select value={createType} onChange={(e) => setCreateType(e.target.value as WorldEntryDto["type"])} title="条目类型">
-										{ENTRY_TYPES.map((t) => (
-											<option key={t} value={t}>
-												{ENTRY_TYPE_LABELS[t]}
-											</option>
-										))}
-									</select>
-									<input
-										value={createTitle}
-										onChange={(e) => setCreateTitle(e.target.value)}
-										placeholder="条目标题"
-									/>
-									<button type="submit" className="w-add-btn" disabled={createTitle.trim() === ""}>
-										添加
-									</button>
-								</form>
+						<div className={`${viewCls("entries", "world-scroll")} w-view-entries`}>
+							<div className="w-entries-main">
 								{selEntry ? (
 									<EntryForm
 										key={selEntry.id}
 										entry={selEntry}
-										entries={world.entries}
-										chapters={chapters}
-										chaptersOk={chaptersOk}
-										slug={slug}
 										onChange={changeEntry}
-										onDelete={() => deleteEntry(selEntry.id)}
+										onRequestDelete={() => setConfirmDelete(selEntry)}
 									/>
 								) : (
-								<div className="w-empty">选择左侧条目进行编辑</div>
-							)}
-								<StorylinePanel
-									storyline={world.storyline}
-									onChange={(s) => updateWorld((w) => ({ ...w, storyline: s }))}
-								/>
-								<TimelinePanel
-									events={world.timeline}
+									<div className="w-empty-state">
+										<span className="w-empty-icon">
+											<Lu icon="book" size={24} />
+										</span>
+										<h3 className="w-empty-title">未选中任何条目</h3>
+										<p className="w-empty-desc">
+											从左边的分类树里选择一个条目，查看并编辑它的设定；也可以直接新建一个条目。
+										</p>
+										<button type="button" className="w-btn-amber w-empty-new" onClick={() => setCreating(true)}>
+											<Lu icon="plus" size={15} /> 新建条目
+										</button>
+										<span className="w-empty-hint">或从已有条目复制一份</span>
+									</div>
+								)}
+							</div>
+							{selEntry && (
+								<EntryInfoPanel
+									key={selEntry.id}
+									entry={selEntry}
+									entries={world.entries}
 									chapters={chapters}
 									chaptersOk={chaptersOk}
-									onChange={(t) => updateWorld((w) => ({ ...w, timeline: t }))}
+									slug={slug}
+									client={client}
+									onChange={changeEntry}
 								/>
-								<ConstraintsPanel
-									constraints={world.constraints}
-									sample={world.styleSample}
-									onConstraints={(c) => updateWorld((w) => ({ ...w, constraints: c }))}
-									onSample={(s) => updateWorld((w) => ({ ...w, styleSample: s }))}
-									/>
-								</>
+							)}
 						</div>
 						{graphMounted && (
-						<div
-							className={
-								view === "graph"
-									? "world-graph-view active"
-									: leaving === "graph"
-										? "world-graph-view leaving"
-										: "world-graph-view"
-							}
-						>
-							<RelationGraph
-								entries={world.entries}
-								relations={world.relations}
-								slug={slug}
-								focusId={selId}
-								onSelect={setSelId}
-								onUpdateRelations={(next) => updateWorld((w) => ({ ...w, relations: next }))}
-								onUpdateEntry={changeEntry}
-								onDeleteEntry={deleteEntry}
-								canUndo={undoCount > 0}
-								onUndo={undo}
-							/>
-						{selEntry ? (
-							<EntryCard
-								key={selEntry.id}
-								entry={selEntry}
-								entries={world.entries}
-								relations={world.relations}
-								slug={slug}
-								client={client}
-							onJump={setSelId}
-							onChange={changeEntry}
-							onClose={() => setSelId(null)}
-							/>
-						) : (
-							<aside className="entry-card entry-card-hint">
-								<div>点击图中节点查看词条详情</div>
-							</aside>
+							<div className={viewCls("graph", "world-graph-view")}>
+								<RelationGraph
+									entries={world.entries}
+									relations={world.relations}
+									slug={slug}
+									focusId={selId}
+									onSelect={setSelId}
+									onUpdateRelations={(next) => updateWorld((w) => ({ ...w, relations: next }))}
+									onUpdateEntry={changeEntry}
+									onDeleteEntry={(id) => {
+										const e = world.entries.find((x) => x.id === id);
+										if (e) setConfirmDelete(e);
+									}}
+									canUndo={undoCount > 0}
+									onUndo={undo}
+									canRedo={redoCount > 0}
+									onRedo={redo}
+								/>
+								{selEntry ? (
+									<EntryCard
+										key={selEntry.id}
+										entry={selEntry}
+										entries={world.entries}
+										relations={world.relations}
+										slug={slug}
+										onJump={setSelId}
+										onClose={() => setSelId(null)}
+										onEdit={() => switchView("entries")}
+										onDelete={() => setConfirmDelete(selEntry)}
+									/>
+								) : (
+									<aside className="entry-card entry-card-hint">
+										<div>点击图中节点查看词条详情</div>
+									</aside>
+								)}
+							</div>
 						)}
+						<div className={viewCls("settings", "world-scroll") + " w-view-settings"}>
+							<div className="w-settings">
+								<div className="w-col">
+									<section className="w-card">
+										<div className="w-card-head">
+											<span className="w-card-title">简要世界观</span>
+											<span className="w-card-note">常驻注入</span>
+										</div>
+										<WorldSummaryPanel
+											summary={world.worldSummary}
+											onChange={(v) => updateWorld((w) => ({ ...w, worldSummary: v }))}
+										/>
+									</section>
+									<StorylinePanel
+										storyline={world.storyline}
+										onChange={(s) => updateWorld((w) => ({ ...w, storyline: s }))}
+									/>
+									<StyleSamplePanel
+										sample={world.styleSample}
+										onSample={(s) => updateWorld((w) => ({ ...w, styleSample: s }))}
+									/>
+								</div>
+								<div className="w-col">
+									<TimelinePanel
+										events={world.timeline}
+										chapters={chapters}
+										chaptersOk={chaptersOk}
+										onChange={(t) => updateWorld((w) => ({ ...w, timeline: t }))}
+									/>
+									<ConstraintsPanel
+										constraints={world.constraints}
+										onConstraints={(c) => updateWorld((w) => ({ ...w, constraints: c }))}
+									/>
+								</div>
+							</div>
 						</div>
-					)}
 					</div>
 				)}
 			</section>
+
+			{/* 删除确认(设计稿 04):独立定位层的模态,fixed 不受祖先 overflow 裁剪 */}
+			{confirmDelete && (
+				<div className="w-modal-mask" onMouseDown={(e) => e.target === e.currentTarget && setConfirmDelete(null)}>
+					<div className="w-modal" role="dialog" aria-modal="true" aria-labelledby="w-del-title">
+						<div className="w-modal-head">
+							<Lu icon="triangle-alert" size={20} strokeWidth={1.6} />
+							<span id="w-del-title">删除这个条目？</span>
+						</div>
+						<p className="w-modal-desc">
+							「{confirmDelete.title || "未命名"}」及其关联章节、关键词等设置都会被移除，此操作不可恢复。
+						</p>
+						<div className="w-modal-actions">
+							<button type="button" className="w-btn-ghost" onClick={() => setConfirmDelete(null)}>
+								取消
+							</button>
+							<button
+								type="button"
+								className="w-btn-solid"
+								onClick={() => {
+									deleteEntry(confirmDelete.id);
+									setConfirmDelete(null);
+								}}
+							>
+								删除条目
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
 		</>
 	);
 }

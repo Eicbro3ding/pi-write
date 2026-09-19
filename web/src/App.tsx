@@ -32,9 +32,10 @@ function isClassicView(v: View): boolean {
 	return v !== "stage";
 }
 
-/** 顶栏保存状态 → 图标与颜色 class(文案来自 WritePage 上报的 SAVE_LABELS)。 */
+/** 顶栏保存状态 → 图标与颜色 class(文案来自 WritePage 上报的 SAVE_LABELS)。
+ *  设计稿顶栏右侧是「● 已保存」——一个状态点 + 文案,不用勾选图标。 */
 const SAVE_STYLE: Record<string, { icon: string; cls: string }> = {
-	"已保存": { icon: "✓", cls: "ok" },
+	"已保存": { icon: "●", cls: "ok" },
 	"未保存": { icon: "●", cls: "dirty" },
 	"保存中": { icon: "…", cls: "busy" },
 	"保存失败": { icon: "!", cls: "err" },
@@ -261,34 +262,9 @@ export function App() {
 				<div className="brand">
 					pi<i>·writer</i>
 				</div>
-				<div className="book">
-					{header
-						? // slug 与书名相同时不重复展示(默认书 title===slug,如「《未命名》 · 未命名」)
-							`《${header.bookTitle}》${header.bookSlug && header.bookSlug !== header.bookTitle ? ` · ${header.bookSlug}` : ""}${header.chapterTitle ? ` · ${header.chapterTitle}` : ""}`
-						: "《未命名》"}
-				</div>
-				<div className="right">
-					{header ? (
-						<span className={!header.connected ? "stat err" : `stat ${SAVE_STYLE[header.save]?.cls ?? ""}`}>
-							{header.connected ? (
-								<>
-									{/* 保存状态文案变化时柔和淡入;字数数字保持静态,避免逐字闪烁 */}
-									<span className={`stat-icon ${SAVE_STYLE[header.save]?.cls ?? ""}`}>
-										{SAVE_STYLE[header.save]?.icon ?? ""}
-									</span>
-									<span key={header.save} style={{ transition: "opacity 140ms" }}>
-										{header.save}
-									</span>
-									<span> · {header.words} 字</span>
-								</>
-							) : (
-								"连接失败"
-							)}
-						</span>
-					) : (
-						<span className="stat">未连接</span>
-					)}
-					<span className="top-divider" />
+				{/* 导航紧跟品牌靠左(旧版把它推到右侧),书名/字数交给各页自己的页头,
+				    顶栏只留「我现在在哪」与「存没存」两件事 */}
+				<nav className="top-nav">
 					{/* 经典模式(单 agent)去掉的只有舞台:导演/演员/旁白那套多 agent 共演。
 					    世界书页没有 agent(面向人的设定编辑器),留着照常用 */}
 					{!classicMode && (
@@ -325,6 +301,27 @@ export function App() {
 						<IconGear size={15} />
 						<span className="top-entry-label">设置</span>
 					</button>
+				</nav>
+				<div className="right">
+					{header ? (
+						<span className={!header.connected ? "stat err" : `stat ${SAVE_STYLE[header.save]?.cls ?? ""}`}>
+							{header.connected ? (
+								<>
+									{/* 保存状态文案变化时柔和淡入;字数在各页页头,不在这里重复 */}
+									<span className={`stat-icon ${SAVE_STYLE[header.save]?.cls ?? ""}`}>
+										{SAVE_STYLE[header.save]?.icon ?? ""}
+									</span>
+									<span key={header.save} style={{ transition: "opacity 140ms" }}>
+										{header.save}
+									</span>
+								</>
+							) : (
+								"连接失败"
+							)}
+						</span>
+					) : (
+						<span className="stat">未连接</span>
+					)}
 				</div>
 			</header>
 			<div className="main">

@@ -55,16 +55,16 @@ describe("简化输出设置", () => {
 });
 
 describe("自动展开思考设置", () => {
-	it("缺省开启(未存储任何值时自动展开为 true)", () => {
+	it("缺省关闭(未存储任何值时思考块默认收起——设计稿 04/06)", () => {
 		stubStorage();
-		expect(autoExpandThinkingEnabled()).toBe(true);
-	});
-	it("显式关闭('0')后为 false,重新开启('1')为 true", () => {
-		stubStorage();
-		setAutoExpandThinking(false);
 		expect(autoExpandThinkingEnabled()).toBe(false);
+	});
+	it("显式开启('1')后为 true,关闭('0')为 false", () => {
+		stubStorage();
 		setAutoExpandThinking(true);
 		expect(autoExpandThinkingEnabled()).toBe(true);
+		setAutoExpandThinking(false);
+		expect(autoExpandThinkingEnabled()).toBe(false);
 	});
 	it("持久化到 localStorage 键", () => {
 		const store = stubStorage();
@@ -73,12 +73,12 @@ describe("自动展开思考设置", () => {
 		setAutoExpandThinking(true);
 		expect(store.get(AUTO_EXPAND_KEY)).toBe("1");
 	});
-	it("parseAutoExpandThinking:缺省/非法值回退开启,仅 '0' 关闭", () => {
-		expect(parseAutoExpandThinking(null)).toBe(true);
-		expect(parseAutoExpandThinking(undefined)).toBe(true);
+	it("parseAutoExpandThinking:仅 '1' 开启,缺省/非法值一律收起", () => {
+		expect(parseAutoExpandThinking(null)).toBe(false);
+		expect(parseAutoExpandThinking(undefined)).toBe(false);
 		expect(parseAutoExpandThinking("0")).toBe(false);
 		expect(parseAutoExpandThinking("1")).toBe(true);
-		expect(parseAutoExpandThinking("junk")).toBe(true);
+		expect(parseAutoExpandThinking("junk")).toBe(false);
 	});
 });
 

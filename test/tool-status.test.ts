@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { activeToolName, DEFAULT_TOOL_STATUS, TOOL_STATUS } from "../web/src/tool-status.ts";
-
-/** 最小消息形状:只保留 activeToolName 需要的字段。 */
-function msg(role: string, toolCalls: Array<{ name: string; result: string | null; isError: boolean }>) {
-  return { role, toolCalls };
-}
+import {
+	ACTION_FLOW_KEEP,
+	actionFlowTools,
+	DEFAULT_TOOL_DONE,
+	DEFAULT_TOOL_STATUS,
+	TOOL_DONE,
+	TOOL_FAIL,
+	TOOL_STATUS,
+	toolActionRow,
+	toolIcon,
+	toolObject,
+} from "../web/src/tool-status.ts";
 
 describe("TOOL_STATUS(工具名 → 中文进行时文案)", () => {
   it("覆盖 web 工具集全部工具", () => {
@@ -16,41 +22,76 @@ describe("TOOL_STATUS(工具名 → 中文进行时文案)", () => {
     expect(TOOL_STATUS["bash"]).toBeUndefined();
     expect(DEFAULT_TOOL_STATUS).toBe("正在调用工具");
   });
+  it("完成文案齐全,未知工具回退通用完成文案", () => {
+    expect(TOOL_DONE.read).toBe("已阅读");
+    expect(TOOL_DONE.edit).toBe("已编辑");
+    expect(TOOL_DONE.world_update).toBe("已更新世界书");
+    expect(DEFAULT_TOOL_DONE).toBe("已调用");
+  });
 });
 
-describe("activeToolName(当前正在执行的工具)", () => {
-  it("最后一条 assistant 消息里 result 为 null 的工具即当前工具", () => {
-    const m = [
-      msg("user", []),
-      msg("assistant", [
-        { name: "read", result: "已读", isError: false },
-        { name: "write", result: null, isError: false },
-      ]),
+describe("工具动作流(03-组件规范/05:带宾语、完成的行留在流水里、不用 emoji)", () => {
+  it("单个工具 → 动作行(进行中/已完成两态)", () => {
+    const running = toolActionRow({ name: "edit", args: '{"path":"draft/ch01.md"}', result: null, isError: false });
+    expect(running).toMatchObject({ verb: "正在编辑", object: "draft/ch01.md", running: true, icon: "edit" });
+    const done = toolActionRow({ name: "edit", args: '{"path":"draft/ch01.md"}', result: "ok", isError: false });
+    expect(done).toMatchObject({ verb: "已编辑", object: "draft/ch01.md", running: false });
+  });
+
+  it("宾语优先 path,其次查询类字段,JSON 取不到字段时宁可不显示", () => {
+    expect(toolObject('{"path":"draft/ch01.md","content":"x"}')).toBe("draft/ch01.md");
+    expect(toolObject('{"pattern":"打油","path":"draft/"}')).toBe("draft/");
+    expect(toolObject('{"pattern":"打油"}')).toBe("打油");
+    expect(toolObject('{"query":"深海鱼骨"}')).toBe("深海鱼骨");
+    expect(toolObject('{"unknownKey":1}')).toBe("");
+    expect(toolObject("")).toBe("");
+    // 裸参(非 JSON):取首行
+    expect(toolObject("git log --oneline -5")).toBe("git log --oneline -5");
+  });
+
+  it("失败行给失败动词(设计稿 V1 示例:✕ 写入失败 notes/city.md)", () => {
+    expect(TOOL_FAIL.write).toBe("写入失败");
+    expect(TOOL_FAIL.read).toBe("读取失败");
+    const failed = toolActionRow({ name: "write", args: '{"path":"notes/city.md"}', result: "", isError: true });
+    expect(failed).toMatchObject({ verb: "写入失败", object: "notes/city.md", running: false, isError: true });
+    // 失败优先于「进行中」:isError 且尚无结果时也不显示「正在编辑」
+    const failedNoResult = toolActionRow({ name: "edit", args: '{"path":"a.md"}', result: null, isError: true });
+    expect(failedNoResult.verb).toBe("写入失败");
+    expect(failedNoResult.running).toBe(false);
+    expect(toolActionRow({ name: "mystery", args: "", result: "", isError: true }).verb).toBe("调用失败");
+  });
+
+  it("图标族按工具名分派", () => {
+    expect(toolIcon("read")).toBe("read");
+    expect(toolIcon("write")).toBe("edit");
+    expect(toolIcon("grep")).toBe("search");
+    expect(toolIcon("ls")).toBe("find");
+    expect(toolIcon("word_count")).toBe("count");
+    expect(toolIcon("world_update")).toBe("world");
+    expect(toolIcon("bash")).toBe("other");
+  });
+
+  it("actionFlowTools:进行中全留 + 最近 3 条已完成,保持原顺序", () => {
+    const tools = [
+      { name: "read", result: "ok" },
+      { name: "read", result: "ok" },
+      { name: "read", result: "ok" },
+      { name: "read", result: "ok" },
+      { name: "edit", result: "ok" },
+      { name: "write", result: null },
     ];
-    expect(activeToolName(m)).toBe("write");
+    const shown = actionFlowTools(tools);
+    // 5 条已完成里只留最后 3 条(第 3、4 条 read + edit),进行中的 write 全留
+    expect(shown.map((t) => t.name)).toEqual(["read", "read", "edit", "write"]);
+    expect(shown).toHaveLength(ACTION_FLOW_KEEP + 1);
   });
-  it("工具完成后(result 已置)返回 null,回退思考提示", () => {
-    const m = [msg("assistant", [{ name: "read", result: "已读", isError: false }])];
-    expect(activeToolName(m)).toBeNull();
-  });
-  it("执行出错的工具不算运行中(isError 且 result 为 null 时不再显示)", () => {
-    const m = [msg("assistant", [{ name: "read", result: null, isError: true }])];
-    expect(activeToolName(m)).toBeNull();
-  });
-  it("空消息列表返回 null", () => {
-    expect(activeToolName([])).toBeNull();
-  });
-  it("user 消息的工具调用不参与(工具卡只属于 assistant 轮)", () => {
-    const m = [msg("user", [{ name: "read", result: null, isError: false }])];
-    expect(activeToolName(m)).toBeNull();
-  });
-  it("跨消息回看:旧 assistant 消息里的运行中工具在最新消息无工具时仍能检出", () => {
-    const m = [
-      msg("user", []),
-      msg("assistant", [{ name: "grep", result: null, isError: false }]),
-      msg("user", []),
-      msg("assistant", []),
+
+  it("actionFlowTools:少于阈值时全部保留;空数组返回空", () => {
+    const tools = [
+      { name: "a", result: "x" },
+      { name: "b", result: null },
     ];
-    expect(activeToolName(m)).toBe("grep");
+    expect(actionFlowTools(tools).map((t) => t.name)).toEqual(["a", "b"]);
+    expect(actionFlowTools([])).toEqual([]);
   });
 });

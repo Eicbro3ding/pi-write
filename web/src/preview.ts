@@ -158,6 +158,20 @@ export interface PreviewCardItem {
 	data: PreviewData;
 }
 
+/** 草稿预览的折叠头统计:首个文件路径 + 全部 section 的增删行数。 */
+export function draftDiffStats(data: PreviewData): { path: string; add: number; del: number } | null {
+	if ("error" in data || data.kind !== "draft" || data.sections.length === 0) return null;
+	let add = 0;
+	let del = 0;
+	for (const s of data.sections) {
+		for (const l of s.diff) {
+			if (l.kind === "add") add++;
+			else if (l.kind === "remove") del++;
+		}
+	}
+	return { path: data.sections[0]!.path, add, del };
+}
+
 /**
  * 世界树变更分类:
  * 结构变化(新增/删除条目、关系增删改)→ 图;仅词条内容修改 → 百科卡;

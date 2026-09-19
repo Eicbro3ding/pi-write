@@ -1,0 +1,38 @@
+/* pi-writer · 居中对话框(设置页「模型提供商」/「添加模型」等)
+   在 styles.css 与 wizard.css 之后加载。
+
+   为什么单独一份:`.wz-overlay` / `.wz-panel` 原先既是「通用居中弹窗」又是向导的
+   外壳。向导改版成整屏引导后,wizard.css 覆盖了 `.wz-overlay`(fixed + 竖向布局),
+   复用它的对话框会被一起拉成整屏布局——所以对话框换成这里独立的 `.dlg-*`,
+   两个形态各归各家,谁改都不再影响对方。 */
+.dlg-overlay {
+  position: fixed; inset: 0; z-index: 300;
+  background: var(--mask);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  display: flex; align-items: center; justify-content: center; padding: var(--sp-6);
+  animation: wz-fade var(--dur-base) var(--ease-out);
+}
+.dlg-panel {
+  width: min(680px, 94vw); max-height: 88vh;
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg-elev); border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg); box-shadow: var(--shadow-3);
+  animation: wz-pop var(--dur-slow) var(--ease-out);
+}
+/* 面板内头/体/脚:弹窗内部结构(与向导的整屏区段同名不同用) */
+.dlg-head {
+  flex: none; display: flex; align-items: center; gap: var(--sp-3);
+  padding: 16px 20px; border-bottom: 1px solid var(--line);
+}
+.dlg-title { font-size: var(--fs-15); font-weight: 500; color: var(--ink); }
+.dlg-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px; }
+.dlg-foot {
+  flex: none; display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-3);
+  padding: 12px 20px; border-top: 1px solid var(--line); background: var(--bg-elev);
+}
+.dlg-x {
+  margin-left: auto; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: var(--r-sm); color: var(--faint);
+  transition: color var(--dur-fast), background var(--dur-fast);
+}
+.dlg-x:hover { color: var(--ink); background: var(--hover-tint); }

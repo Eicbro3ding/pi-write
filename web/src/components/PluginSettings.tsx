@@ -3,6 +3,7 @@ import type { ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
 import type { PluginInfoDto, PluginSettingsFieldDto } from "../types.ts";
 import { ToggleSwitch } from "./ToggleSwitch.tsx";
+import { Select } from "./Select.tsx";
 
 /**
  * 插件设置菜单(声明式渲染):按 plugin.json 的 frontend.ui.settingsItems
@@ -95,18 +96,13 @@ export function PluginSettings({ client, plugin }: { client: ApiClient; plugin: 
 				break;
 			case "select":
 				control = (
-					<select
-						className="s-select"
+					<Select
+						className="sel-row"
 						value={typeof value === "string" ? value : ""}
 						disabled={busy}
-						onChange={(e) => setValues((prev) => ({ ...prev, [field.key]: e.target.value }))}
-					>
-						{(field.options ?? []).map((o) => (
-							<option key={o.value} value={o.value}>
-								{o.label}
-							</option>
-						))}
-					</select>
+						onChange={(v) => setValues((prev) => ({ ...prev, [field.key]: v }))}
+						options={field.options ?? []}
+					/>
 				);
 				break;
 			case "textarea":

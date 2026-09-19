@@ -6,10 +6,10 @@ import cola from "cytoscape-cola";
 import type { RelationArrowDto, WorldEntryDto, WorldRelationDto } from "../types.ts";
 import { ENTRY_TYPES, ENTRY_TYPE_LABELS } from "./WorldTree.tsx";
 import { newId } from "./id.ts";
-import { disconnectEntry, genAvatarDataUrl } from "../graph-logic.ts";
-import { imageUrl } from "../api/client.ts";
-import { buildGraphStyles, themeVar, TYPE_FALLBACKS, TYPE_TOKENS } from "../graph-styles.ts";
+import { disconnectEntry } from "../graph-logic.ts";
+import { buildGraphStyles, genInitialDataUrl, themeVar, TYPE_FALLBACKS, TYPE_TOKENS } from "../graph-styles.ts";
 import { loadPositions, loadViewport, savePositions, saveViewport } from "../graph-persistence.ts";
+import { Lu } from "./Lu.tsx";
 
 cytoscape.use(cola);
 
@@ -23,10 +23,14 @@ cytoscape.use(cola);
  * 数据变更由父组件置脏后整体走 putWorld(与服务端 relations 校验对齐)。
  */
 
-/** 节点展示标题:超长截断防巨节点(完整标题在词条面板可见)。 */
-function nodeLabel(title: string): string {
+/**
+ * 节点展示标题(设计稿 10):第一行名字(超长截断防巨节点),第二行关系条数。
+ * cytoscape 单个 label 只能有一种字号/字色,两行同款样式。
+ */
+function nodeLabel(title: string, relCount: number): string {
 	const t = title.trim() || "未命名";
-	return t.length > 14 ? `${t.slice(0, 14)}…` : t;
+	const name = t.length > 12 ? `${t.slice(0, 12)}…` : t;
+	return `${name}\n${relCount} 条关系`;
 }
 
 interface RelationGraphProps {
@@ -44,9 +48,11 @@ interface RelationGraphProps {
 	onUpdateEntry?: (next: WorldEntryDto) => void;
 	/** 节点右键快捷删除条目(父组件负责级联清理)。 */
 	onDeleteEntry?: (id: string) => void;
-	/** 撤销可用与触发(父组件持有撤销栈)。 */
+	/** 撤销/重做可用与触发(父组件持有撤销栈)。 */
 	canUndo?: boolean;
 	onUndo?: () => void;
+	canRedo?: boolean;
+	onRedo?: () => void;
 }
 
 type CtxMenu =
@@ -216,6 +222,8 @@ export function RelationGraph({
 	onDeleteEntry,
 	canUndo,
 	onUndo,
+	canRedo,
+	onRedo,
 }: RelationGraphProps) {
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const cyRef = useRef<Core | null>(null);
@@ -277,20 +285,25 @@ export function RelationGraph({
 		const missing = stored ? visible.filter((e) => !stored[e.id]) : visible;
 		// 至少一个节点有存档位置才走 preset 恢复;全为新节点则整图 cose(fit)
 		const hasStored = missing.length < visible.length;
+		/** 条目 id → 关系条数(节点标签第二行;与分类树同源)。 */
+		const relCountOf = (id: string) => relations.filter((r) => r.from === id || r.to === id).length;
 
-		const nodeElements: ElementDefinition[] = visible.map((e) => ({
-					data: {
-						id: e.id,
-						label: nodeLabel(e.title),
-						type: e.type,
-						active: e.active,
-						typeColor: themeVar(TYPE_TOKENS[e.type], TYPE_FALLBACKS[e.type]),
-						// 主图优先;无图回退"白底+首字"文字头像(标题变化在增量 effect 同步)
-						backgroundImage: e.avatar ? imageUrl(slug, e.avatar) : genAvatarDataUrl(e.title, themeVar(TYPE_TOKENS[e.type], TYPE_FALLBACKS[e.type])),
-					},
-					// preset 读取元素定义的顶层 position;放在 data 内会被 Cytoscape 忽略
-					...(hasStored && stored?.[e.id] ? { position: stored[e.id] } : {}),
-			}));
+		const nodeElements: ElementDefinition[] = visible.map((e) => {
+			const typeColor = themeVar(TYPE_TOKENS[e.type], TYPE_FALLBACKS[e.type]);
+			return {
+				data: {
+					id: e.id,
+					label: nodeLabel(e.title, relCountOf(e.id)),
+					type: e.type,
+					active: e.active,
+					typeColor,
+					// 设计稿 10:圆内首字(类型色),不再用条目主图/白底文字头像
+					backgroundImage: genInitialDataUrl(e.title, typeColor),
+				},
+				// preset 读取元素定义的顶层 position;放在 data 内会被 Cytoscape 忽略
+				...(hasStored && stored?.[e.id] ? { position: stored[e.id] } : {}),
+			};
+		});
 		const edgeElements: ElementDefinition[] = visRels.map((r) => ({
 			data: {
 				id: r.id,
@@ -534,7 +547,8 @@ export function RelationGraph({
 		if (linkFrom) cy.getElementById(linkFrom).addClass("link-from");
 	}, [linkFrom, epoch]);
 
-	// 标题/激活/图片增量同步:文本与图片编辑不重建图,只更新节点 data(节点宽度按 label 自适应)
+	// 标题/激活增量同步:文本编辑不重建图,只更新节点 data(关系条数在关系变更时
+	// 由重建 effect 刷新——graphSignature 含 relations)
 	useEffect(() => {
 		const cy = cyRef.current;
 		if (!cy) return;
@@ -542,11 +556,12 @@ export function RelationGraph({
 			const el = cy.getElementById(e.id);
 			if (el.length === 0) continue;
 			const typeColor = themeVar(TYPE_TOKENS[e.type], TYPE_FALLBACKS[e.type]);
-			el.data("label", nodeLabel(e.title));
+			const relCount = relations.filter((r) => r.from === e.id || r.to === e.id).length;
+			el.data("label", nodeLabel(e.title, relCount));
 			el.data("active", e.active);
-			el.data("backgroundImage", e.avatar ? imageUrl(slug, e.avatar) : genAvatarDataUrl(e.title, typeColor));
+			el.data("backgroundImage", genInitialDataUrl(e.title, typeColor));
 		}
-	}, [entries, slug, epoch]);
+	}, [entries, relations, slug, epoch]);
 
 	// 父组件联动选中(词条面板跳转 / 列表视图选择):选中 + 居中
 	useEffect(() => {
@@ -612,43 +627,51 @@ export function RelationGraph({
 	return (
 		<div className="graph-wrap">
 			<div className="graph-toolbar">
-				<span className="graph-toolbar-title">关系图</span>
-				{ENTRY_TYPES.map((t) => (
-					<label key={t} className="graph-filter">
-						<input
-							type="checkbox"
-							checked={typesOn[t]}
-							onChange={(e) => {
-								setTypesOn((prev) => ({ ...prev, [t]: e.target.checked }));
+				<div className="graph-filters">
+					{ENTRY_TYPES.map((t) => (
+						<button
+							key={t}
+							type="button"
+							className={typesOn[t] ? "graph-filter on" : "graph-filter"}
+							aria-pressed={typesOn[t]}
+							title={`${typesOn[t] ? "隐藏" : "显示"}${ENTRY_TYPE_LABELS[t]}条目`}
+							onClick={() => {
+								setTypesOn((prev) => ({ ...prev, [t]: !prev[t] }));
 								// 过滤切换可能把连线起点/右键目标节点藏掉:清空相关状态
 								setLinking(false);
 								setLinkFrom(null);
 								setCtxMenu(null);
 							}}
-						/>
-						{ENTRY_TYPE_LABELS[t]}
-					</label>
-				))}
-				<button
-					type="button"
-					className={linking ? "graph-link-btn on" : "graph-link-btn"}
-					onClick={() => {
-						setLinking((v) => !v);
-						setLinkFrom(null);
-					}}
-				>
-					{linking ? "取消连线" : "连线"}
-				</button>
-				<button type="button" className="graph-link-btn" disabled={!canUndo} onClick={() => onUndo?.()} title="撤销(Ctrl+Z)">
-					撤销
-				</button>
-				<span className="graph-hint">
-					{linking
-						? linkFrom
-							? "点击目标节点创建关系(再点同一点取消)"
-							: "点击起始节点"
-						: "单击节点查看词条 · 右键节点/连线快捷操作 · 拖拽节点调整布局"}
-				</span>
+						>
+							<span className="graph-filter-dot" style={{ background: `var(${TYPE_TOKENS[t]})` }} />
+							<span className="graph-filter-label">{ENTRY_TYPE_LABELS[t]}</span>
+							<span className="graph-filter-count">{entries.filter((e) => e.type === t).length}</span>
+						</button>
+					))}
+				</div>
+				<div className="graph-tools">
+					{linking && (
+						<span className="graph-hint">
+							{linkFrom ? "点击目标节点创建关系(再点同一点取消)" : "点击起始节点"}
+						</span>
+					)}
+					<button
+						type="button"
+						className={linking ? "graph-link-btn on" : "graph-link-btn"}
+						onClick={() => {
+							setLinking((v) => !v);
+							setLinkFrom(null);
+						}}
+					>
+						<>{linking ? "取消连线" : <><Lu icon="link-2" size={13} /> 连线</>}</>
+					</button>
+					<button type="button" className="graph-tool-btn" disabled={!canUndo} onClick={() => onUndo?.()} title="撤销(Ctrl+Z)">
+						<Lu icon="undo-2" size={13} /> 撤销
+					</button>
+					<button type="button" className="graph-tool-btn" disabled={!canRedo} onClick={() => onRedo?.()} title="重做(Ctrl+Shift+Z)">
+						<Lu icon="redo-2" size={13} /> 重做
+					</button>
+				</div>
 			</div>
 			{/* 画布恒挂载(过滤走 show()/hide() 不重建实例,P7);无可见条目时覆盖空态提示 */}
 			<div className="graph-canvas">

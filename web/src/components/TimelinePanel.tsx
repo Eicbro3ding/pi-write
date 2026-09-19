@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { ChapterRef, TimelineEventDto } from "../types.ts";
 import { newId } from "./id.ts";
+import { Select } from "./Select.tsx";
 
 interface TimelinePanelProps {
 	events: TimelineEventDto[];
@@ -10,8 +11,9 @@ interface TimelinePanelProps {
 }
 
 /**
- * 时间线面板:事件列表(chapter 标签 + 文本)+ 新增(chapter 下拉 + text)。
- * chapter 存章节 id;未知 id 原样显示。修改直接回调 onChange,整体保存。
+ * 时间线卡片(设计稿 09 右栏):事件行 = 章节胶囊 + 文本 + 删除;底部为新增行
+ * (章节下拉 + 事件描述 + 琥珀「添加」)。chapter 存章节 id;未知 id 原样显示。
+ * 修改直接回调 onChange,整体保存。
  */
 export function TimelinePanel({ events, chapters, chaptersOk, onChange }: TimelinePanelProps) {
 	const [chapter, setChapter] = useState<string>("");
@@ -31,9 +33,14 @@ export function TimelinePanel({ events, chapters, chaptersOk, onChange }: Timeli
 	}
 
 	return (
-		<section className="w-panel">
-			<div className="s-head">时间线</div>
-			{events.length === 0 && <div className="w-empty">暂无事件，在下方新增</div>}
+		<section className="w-card">
+			<div className="w-card-head">
+				<span className="w-card-title">时间线</span>
+				<span className="w-card-ops">
+					<span className="w-card-count">{events.length} 条</span>
+				</span>
+			</div>
+			{events.length === 0 && <div className="w-card-empty">暂无事件，在下方新增</div>}
 			{events.map((ev) => (
 				<div className="w-timeline-row" key={ev.id}>
 					<span className="w-chapter-tag" title={ev.chapter}>
@@ -43,40 +50,43 @@ export function TimelinePanel({ events, chapters, chaptersOk, onChange }: Timeli
 					<button
 						type="button"
 						className="w-ibtn danger"
-						title="删除事件" aria-label="删除事件"
+						title="删除事件"
+						aria-label="删除事件"
 						onClick={() => onChange(events.filter((x) => x.id !== ev.id))}
 					>
-						删
+						✕
 					</button>
 				</div>
 			))}
 			{chaptersOk ? (
-				<div className="w-timeline-add">
-					<select
-						className="w-input w-select"
-						value={effChapter}
-						onChange={(e) => setChapter(e.target.value)}
-					>
-						{chapters.map((c) => (
-							<option key={c.id} value={c.id}>
-								{c.title}
-								{c.exists ? "" : " · 缺失"}
-							</option>
-						))}
-					</select>
-					<input
-						className="w-input"
-						value={text}
-						placeholder="事件描述，如：凯文在酒馆遇到神秘老者"
-						onKeyDown={(e) => {
-							if (e.key === "Enter") add();
-						}}
-						onChange={(e) => setText(e.target.value)}
-					/>
-					<button type="button" className="btn-ghost" disabled={text.trim() === ""} onClick={add}>
-						添加
-					</button>
-				</div>
+				chapters.length === 0 ? (
+					<div className="w-field-hint">当前书没有章节，暂无法新增事件</div>
+				) : (
+					<div className="w-timeline-add">
+						<Select
+							className="sel-inline"
+							value={effChapter}
+							title="所属章节"
+							onChange={(v) => setChapter(v)}
+							options={chapters.map((c) => ({
+								value: c.id,
+								label: `${c.title}${c.exists ? "" : " · 缺失"}`,
+							}))}
+						/>
+						<input
+							className="w-timeline-input"
+							value={text}
+							placeholder="事件描述…"
+							onKeyDown={(e) => {
+								if (e.key === "Enter") add();
+							}}
+							onChange={(e) => setText(e.target.value)}
+						/>
+						<button type="button" className="w-btn-amber" disabled={text.trim() === ""} onClick={add}>
+							添加
+						</button>
+					</div>
+				)
 			) : (
 				<div className="w-field-hint">章节列表不可用，暂无法新增事件</div>
 			)}

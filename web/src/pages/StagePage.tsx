@@ -5,7 +5,7 @@ import type { Library } from "../library.ts";
 import { useMediaQuery } from "../useMediaQuery.ts";
 import { useDragResize } from "../use-drag-resize.ts";
 import { initialSessionState, messagesToEvents, processAgentEvent, RESET, sessionReducer } from "../store.ts";
-import type { AgentEventDto, ChapterRef, ScriptPatchDto, StageModeDto, StagePhaseDto, StageScriptDto, StageSnapshotDto, WorldDataDto } from "../types.ts";
+import type { AgentEventDto, BookFileEntryDto, ChapterRef, ScriptPatchDto, StageModeDto, StagePhaseDto, StageScriptDto, StageSnapshotDto, WorldDataDto } from "../types.ts";
 import { formatCounts, initialStageState, reduceStage, stageEntryText } from "../stage-web.ts";
 import { contextUsageHint } from "../context-usage.ts";
 import {
@@ -20,9 +20,13 @@ import { ChapterSidebar } from "../components/ChapterSidebar.tsx";
 import { InputBar } from "../components/InputBar.tsx";
 import { MessageList } from "../components/MessageList.tsx";
 import { PreviewCard } from "../components/PreviewCard.tsx";
+import { Select } from "../components/Select.tsx";
 import { StageAvatar } from "../components/StageAvatar.tsx";
 import { StagePanel, type StagePanelTab } from "../components/StagePanel.tsx";
+import { WorkspacePanel } from "../components/WorkspacePanel.tsx";
+import { FilePreview } from "../components/FilePreview.tsx";
 import { buildWorldDiff, classifyWorldChange, type PreviewData } from "../preview.ts";
+import { conversationStyle, panelCollapsed, setPanelCollapsed, type ConversationStyle } from "../stage-preferences.ts";
 
 /**
  * 舞台页(导演/演出):书库栏(常驻,与编辑页共享 useLibrary 状态)+ 舞台主区 +
@@ -34,6 +38,9 @@ import { buildWorldDiff, classifyWorldChange, type PreviewData } from "../previe
  * 状态:stage reducer(stage-web.ts 纯逻辑)维护快照 + 舞台流 + busy/turnPending;
  * 快照拉取 + SSE(stage_entry/system/done,按 slug 过滤)对齐服务端。
  */
+/** 空台账(舞台页没有 writer_event 写入路径;稳定引用,避免每次渲染新建)。 */
+const EMPTY_TOUCHED: ReadonlySet<string> = new Set();
+
 export function StagePage({
 	client,
 	library,
@@ -75,6 +82,10 @@ export function StagePage({
 	const [autoMode, setAutoMode] = useState(false);
 	/** 编剧思考链可见性档位(1-3,服务端无此字段,乐观切换)。 */
 	const [thoughts, setThoughts] = useState(2);
+	/** 左栏内容(章节 / 工作区):与编辑页同一套 rail 语义(设计稿 04 左栏同样有这两个页签)。 */
+	const [railMode, setRailMode] = useState<"chapters" | "workspace">("chapters");
+	/** 工作区文件预览(只读覆盖层压住舞台流,与编辑页同款)。 */
+	const [filePreview, setFilePreview] = useState<BookFileEntryDto | null>(null);
 	/** 右侧面板标签。 */
 	const [tab, setTab] = useState<StagePanelTab>("script");
 	/** 反馈表单:正在反馈的条目序号(1-based,即 /fix index);null = 关闭。 */
@@ -84,8 +95,19 @@ export function StagePage({
 	const [drawerOpen, setDrawerOpen] = useState(false);
 	/** 窄屏(<900px)判定:书库栏变抽屉(与写作页同断点)。 */
 	const isNarrow = useMediaQuery("(max-width: 900px)");
-	/** 右侧面板宽度(px,左缘拖拽手柄调整,280–520)。 */
-	const [panelWidth, setPanelWidth] = useState(360);
+	/** 右侧面板宽度(px,左缘拖拽手柄调整,280–520;**缺省 340**:设计稿 04 定稿宽度)。 */
+	const [panelWidth, setPanelWidth] = useState(340);
+	/** 右侧面板收起态(48px 竖条;localStorage 持久化,与编辑页 AI 伙伴栏同一套语言)。 */
+	const [panelShut, setPanelShut] = useState<boolean>(() => panelCollapsed());
+	const togglePanelShut = useCallback(() => {
+		setPanelShut((v) => {
+			const next = !v;
+			setPanelCollapsed(next);
+			return next;
+		});
+	}, []);
+	/** 对话形态:文档流(设计稿 04,缺省)/ 气泡(设计稿 05,设置里开启的差分)。 */
+	const [chatStyle] = useState<ConversationStyle>(() => conversationStyle());
 
 	/** 面板拖拽调宽:按下后在 window 上监听移动,宽度随鼠标横向位移受限于 [280, 520](useDragResize)。 */
 	const onPanelResizeStart = useDragResize({
@@ -370,6 +392,17 @@ export function StagePage({
 		[currentChapter, library],
 	);
 
+	/** 工作区点草稿 → 切回「章节」模式并选中该章(与编辑页同语义)。 */
+	const openChapterFromWorkspace = useCallback(
+		(chapterId: string) => {
+			const ch = (bookDetail?.chapters ?? []).find((c) => c.id === chapterId);
+			if (!ch) return;
+			setRailMode("chapters");
+			selectChapter(ch);
+		},
+		[bookDetail, selectChapter],
+	);
+
 	const newChapter = useCallback(async () => {
 		if (!bookDetail) return;
 		try {
@@ -440,9 +473,10 @@ export function StagePage({
 	const sceneId = snap?.sceneId ?? null;
 	const script = snap?.script ?? null;
 	const noScene = sceneId === null;
-	const nextDisabled = busy || stage.turnPending || autoMode;
-	const narratorActor = (actorId: string): boolean =>
-		snap?.cast.actors.find((a) => a.id === actorId)?.type === "narrator";
+	/** 场景头主标题:开演后 = 剧本的场景名(如「第三章·灯火」);未开演 = 当前章节名,
+	 *  第二行小字说明还没有一幕(设计稿 04:一行干净的场景头,不再两行杂糅)。 */
+	const sceneTitle = script?.scene ?? currentChapter?.title ?? "还没有一幕";
+	/** 未开演(phase=idle)时状态胶囊读作「未开演」(设计稿 04),其余按阶段标签。 */
 	const phaseLabel: Record<StagePhaseDto, string> = {
 		idle: "待命",
 		casting: "筹备",
@@ -450,6 +484,10 @@ export function StagePage({
 		wrapping: "收尾中",
 		closed: "已收幕",
 	};
+	const phaseText = snap ? (snap.phase === "idle" ? "未开演" : phaseLabel[snap.phase]) : "";
+	const nextDisabled = busy || stage.turnPending || autoMode;
+	const narratorActor = (actorId: string): boolean =>
+		snap?.cast.actors.find((a) => a.id === actorId)?.type === "narrator";
 	const phaseCls: Record<StagePhaseDto, string> = {
 		idle: "st-badge muted",
 		casting: "st-badge amber",
@@ -463,6 +501,16 @@ export function StagePage({
 		directing: "导演",
 	};
 	const castChars = script ? Object.values(script.definition.cast).map((c) => c[0] ?? "") : [];
+
+	/** 模式显示(「▾ 讨论模式」):模式由导演侧编排驱动(stage 编排器按剧本阶段
+	 *  切换,HTTP 命令面只有查询没有设置,见 src/web/stage-host.ts 的 "mode"),
+	 *  所以这里不做假下拉——点它给出准确解释,不让按钮骗人。 */
+	function explainMode() {
+		dispatch({
+			type: "system",
+			text: "导演模式(讨论 / 剧本 / 导演)由舞台编排按剧本阶段自动切换,不能从这里手动切;要推进流程就在下方给导演发话或示意写剧本。",
+		});
+	}
 
 	/** 提交反馈(/fix):长命令,经 stage_done 完成;续演回合的结束信号会恢复按钮。 */
 	function submitFix() {
@@ -520,7 +568,10 @@ export function StagePage({
 
 	let entryNo = 0;
 	return (
-		<div className="stage-grid" style={{ "--stage-panel-w": `${panelWidth}px` } as React.CSSProperties}>
+		<div
+			className={panelShut && !isNarrow ? "stage-grid panel-shut" : "stage-grid"}
+			style={{ "--stage-panel-w": `${panelWidth}px` } as React.CSSProperties}
+		>
 			<ChapterSidebar
 				books={books}
 				slug={bookDetail?.slug ?? null}
@@ -543,9 +594,26 @@ export function StagePage({
 				onToggleCollapse={toggleSidebarCollapsed}
 				drawerOpen={drawerOpen}
 				onClose={() => setDrawerOpen(false)}
+				railMode={railMode}
+				onRailModeChange={setRailMode}
+				workspace={
+					<WorkspacePanel
+						client={client}
+						slug={slug}
+						active={railMode === "workspace"}
+						/* 台账「AI 写过」的来源是编辑页 writer_event 的写入路径(内存态、刷新即空);
+						   舞台页没有这条事件流,传空集——文件清单与预览不受影响 */
+						aiTouched={EMPTY_TOUCHED}
+						onOpenChapter={openChapterFromWorkspace}
+						onPreview={setFilePreview}
+					/>
+				}
 			/>
 			<div className="stage-main">
-				{/* 场景头:窄屏书库抽屉开关 + 场景名 + 阶段/模式徽章 + 计数 + 导演最近一句 */}
+				{/* 场景头(设计稿 04):**一行**——左边场景名(18 号)+ 状态胶囊;
+				    右边模式显示(「▾ 讨论模式」)+ mono 小字计数;窄屏书库抽屉开关在最左。
+				    原来把「还没有一幕 | 待命 | 讨论」和「导演: …」挤在同一行,杂糅又抢视线,
+				    现在导演最近一句收进下方可折叠的次要行 */}
 				<div className="stage-head">
 					{isNarrow && (
 						<button
@@ -557,12 +625,33 @@ export function StagePage({
 							书库
 						</button>
 					)}
-					<span className={noScene ? "stage-scene idle" : "stage-scene"}>{snap?.script?.scene ?? "还没有一幕"}</span>
-					{snap && <span className={phaseCls[snap.phase]}>{phaseLabel[snap.phase]}</span>}
-					{snap && <span className="st-badge green">{modeLabel[snap.mode]}</span>}
-					{snap && <span className="st-counts">{formatCounts(snap.counts)}</span>}
-					{snap?.directorLast && <span className="st-dir-last">导演: {snap.directorLast.length > 60 ? `${snap.directorLast.slice(0, 60)}…` : snap.directorLast}</span>}
+					<div className="sh-scene">
+						<span className={noScene ? "sh-title idle" : "sh-title"}>{sceneTitle}</span>
+						{snap && <span className={phaseCls[snap.phase]}>{phaseText}</span>}
+					</div>
+					<div className="sh-right">
+						{snap && (
+							<button type="button" className="sh-mode" onClick={explainMode} title="导演模式由舞台编排按剧本阶段自动切换">
+								<span className="sh-mode-caret">▾</span>
+								{modeLabel[snap.mode]}模式
+							</button>
+						)}
+						{snap && <span className="st-counts">{formatCounts(snap.counts)}</span>}
+					</div>
 				</div>
+
+				{/* 工作区文件只读预览:压住舞台流(与编辑页同款覆盖层;舞台会话不卸载) */}
+				{filePreview && slug && (
+					<FilePreview client={client} slug={slug} entry={filePreview} onClose={() => setFilePreview(null)} />
+				)}
+
+				{/* 导演最近一句:次要行,默认收起(details 原生折叠,不占视线) */}
+				{snap?.directorLast && (
+					<details className="stage-dir-last">
+						<summary>导演最近一句</summary>
+						<div className="sdl-text">{snap.directorLast}</div>
+					</details>
+				)}
 
 				{/* 收幕进行中提示条(2026-08-11):导演整理回合结束(agent_settled)即撤,
 				    编剧成文阶段不再提示;固定条不随滚动消失,用户一定能看到 */}
@@ -601,22 +690,17 @@ export function StagePage({
 						<button type="button" className="btn" disabled={busy} onClick={() => void runCommand("retry")}>
 							重演
 						</button>
-						<select
-							className="st-select"
+						<Select
+							className="st-force"
 							disabled={!script || busy}
 							value=""
-							onChange={(e) => {
-								const t = e.target.value;
+							placeholder="强制发言 ▾"
+							ariaLabel="强制某位演员发言"
+							onChange={(t) => {
 								if (t) void runCommand("force", { target: t });
 							}}
-						>
-							<option value="">强制发言 ▾</option>
-							{castChars.map((c) => (
-								<option key={c} value={c}>
-									{c}
-								</option>
-							))}
-						</select>
+							options={castChars.map((c) => ({ value: c, label: c }))}
+						/>
 						<span className="st-seg">
 							{([1, 2, 3] as const).map((l) => (
 								<button
@@ -650,8 +734,9 @@ export function StagePage({
 				)}
 
 				{/* 舞台流:演出前 = 讨论室(引导卡居上 + 导演对话);演出中 = 条目 + 系统行
-				    (导演对话隐藏,主区让给演员);收幕后 = 条目归档、导演对话恢复 */}
-				<div className="stage-scroll">
+				    (导演对话隐藏,主区让给演员);收幕后 = 条目归档、导演对话恢复。
+				    chat-bubble = 气泡差分(设计稿 05,设置里开启;缺省文档流) */}
+				<div className={chatStyle === "bubble" ? "stage-scroll chat-bubble" : "stage-scroll"}>
 					{/* 引导卡只在「无场景 + 导演对话为空」时显示:发出第一条消息后(导演对话
 					    有水合/回显内容)即隐藏,让主区让给对话流 */}
 					{noScene && directorSession.messages.length === 0 && (
@@ -790,14 +875,24 @@ export function StagePage({
 				commands={directorSlashCommands}
 				context={directorSlashContext}
 				onCommandError={(msg) => dispatch({ type: "system", text: `命令失败: ${msg}`, err: true })}
-					placeholder="向导演说话…(/ 命令面板；Ctrl+Enter 发送，Enter 换行；演出前聊剧情，演出中可插话/反馈)"
+					placeholder="向导演说话…"
 					ariaLabel="向导演说话"
 				/>
 			</div>
 			<aside className="stage-panel">
-				{/* 左缘拖拽调宽手柄(窄屏面板收起时隐藏) */}
-				{!isNarrow && <div className="sp-resize" onMouseDown={onPanelResizeStart} title="拖拽调整宽度" />}
-				<StagePanel client={client} slug={slug ?? ""} snapshot={snap} tab={tab} onTab={setTab} onRevise={submitRevise} />
+				{/* 左缘拖拽调宽手柄(窄屏面板收起时隐藏;面板收起成 48px 竖条时同) */}
+				{!isNarrow && !panelShut && <div className="sp-resize" onMouseDown={onPanelResizeStart} title="拖拽调整宽度" />}
+				<StagePanel
+					client={client}
+					slug={slug ?? ""}
+					snapshot={snap}
+					tab={tab}
+					onTab={setTab}
+					onRevise={submitRevise}
+					collapsed={panelShut && !isNarrow}
+					onToggleCollapse={togglePanelShut}
+					busy={busy}
+				/>
 			</aside>
 		</div>
 	);

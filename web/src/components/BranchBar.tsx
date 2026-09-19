@@ -1,4 +1,5 @@
 import type { SessionBranchInfo } from "../types.ts";
+import { Select } from "./Select.tsx";
 
 /**
  * 分支栏 —— 会话存在多个分支时显示在对话视图顶部:
@@ -23,24 +24,18 @@ export function BranchBar({
 	return (
 		<div className="branch-bar">
 			<span className="branch-label">⑂ 分支</span>
-			<select
+			<Select
 				className="branch-select"
 				value={current?.leafId ?? ""}
 				disabled={streaming}
-				onChange={(e) => {
-					const leafId = e.target.value;
-					if (leafId && leafId !== current?.leafId) onNavigate(leafId);
+				onChange={(v) => {
+					if (v && v !== current?.leafId) onNavigate(v);
 				}}
-			>
-				{branches.map((b) => (
-					<option key={b.leafId} value={b.leafId}>
-						{b.isCurrent ? "● " : "○ "}
-						{b.summary}
-						{b.tail ? ` → ${b.tail}` : ""}
-						({b.count} 条)
-					</option>
-				))}
-			</select>
+				options={branches.map((b) => ({
+					value: b.leafId,
+					label: `${b.isCurrent ? "● " : "○ "}${b.summary}${b.tail ? ` → ${b.tail}` : ""}(${b.count} 条)`,
+				}))}
+			/>
 		</div>
 	);
 }
