@@ -318,7 +318,7 @@ export interface ToolCardSlots {
  */
 function Message({
 	m,
-	simplifiedTools,
+	debug,
 	streaming,
 	cards,
 	onEdit,
@@ -326,7 +326,7 @@ function Message({
 	onRevertCard,
 }: {
 	m: ChatMessage;
-	simplifiedTools: boolean;
+	debug: boolean;
 	streaming: boolean;
 	/** 工具块卡片槽(由 MessageList 用 useMemo 构造:引用稳定,可作 memo 比较依据)。 */
 	cards?: ToolCardSlots;
@@ -338,7 +338,6 @@ function Message({
 	const [editText, setEditText] = useState("");
 	/** 过程折叠(整轮思考 + 工具)。缺省展开;流式中强制展开。 */
 	const [procOpen, setProcOpen] = useState(true);
-	const debug = !simplifiedTools;
 	const text = blocksText(m.blocks);
 	const duration = turnDurationMs(m);
 	/** 本轮是否有「过程」(思考或工具);没有就不给折叠胶囊。 */
@@ -479,10 +478,10 @@ function Message({
  * 比较器返回 true = 跳过重渲染。
  */
 function messagePropsEqual(
-	prev: { m: ChatMessage; simplifiedTools: boolean; streaming: boolean; cards?: ToolCardSlots },
-	next: { m: ChatMessage; simplifiedTools: boolean; streaming: boolean; cards?: ToolCardSlots },
+	prev: { m: ChatMessage; debug: boolean; streaming: boolean; cards?: ToolCardSlots },
+	next: { m: ChatMessage; debug: boolean; streaming: boolean; cards?: ToolCardSlots },
 ): boolean {
-	if (prev.simplifiedTools !== next.simplifiedTools || prev.streaming !== next.streaming) return false;
+	if (prev.debug !== next.debug || prev.streaming !== next.streaming) return false;
 	// cards 由 MessageList 的 useMemo 构造(toolCallId 映射),引用稳定;变异则整表重建
 	if (prev.cards !== next.cards) return false;
 	const a = prev.m;
@@ -533,7 +532,7 @@ export function MessageList({
 	messages,
 	streaming,
 	compacting,
-	simplifiedTools,
+	debug,
 	confirmCards,
 	previewCards,
 	onConfirmCard,
@@ -546,7 +545,7 @@ export function MessageList({
 	streaming: boolean;
 	/** 上下文压缩中:列表末尾显示「正在压缩上下文」。 */
 	compacting?: boolean;
-	simplifiedTools: boolean;
+	debug: boolean;
 	/** 编剧编辑确认卡(按 toolCallId 认领到对应的 write/edit 工具块上)。 */
 	confirmCards?: ReadonlyArray<ConfirmCardItem>;
 	/** 只读预览卡(舞台世界树 / 剧本确认),同样按 toolCallId 挂到工具块上。 */
@@ -641,7 +640,7 @@ export function MessageList({
 							>
 								<MessageMemo
 									m={m}
-									simplifiedTools={simplifiedTools}
+									debug={debug}
 									streaming={streaming}
 									cards={cards}
 									onEdit={onEdit}

@@ -1,21 +1,95 @@
-/** 简化输出开关的 localStorage 键。 */
-const SIMPLIFIED_KEY = "pi-writer-simplified-tools";
+/**
+ * 调试模式的 localStorage 键。
+ *
+ * **它是开发者的排障开关,不是显示偏好**(2026-09-19)。改造前叫「简化输出」,
+ * 是个默认**开**的开关——要看详细得去关掉它;而且挂在首启向导里,等于把开发者的
+ * 排障开关摆给第一次用的用户。现在方向与名字一致(默认关),并且**平时界面里
+ * 根本没有这一项**:要在控制台跑一行命令解锁才出现。
+ *
+ * ⚠️ 这不是权限门。任何人打开控制台都能开,它防的是误触,不是恶意。
+ */
+const DEBUG_MODE_KEY = "pi-writer-debug-mode";
+/** 解锁标记(界面是否显示这一项);独立于「是否开着」。 */
+const DEBUG_UNLOCK_KEY = "pi-writer-debug-unlocked";
+/** 一次性迁移标记。 */
+const DEBUG_MIGRATED_KEY = "pi-writer-debug-migrated";
+/** 改造前的旧键(默认开启的「简化输出」)。 */
+const LEGACY_SIMPLIFIED_KEY = "pi-writer-simplified-tools";
+
+/** 调试开关变化事件(控制台解锁 / 设置页切换后广播,App 据此重渲染)。 */
+export const DEBUG_CHANGED_EVENT = "pi-writer-debug-changed";
+export const DEBUG_UNLOCK_COMMAND = "piWriterDebug()";
+export const DEBUG_LOCK_COMMAND = "piWriterDebugOff()";
 
 /**
- * 解析存储值:仅显式 "0" 表示关闭,缺省/其他值一律视为开启(默认开启)。
+ * 一次性迁移:旧「简化输出」取反即「调试模式」。
+ *
+ * 旧键只在用户显式点过开关时才存在(默认开 = 无键)。若他当时是**关掉**简化输出
+ * (= 想看详细),迁移后应保持观感:开调试模式**并同时解锁**,否则界面里看不到
+ * 这项、也没有开关可关,他会以为设置丢了。若旧键不存在,什么都不做(默认非调试)。
  */
-export function parseSimplifiedTools(raw: string | null | undefined): boolean {
-	return raw !== "0";
+function migrateLegacyOnce(): void {
+	if (typeof localStorage === "undefined") return;
+	if (localStorage.getItem(DEBUG_MIGRATED_KEY) === "1") return;
+	localStorage.setItem(DEBUG_MIGRATED_KEY, "1");
+	const legacy = localStorage.getItem(LEGACY_SIMPLIFIED_KEY);
+	if (legacy === null) return;
+	localStorage.removeItem(LEGACY_SIMPLIFIED_KEY);
+	if (legacy === "0") {
+		localStorage.setItem(DEBUG_UNLOCK_KEY, "1");
+		localStorage.setItem(DEBUG_MODE_KEY, "1");
+	}
 }
 
-/** 当前是否开启简化输出(工具卡片隐藏)。 */
-export function simplifiedToolsEnabled(): boolean {
-	return parseSimplifiedTools(localStorage.getItem(SIMPLIFIED_KEY));
+/** 解析存储值:仅显式 "1" 表示开启(默认关闭)。 */
+export function parseDebugMode(raw: string | null | undefined): boolean {
+	return raw === "1";
 }
 
-/** 设置简化输出并持久化。 */
-export function setSimplifiedTools(enabled: boolean): void {
-	localStorage.setItem(SIMPLIFIED_KEY, enabled ? "1" : "0");
+/** 界面是否已解锁显示「调试模式」这一项。 */
+export function debugUnlocked(): boolean {
+	if (typeof localStorage === "undefined") return false;
+	migrateLegacyOnce();
+	return localStorage.getItem(DEBUG_UNLOCK_KEY) === "1";
+}
+
+/** 当前是否开启调试模式(未解锁时恒为关闭 —— 关着就是关着,与界面藏不藏无关)。 */
+export function debugModeEnabled(): boolean {
+	if (typeof localStorage === "undefined") return false;
+	migrateLegacyOnce();
+	if (localStorage.getItem(DEBUG_UNLOCK_KEY) !== "1") return false;
+	return parseDebugMode(localStorage.getItem(DEBUG_MODE_KEY));
+}
+
+/** 设置调试模式并持久化(只在已解锁时有效;未解锁调用等于什么都不做)。 */
+export function setDebugMode(enabled: boolean): void {
+	localStorage.setItem(DEBUG_MODE_KEY, enabled ? "1" : "0");
+}
+
+function notifyDebugChanged(): void {
+	if (typeof window === "undefined") return;
+	window.dispatchEvent(new Event(DEBUG_CHANGED_EVENT));
+}
+
+/** 控制台入口:解锁「调试模式」这一项并直接打开它。 */
+export function enableDebugMode(): void {
+	localStorage.setItem(DEBUG_UNLOCK_KEY, "1");
+	localStorage.setItem(DEBUG_MODE_KEY, "1");
+	notifyDebugChanged();
+}
+
+/** 控制台入口:关掉调试模式并把这一项重新藏回界面。 */
+export function disableDebugMode(): void {
+	localStorage.removeItem(DEBUG_UNLOCK_KEY);
+	localStorage.setItem(DEBUG_MODE_KEY, "0");
+	notifyDebugChanged();
+}
+
+/** 订阅调试开关变化(返回退订函数)。 */
+export function subscribeDebugChanged(fn: () => void): () => void {
+	if (typeof window === "undefined") return () => {};
+	window.addEventListener(DEBUG_CHANGED_EVENT, fn);
+	return () => window.removeEventListener(DEBUG_CHANGED_EVENT, fn);
 }
 
 /** 自动展开思考开关的 localStorage 键。 */

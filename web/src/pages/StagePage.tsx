@@ -63,7 +63,7 @@ export function StagePage({
 	library,
 	active,
 	onGoEdit,
-	simplifiedTools,
+	debug,
 }: {
 	client: ApiClient;
 	/** 书库状态唯一真相源(App 持有,与编辑页共用——书库栏两页常驻且状态同步)。 */
@@ -73,7 +73,7 @@ export function StagePage({
 	/** 收幕完成引导卡「去编辑页」跳转(App 顶层视图切换)。 */
 	onGoEdit?: () => void;
 	/** 简化输出(设置页「界面偏好」):导演对话工具卡片隐藏,只保留模型文本输出。 */
-	simplifiedTools?: boolean;
+	debug?: boolean;
 }) {
 	const {
 		books,
@@ -867,7 +867,7 @@ export function StagePage({
 							messages={directorSession.messages}
 							streaming={directorSession.isStreaming}
 							compacting={directorSession.compacting}
-							simplifiedTools={simplifiedTools === true}
+							debug={debug === true}
 							previewCards={directorCards}
 							emptyText="向导演发一句话，讨论剧情、人物与悬念——导演会边聊边维护世界书"
 						/>

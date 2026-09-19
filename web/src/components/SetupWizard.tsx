@@ -93,8 +93,6 @@ function extractModels(models: readonly unknown[]): ModelInfo[] {
 
 export function SetupWizard({
 	client,
-	simplifiedTools,
-	onSimplifiedToolsChange,
 	autoExpandThinking,
 	onAutoExpandThinkingChange,
 	autoConfirmEdits,
@@ -105,9 +103,6 @@ export function SetupWizard({
 	onFinished,
 }: {
 	client: ApiClient;
-	/** 简化输出开关(工具调用卡片隐藏;缺省开启)。 */
-	simplifiedTools: boolean;
-	onSimplifiedToolsChange: (enabled: boolean) => void;
 	/** 自动展开思考开关(思考块默认展开;缺省开启)。 */
 	autoExpandThinking: boolean;
 	onAutoExpandThinkingChange: (enabled: boolean) => void;
@@ -335,9 +330,8 @@ export function SetupWizard({
 	}
 
 	/** 偏好开关:即时生效(经 App 的持久化 setter)+ 标记偏好步走过。 */
-	function togglePref(key: "simplified" | "autoExpand" | "autoConfirm", v: boolean) {
-		if (key === "simplified") onSimplifiedToolsChange(v);
-		else if (key === "autoExpand") onAutoExpandThinkingChange(v);
+	function togglePref(key: "autoExpand" | "autoConfirm", v: boolean) {
+		if (key === "autoExpand") onAutoExpandThinkingChange(v);
 		else onAutoConfirmEditsChange(v);
 		mark("prefs");
 	}
@@ -697,13 +691,6 @@ export function SetupWizard({
 										<div className="wz-pref-desc">开启后去掉舞台,编辑页换成带全量工具的唯一写作 agent。</div>
 									</div>
 									<ToggleSwitch checked={classicMode} onChange={(v) => void toggleClassic(v)} ariaLabel="经典模式" />
-								</div>
-								<div className="wz-pref-row">
-									<div className="wz-pref-text">
-										<div className="wz-pref-title">简化输出</div>
-										<div className="wz-pref-desc">对话中不显示工具调用卡片,以「正在阅读 / 正在编辑」等动态提示代替。</div>
-									</div>
-									<ToggleSwitch checked={simplifiedTools} onChange={(v) => togglePref("simplified", v)} ariaLabel="简化输出" />
 								</div>
 								<div className="wz-pref-row">
 									<div className="wz-pref-text">

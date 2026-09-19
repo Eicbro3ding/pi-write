@@ -107,7 +107,7 @@ export function WritePage({
 	client,
 	onHeader,
 	library,
-	simplifiedTools,
+	debug,
 	autoConfirmEdits,
 	classicMode,
 }: {
@@ -116,7 +116,7 @@ export function WritePage({
 	/** 书库状态唯一真相源(App 持有,舞台页/编辑页共用——书库栏两页常驻且状态同步)。 */
 	library: Library;
 	/** 简化输出:隐藏工具调用卡片(设置页开关,缺省开启)。 */
-	simplifiedTools: boolean;
+	debug: boolean;
 	/** 编辑免确认:编剧编辑落盘即归档(设置页开关,缺省关闭 = 默认走待确认卡)。 */
 	autoConfirmEdits: boolean;
 	/** 经典模式(单 agent):AI 是带全量工具的写作 agent,标签与文案不再称「编剧」。 */
@@ -1308,7 +1308,7 @@ export function WritePage({
 								messages={writerSession.messages}
 								streaming={writerSession.isStreaming}
 								compacting={writerSession.compacting}
-								simplifiedTools={simplifiedTools}
+								debug={debug}
 								confirmCards={confirmCards}
 								onConfirmCard={confirmCard}
 								onRevertCard={(id) => void revertCard(id)}

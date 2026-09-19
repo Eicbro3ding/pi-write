@@ -125,7 +125,7 @@ agent 会话事件(pi vendor AgentSessionEvent)
 - **中栏(纸张)**:`.paper-surface` 固定 `min(728px, 100% - 44px)` 居中(原来是铺满 + 编辑器内部限宽 800);页头一行放章节名 + 状态胶囊 + 草稿路径 + 字数 + 全屏编辑。
 - **右栏(AI 伙伴)**:默认 380 → 340(`WritePage` 的 `companionWidth`),标签条从「分段胶囊」改**下划线式**,并加 `»` 收起(localStorage `pi-writer:companion-collapsed`,收起成 48px 竖条,由 `.writing-workspace-shell.companion-collapsed` 换 grid 轨宽)。
 - **舞台右栏**同理(340 + 48px 竖条),外层页签改「图标 + 下划线」,内层 `ScriptView` 保留胶囊;新增 `ReviseScriptModal`(860px)与气泡差分(`web/src/stage-preferences.ts`,localStorage)。
-- **统一下拉** `web/src/components/Select.tsx` + `select-logic.ts` 取代原生 `<select>`(12 处);**主题卡** `ThemeCards.tsx` + `themes.ts` 的 `buildThemeFamilies`/`themeFamilyPick` 做浅深合并;**长内容折叠** `fold.ts` + `FoldablePre.tsx`;**工具动作流** 在 `tool-status.ts`。
+- **统一下拉** `web/src/components/Select.tsx` + `select-logic.ts` 取代原生 `<select>`(12 处);**主题卡** `ThemeCards.tsx` + `themes.ts` 的 `buildThemeFamilies`/`themeFamilyPick` 做浅深合并;**长内容折叠** `fold.ts` + `FoldablePre.tsx`;**工具块渲染表** 在 `tool-status.ts`(块渲染表:bash 终端块 / 产出型预览卡 / 读取型动作行 / 调试模式退回原始卡)。
 - **对话框与向导分家**:`.wz-overlay/.wz-panel` 归首启向导的整屏形态;设置页的「模型提供商」「添加模型」等居中弹窗改用 `web/src/styles/dialog.css` 的 `.dlg-overlay/.dlg-panel`——两者曾共用同一组类,向导改成整屏后会把对话框一起拉成整屏布局。
 
 ### 7.2 `/` 命令(前端插件预留缝)

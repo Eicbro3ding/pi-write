@@ -117,8 +117,9 @@ function extractModels(models: readonly unknown[]): ModelInfo[] {
 export function SettingsPage({
 	client,
 	slug,
-	simplifiedTools,
-	onSimplifiedToolsChange,
+	debugMode,
+	debugShown,
+	onDebugModeChange,
 	autoExpandThinking,
 	onAutoExpandThinkingChange,
 	autoConfirmEdits,
@@ -136,9 +137,12 @@ export function SettingsPage({
 	client: ApiClient;
 	/** 当前打开的书 slug(世界书注入分组随打开书重拉;null = 未打开书)。 */
 	slug: string | null;
-	/** 简化输出开关状态(工具调用卡片隐藏;缺省开启)。 */
-	simplifiedTools: boolean;
-	onSimplifiedToolsChange: (enabled: boolean) => void;
+	/** 调试模式开关状态(工具块退回原始参数与结果;缺省关闭)。 */
+	debugMode: boolean;
+	/** 界面是否已解锁显示「调试模式」(未解锁则不渲染该项)。 */
+	debugShown: boolean;
+	/** 调试模式开关变化(仅解锁后可见,见 debugShown)。 */
+	onDebugModeChange: (enabled: boolean) => void;
 	/** 自动展开思考开关状态(思考块默认展开;缺省开启)。 */
 	autoExpandThinking: boolean;
 	onAutoExpandThinkingChange: (enabled: boolean) => void;
@@ -865,13 +869,6 @@ export function SettingsPage({
 									<div className="s-pref-list">
 										<div className="s-pref-item">
 											<div className="s-pref-text">
-												<div className="s-pref-title">简化输出</div>
-												<div className="s-pref-desc">对话中不显示工具调用卡片,以「正在阅读 / 正在编辑」等动态提示代替。</div>
-											</div>
-											<ToggleSwitch checked={simplifiedTools} onChange={onSimplifiedToolsChange} ariaLabel="简化输出" />
-										</div>
-										<div className="s-pref-item">
-											<div className="s-pref-text">
 												<div className="s-pref-title">自动展开思考</div>
 												<div className="s-pref-desc">思考块默认展开,无需逐条点击。</div>
 											</div>
@@ -979,6 +976,30 @@ export function SettingsPage({
 					{cat === "advanced" && (
 						<div className="st-cols">
 							<div className="st-col-main">
+								{/* 调试模式:平时**不渲染**(debugShown 由控制台解锁决定,见 settings.ts)。
+								    它不是显示偏好,是排障开关——把每个工具块退回原始工具名 + 完整参数 +
+								    完整结果,好看清模型到底怎么调的、错在哪一步。 */}
+								{debugShown && (
+									<section className="s-card">
+										<div className="st-card-head">
+											<span className="s-card-head">调试模式</span>
+										</div>
+										<div className="s-card-desc">
+											每个工具调用退回完整卡:原始工具名 + 完整参数 + 完整结果,不再压缩成动作行。排查「模型到底怎么调的工具、错在哪一步」时用。
+										</div>
+										<div className="s-pref-list">
+											<div className="s-pref-item">
+												<div className="s-pref-text">
+													<div className="s-pref-title">启用调试模式</div>
+													<div className="s-pref-desc">
+														默认关闭。在控制台运行 <code>piWriterDebugOff()</code> 可关闭并重新隐藏这一项。
+													</div>
+												</div>
+												<ToggleSwitch checked={debugMode} onChange={onDebugModeChange} ariaLabel="调试模式" />
+											</div>
+										</div>
+									</section>
+								)}
 								{/* 执行命令(shell):高风险胶囊 + 红色警示块 + 关闭时次级态 */}
 								<section className="s-card">
 									<div className="st-card-head">
@@ -993,7 +1014,7 @@ export function SettingsPage({
 										<div className="s-pref-item">
 											<div className="s-pref-text">
 												<div className="s-pref-title">启用外部命令</div>
-												<div className="s-pref-desc">默认关闭。开启后命令与输出会实时显示在对话里(开着「简化输出」也可见)。</div>
+												<div className="s-pref-desc">默认关闭。开启后命令与输出会实时显示在对话里(调试模式下也可见)。</div>
 											</div>
 											<ToggleSwitch checked={shellEnabled} onChange={askShellEnable} ariaLabel="外部命令" />
 										</div>

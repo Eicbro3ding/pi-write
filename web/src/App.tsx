@@ -12,11 +12,13 @@ import {
 	autoConfirmEditsEnabled,
 	autoExpandThinkingEnabled,
 	classicModeEnabled,
+	debugModeEnabled,
+	debugUnlocked,
 	setAutoConfirmEdits as persistAutoConfirmEdits,
 	setAutoExpandThinking as persistAutoExpandThinking,
 	setClassicMode as persistClassicMode,
-	setSimplifiedTools as persistSimplifiedTools,
-	simplifiedToolsEnabled,
+	setDebugMode as persistDebugMode,
+	subscribeDebugChanged,
 } from "./settings.ts";
 import type { ResolvedShellDto, ShellKindDto, WriterSettingsDto } from "./types.ts";
 
@@ -59,12 +61,27 @@ export function App() {
 	/** 顶栏视图;经典模式(本地缓存已开启)首帧直接落在编辑页。 */
 	const [view, setView] = useState<View>(() => (classicModeEnabled() ? "edit" : "stage"));
 	const [header, setHeader] = useState<HeaderInfo | null>(null);
-	/** 简化输出(隐藏工具卡片),缺省开启;切换经设置页持久化并同步 state。 */
-	const [simplifiedTools, setSimplifiedToolsState] = useState<boolean>(() => simplifiedToolsEnabled());
-	const setSimplifiedTools = (v: boolean) => {
-		persistSimplifiedTools(v);
-		setSimplifiedToolsState(v);
+	/**
+	 * 调试模式(每个工具块退回原始工具名 + 完整参数 + 完整结果)。
+	 * **不是显示偏好,是开发者的排障开关**:默认关闭,且平时设置页里没有这一项——
+	 * 要在 F12 控制台跑 `piWriterDebug()` 解锁才出现(见 main.tsx / settings.ts)。
+	 */
+	const [debugMode, setDebugModeState] = useState<boolean>(() => debugModeEnabled());
+	/** 界面是否已解锁显示「调试模式」(未解锁时设置页不渲染这一项)。 */
+	const [debugShown, setDebugShown] = useState<boolean>(() => debugUnlocked());
+	const setDebugMode = (v: boolean) => {
+		persistDebugMode(v);
+		setDebugModeState(v);
 	};
+	// 控制台解锁/锁定后(requestDebugChanged 事件)同步界面:否则设置页要刷新才认账
+	useEffect(
+		() =>
+			subscribeDebugChanged(() => {
+				setDebugShown(debugUnlocked());
+				setDebugModeState(debugModeEnabled());
+			}),
+		[],
+	);
 	/** 当前打开的书 slug(由书库状态上报;世界书页据此判断有无会话并加载世界书)。 */
 	const [currentSlug, setCurrentSlug] = useState<string | null>(null);
 	/** 书库状态唯一真相源:舞台页与编辑页共用,书库栏两页常驻且状态同步。 */
@@ -244,8 +261,6 @@ export function App() {
 		return (
 			<SetupWizard
 				client={client}
-				simplifiedTools={simplifiedTools}
-				onSimplifiedToolsChange={setSimplifiedTools}
 				autoExpandThinking={autoExpandThinking}
 				onAutoExpandThinkingChange={setAutoExpandThinking}
 				autoConfirmEdits={autoConfirmEdits}
@@ -333,7 +348,7 @@ export function App() {
 				    服务端重新水合,状态不丢 */}
 				{!classicMode && (
 					<section className={`view ${view === "stage" ? "" : "hidden"}`}>
-						<StagePage client={client} library={library} active={view === "stage"} onGoEdit={() => setView("edit")} simplifiedTools={simplifiedTools} />
+						<StagePage client={client} library={library} active={view === "stage"} onGoEdit={() => setView("edit")} debug={debugMode} />
 					</section>
 				)}
 					<section className={`view ${view === "edit" ? "" : "hidden"}`}>
@@ -341,7 +356,7 @@ export function App() {
 							client={client}
 							library={library}
 							onHeader={setHeader}
-							simplifiedTools={simplifiedTools}
+							debug={debugMode}
 							autoConfirmEdits={autoConfirmEdits}
 							classicMode={classicMode}
 						/>
@@ -353,8 +368,9 @@ export function App() {
 						<SettingsPage
 							client={client}
 							slug={currentSlug}
-							simplifiedTools={simplifiedTools}
-							onSimplifiedToolsChange={setSimplifiedTools}
+							debugMode={debugMode}
+							debugShown={debugShown}
+							onDebugModeChange={setDebugMode}
 							autoExpandThinking={autoExpandThinking}
 							onAutoExpandThinkingChange={setAutoExpandThinking}
 							autoConfirmEdits={autoConfirmEdits}
@@ -375,8 +391,6 @@ export function App() {
 			{rerunWizard && (
 				<SetupWizard
 					client={client}
-					simplifiedTools={simplifiedTools}
-					onSimplifiedToolsChange={setSimplifiedTools}
 					autoExpandThinking={autoExpandThinking}
 					onAutoExpandThinkingChange={setAutoExpandThinking}
 					autoConfirmEdits={autoConfirmEdits}

@@ -2,16 +2,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	autoExpandThinkingEnabled,
 	classicModeEnabled,
+	debugModeEnabled,
+	debugUnlocked,
+	disableDebugMode,
+	enableDebugMode,
 	parseAutoExpandThinking,
 	parseClassicMode,
-	parseSimplifiedTools,
+	parseDebugMode,
 	setAutoExpandThinking,
 	setClassicMode,
-	setSimplifiedTools,
-	simplifiedToolsEnabled,
+	setDebugMode,
 } from "../web/src/settings.ts";
 
-const STORAGE_KEY = "pi-writer-simplified-tools";
+const DEBUG_KEY = "pi-writer-debug-mode";
+const DEBUG_UNLOCK_KEY = "pi-writer-debug-unlocked";
+const DEBUG_MIGRATED_KEY = "pi-writer-debug-migrated";
+const LEGACY_KEY = "pi-writer-simplified-tools";
 const AUTO_EXPAND_KEY = "pi-writer-auto-expand-thinking";
 const CLASSIC_MODE_KEY = "pi-writer-classic-mode";
 
@@ -20,37 +26,75 @@ function stubStorage(init: Record<string, string> = {}) {
 	vi.stubGlobal("localStorage", {
 		getItem: (k: string) => store.get(k) ?? null,
 		setItem: (k: string, v: string) => void store.set(k, v),
+		removeItem: (k: string) => void store.delete(k),
 	});
 	return store;
 }
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe("简化输出设置", () => {
-	it("缺省开启(未存储任何值时简化输出为 true)", () => {
+describe("调试模式设置(原「简化输出」)", () => {
+	it("缺省关闭 —— 与旧开关的默认值相反(方向跟名字对齐)", () => {
 		stubStorage();
-		expect(simplifiedToolsEnabled()).toBe(true);
+		expect(debugModeEnabled()).toBe(false);
 	});
-	it("显式关闭('0')后为 false,重新开启('1')为 true", () => {
-		stubStorage();
-		setSimplifiedTools(false);
-		expect(simplifiedToolsEnabled()).toBe(false);
-		setSimplifiedTools(true);
-		expect(simplifiedToolsEnabled()).toBe(true);
+	it("未解锁时恒为关闭:即使存储里写着开启也不认(界面藏起来了,状态就不该生效)", () => {
+		stubStorage({ [DEBUG_KEY]: "1" });
+		expect(debugUnlocked()).toBe(false);
+		expect(debugModeEnabled()).toBe(false);
 	});
-	it("持久化到 localStorage 键", () => {
+	it("解锁后按存储值生效", () => {
+		const store = stubStorage({ [DEBUG_UNLOCK_KEY]: "1", [DEBUG_MIGRATED_KEY]: "1" });
+		setDebugMode(true);
+		expect(debugModeEnabled()).toBe(true);
+		setDebugMode(false);
+		expect(debugModeEnabled()).toBe(false);
+		expect(store.get(DEBUG_KEY)).toBe("0");
+	});
+	it("控制台入口:enableDebugMode 解锁并打开,disableDebugMode 关闭并重新隐藏", () => {
 		const store = stubStorage();
-		setSimplifiedTools(false);
-		expect(store.get(STORAGE_KEY)).toBe("0");
-		setSimplifiedTools(true);
-		expect(store.get(STORAGE_KEY)).toBe("1");
+		enableDebugMode();
+		expect(debugUnlocked()).toBe(true);
+		expect(debugModeEnabled()).toBe(true);
+		disableDebugMode();
+		expect(debugUnlocked()).toBe(false);
+		expect(debugModeEnabled()).toBe(false);
+		expect(store.get(DEBUG_KEY)).toBe("0");
 	});
-	it("parseSimplifiedTools:缺省/非法值回退开启,仅 '0' 关闭", () => {
-		expect(parseSimplifiedTools(null)).toBe(true);
-		expect(parseSimplifiedTools(undefined)).toBe(true);
-		expect(parseSimplifiedTools("0")).toBe(false);
-		expect(parseSimplifiedTools("1")).toBe(true);
-		expect(parseSimplifiedTools("junk")).toBe(true);
+	it("parseDebugMode:仅 '1' 开启,缺省/非法值一律关闭", () => {
+		expect(parseDebugMode(null)).toBe(false);
+		expect(parseDebugMode(undefined)).toBe(false);
+		expect(parseDebugMode("0")).toBe(false);
+		expect(parseDebugMode("1")).toBe(true);
+		expect(parseDebugMode("junk")).toBe(false);
+	});
+});
+
+describe("旧「简化输出」键的一次性迁移", () => {
+	it("旧键不存在 → 什么都不做(默认非调试)", () => {
+		const store = stubStorage();
+		expect(debugModeEnabled()).toBe(false);
+		expect(debugUnlocked()).toBe(false);
+		expect(store.get(LEGACY_KEY)).toBeUndefined();
+	});
+	it("旧键为 '1'(简化开着 = 当时没在看详细)→ 调试关闭", () => {
+		stubStorage({ [LEGACY_KEY]: "1" });
+		expect(debugModeEnabled()).toBe(false);
+		expect(debugUnlocked()).toBe(false);
+	});
+	it("旧键为 '0'(他当时关掉了简化 = 在看详细)→ 迁移为调试开启 + 解锁,观感不变", () => {
+		const store = stubStorage({ [LEGACY_KEY]: "0" });
+		expect(debugModeEnabled()).toBe(true);
+		// 同时解锁:否则界面里没有这一项、没有开关可关,他会以为设置丢了
+		expect(debugUnlocked()).toBe(true);
+		expect(store.get(LEGACY_KEY)).toBeUndefined(); // 旧键清理
+	});
+	it("迁移只跑一次:之后手改旧键不再影响", () => {
+		const store = stubStorage({ [LEGACY_KEY]: "0" });
+		expect(debugModeEnabled()).toBe(true);
+		store.set(LEGACY_KEY, "1");
+		disableDebugMode();
+		expect(debugModeEnabled()).toBe(false);
 	});
 });
 
