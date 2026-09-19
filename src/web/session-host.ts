@@ -20,7 +20,14 @@ import {
 import type { AuthInteraction } from "../../vendor/pi-ai/src/index.ts";
 import { getBooksDir } from "../config.ts";
 import { toolGuardContext } from "../tool-guard.ts";
-import { chatTextOfMessage, chatThinkingOfMessage } from "../session-text.ts";
+import {
+	chatContentOfMessage,
+	chatTextOfMessage,
+	chatThinkingOfMessage,
+	toolResultCallId,
+	toolResultText,
+	type ChatContentPart,
+} from "../session-text.ts";
 import { createKeyInteraction, deriveAuthKind, sortProviders, type ProviderDetail, type ProviderListItem } from "./provider-auth.ts";
 
 /** SessionHost 构造选项;createRuntime 由调用方注入,SessionHost 不自己构造 services。 */
@@ -43,10 +50,21 @@ export interface SessionStateSnapshot {
 	/**
 	 * 消息列表(沿会话 leaf 链提取;撤回后旧分支消息自然消失)。
 	 * id 是会话 entry 的稳定 id(撤回/编辑的定位依据);timestamp 同 entry。
-	 * thinking:assistant 消息的思考链(实时经 SSE thinking_delta 流式进来,
-	 * 历史水合时从会话文件提取,保证刷新/重开页面后思考块仍在)。
+	 * thinking / text 是**兼容投影**(整条消息拼接,供 TUI 与分支摘要取文本);
+	 * `content` 才是渲染依据:**有序内容块**(思考 / 正文 / 工具调用),
+	 * 工具块内联执行结果。缺 content 的旧形状按 text/thinking 兜底。
+	 * startedAt / endedAt 是组内首末 entry 时间(ms),供「已工作 X 分 Y 秒」还原。
 	 */
-	messages: Array<{ role: "user" | "assistant"; text: string; thinking?: string; timestamp?: string; id?: string }>;
+	messages: Array<{
+		role: "user" | "assistant";
+		text: string;
+		thinking?: string;
+		content?: ChatContentPart[];
+		timestamp?: string;
+		startedAt?: number;
+		endedAt?: number;
+		id?: string;
+	}>;
 	diagnostics: Array<{ type: "error" | "warning" | "info"; message: string }>;
 }
 
@@ -507,39 +525,106 @@ export class SessionHost {
  * (撤回只作用于 user 消息,user 的 id 即该组起点 entry 的 id,不受合并影响)。
  * 接受任意 SessionManager(逻辑同 extractMessages)——供 server 只读端点读取
  * 指定章节会话,不依赖 runtime。
+ *
+ * 2026-09-19 起每条消息另带 `content`:**有序内容块**(思考 / 正文 / 工具调用),
+ * 工具结果按 toolCallId 从独立 toolResult entry 配对回填到调用块上。
+ * 改造前这里只提 text + thinking —— 多段思考被拼成一坨、工具调用整段丢弃,
+ * 于是「刷新页面后历史工具卡全没了」且思考链与工具的真实先后无从还原。
+ * text/thinking 作为兼容投影保留(TUI 与分支摘要仍按整条消息取文本)。
  */
 export function extractMessagesFromManager(sm: SessionManager): SessionStateSnapshot["messages"] {
 	const out: SessionStateSnapshot["messages"] = [];
+	/** 当前 assistant 组的块序列(工具结果要回填到其中的调用块上)。 */
+	let groupParts: ChatContentPart[] = [];
+	/** toolCallId → 调用块(跨段查找:结果 entry 紧跟其段,但配对按 id 而非位置)。 */
+	const partById = new Map<string, Extract<ChatContentPart, { type: "toolCall" }>>();
+	/** 组内首条 entry 的时间(ms)——回合耗时起点。 */
+	let groupStart: number | undefined;
+
+	const timeOf = (entry: { timestamp?: unknown }): number | undefined => {
+		const raw = entry.timestamp;
+		if (typeof raw === "number") return raw;
+		if (typeof raw === "string") {
+			const t = Date.parse(raw);
+			return Number.isNaN(t) ? undefined : t;
+		}
+		return undefined;
+	};
+
 	// 只走 leaf 链(getBranch 沿 parentId 回溯):撤回后旧分支不显示,与上下文一致
 	for (const entry of sm.getBranch()) {
-		const msg = (entry as { message?: { role?: string; content?: unknown } }).message;
+		const msg = (entry as { message?: { role?: string; content?: unknown; toolCallId?: unknown } }).message;
 		if (!msg) continue;
-		const text = chatTextOfMessage(msg);
-		if (!text) continue;
-		const role = msg.role === "user" ? "user" : "assistant";
-		const base = {
-			timestamp: typeof entry.timestamp === "string" ? entry.timestamp : undefined,
-			id: entry.id,
-		};
-		if (role === "user") {
-			out.push({ role, text, ...base });
+
+		// 工具结果:回填到对应调用块(独立 entry,不是气泡)
+		const callId = toolResultCallId(msg as { role?: string; toolCallId?: unknown });
+		if (callId !== undefined) {
+			const part = partById.get(callId);
+			if (part) {
+				part.result = toolResultText(msg as { content?: unknown });
+				part.isError = (msg as { isError?: unknown }).isError === true;
+			}
 			continue;
 		}
+
+		const text = chatTextOfMessage(msg);
+		if (msg.role === "user") {
+			if (!text) continue;
+			groupParts = [];
+			partById.clear();
+			groupStart = timeOf(entry as { timestamp?: unknown });
+			out.push({
+				role: "user",
+				text,
+				content: [{ type: "text", text }],
+				timestamp: typeof entry.timestamp === "string" ? entry.timestamp : undefined,
+				...(groupStart !== undefined ? { startedAt: groupStart, endedAt: groupStart } : {}),
+				id: entry.id,
+			});
+			continue;
+		}
+		if (msg.role !== "assistant") continue;
+
+		const parts = chatContentOfMessage(msg as { role?: string; content?: unknown });
 		// 思考链一并提取(历史水合:刷新/重开页面后思考块仍在)
-		const thinking = chatThinkingOfMessage(msg);
+		const thinking = chatThinkingOfMessage(msg as { role?: string; content?: unknown });
+		// 工具调用段可能既无正文也无思考:改造前这种 entry 会被 `if (!text) continue` 整条丢掉
+		if (!text && parts.length === 0) continue;
+		const at = timeOf(entry as { timestamp?: unknown });
+		const timestamp = typeof entry.timestamp === "string" ? entry.timestamp : undefined;
 		const last = out[out.length - 1];
 		if (last && last.role === "assistant") {
-			// 并入当前组:同轮回复的多段 assistant 输出(工具调用轮次)合并为一条气泡
+			// 并入当前组:同轮回复的多段 assistant 输出(工具调用轮次)合并为一条气泡。
+			// **块按序追加**——顺序就是真实顺序,不再把多段 thinking 拼成一个字符串
+			groupParts.push(...parts);
+			for (const p of parts) if (p.type === "toolCall") partById.set(p.id, p);
 			out[out.length - 1] = {
 				role: "assistant",
-				text: `${last.text}\n\n${text}`,
-				thinking: [last.thinking, thinking].filter((s) => s && s.length > 0).join("\n\n"),
-				...(base.id ? { id: base.id } : {}),
-				timestamp: base.timestamp,
+				text: text ? (last.text.length > 0 ? `${last.text}\n\n${text}` : text) : last.text,
+				thinking: [last.thinking, thinking].filter((s) => s && s.length > 0).join("\n\n") || undefined,
+				content: groupParts,
+				// id 取组内**最后一条** entry(与改造前一致;撤回只作用于 user 消息,
+				// user 的 id 是组起点、不受合并影响)
+				id: entry.id,
+				...(last.startedAt !== undefined ? { startedAt: last.startedAt } : {}),
+				...(at !== undefined ? { endedAt: at } : {}),
+				timestamp,
 			};
-		} else {
-			out.push({ role, text, thinking: thinking || undefined, ...base });
+			continue;
 		}
+		if (parts.length === 0 && thinking.length === 0 && !text) continue;
+		groupParts = parts;
+		partById.clear();
+		for (const p of parts) if (p.type === "toolCall") partById.set(p.id, p);
+		out.push({
+			role: "assistant",
+			text: text ?? "",
+			thinking: thinking || undefined,
+			content: groupParts,
+			...(at !== undefined ? { startedAt: at, endedAt: at } : {}),
+			timestamp,
+			id: entry.id,
+		});
 	}
 	return out;
 }

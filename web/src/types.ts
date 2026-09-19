@@ -34,6 +34,30 @@ export interface BookDetail {
 	chapters: ChapterRef[];
 }
 
+/**
+ * 会话历史里的一个有序内容块(与后端 src/session-text.ts 的 ChatContentPart 对齐)。
+ * 工具块**内联执行结果** —— 工具结果在磁盘上本来是独立的 toolResult entry,
+ * 服务端配对回填后挂在调用块上,前端水合不必再合成事件对。
+ */
+export type ChatContentPartDto =
+	| { type: "text"; text: string }
+	| { type: "thinking"; text: string }
+	| { type: "toolCall"; id: string; name: string; arguments: string; result?: string | null; isError?: boolean };
+
+/** 服务端下发的会话历史消息(兼容投影 text/thinking + 渲染依据 content)。 */
+export interface SessionMessageDto {
+	role: "user" | "assistant";
+	text: string;
+	thinking?: string;
+	/** 有序内容块;缺省(旧形状)时按 text/thinking 兜底。 */
+	content?: ChatContentPartDto[];
+	timestamp?: string;
+	/** 组内首末 entry 时间(ms);「已工作 X 分 Y 秒」的还原依据。 */
+	startedAt?: number;
+	endedAt?: number;
+	id?: string;
+}
+
 /** 会话状态快照(后端 session-host getState())。 */
 export interface SessionState {
 	bookSlug: string | null;
@@ -43,7 +67,7 @@ export interface SessionState {
 	 * 会话历史,用于前端聊天水合(openBook / SSE onopen 对齐)。
 	 * id 是会话 entry 稳定 id(编辑/分支定位依据);timestamp 同 entry。
 	 */
-	messages: Array<{ role: "user" | "assistant"; text: string; timestamp?: string; id?: string }>;
+	messages: SessionMessageDto[];
 	diagnostics: Array<{ type: string; message: string }>;
 }
 
@@ -225,7 +249,15 @@ export interface SessionViewState {
  * 附加)与 message_start(历史水合 messagesToEvents 手动构造时带)。
  */
 export type AgentEventDto =
-	| { type: "message_start"; message: { role: string; content?: unknown }; entryId?: string }
+	| {
+			type: "message_start";
+			message: { role: string; content?: unknown };
+			entryId?: string;
+			/** 仅历史水合合成的事件携带(实时 SSE 无此字段):组内首末 entry 时间(ms),
+			 *  供 reducer 给气泡落 startedAt/endedAt,「已工作 X 分 Y 秒」刷新后仍在。 */
+			startedAt?: number;
+			endedAt?: number;
+	  }
 	| {
 			type: "message_update";
 			message: Record<string, unknown>;
@@ -433,8 +465,9 @@ export interface StageSnapshotDto {
 	transcript: StageEntryDto[];
 	counts: StageCountsDto;
 	directorLast: string | undefined;
-	/** 导演讨论历史(用户/导演消息对,assistant 带思考链;快照对齐时恢复对话气泡,刷新页面不丢)。 */
-	directorChat: Array<{ role: "user" | "assistant"; text: string; thinking?: string }>;
+	/** 导演讨论历史(用户/导演消息对,assistant 带思考链与有序块;快照对齐时恢复
+	 *  对话气泡与工具块,刷新页面不丢)。 */
+	directorChat: SessionMessageDto[];
 	/** 角色名 → 世界书条目头像文件(无头像角色前端走首字+角色色兜底)。 */
 	avatars: Record<string, string>;
 	/** 导演会话上下文占用(供「建议 /compact」提示;无活跃会话/未知时为 null)。 */
@@ -452,7 +485,7 @@ export interface WriterStateDto {
 	/** 会话文件是否已创建(未对话过的书无会话)。 */
 	exists: boolean;
 	isStreaming: boolean;
-	messages: Array<{ role: "user" | "assistant"; text: string; thinking?: string; timestamp?: string; id?: string }>;
+	messages: SessionMessageDto[];
 }
 
 /** 用户自定义主题(资产文件:主题目录下的 *.css)。 */

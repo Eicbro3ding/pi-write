@@ -108,9 +108,13 @@ export function buildWorldDiff(before: WorldDataDto, after: WorldDataDto): World
 }
 
 /**
- * 预览卡片数据:每 AI 回合最多一张,内容 = 最近一种编辑类型。
- * draft = 各草稿文件以回合首次编辑为基线的累计 diff;world 按变更类型分流
- * (graph = 结构变化出图,entry = 仅词条修改出百科卡);fetch 失败走 error。
+ * 预览卡数据:每个工具块最多一张,内容 = 该次编辑的结果。
+ * draft = 该次编辑的 diff;world 按变更类型分流(graph = 结构变化出图,
+ * entry = 仅词条修改出百科卡);fetch 失败走 error。
+ *
+ * 2026-09-19:预览卡不再是「锚定在 assistant 消息下的独立层」,而是**工具块自己的
+ * 渲染结果** —— 挂载键从消息 id(anchorId)换成工具调用 id(toolCallId)。
+ * 于是「卡片找宿主消息」这件事整个消失:块在,卡就在;块不在,卡就不渲染。
  */
 export type PreviewData =
 	| {
@@ -147,19 +151,15 @@ export type PreviewData =
 	| { kind: "draft" | "world"; error: true; toolName: string; path: string | null };
 
 /**
- * 预览卡片(UI 状态):id 为稳定标识(React key 与按 id 更新定位,不依赖数组下标);
- * anchorId 锚定该回合 assistant 消息——实时回合为消息内存 id,稳定化后为
- * entryId(持久化恢复后按 entryId 渲染);assistant 消息尚未创建时为
- * `pending:<kind>` 占位(避免草稿/世界两张卡共用空锚点)。
+ * 旧形状的确认卡判定:改造前用 anchorId 锚定 assistant 消息,无法反推工具调用 id。
+ * 服务端持久化的卡里若还是这种形状,认领不到工具块 → 恢复时丢弃
+ * (文件已落盘,只是确认/回退入口不再提供)。
  */
-export interface PreviewCardItem {
-	id: string;
-	anchorId: string;
-	data: PreviewData;
+export function isLegacyConfirmCard(c: { toolCallId?: unknown }): boolean {
+	return typeof c.toolCallId !== "string" || c.toolCallId.length === 0;
 }
 
-/** 草稿预览的折叠头统计:首个文件路径 + 全部 section 的增删行数。 */
-export function draftDiffStats(data: PreviewData): { path: string; add: number; del: number } | null {
+/** 草稿预览的折叠头统计:首个文件路径 + 全部 section 的增删行数。 */export function draftDiffStats(data: PreviewData): { path: string; add: number; del: number } | null {
 	if ("error" in data || data.kind !== "draft" || data.sections.length === 0) return null;
 	let add = 0;
 	let del = 0;

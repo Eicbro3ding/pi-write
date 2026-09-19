@@ -6,7 +6,7 @@ import { useMediaQuery } from "../useMediaQuery.ts";
 import { useDragResize } from "../use-drag-resize.ts";
 import { initialSessionState, messagesToEvents, processAgentEvent, RESET, sessionReducer } from "../store.ts";
 import { blocksText, blocksThinking } from "../blocks.ts";
-import type { AgentEventDto, BookFileEntryDto, ChapterRef, ScriptPatchDto, StageModeDto, StagePhaseDto, StageScriptDto, StageSnapshotDto, WorldDataDto } from "../types.ts";
+import type { AgentEventDto, BookFileEntryDto, ChapterRef, ChatMessage, ScriptPatchDto, StageModeDto, StagePhaseDto, StageScriptDto, StageSnapshotDto, WorldDataDto } from "../types.ts";
 import { formatCounts, initialStageState, reduceStage, stageEntryText } from "../stage-web.ts";
 import { contextUsageHint } from "../context-usage.ts";
 import {
@@ -19,7 +19,7 @@ import {
 } from "../slash-commands.ts";
 import { ChapterSidebar } from "../components/ChapterSidebar.tsx";
 import { InputBar } from "../components/InputBar.tsx";
-import { MessageList } from "../components/MessageList.tsx";
+import { MessageList, type PreviewCardSlot } from "../components/MessageList.tsx";
 import { PreviewCard } from "../components/PreviewCard.tsx";
 import { Select } from "../components/Select.tsx";
 import { StageAvatar } from "../components/StageAvatar.tsx";
@@ -41,6 +41,22 @@ import { conversationStyle, panelCollapsed, setPanelCollapsed, type Conversation
  */
 /** 空台账(舞台页没有 writer_event 写入路径;稳定引用,避免每次渲染新建)。 */
 const EMPTY_TOUCHED: ReadonlySet<string> = new Set();
+
+/**
+ * 找最后一个指定工具的工具块 id —— 预览卡的挂载键(2026-09-19)。
+ * 倒序扫描:导演一轮里 world_update / script_confirm 只调一次,取最后一条即当前那次。
+ * 找不到返回 undefined(卡片就不渲染:卡片的宿主只能是工具块)。
+ */
+function lastToolBlockId(messages: readonly ChatMessage[], toolName: string): string | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const blocks = messages[i]!.blocks;
+		for (let j = blocks.length - 1; j >= 0; j--) {
+			const b = blocks[j]!;
+			if (b.kind === "tool" && b.call.name === toolName) return b.call.id;
+		}
+	}
+	return undefined;
+}
 
 export function StagePage({
 	client,
@@ -277,7 +293,6 @@ export function StagePage({
 	const worldEditPendingRef = useRef(false);
 	/** 收幕导演回合是否已结束(agent_settled 置位;收幕提示条据此撤下,不等编剧成文)。 */
 	const [cutDirectorDone, setCutDirectorDone] = useState(false);
-
 	// ---- 导演会话(2026-08-11 统一重构):与编剧/主会话同款 reducer + MessageList。
 	// stage_director_event 内层是主会话同款事件(processAgentEvent 归约),
 	// 思考折叠/流式/工具卡片零新逻辑;快照 directorChat 水合恢复。
@@ -570,6 +585,42 @@ export function StagePage({
 	/** 导演会话上下文占用达到阈值时的「建议 /compact」提示。 */
 	const directorUsageHint = contextUsageHint(stage.snapshot?.directorUsage ?? null);
 
+	// ---- 工具块卡片槽(2026-09-19)----
+	// 世界书预览与剧本确认卡不再锚在对话末尾/独立一层,而是挂在**产生它的那次工具调用**
+	// 块上(world_update / script_confirm)。先取块 id(字符串,值稳定)再 memo,
+	// 避免流式期间 messages 变化导致 Map 每次重建、整列表失去 memo。
+	const worldUpdateCallId = lastToolBlockId(directorSession.messages, "world_update");
+	const scriptConfirmCallId = lastToolBlockId(directorSession.messages, "script_confirm");
+	const directorCards = useMemo(() => {
+		const out = new Map<string, PreviewCardSlot>();
+		if (worldUpdateCallId && worldPreview) out.set(worldUpdateCallId, { data: worldPreview });
+		if (scriptConfirm && !confirmDismissed && scriptConfirmCallId) {
+			out.set(scriptConfirmCallId, {
+				data: { kind: "script", toolName: "script_confirm", sceneId: scriptConfirm.sceneId, script: scriptConfirm.script },
+				actions: scriptConfirm.confirmed ? (
+					<span className="preview-note">已确认，等待导演开演…</span>
+				) : (
+					<>
+						<button type="button" className="btn primary" disabled={busy} onClick={() => void confirmScript()}>
+							确认开演
+						</button>
+						<button
+							type="button"
+							className="btn"
+							onClick={() => {
+								setConfirmDismissed(true);
+								dispatch({ type: "system", text: "在下方对话里告诉导演要修改哪里，导演会用 script_confirm 重新提交。" });
+							}}
+						>
+							需要修改
+						</button>
+					</>
+				),
+			});
+		}
+		return out;
+	}, [worldUpdateCallId, scriptConfirmCallId, worldPreview, scriptConfirm, confirmDismissed, busy]);
+
 	let entryNo = 0;
 	return (
 		<div
@@ -817,38 +868,8 @@ export function StagePage({
 							streaming={directorSession.isStreaming}
 							compacting={directorSession.compacting}
 							simplifiedTools={simplifiedTools === true}
+							previewCards={directorCards}
 							emptyText="向导演发一句话，讨论剧情、人物与悬念——导演会边聊边维护世界书"
-						/>
-					)}
-					{/* 导演世界书编辑预览卡:world_update 变更的 diff/关系图(最新一次) */}
-					{worldPreview && <PreviewCard data={worldPreview} />}
-					{/* 剧本确认门(2026-08-11):导演 script_confirm 提交后,确认卡紧跟对话末尾。
-					    对话区不被压缩靠 chat-scroll 取消 flex:1(自然高度,整列滚动),
-					    卡片自身仍在文档流里 */}
-					{scriptConfirm && !confirmDismissed && (
-						<PreviewCard
-							data={{ kind: "script", toolName: "script_confirm", sceneId: scriptConfirm.sceneId, script: scriptConfirm.script }}
-							actions={
-								scriptConfirm.confirmed ? (
-									<span className="preview-note">已确认，等待导演开演…</span>
-								) : (
-									<>
-										<button type="button" className="btn primary" disabled={busy} onClick={() => void confirmScript()}>
-											确认开演
-										</button>
-										<button
-											type="button"
-											className="btn"
-											onClick={() => {
-												setConfirmDismissed(true);
-												dispatch({ type: "system", text: "在下方对话里告诉导演要修改哪里，导演会用 script_confirm 重新提交。" });
-											}}
-										>
-											需要修改
-										</button>
-									</>
-								)
-							}
 						/>
 					)}
 				</div>

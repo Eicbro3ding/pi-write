@@ -5,7 +5,7 @@ import { DUR, EASE, EDGE_IN } from "../motion.ts";
 import { PreviewBody } from "./PreviewCard.tsx";
 
 /** 待确认的编剧编辑卡:before = 编辑前基线(「回退」写回用),data = 预览渲染数据,
- *  anchorId = 触发它的 assistant 消息 id(实时随机 id 或水合后 entryId,与预览卡同规则);
+ *  toolCallId = 挂载键——**卡片是那次 write/edit 工具块的渲染结果**(2026-09-19);
  *  auto = 免确认模式(设置页开关):编辑落盘即归档,卡片只读展示「已应用」。 */
 export interface ConfirmCardItem {
 	id: string;
@@ -13,15 +13,16 @@ export interface ConfirmCardItem {
 	path: string | null;
 	before: string | WorldDataDto;
 	data: PreviewData;
-	anchorId: string | null;
+	/** 工具调用 id:决定这张卡挂在哪个块上(服务端持久化后跨刷新仍能认领)。 */
+	toolCallId: string;
 	auto?: boolean;
 }
 
 /**
  * 编剧编辑确认卡:diff 预览(复用 PreviewBody,与主会话预览卡同一渲染)+
  * 确认/回退。回退由调用方执行(写回编辑前状态)。
- * 嵌入编剧对话流,锚定在触发编辑的 assistant 消息下(与原对话侧边栏
- * 预览卡同一设计);入场:右缘列容器从右侧水平滑入。
+ * **它是工具块的渲染结果**(挂在该 write/edit 块的位置上),不再是锚定在消息下的
+ * 独立一层;入场:右缘列容器从右侧水平滑入。
  */
 export function ConfirmCard({
 	data,

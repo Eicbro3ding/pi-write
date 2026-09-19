@@ -8,7 +8,7 @@
  * 不依赖 message.id。message_start 只追加 user/assistant 消息,role=toolResult
  * 等非气泡角色直接跳过,不渲染为气泡。
  */
-import type { AgentEventDto, ChatMessage, MessageBlock, SessionViewState, ToolCallInfo } from "./types.ts";
+import type { AgentEventDto, ChatMessage, MessageBlock, SessionMessageDto, SessionViewState, ToolCallInfo } from "./types.ts";
 import { extractCacheHit } from "./context-usage.ts";
 
 /** 初始会话视图状态。 */
@@ -51,23 +51,32 @@ function partialTextOf(partial: unknown): string | null {
  * 历史消息带服务端 entry id(entryId),ChatMessage.id 直接用它(稳定,撤回定位依据)。
  * 每条历史消息成对补 message_end:置 done——思考块渲染「思考」且不显示计时
  * (重载思维链无计时起点;2026-08-11)。
+ *
+ * 2026-09-19:历史消息带 `content`(有序块:思考 / 正文 / 工具调用,工具块内联结果)
+ * 时**原样透传**给 reducer —— 于是刷新页面后思考与工具的先后、工具卡本身都还在,
+ * 不再只留下「一坨思考 + 一坨正文」。缺 content 的旧形状退回 text/thinking 投影。
+ * startedAt/endedAt 一并携带,回合耗时刷新后不丢。
  */
-export function messagesToEvents(
-	messages: ReadonlyArray<{ role: "user" | "assistant"; text: string; thinking?: string; id?: string }>,
-): Array<Extract<AgentEventDto, { type: "message_start" } | { type: "message_end" }>> {
+export function messagesToEvents(messages: readonly SessionMessageDto[]): Array<Extract<AgentEventDto, { type: "message_start" } | { type: "message_end" }>> {
 	const events: Array<Extract<AgentEventDto, { type: "message_start" } | { type: "message_end" }>> = [];
 	for (const m of messages) {
-		// 历史水合的 thinking 一并还原:reducer 的 message_start 经 splitContent
+		// 历史水合的 thinking 一并还原:reducer 的 message_start 经 blocksFromContent
 		// 提取 thinking 块,思考链随消息恢复(刷新/重开页面后不丢)
-		const content: Array<{ type: string; text: string }> = [];
-		if (m.role === "assistant" && m.thinking && m.thinking.length > 0) {
-			content.push({ type: "thinking", text: m.thinking });
+		let content: unknown[] = m.content ? (m.content as unknown[]) : [];
+		if (content.length === 0) {
+			const fallback: Array<{ type: string; text: string }> = [];
+			if (m.role === "assistant" && m.thinking && m.thinking.length > 0) {
+				fallback.push({ type: "thinking", text: m.thinking });
+			}
+			if (m.text.length > 0) fallback.push({ type: "text", text: m.text });
+			content = fallback;
 		}
-		content.push({ type: "text", text: m.text });
 		events.push({
 			type: "message_start",
 			message: { role: m.role, content },
 			...(m.id ? { entryId: m.id } : {}),
+			...(m.startedAt !== undefined ? { startedAt: m.startedAt } : {}),
+			...(m.endedAt !== undefined ? { endedAt: m.endedAt } : {}),
 		});
 		// 水合消息成对补 message_end:置 done——思考块渲染为「思考」且不显示
 		// 计时(重载思维链无计时起点;此前 done 恒 false,显示「思考中 x 秒」)
@@ -122,7 +131,16 @@ export function blocksFromContent(content: unknown): MessageBlock[] {
 	if (!Array.isArray(content)) return [];
 	const out: MessageBlock[] = [];
 	for (const part of content) {
-		const p = part as { type?: string; text?: string; thinking?: string; id?: string; name?: string; arguments?: unknown };
+		const p = part as {
+			type?: string;
+			text?: string;
+			thinking?: string;
+			id?: string;
+			name?: string;
+			arguments?: unknown;
+			result?: unknown;
+			isError?: unknown;
+		};
 		if (p.type === "text") {
 			if (typeof p.text === "string" && p.text.length > 0) out.push({ kind: "text", text: p.text });
 		} else if (p.type === "thinking") {
@@ -130,9 +148,18 @@ export function blocksFromContent(content: unknown): MessageBlock[] {
 			const t = typeof p.thinking === "string" ? p.thinking : typeof p.text === "string" ? p.text : "";
 			if (t.length > 0) out.push({ kind: "thinking", text: t });
 		} else if (p.type === "toolCall" && typeof p.id === "string") {
+			// 历史水合的工具块内联着执行结果(服务端按 toolCallId 配对回填);
+			// 实时路径的调用块不带 result,由 tool_execution_end 后续填入
+			const hasResult = "result" in p;
 			out.push({
 				kind: "tool",
-				call: { id: p.id, name: p.name ?? "", args: argsToString(p.arguments), result: null, isError: false },
+				call: {
+					id: p.id,
+					name: p.name ?? "",
+					args: argsToString(p.arguments),
+					result: hasResult ? (typeof p.result === "string" ? p.result : JSON.stringify(p.result ?? "")) : null,
+					isError: p.isError === true,
+				},
 			});
 		}
 	}
@@ -253,6 +280,8 @@ export function processAgentEvent(state: SessionViewState, event: AgentEventDto)
 						blocks: mergeSegment(last.blocks, seg),
 						// 上一条的 message_end 已置 done,合并后继续流式,等本段 message_end 再置 done
 						done: false,
+						// 水合:组的终点随最后一段推进(实时路径该字段由 agent_settled 落)
+						...(event.endedAt !== undefined ? { endedAt: event.endedAt } : {}),
 					};
 					return { ...state, messages };
 				}
@@ -265,8 +294,14 @@ export function processAgentEvent(state: SessionViewState, event: AgentEventDto)
 				role: m.role,
 				blocks: seg,
 				done: false,
-				// 计时起点取本轮 turn_start(用户发出那一刻),而不是首个 token 到达时刻
-				...(m.role === "assistant" ? { startedAt: state.turnStartedAt ?? Date.now() } : {}),
+				// 计时起点:历史水合给的是组内首条 entry 时间;实时路径取本轮 turn_start
+				// (用户发出那一刻),而不是首个 token 到达时刻
+				...(m.role === "assistant"
+					? {
+							startedAt: event.startedAt ?? state.turnStartedAt ?? Date.now(),
+							...(event.endedAt !== undefined ? { endedAt: event.endedAt } : {}),
+						}
+					: {}),
 			};
 			return { ...state, messages: [...state.messages, msg] };
 		}

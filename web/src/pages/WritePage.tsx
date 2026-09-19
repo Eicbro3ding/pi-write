@@ -36,7 +36,7 @@ import { NoticeBoard } from "../components/NoticeBoard.tsx";
 import { WorkspacePanel } from "../components/WorkspacePanel.tsx";
 import { newId } from "../components/id.ts";
 import { createEditCapture } from "../edit-capture.ts";
-import { parseToolArgs, pathFromArgs } from "../preview.ts";
+import { isLegacyConfirmCard, parseToolArgs, pathFromArgs } from "../preview.ts";
 import type { Library } from "../library.ts";
 import { DUR, EASE } from "../motion.ts";
 import { useMediaQuery } from "../useMediaQuery.ts";
@@ -252,8 +252,6 @@ export function WritePage({
 	const writerAlignedRef = useRef<string | null>(null);
 	/** 编剧会话分支树(编辑重发产生新分支后,分支栏切换旧分支);空 = 无分支历史。 */
 	const [writerTree, setWriterTree] = useState<SessionTreeDto | null>(null);
-	/** 编剧会话最近一条 assistant 气泡 id(确认卡锚点);随 writerSession.messages 更新。 */
-	const writerLastAssistantIdRef = useRef<string | null>(null);
 	/** 编辑免确认(设置页开关):经 ref 供 SSE 订阅闭包读取最新值。 */
 	const autoConfirmEditsRef = useRef(autoConfirmEdits);
 	autoConfirmEditsRef.current = autoConfirmEdits;
@@ -264,30 +262,6 @@ export function WritePage({
 	const serverSessionRef = useRef<{ slug: string; chapterFile: string } | null>(null);
 	/** 查看模式标记:服务端会话 ≠ 当前查看章节(渲染顶部提示;写操作前切换)。 */
 	const [viewingOther, setViewingOther] = useState(false);
-
-	/** 编剧锚点维护:确认卡锚定「触发编辑的那条 assistant」——实时回合 id 为内存随机
-	 *  id,message_end 后换成 entryId。 */
-	useEffect(() => {
-		const last = writerSession.messages.filter((m) => m.role === "assistant").at(-1);
-		const id = last?.id ?? null;
-		const entryId = last?.entryId;
-		if (writerLastAssistantIdRef.current === id) return;
-		writerLastAssistantIdRef.current = id;
-		if (id !== null && entryId !== undefined && entryId !== id) {
-			// 最后一条 assistant 已结束(拿到 entryId):把仍指向实时 id 的确认卡升级为 entryId
-			setConfirmCards((prev) => {
-				let changed = false;
-				const next = prev.map((c) => {
-					if (c.anchorId === id) {
-						changed = true;
-						return { ...c, anchorId: entryId };
-					}
-					return c;
-				});
-				return changed ? next : prev;
-			});
-		}
-	}, [writerSession.messages]);
 
 	/**
 	 * 书/章节切换的统一清理:编剧会话 + 确认队列(编辑上下文已变;会话本体在
@@ -323,8 +297,11 @@ export function WritePage({
 				.then((cards) => {
 					if (confirmScopeRef.current !== scope) return; // 期间又切书:放弃
 					setConfirmCards((prev) => {
-						const ids = new Set(cards.map((c) => c.id));
-						return [...cards, ...prev.filter((c) => !ids.has(c.id))];
+						// 旧形状(改造前用 anchorId 锚定消息)无法反推工具调用 id,认领不到工具块
+						// → 丢弃:文件已落盘,只是确认/回退入口不再提供(2026-09-19)
+						const usable = cards.filter((c) => !isLegacyConfirmCard(c));
+						const ids = new Set(usable.map((c) => c.id));
+						return [...usable, ...prev.filter((c) => !ids.has(c.id))];
 					});
 				})
 				.catch(() => {
@@ -880,6 +857,9 @@ export function WritePage({
 
 	/**
 	 * 编剧编辑工具 end:经共享捕获器(writerCapture)组装 diff 出确认卡。
+	 * 卡片挂载键 = **toolCallId**(2026-09-19):卡是那次 write/edit 工具块的渲染结果,
+	 * 不再需要「锚定到某条 assistant 消息」—— 改造前为此要维护「内存随机 id 在
+	 * message_end 后升级成 entryId 再回头改写卡锚点」的接力,已随锚点机制一并删除。
 	 * scope 守卫:handleEnd 是异步的(await 取数),期间切书/切章时丢弃旧 scope 的
 	 * 卡片——否则旧书/旧章卡片会 append 进新 scope 的确认队列并被持久化
 	 * (2026-08 修复,与恢复路径的 confirmScopeRef 归属同规则)。
@@ -889,14 +869,12 @@ export function WritePage({
 		const edit = await writerCapture.handleEnd(e.toolCallId, e.isError);
 		if (!edit) return; // 失败/非编辑工具/无实质变化:不弹卡
 		if (`${bookDetailRef.current?.slug ?? ""}:${currentChapterRef.current?.file ?? ""}` !== scope) return; // 期间切书/切章:丢弃
-		// 锚点:触发编辑的那条 assistant(工具必在其回合内执行,消息已 start)
-		const anchorId = writerLastAssistantIdRef.current ?? null;
 		const card: ConfirmCardItem = {
 			id: newId("confirm"),
 			kind: edit.kind,
 			path: edit.path,
 			before: edit.before,
-			anchorId,
+			toolCallId: e.toolCallId,
 			// 免确认模式(设置页):编辑落盘即归档,卡片只读展示「已应用」
 			auto: autoConfirmEditsRef.current,
 			data: edit.data,

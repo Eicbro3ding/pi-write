@@ -2,7 +2,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir, getBookDir } from "../config.ts";
 import { getBookSessionsDir } from "../book-manager.ts";
-import { chatTextOfMessage, chatThinkingOfMessage } from "../session-text.ts";
+import {
+	chatContentOfMessage,
+	chatTextOfMessage,
+	chatThinkingOfMessage,
+	toolResultCallId,
+	toolResultText,
+	type ChatContentPart,
+} from "../session-text.ts";
 import { countStage } from "../stage/counters.ts";
 import { loadCast } from "../stage/cast.ts";
 import { readStage } from "../stage/stage-store.ts";
@@ -107,7 +114,20 @@ async function collectAvatars(bookDir: string): Promise<Record<string, string>> 
 }
 
 /** 导演讨论历史类型(快照字段与 getDirectorChat 共用)。 */
-export type DirectorChatMessage = { role: "user" | "assistant"; text: string; thinking?: string };
+export type DirectorChatMessage = {
+	role: "user" | "assistant";
+	text: string;
+	thinking?: string;
+	/**
+	 * 有序内容块(思考 / 正文 / 工具调用),工具块内联执行结果 —— 与主会话
+	 * `SessionStateSnapshot.messages[].content` 同形状,前端走同一套水合路径
+	 * (2026-09-19)。改造前只提 text + thinking,导演的工具调用在刷新后整段消失。
+	 */
+	content?: ChatContentPart[];
+	/** 组内首末 entry 时间(ms);「已工作 X 分 Y 秒」的还原依据。 */
+	startedAt?: number;
+	endedAt?: number;
+};
 
 /**
  * 从磁盘导演会话文件恢复讨论历史——导演会话由 SessionManager 持久化,服务重启后
@@ -122,18 +142,49 @@ function readDirectorChatFromDisk(slug: string, chapterFile: string | null): Dir
 		const abs = join(getBookSessionsDir(slug), file);
 		if (!existsSync(abs)) return [];
 		const chat: DirectorChatMessage[] = [];
+		/** toolCallId → 调用块(工具结果在独立的 toolResult 行上,按 id 回填)。 */
+		const partById = new Map<string, Extract<ChatContentPart, { type: "toolCall" }>>();
 		for (const line of readFileSync(abs, "utf-8").split("\n")) {
 			if (line.trim().length === 0) continue;
 			try {
-				const rec = JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } };
+				const rec = JSON.parse(line) as {
+					type?: string;
+					timestamp?: unknown;
+					message?: { role?: string; content?: unknown; toolCallId?: unknown; isError?: unknown };
+				};
 				const message = rec.message;
 				if (rec.type !== "message" || !message) continue;
+				const at = typeof rec.timestamp === "number" ? rec.timestamp : typeof rec.timestamp === "string" ? Date.parse(rec.timestamp) : NaN;
+				// 工具结果:回填到对应调用块,自身不成气泡
+				const callId = toolResultCallId(message);
+				if (callId !== undefined) {
+					const part = partById.get(callId);
+					if (part) {
+						part.result = toolResultText(message);
+						part.isError = message.isError === true;
+					}
+					continue;
+				}
 				const role = message.role;
 				if (role !== "user" && role !== "assistant") continue;
 				const text = chatTextOfMessage(message);
-				if (!text) continue;
-				const thinking = role === "assistant" ? chatThinkingOfMessage(message) || undefined : undefined;
-				chat.push({ role, text, thinking });
+				if (role === "user") {
+					if (!text) continue;
+					partById.clear();
+					chat.push({ role, text, content: [{ type: "text", text }] });
+					continue;
+				}
+				const parts = chatContentOfMessage(message);
+				// 工具调用段可能既无正文也无思考:改造前这种行会被 `if (!text) continue` 丢掉
+				if (!text && parts.length === 0) continue;
+				for (const p of parts) if (p.type === "toolCall") partById.set(p.id, p);
+				chat.push({
+					role,
+					text: text ?? "",
+					thinking: chatThinkingOfMessage(message) || undefined,
+					content: parts,
+					...(Number.isNaN(at) ? {} : { startedAt: at, endedAt: at }),
+				});
 			} catch {
 				/* 坏行跳过(会话文件可能被并发写/截断) */
 			}

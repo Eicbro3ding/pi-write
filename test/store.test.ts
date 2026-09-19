@@ -252,6 +252,38 @@ describe("processAgentEvent", () => {
   it("messagesToEvents 空历史返回空事件序列", () => {
     expect(messagesToEvents([])).toEqual([]);
   });
+  it("messagesToEvents 透传有序 content 与回合起止时间(刷新后工具块与耗时都在)", () => {
+    const content = [
+      { type: "thinking", text: "先查" },
+      { type: "text", text: "查一下" },
+      { type: "toolCall", id: "t1", name: "read", arguments: '{"path":"a.md"}', result: "文件内容", isError: false },
+      { type: "thinking", text: "再看" },
+      { type: "toolCall", id: "t2", name: "grep", arguments: "{}", result: "没找到", isError: true },
+      { type: "text", text: "结论" },
+    ];
+    const events = messagesToEvents([
+      { role: "user", text: "查设定" },
+      { role: "assistant", text: "查一下\n\n结论", content, id: "e2", startedAt: 1000, endedAt: 9000 },
+    ]);
+    // content 原样进 message_start;不再退回「thinking + text」两条
+    const start = events[2] as Extract<(typeof events)[number], { type: "message_start" }>;
+    expect(start.message.content).toBe(content);
+    expect(start.startedAt).toBe(1000);
+    expect(start.endedAt).toBe(9000);
+    // 归约后:顺序、工具结果、回合耗时三者都在
+    let s = initialSessionState();
+    for (const e of events) s = processAgentEvent(s, e);
+    expect(shape(s.messages[1]!)).toEqual(["thinking", "text", "tool:read", "thinking", "tool:grep", "text"]);
+    const tools = blocksTools(s.messages[1]!.blocks);
+    expect(tools[0]).toMatchObject({ id: "t1", result: "文件内容", isError: false });
+    expect(tools[1]).toMatchObject({ id: "t2", result: "没找到", isError: true });
+    expect(turnDurationMs(s.messages[1]!)).toBe(8000);
+  });
+  it("messagesToEvents:缺 content 的旧形状退回 text/thinking 投影", () => {
+    let s = initialSessionState();
+    for (const e of messagesToEvents([{ role: "assistant", text: "正文", thinking: "想" }])) s = processAgentEvent(s, e);
+    expect(shape(s.messages[0]!)).toEqual(["thinking", "text"]);
+  });
 });
 
 describe("回合计时(已工作 X 分 Y 秒)", () => {

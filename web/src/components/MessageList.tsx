@@ -1,12 +1,14 @@
-import { Fragment, memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { ChatMessage, ToolCallInfo } from "../types.ts";
 import { DUR, EASE, EDGE_IN, STAGGER } from "../motion.ts";
 import { renderMarkdown } from "../markdown.ts";
 import { blocksText, formatDuration, turnDurationMs } from "../blocks.ts";
+import type { PreviewData } from "../preview.ts";
 import { ConfirmCard, type ConfirmCardItem } from "./ConfirmCard.tsx";
 import { FoldablePre } from "./FoldablePre.tsx";
 import { Lu } from "./Lu.tsx";
+import { PreviewCard } from "./PreviewCard.tsx";
 import { ToolIcon } from "./ToolIcon.tsx";
 import { toolActionRow, toolIcon, toolRenderForm } from "../tool-status.ts";
 import { autoExpandThinkingEnabled } from "../settings.ts";
@@ -154,16 +156,43 @@ function ToolActionRow({ t }: { t: ToolCallInfo }) {
 /**
  * 工具块的渲染分发(块渲染表见 tool-status.ts 的 toolRenderForm)。
  *
- * `preview`(产出型工具)目前还没有卡片数据可挂——把预览卡从「锚定在消息下的独立
- * 层」改成「工具块自己的渲染结果」是下一步改造,那时这里会收到按 toolCallId 索引的
- * 卡片并把 PreviewCard 渲染出来。在那之前一律降级为动作行:**降级不是异常态**
- * (取数失败、无实质变化、非编辑类工具都走这里),所以不需要额外的错误分支。
+ * `preview`(产出型工具)优先渲染**卡片**:编剧编辑确认卡(带确认/回退)或只读预览卡
+ * (舞台世界树更新)。卡片按 toolCallId 认领——它就是这个块的渲染结果,不再锚定消息。
+ * **认领不到就降级为动作行**,而不是像改造前那样飘到列表末尾兜底:卡片的宿主只能是
+ * 工具块,块不在就没有卡。降级不是异常态(取数失败、无实质变化、非编辑类工具都走这里)。
  */
-function ToolBlock({ t, debug }: { t: ToolCallInfo; debug: boolean }) {
+function ToolBlock({
+	t,
+	debug,
+	cards,
+	onConfirmCard,
+	onRevertCard,
+}: {
+	t: ToolCallInfo;
+	debug: boolean;
+	cards?: ToolCardSlots;
+	onConfirmCard?: (id: string) => void;
+	onRevertCard?: (id: string) => void;
+}) {
 	const form = toolRenderForm(t.name, debug);
 	// 默认不显示的工具失败时强制露出:静默会让「AI 好像什么都没干」,而失败恰恰是要看的东西
 	if (form === "hidden") return t.isError ? <ToolActionRow t={t} /> : null;
 	if (form === "terminal" || form === "card") return <ToolCard t={t} />;
+	if (form === "preview") {
+		const confirm = cards?.confirm?.get(t.id);
+		if (confirm) {
+			return (
+				<ConfirmCard
+					data={confirm.data}
+					auto={confirm.auto}
+					onConfirm={() => onConfirmCard?.(confirm.id)}
+					onRevert={() => onRevertCard?.(confirm.id)}
+				/>
+			);
+		}
+		const preview = cards?.preview?.get(t.id);
+		if (preview) return <PreviewCard data={preview.data} actions={preview.actions} />;
+	}
 	return <ToolActionRow t={t} />;
 }
 
@@ -262,6 +291,21 @@ export function ThinkingBlock({ text, done }: { text: string; done: boolean }) {
 	);
 }
 
+/** 只读预览卡槽:data + 可选底部动作区(剧本确认卡的「确认开演 / 需要修改」由页面注入)。 */
+export interface PreviewCardSlot {
+	data: PreviewData;
+	actions?: ReactNode;
+}
+
+/**
+ * 工具块的卡片槽(按 toolCallId 索引)。没进这两个 Map 的产出型工具块一律降级为动作行。
+ * `confirm` = 编剧编辑确认卡(带确认/回退);`preview` = 只读预览卡(舞台世界树 / 剧本确认)。
+ */
+export interface ToolCardSlots {
+	confirm?: ReadonlyMap<string, ConfirmCardItem>;
+	preview?: ReadonlyMap<string, PreviewCardSlot>;
+}
+
 /**
  * 一条稿件记录:无气泡,小号元信息标签 + **按到达顺序排列的块** + 回合级过程折叠。
  *
@@ -276,12 +320,19 @@ function Message({
 	m,
 	simplifiedTools,
 	streaming,
+	cards,
 	onEdit,
+	onConfirmCard,
+	onRevertCard,
 }: {
 	m: ChatMessage;
 	simplifiedTools: boolean;
 	streaming: boolean;
+	/** 工具块卡片槽(由 MessageList 用 useMemo 构造:引用稳定,可作 memo 比较依据)。 */
+	cards?: ToolCardSlots;
 	onEdit?: (m: ChatMessage, newText: string) => void;
+	onConfirmCard?: (id: string) => void;
+	onRevertCard?: (id: string) => void;
 }) {
 	const [editing, setEditing] = useState(false);
 	const [editText, setEditText] = useState("");
@@ -381,7 +432,16 @@ function Message({
 						}
 						if (b.kind === "tool") {
 							if (!procShown) return null;
-							return <ToolBlock key={b.call.id} t={b.call} debug={debug} />;
+							return (
+								<ToolBlock
+									key={b.call.id}
+									t={b.call}
+									debug={debug}
+									cards={cards}
+									onConfirmCard={onConfirmCard}
+									onRevertCard={onRevertCard}
+								/>
+							);
 						}
 						if (b.text.length === 0) return null;
 						return m.role === "user" ? (
@@ -419,10 +479,12 @@ function Message({
  * 比较器返回 true = 跳过重渲染。
  */
 function messagePropsEqual(
-	prev: { m: ChatMessage; simplifiedTools: boolean; streaming: boolean },
-	next: { m: ChatMessage; simplifiedTools: boolean; streaming: boolean },
+	prev: { m: ChatMessage; simplifiedTools: boolean; streaming: boolean; cards?: ToolCardSlots },
+	next: { m: ChatMessage; simplifiedTools: boolean; streaming: boolean; cards?: ToolCardSlots },
 ): boolean {
 	if (prev.simplifiedTools !== next.simplifiedTools || prev.streaming !== next.streaming) return false;
+	// cards 由 MessageList 的 useMemo 构造(toolCallId 映射),引用稳定;变异则整表重建
+	if (prev.cards !== next.cards) return false;
 	const a = prev.m;
 	const b = next.m;
 	if (a === b) return true;
@@ -459,25 +521,13 @@ function messagePropsEqual(
 const MessageMemo = memo(Message, messagePropsEqual);
 
 /**
- * 预览卡片锚点匹配:anchorId 可能是内存随机 id(实时回合)或会话 entryId
- * (message_end 稳定化后/水合恢复);消息的 id 实时为随机 id、水合后为 entryId,
- * entryId 作为附加字段存在——双通道匹配保证卡片不落孤儿区。
- */
-function anchorMatches(m: ChatMessage, anchorId: string): boolean {
-	return m.id === anchorId || m.entryId === anchorId;
-}
-
-/** 确认卡锚点丢失判定:无锚点(null,编辑时还没有 assistant 消息)或消息列表中无匹配。 */
-function confirmAnchorLost(messages: ChatMessage[], c: ConfirmCardItem): boolean {
-	const anchorId = c.anchorId;
-	if (anchorId === null) return true;
-	return !messages.some((m) => anchorMatches(m, anchorId));
-}
-
-/**
  * 消息列表:滚动容器 + 自动滚底。用户在流式阅读时上翻,则暂停跟随;
  * 新消息出现时恢复跟随底部。AI 输出中(isStreaming)在列表末尾显示
  * 思考中/分析中/创作中 状态提示。
+ *
+ * 卡片层已取消(2026-09-19):预览卡/确认卡不再是锚定在消息下的独立一层
+ * (连同 anchorMatches / confirmAnchorLost / 锚点升级 dance 一起删掉),
+ * 它们由 `cards` 按 toolCallId 交给对应工具块渲染,块在卡就在。
  */
 export function MessageList({
 	messages,
@@ -485,6 +535,7 @@ export function MessageList({
 	compacting,
 	simplifiedTools,
 	confirmCards,
+	previewCards,
 	onConfirmCard,
 	onRevertCard,
 	onEdit,
@@ -496,9 +547,10 @@ export function MessageList({
 	/** 上下文压缩中:列表末尾显示「正在压缩上下文」。 */
 	compacting?: boolean;
 	simplifiedTools: boolean;
-	/** 编剧编辑确认卡列表:与预览卡同锚定规则(触发编辑的 assistant 消息下)。
-	 *  与预览卡并存时各自独立渲染(确认卡不是回合汇总,一编辑一张)。 */
+	/** 编剧编辑确认卡(按 toolCallId 认领到对应的 write/edit 工具块上)。 */
 	confirmCards?: ReadonlyArray<ConfirmCardItem>;
+	/** 只读预览卡(舞台世界树 / 剧本确认),同样按 toolCallId 挂到工具块上。 */
+	previewCards?: ReadonlyMap<string, PreviewCardSlot>;
 	/** 确认编剧编辑(归档删卡;文件已落盘)。 */
 	onConfirmCard?: (id: string) => void;
 	/** 回退编剧编辑(写回编辑前状态)。 */
@@ -511,6 +563,17 @@ export function MessageList({
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const stickRef = useRef(true);
 	const countRef = useRef(messages.length);
+	/**
+	 * 卡片槽(按 toolCallId 索引)。**必须是 memo 化的稳定引用**:Message 的 memo
+	 * 比较器按引用比 cards,每渲染重建 Map 会让整列表失去 memo(流式 delta 全量重渲)。
+	 */
+	const cards = useMemo<ToolCardSlots>(
+		() => ({
+			confirm: new Map((confirmCards ?? []).map((c) => [c.toolCallId, c])),
+			preview: previewCards,
+		}),
+		[confirmCards, previewCards],
+	);
 	/** 已见过(已入场)的消息 id 集合:渲染期只读,提交期(useEffect)推进。 */
 	const seenIdsRef = useRef<Set<string> | null>(null);
 	/** 批量静默阈值:单次渲染新增 >2 条视为历史水合(切章/重连对齐),整体静默呈现,
@@ -558,7 +621,6 @@ export function MessageList({
 
 	return (
 		<div className="chat-scroll" ref={scrollRef} onScroll={handleScroll}>
-			{/* 空态仅当无消息且无恢复卡片(服务端持久化预读的卡片在空会话下也要可见) */}
 			{messages.length === 0 && !streaming ? (
 				<div className="chat-empty">{emptyText}</div>
 				) : (
@@ -567,45 +629,28 @@ export function MessageList({
 							const idx = newIds.indexOf(m.id);
 						// 仅新增消息带入场动画(右缘列:从右侧水平滑入,40ms 交错,上限 8 条)
 						return (
-							<Fragment key={m.id}>
-								<motion.div
-									key={m.id}
-									initial={idx >= 0 ? EDGE_IN.right : false}
-									animate={{ opacity: 1, x: 0 }}
-										transition={{
-											duration: DUR.base,
-											ease: EASE.out,
-											delay: idx >= 0 ? Math.min(idx * STAGGER, 0.32) : 0,
-										}}
-									>
-									<MessageMemo
-										m={m}
-										simplifiedTools={simplifiedTools}
-										streaming={streaming}
-										onEdit={onEdit}
-									/>
-								</motion.div>
-								{confirmCards?.filter((c) => c.anchorId !== null && anchorMatches(m, c.anchorId)).map((c) => (
-									<ConfirmCard
-										key={c.id}
-										data={c.data}
-										auto={c.auto}
-										onConfirm={() => onConfirmCard?.(c.id)}
-										onRevert={() => onRevertCard?.(c.id)}
-									/>
-								))}
-							</Fragment>
+							<motion.div
+								key={m.id}
+								initial={idx >= 0 ? EDGE_IN.right : false}
+								animate={{ opacity: 1, x: 0 }}
+								transition={{
+									duration: DUR.base,
+									ease: EASE.out,
+									delay: idx >= 0 ? Math.min(idx * STAGGER, 0.32) : 0,
+								}}
+							>
+								<MessageMemo
+									m={m}
+									simplifiedTools={simplifiedTools}
+									streaming={streaming}
+									cards={cards}
+									onEdit={onEdit}
+									onConfirmCard={onConfirmCard}
+									onRevertCard={onRevertCard}
+								/>
+							</motion.div>
 						);
 					})}
-					{confirmCards?.filter((c) => confirmAnchorLost(messages, c)).map((c) => (
-						<ConfirmCard
-							key={c.id}
-							data={c.data}
-							auto={c.auto}
-							onConfirm={() => onConfirmCard?.(c.id)}
-							onRevert={() => onRevertCard?.(c.id)}
-						/>
-					))}
 						{/* 状态提示:压缩中 > 工具执行中(简化输出)> 思考轮换;自动滚底会把它带进视野 */}
 						{compacting ? (
 							<CompactingIndicator />

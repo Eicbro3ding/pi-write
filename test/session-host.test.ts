@@ -222,6 +222,37 @@ function pushThinkingMessage(sm: SessionManager, text: string, thinking: string)
 	return sm.getBranch().at(-1)!.id;
 }
 
+/** 推一条「思考 + 工具调用」的 assistant 消息(模拟真实多轮工具调用的落盘形态)。 */
+function pushToolCallMessage(
+	sm: SessionManager,
+	thinking: string,
+	calls: Array<{ id: string; name: string }>,
+	text = "",
+): string {
+	sm.appendMessage({
+		role: "assistant",
+		content: [
+			{ type: "thinking", thinking, thinkingSignature: "reasoning_content" },
+			...(text.length > 0 ? [{ type: "text", text }] : []),
+			...calls.map((c) => ({ type: "toolCall", id: c.id, name: c.name, arguments: { path: `${c.name}.md` } })),
+		],
+		timestamp: Date.now(),
+	} as never);
+	return sm.getBranch().at(-1)!.id;
+}
+
+/** 推一条工具结果 entry(toolResult 在磁盘上是独立 entry,按 toolCallId 与调用配对)。 */
+function pushToolResult(sm: SessionManager, toolCallId: string, text: string, isError = false): void {
+	sm.appendMessage({
+		role: "toolResult",
+		toolCallId,
+		toolName: "read",
+		content: [{ type: "text", text }],
+		isError,
+		timestamp: Date.now(),
+	} as never);
+}
+
 describe("SessionHost retractMessage", () => {
 	it("撤回用户消息后 getState 只含其之前的消息,且消息带 entry id", async () => {
 		const sm = makeRealSm();
@@ -364,6 +395,92 @@ describe("SessionHost retractMessage", () => {
 		expect(msgs[1]!.id).toBe(lastId);
 		expect(msgs[2]!.thinking).toBeUndefined();
 		expect(msgs[3]!.thinking).toBe("后续思路……");
+	});
+
+	it("extractMessages 保留有序块:思考 / 工具调用 / 工具结果按真实顺序(2026-09-19)", async () => {
+		const sm = makeRealSm();
+		const fake = makeFakeRuntime();
+		wireRealSm(fake, sm);
+		const host = makeHost(fake);
+		await host.start();
+
+		// 一个用户回合 = 三段「思考 → 工具」+ 最后一段交付正文
+		pushMessage(sm, "user", "看看设定");
+		pushToolCallMessage(sm, "第一轮思考", [{ id: "c1", name: "ls" }]);
+		pushToolResult(sm, "c1", "目录列表");
+		pushToolCallMessage(sm, "第二轮思考", [{ id: "c2", name: "read" }]);
+		pushToolResult(sm, "c2", "第一章内容");
+		pushToolCallMessage(sm, "第三轮思考", [], "交付正文");
+		pushMessage(sm, "user", "继续");
+		pushToolCallMessage(sm, "后续思考", [{ id: "c3", name: "grep" }]);
+		pushToolResult(sm, "c3", "搜索失败", true);
+
+		const msgs = host.getState().messages;
+		expect(msgs.map((m) => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
+		// 第一个回合:三段的思考与工具**按真实顺序**交错,不再只留「一坨思考」
+		expect(msgs[1]!.content?.map((p) => (p.type === "toolCall" ? `tool:${p.name}` : p.type))).toEqual([
+			"thinking",
+			"tool:ls",
+			"thinking",
+			"tool:read",
+			"thinking",
+			"text",
+		]);
+		// 工具结果按 toolCallId 从独立 toolResult entry 回填到调用块上
+		const first = msgs[1]!.content![1]!;
+		expect(first.type === "toolCall" && first.result).toBe("目录列表");
+		expect(first.type === "toolCall" && first.isError).toBe(false);
+		// 工具块用 vendor 的 ToolCall.id 建,前端 tool_execution_start 同源
+		expect(first.type === "toolCall" && first.id).toBe("c1");
+		// 失败结果也要忠实带过来(isError 决定前端画「✕ 读取失败」还是「✓ 已阅读」)
+		const failed = msgs[3]!.content!.find((p) => p.type === "toolCall");
+		expect(failed && failed.type === "toolCall" && failed.isError).toBe(true);
+		// 兼容投影仍在(TUI / 分支摘要按整条消息取文本)
+		expect(msgs[1]!.thinking).toBe("第一轮思考\n\n第二轮思考\n\n第三轮思考");
+		expect(msgs[1]!.text).toBe("交付正文");
+	});
+
+	it("extractMessages 带回合起止时间(「已工作 X 分 Y 秒」刷新后仍在)", async () => {
+		const sm = makeRealSm();
+		const fake = makeFakeRuntime();
+		wireRealSm(fake, sm);
+		const host = makeHost(fake);
+		await host.start();
+
+		pushMessage(sm, "user", "写一段");
+		pushToolCallMessage(sm, "想", [{ id: "c1", name: "read" }]);
+		pushToolResult(sm, "c1", "ok");
+		pushMessage(sm, "assistant", "成稿");
+
+		// entry 时间戳由 SessionManager 落盘时给(appendMessage 不接受注入),
+		// 所以按分支首末 entry 的时间戳断言,而不是自己编一个
+		const branch = sm.getBranch();
+		const firstAssistant = branch.find((e) => (e.message as { role?: string } | undefined)?.role === "assistant")!;
+		const lastAssistant = [...branch].reverse().find((e) => (e.message as { role?: string } | undefined)?.role === "assistant")!;
+		const msg = host.getState().messages[1]!;
+		expect(msg.startedAt).toBe(Date.parse(firstAssistant.timestamp));
+		expect(msg.endedAt).toBe(Date.parse(lastAssistant.timestamp));
+	});
+
+	it("extractMessages:纯工具调用段(无正文无思考)不再被丢掉", async () => {
+		const sm = makeRealSm();
+		const fake = makeFakeRuntime();
+		wireRealSm(fake, sm);
+		const host = makeHost(fake);
+		await host.start();
+
+		pushMessage(sm, "user", "统计一下");
+		sm.appendMessage({
+			role: "assistant",
+			content: [{ type: "toolCall", id: "c1", name: "word_count", arguments: {} }],
+			timestamp: Date.now(),
+		} as never);
+		pushToolResult(sm, "c1", "3,200 字");
+
+		const msgs = host.getState().messages;
+		expect(msgs).toHaveLength(2);
+		expect(msgs[1]!.content?.map((p) => p.type)).toEqual(["toolCall"]);
+		expect(msgs[1]!.text).toBe("");
 	});
 });
 
