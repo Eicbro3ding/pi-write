@@ -2,7 +2,9 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import { Lu } from "./Lu.tsx";
 import {
 	composeMessageWithAttachments,
+	keepSlashIndex,
 	parseSlashQuery,
+	slashArrowMove,
 	slashCommandMatches,
 	type InputChip,
 	type SlashCommand,
@@ -87,6 +89,12 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 	onCommandErrorRef.current = onCommandError;
 	/** 搜索请求代数:慢响应不得覆盖新查询结果。 */
 	const menuSeqRef = useRef(0);
+	/**
+	 * 被菜单消费掉的按键。**keyup 时不再刷新菜单** —— 刷新会重建菜单(旧代码里
+	 * 连带把 index 打回 0),于是方向键刚挪完就被打回第一项。
+	 * 只记一个键即可:keydown/keyup 成对到达,中间不会有别的键。
+	 */
+	const menuKeyRef = useRef<string | null>(null);
 
 	// textarea 自动增高(受 MAX_HEIGHT 约束)。
 	// 注意:双常驻标签(伙伴栏对话/批注)下,隐藏标签内的输入条在 display:none 容器中
@@ -126,6 +134,14 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 		}));
 	}
 
+	/**
+	 * 落菜单状态:**查询未变时保留当前选中项**(上下键之后任何一次重建都会把它打回
+	 * 第一项 —— 那是「上下移动不生效」的直接原因),查询变了才回到第一项。
+	 */
+	function commitMenu(next: Omit<SlashMenuState, "index">) {
+		setMenu((prev) => ({ ...next, index: keepSlashIndex(prev, next, next.items.length) }));
+	}
+
 	/** 按当前文本与光标重建/关闭命令面板。 */
 	function refreshMenu(ta: HTMLTextAreaElement) {
 		const q = parseSlashQuery(ta.value, ta.selectionStart ?? ta.value.length);
@@ -143,12 +159,11 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 		// `/`(无触发名)或前缀命中多条且尚无精确命中:先让用户选命令
 		if (q.trigger.length === 0 || (matches.length > 1 && !exact)) {
 			const command = exact ?? matches[0]!;
-			setMenu({
+			commitMenu({
 				seq,
 				query: q,
 				command,
 				items: commandPickerItems(matches),
-				index: 0,
 				loading: false,
 				notice: null,
 				picker: true,
@@ -158,16 +173,16 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 		const command = exact ?? matches[0]!;
 		// action 命令(有 run、无 search)不需要远程搜索,直接给一条固定候选
 		if (command.run && !command.search) {
-			setMenu({ seq, query: q, command, items: [actionSuggestion(command, q.term)], index: 0, loading: false, notice: null, picker: false });
+			commitMenu({ seq, query: q, command, items: [actionSuggestion(command, q.term)], loading: false, notice: null, picker: false });
 			return;
 		}
-		setMenu({ seq, query: q, command, items: [], index: 0, loading: true, notice: null, picker: false });
+		commitMenu({ seq, query: q, command, items: [], loading: true, notice: null, picker: false });
 		const ctx = contextRef.current;
 		void (async () => {
 			try {
 				const items = (await command.search?.(q.term, ctx ?? ({} as SlashContext))) ?? [];
 				if (seq !== menuSeqRef.current) return;
-				setMenu((prev) => (prev && prev.seq === seq ? { ...prev, items, loading: false, index: 0 } : prev));
+				commitMenu({ seq, query: q, command, items, loading: false, notice: null, picker: false });
 			} catch (err) {
 				if (seq !== menuSeqRef.current) return;
 				setMenu((prev) =>
@@ -272,23 +287,25 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 	function handleKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {
 		if (menu) {
 			// 命令面板打开时:方向键/回车/Tab 作用于面板,不发送;Esc 关闭
-			if (e.key === "ArrowDown" && menu.items.length > 0) {
+			// 方向键走纯函数(见 slash-commands.ts):**候选项 ≤1 时不吃键** ——
+			// 挪不动却 preventDefault 会让光标也动不了,表现成「输入框被锁住」
+			const move = slashArrowMove(e.key, menu.index, menu.items.length);
+			if (move.consume) {
 				e.preventDefault();
-				setMenu({ ...menu, index: (menu.index + 1) % menu.items.length });
-				return;
-			}
-			if (e.key === "ArrowUp" && menu.items.length > 0) {
-				e.preventDefault();
-				setMenu({ ...menu, index: (menu.index - 1 + menu.items.length) % menu.items.length });
+				menuKeyRef.current = e.key;
+				// 函数式更新:连按两次时第二次不会读到上一帧的旧 index(丢了那一步)
+				setMenu((prev) => (prev ? { ...prev, index: move.index } : prev));
 				return;
 			}
 			if (e.key === "Escape") {
 				e.preventDefault();
+				menuKeyRef.current = e.key;
 				setMenu(null);
 				return;
 			}
 			if ((e.key === "Enter" || e.key === "Tab") && !e.ctrlKey && !e.metaKey && menu.items.length > 0) {
 				e.preventDefault();
+				menuKeyRef.current = e.key;
 				void pick(menu.items[menu.index], menu);
 				return;
 			}
@@ -358,7 +375,14 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 						refreshMenu(e.target);
 					}}
 					onKeyDown={handleKey}
-					onKeyUp={(e) => refreshMenu(e.currentTarget)}
+					onKeyUp={(e) => {
+						// 菜单吃掉的方向键不回灌给刷新逻辑,否则选中项会被打回第一项
+						if (e.key === menuKeyRef.current) {
+							menuKeyRef.current = null;
+							return;
+						}
+						refreshMenu(e.currentTarget);
+					}}
 					onClick={(e) => refreshMenu(e.currentTarget)}
 				/>
 				{streaming ? (

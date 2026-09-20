@@ -5,12 +5,14 @@
 import { describe, expect, it } from "vitest";
 import {
 	composeMessageWithAttachments,
+	keepSlashIndex,
 	makeChapterCommand,
 	makeCompactCommand,
 	makeNodeCommand,
 	makePluginCommand,
 	parseSlashQuery,
 	scoreWorldEntry,
+	slashArrowMove,
 	worldEntryInsertText,
 } from "../web/src/slash-commands.ts";
 import type { SlashContext } from "../web/src/slash-commands.ts";
@@ -158,5 +160,55 @@ describe("插件 Web 命令(makePluginCommand)", () => {
 		await cmd.run!("6", {} as SlashContext);
 		await cmd.run!("  ", {} as SlashContext);
 		expect(calls).toEqual(["6", "(none)"]);
+	});
+});
+
+describe("斜杠菜单的上下键处置(2026-09-20 修)", () => {
+	it("候选项 ≤1 时**不吃键**:挪不动还 preventDefault 会让光标也动不了(「输入框被锁」)", () => {
+		for (const key of ["ArrowUp", "ArrowDown"]) {
+			expect(slashArrowMove(key, 0, 0)).toEqual({ consume: false, index: 0 });
+			expect(slashArrowMove(key, 0, 1)).toEqual({ consume: false, index: 0 });
+		}
+	});
+
+	it("候选项 ≥2:上下环回,且吃掉按键", () => {
+		expect(slashArrowMove("ArrowDown", 0, 3)).toEqual({ consume: true, index: 1 });
+		expect(slashArrowMove("ArrowDown", 2, 3)).toEqual({ consume: true, index: 0 }); // 环回
+		expect(slashArrowMove("ArrowUp", 0, 3)).toEqual({ consume: true, index: 2 }); // 环回
+		expect(slashArrowMove("ArrowUp", 1, 3)).toEqual({ consume: true, index: 0 });
+	});
+
+	it("越界下标被夹住(异步搜索结果回来时 index 可能停在旧长度上)", () => {
+		expect(slashArrowMove("ArrowDown", 9, 3)).toEqual({ consume: true, index: 1 });
+		expect(slashArrowMove("ArrowUp", 9, 3)).toEqual({ consume: true, index: 2 });
+	});
+
+	it("非方向键一律不吃", () => {
+		for (const key of ["a", "ArrowLeft", "ArrowRight", "Enter", "Escape"]) {
+			expect(slashArrowMove(key, 1, 5)).toEqual({ consume: false, index: 1 });
+		}
+	});
+});
+
+describe("菜单重建时的选中项保留(2026-09-20 修)", () => {
+	const base = { query: { trigger: "no", term: "" }, command: { trigger: "node" }, picker: false };
+	const next = { picker: false, query: { trigger: "no", term: "" }, command: { trigger: "node" } };
+
+	it("查询未变 → 保留当前项(否则 keyup 重建会把上下键的移动打回第一项)", () => {
+		expect(keepSlashIndex({ ...base, index: 3 }, next, 5)).toBe(3);
+	});
+
+	it("查询变了(又敲了字)→ 回到第一项", () => {
+		expect(keepSlashIndex({ ...base, index: 3 }, { ...next, query: { trigger: "no", term: "林" } }, 5)).toBe(0);
+		expect(keepSlashIndex({ ...base, index: 3 }, { ...next, command: { trigger: "node" }, picker: true }, 5)).toBe(0);
+	});
+
+	it("结果数变少 → 按新长度夹紧,不越界", () => {
+		expect(keepSlashIndex({ ...base, index: 4 }, next, 2)).toBe(1);
+	});
+
+	it("没有上一帧(首次打开)或空结果 → 第一项", () => {
+		expect(keepSlashIndex(null, next, 5)).toBe(0);
+		expect(keepSlashIndex({ ...base, index: 2 }, next, 0)).toBe(0);
 	});
 });

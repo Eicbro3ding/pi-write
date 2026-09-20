@@ -2102,8 +2102,8 @@ export class WriterServer {
 		if (rawShell !== undefined && typeof rawShell !== "boolean") {
 			throw new HttpError(400, "bad_request", "字段 enableShell 必须是布尔值");
 		}
-		if (rawKind !== undefined && rawKind !== "bash" && rawKind !== "pwsh") {
-			throw new HttpError(400, "bad_request", "字段 shellKind 只能是 bash 或 pwsh");
+		if (rawKind !== undefined && rawKind !== "auto" && rawKind !== "bash" && rawKind !== "pwsh") {
+			throw new HttpError(400, "bad_request", "字段 shellKind 只能是 auto、bash 或 pwsh");
 		}
 		if (rawPath !== undefined && typeof rawPath !== "string") {
 			throw new HttpError(400, "bad_request", "字段 shellPath 必须是字符串");

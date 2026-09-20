@@ -323,8 +323,8 @@ export interface WriterSettingsDto {
 	shellPath: string;
 }
 
-/** 用户可选的 shell 类型。 */
-export type ShellKindDto = "bash" | "pwsh";
+/** 用户可选的 shell 类型;auto(缺省)= 按平台自动识别(Windows 优先 PowerShell)。 */
+export type ShellKindDto = "auto" | "bash" | "pwsh";
 
 /** 实际解析出的 shell 方言("none" = 声明了 shell 但本机没找到可用的)。 */
 export type ShellDialectDto = "none" | "bash" | "pwsh" | "powershell";

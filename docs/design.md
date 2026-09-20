@@ -100,8 +100,10 @@
 ## 10. 外部命令与 shell 方言(2026-09,0.0.6)
 
 - **分层缺位**:vendor 没有 `ctx.shell` 那样的执行器抽象——它的 shell 通道 bash 专用(`getShellConfig()`:Windows 只找 Git Bash,找不到直接抛错;spawn 写死 `["-c"]`)。方言支持因此不加壳层,而是复用它**已有**的 `shellPath` 设置:`pwsh -Command` 可缩写为 `-c`,同一 spawn 形态直接跑 PowerShell(实测 `{shell, args:["-c"]}`);代价是退出码语义不同——`pwsh -Command` 会把原生程序退出码折算成 1,故提示词必须要求 `exit $LASTEXITCODE`;
-- **解析唯一实现** `src/shell-kind.ts`:显式路径(按文件名判方言)> `%ProgramFiles%\PowerShell\7\pwsh.exe` > PATH `pwsh` > 回退系统自带 Windows PowerShell 5.1(带 warning)。依赖(platform / env / exists / which)全注入,所以能纯逻辑单测——CI 无 pwsh、开发机有 pwsh,断言不会分叉;
+- **解析唯一实现** `src/shell-kind.ts`,显式路径优先(按文件名判方言);否则看 `shellKind`:`auto`(**缺省**,2026-09-20)= 按平台识别——非 Windows 用 bash,Windows 先找 `%ProgramFiles%\PowerShell\7\pwsh.exe` → PATH `pwsh` → 回退系统自带 5.1(带 warning),一个 PowerShell 都没有才落回 bash 并提示「需要 Git Bash」;`bash` / `pwsh` 则按显式走。依赖(platform / env / exists / which)全注入,所以能纯逻辑单测——CI 无 pwsh、开发机有 pwsh,断言不会分叉;
+- **缺省为什么是 auto 而不是 bash**:vendor 的 bash 通道在 Windows 上只找 Git Bash,找不到直接抛错。缺省钉死 bash 等于让 Windows 用户一开开关就撞报错;按平台识别则开箱可用,想固定方言仍可显式选;
 - **改提示词而不是改工具名**:vendor 的工具 schema 固定叫 `bash`,改名要动 vendor;选择在系统提示里点明方言。**解析不到就声明无 shell**:不给工具 + 如实叙述,避免「给了一个必然报错的工具」;
+- **能力要如实说全**(2026-09-20):此前提示词只写「工作目录为书目录」并把联网说成「仍需经外部工具挂载」——与事实相反,shell 以服务进程身份运行、路径守卫管不到它(`docs/security.md`)。模型不知道自己的能力范围就会绕远路:该联网查证时说自己没这能力、该跑脚本时纯手算。现在三档方言都写明「这是整台机器的权限:访问网络、执行任意代码与程序、读写书目录之外的路径」;
 - **安全面**:默认关、风险确认、命令与输出实时可见——三者缺一不可,详见 security.md「外部命令(shell)开关」。
 
 ## 11. 界面改版 v1(2026-09-19)

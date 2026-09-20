@@ -67,6 +67,7 @@ const SHELL_DIALECT_TEXT: Record<ShellDialectDto, string> = {
 
 /** shell 方言下拉项(设计稿 13:bash / PowerShell,标签精简)。 */
 const SHELL_KIND_OPTIONS = [
+	{ value: "auto", label: "自动(按平台识别)" },
 	{ value: "bash", label: "bash" },
 	{ value: "pwsh", label: "PowerShell" },
 ];
@@ -1037,7 +1038,7 @@ export function SettingsPage({
 											<div className="s-pref-text">
 												<div className="s-pref-title">Shell 方言</div>
 												<div className="s-pref-desc">
-													决定 AI 实际执行哪种 shell 语法。Windows 上 bash 需要 Git Bash;选 PowerShell 则命令按 PowerShell 语法执行,系统提示词也会照实说明。
+													决定 AI 实际执行哪种 shell 语法,系统提示词会照实说明。**自动** = 按平台识别:Windows 上优先 PowerShell(7 → 5.1),其余平台用 bash。选了 bash 但 Windows 上没装 Git Bash 会报错;想固定方言就显式选。
 												</div>
 											</div>
 											<Select
@@ -1075,7 +1076,10 @@ export function SettingsPage({
 											</div>
 										</div>
 									</div>
-									{(shellEnabled || shellKind === "pwsh") && resolvedShell && (
+									{/* 开启时显示实际方言;**关着但有 warning 也要显示** ——
+									    「自动」在 Windows 上没探到 PowerShell、或选了 pwsh 但本机没装,
+									    正是要在启用之前就看到的那条信息 */}
+									{(shellEnabled || resolvedShell?.warning !== undefined) && resolvedShell && (
 										<div className="s-card-desc st-desc-tight">
 											实际使用:{SHELL_DIALECT_TEXT[resolvedShell.dialect]}
 											{resolvedShell.path ? `(${resolvedShell.path})` : ""}

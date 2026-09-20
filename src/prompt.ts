@@ -29,18 +29,25 @@ export interface WriterPromptTool {
 }
 
 /**
- * 按方言叙述 shell 工具。注意 vendor 里工具名**始终叫 `bash`**(参数 schema 与
- * 描述都是 bash 口径),方言不同时必须在这里点明,否则模型会写 bash 语法直接报错。
+ * 按方言叙述 shell 工具。
  *
- * pwsh 的两条关键差异(详见 shell-kind.ts 模块注释):
- * - 语法/路径:PowerShell cmdlet 与原生路径,不是 bash 的 `$VAR`/heredoc;
- * - 退出码:`pwsh -Command` 的退出码会被折算,要真实退出码须自己 `exit $LASTEXITCODE`。
+ * 三条要点:
+ * 1. **工具名在 vendor 里始终叫 `bash`**(参数 schema 与描述都是 bash 口径),
+ *    方言不同时必须在这里点明,否则模型会写 bash 语法直接报错。
+ * 2. **拿到 shell 就拿到了整台机器,必须如实说清**(2026-09-20)。此前这里只写
+ *    「工作目录为书目录」并把联网说成「仍需经外部工具挂载」——与事实相反:
+ *    shell 以 pi-writer 服务进程的用户身份运行,能访问网络、执行任意程序与代码、
+ *    读写书目录之外的路径(`installToolPathGuard` 管不到它,见 docs/security.md)。
+ *    模型不知道自己的能力范围就会绕远路(该联网时说自己没这能力、该跑脚本时纯手算)。
+ * 3. pwsh 的两条关键差异(详见 shell-kind.ts 模块注释):
+ *    - 语法/路径:PowerShell cmdlet 与原生路径,不是 bash 的 `$VAR`/heredoc;
+ *    - 退出码:`pwsh -Command` 的退出码会被折算,要真实退出码须自己 `exit $LASTEXITCODE`。
  */
 const SHELL_LINES: Record<ShellDialect, string> = {
-	none: "你**没有** \\`bash\\`/shell 与浏览器工具;需要 shell 能力时告诉用户,建议他们自己运行。",
-	bash: "你可以使用 \\`bash\\`(工作目录为书目录);浏览器与联网能力仍需经外部工具挂载。",
-	pwsh: "你可以使用 \\`bash\\` 工具执行命令——本机它由 **PowerShell 7(pwsh)** 执行:请写 PowerShell 语法与原生路径(如 `Get-ChildItem`、`$env:NAME`、`C:\\...`),不要用 bash 的 `$VAR`/heredoc;要拿真实退出码请在命令末尾加 `exit $LASTEXITCODE`(否则原生程序的退出码会被折算)。工作目录为书目录。",
-	powershell: "你可以使用 \\`bash\\` 工具执行命令——本机它由 **Windows PowerShell 5.1** 执行:请写 PowerShell 语法与原生路径(如 `Get-ChildItem`、`$env:NAME`、`C:\\...`),且 **不支持 `&&`/`||`**(多条命令用 `;` 或分次调用);不要用 bash 的 `$VAR`/heredoc。工作目录为书目录。",
+	none: "你**没有** `bash`/shell 与浏览器工具;需要 shell 能力时告诉用户,建议他们自己运行。",
+	bash: "你可以使用 `bash` 执行命令。**这是整台机器的权限,不只是书目录**:它以 pi-writer 服务进程的用户身份运行,可以访问网络(下载文件、调用 API、查询资料)、执行任意代码与程序(python/node/编译器/本机 CLI 工具)、读写书目录之外的路径。既然用户已在设置里显式开启它,该用就用——需要联网查证或跑脚本时不要绕路。涉及删除、覆盖、对外发送这类不可逆动作时先说一句。默认工作目录为书目录。",
+	pwsh: "你可以使用 `bash` 工具执行命令——本机它由 **PowerShell 7(pwsh)** 执行:请写 PowerShell 语法与原生路径(如 `Get-ChildItem`、`$env:NAME`、`C:\\...`),不要用 bash 的 `$VAR`/heredoc;要拿真实退出码请在命令末尾加 `exit $LASTEXITCODE`(否则原生程序的退出码会被折算)。**这是整台机器的权限,不只是书目录**:可以访问网络、执行任意代码与程序、读写书目录之外的路径。默认工作目录为书目录。",
+	powershell: "你可以使用 `bash` 工具执行命令——本机它由 **Windows PowerShell 5.1** 执行:请写 PowerShell 语法与原生路径(如 `Get-ChildItem`、`$env:NAME`、`C:\\...`),且 **不支持 `&&`/`||`**(多条命令用 `;` 或分次调用);不要用 bash 的 `$VAR`/heredoc。**这是整台机器的权限,不只是书目录**:可以访问网络、执行任意代码与程序、读写书目录之外的路径。默认工作目录为书目录。",
 };
 
 /**

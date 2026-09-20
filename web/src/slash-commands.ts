@@ -69,6 +69,46 @@ export function composeMessageWithAttachments(chips: ReadonlyArray<InputChip>, t
 		.join("\n\n");
 }
 
+/**
+ * 斜杠菜单对上下方向键的处置(纯函数,便于单测)。
+ *
+ * 两个必须守住的边界(2026-09-20 修):
+ * - **候选项 ≤1 时不要吃掉方向键**。挪不动却 `preventDefault`,结果菜单没反应、
+ *   光标也动不了 —— 用户看到的是「文本框被锁定」。没得选就把键还给文本框。
+ * - 下标按候选数**环回**,越界由取模兜住,不靠调用方保证 index 合法
+ *   (异步搜索结果回来时 index 可能停在旧长度上)。
+ *
+ * @returns consume = 是否该阻止默认行为;index = 挪完之后的选中项下标。
+ */
+export function slashArrowMove(key: string, index: number, count: number): { consume: boolean; index: number } {
+	if (count <= 1) return { consume: false, index };
+	if (key === "ArrowDown") return { consume: true, index: (index + 1) % count };
+	if (key === "ArrowUp") return { consume: true, index: (index - 1 + count) % count };
+	return { consume: false, index };
+}
+
+/**
+ * 重建菜单时该保留还是重置选中项。
+ *
+ * 刷新菜单会在**每次 keyup** 上发生 —— 上下键挪完立刻被重建并打回第一项,正是
+ * 「上下移动之后选中项不动」的直接原因。所以:查询没变就保留当前项(并按新长度
+ * 夹紧),查询变了(用户又敲了字)才回到第一项。
+ */
+export function keepSlashIndex(
+	prev: { query: { trigger: string; term: string }; command: { trigger: string }; picker: boolean; index: number } | null,
+	next: { query: { trigger: string; term: string }; command: { trigger: string }; picker: boolean },
+	count: number,
+): number {
+	const sameQuery =
+		prev !== null &&
+		prev.picker === next.picker &&
+		prev.command.trigger === next.command.trigger &&
+		prev.query.trigger === next.query.trigger &&
+		prev.query.term === next.query.term;
+	if (!sameQuery || count <= 0) return 0;
+	return Math.min(Math.max(0, prev!.index), count - 1);
+}
+
 /** 一条 `/` 命令。 */
 export interface SlashCommand {
 	/** 不带斜杠的触发名,如 "node"。 */

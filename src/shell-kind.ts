@@ -19,8 +19,13 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 
-/** 用户可选的 shell 类型(setting 里的枚举值)。 */
-export type ShellKind = "bash" | "pwsh";
+/**
+ * 用户可选的 shell 类型(setting 里的枚举值)。
+ *
+ * `"auto"`(缺省)= **按平台自动识别**:Windows 上优先 PowerShell(pwsh → 5.1),
+ * 其余平台用 bash。显式选 bash / pwsh 时仍按显式走,不动。
+ */
+export type ShellKind = "auto" | "bash" | "pwsh";
 
 /** 实际解析出的方言:"none" = 声明要 shell 但没找到可用的。 */
 export type ShellDialect = "none" | "bash" | "pwsh" | "powershell";
@@ -139,7 +144,22 @@ export function resolveWriterShell(settings: WriterShellSettings, deps: ShellRes
 		return { dialect: dialectOfPath(abs), path: abs };
 	}
 
-	if (settings.shellKind !== "pwsh") return { dialect: "bash" };
+	const kind = settings.shellKind ?? "auto";
+
+	// 按平台自动识别:Windows 上没有原生 bash,先用 PowerShell;其余平台 bash 是本地常识
+	if (kind === "auto") {
+		if (platform !== "win32") return { dialect: "bash" };
+		const auto = findPowerShell(platform, env, exists, which);
+		if (auto) return auto;
+		// 没找到任何 PowerShell:回落到 bash 让 vendor 去探 Git Bash —— 但不能
+		// 只说「用 bash」,Windows 上没装 Git Bash 时它会直接抛错,得先提醒
+		return {
+			dialect: "bash",
+			warning: "未检测到 PowerShell,按 bash 方言处理(Windows 上需要已安装 Git Bash;也可在设置里指定 pwsh 或 bash.exe 路径)",
+		};
+	}
+
+	if (kind !== "pwsh") return { dialect: "bash" };
 
 	const found = findPowerShell(platform, env, exists, which);
 	if (found) return found;
@@ -148,6 +168,13 @@ export function resolveWriterShell(settings: WriterShellSettings, deps: ShellRes
 		warning: "未找到 PowerShell:请安装 PowerShell 7(pwsh),或在设置里填写 pwsh 可执行文件路径",
 	};
 }
+
+/** 设置页里的方言选项名(与 web/src/types.ts 的 ShellKindDto 同集合)。 */
+export const SHELL_KIND_LABELS: Record<ShellKind, string> = {
+	auto: "自动(按平台识别)",
+	bash: "bash",
+	pwsh: "PowerShell",
+};
 
 /** 设置页/诊断用的方言名称。 */
 export const SHELL_DIALECT_LABELS: Record<ShellDialect, string> = {

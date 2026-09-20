@@ -11,7 +11,7 @@
  *   世界书),编辑页的 AI 不再是受限编剧,而是带全量工具的写作 agent。切换后
  *   已建会话必须重建,新工具集才生效(server 侧 PUT 时释放 WriterHost 会话)。
  * - **enableShell(外部命令)**:放开 agent 的 shell 工具;缺省关闭(风险自担)。
- * - **shellKind / shellPath**:shell 方言(bash / pwsh)与显式可执行文件路径。
+ * - **shellKind / shellPath**:shell 方言(auto 按平台识别 / bash / pwsh)与显式可执行文件路径。
  *   选 pwsh 时实际执行的是 PowerShell 语法,提示词按方言叙述(见 shell-kind.ts)。
  *
  * 纯展示类偏好(简化输出/自动展开思考/编辑免确认)仍留在浏览器 localStorage,
@@ -62,7 +62,7 @@ export interface WriterSettings {
 
 /** 默认设置(缺省:多 agent 形态、无外部命令、bash)。 */
 export function defaultWriterSettings(): WriterSettings {
-	return { version: WRITER_SETTINGS_VERSION, classicMode: false, enableShell: false, shellKind: "bash", shellPath: "" };
+	return { version: WRITER_SETTINGS_VERSION, classicMode: false, enableShell: false, shellKind: "auto", shellPath: "" };
 }
 
 /**
@@ -77,7 +77,7 @@ export function parseWriterSettings(raw: unknown): WriterSettings {
 	if (typeof obj.classicMode === "boolean") out.classicMode = obj.classicMode;
 	if (typeof obj.enableShell === "boolean") out.enableShell = obj.enableShell;
 	// 枚举字段只认合法值(shellKind 拼错 → 回落 bash,而不是把未知值带进装配)
-	if (obj.shellKind === "bash" || obj.shellKind === "pwsh") out.shellKind = obj.shellKind;
+	if (obj.shellKind === "auto" || obj.shellKind === "bash" || obj.shellKind === "pwsh") out.shellKind = obj.shellKind;
 	// 路径字段只认字符串并去空白;上限防手写文件塞入超长值
 	if (typeof obj.shellPath === "string") out.shellPath = obj.shellPath.trim().slice(0, 500);
 	return out;

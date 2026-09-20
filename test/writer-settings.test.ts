@@ -29,12 +29,12 @@ afterEach(() => {
 });
 
 describe("parseWriterSettings", () => {
-	it("缺省关闭经典模式,shell 方言为 bash、路径为空(自动)", () => {
+	it("缺省关闭经典模式,shell 方言为 auto(按平台识别)、路径为空", () => {
 		expect(defaultWriterSettings()).toEqual({
 			version: WRITER_SETTINGS_VERSION,
 			classicMode: false,
 			enableShell: false,
-			shellKind: "bash",
+			shellKind: "auto",
 			shellPath: "",
 		});
 	});
@@ -52,7 +52,7 @@ describe("parseWriterSettings", () => {
 			version: WRITER_SETTINGS_VERSION,
 			classicMode: true,
 			enableShell: false,
-			shellKind: "bash",
+			shellKind: "auto",
 			shellPath: "",
 		});
 	});
@@ -64,12 +64,14 @@ describe("parseWriterSettings", () => {
 		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION }).enableShell).toBe(false);
 	});
 
-	it("shellKind 只认 bash/pwsh,拼错或旧文件缺字段 → 回落 bash", () => {
+	it("shellKind 只认 auto/bash/pwsh,拼错或旧文件缺字段 → 回落 auto", () => {
 		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, shellKind: "pwsh" }).shellKind).toBe("pwsh");
 		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, shellKind: "bash" }).shellKind).toBe("bash");
-		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, shellKind: "zsh" }).shellKind).toBe("bash");
-		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, shellKind: 7 }).shellKind).toBe("bash");
-		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION }).shellKind).toBe("bash");
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, shellKind: "auto" }).shellKind).toBe("auto");
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, shellKind: "zsh" }).shellKind).toBe("auto");
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, shellKind: 7 }).shellKind).toBe("auto");
+		// 旧文件没这个字段:回落到 auto(平台自己认),而不是钉死 bash
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION }).shellKind).toBe("auto");
 	});
 
 	it("shellPath 去空白、非字符串回落空、超长截断", () => {

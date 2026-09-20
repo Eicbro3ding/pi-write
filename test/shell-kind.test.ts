@@ -5,7 +5,7 @@
  * (Linux 无 pwsh)与开发机(Windows 装了 pwsh)会得出不同断言。
  */
 import { describe, expect, it } from "vitest";
-import { dialectOfPath, resolveWriterShell, SHELL_DIALECT_LABELS } from "../src/shell-kind.ts";
+import { dialectOfPath, resolveWriterShell, SHELL_DIALECT_LABELS, SHELL_KIND_LABELS } from "../src/shell-kind.ts";
 
 /** 构造注入环境:existing = 存在的文件集合,onPath = which 的结果表。 */
 function deps(options: {
@@ -105,6 +105,59 @@ describe("resolveWriterShell · 显式路径(优先级最高)", () => {
 		const r = resolveWriterShell({ shellKind: "pwsh", shellPath: "  /usr/bin/pwsh  " }, deps({ existing: ["/usr/bin/pwsh"] }));
 		expect(r).toEqual({ dialect: "pwsh", path: "/usr/bin/pwsh" });
 		expect(resolveWriterShell({ shellKind: "bash", shellPath: "   " }, deps({})).dialect).toBe("bash");
+	});
+});
+
+describe("按平台自动识别(auto,2026-09-20)", () => {
+	it("非 Windows → bash,且不带 path(让 vendor 走自己的探测链)", () => {
+		for (const platform of ["linux", "darwin"] as NodeJS.Platform[]) {
+			expect(resolveWriterShell({ shellKind: "auto" }, deps({ platform }))).toEqual({ dialect: "bash" });
+			// 字段缺省也等同 auto(旧配置文件没有这个字段)
+			expect(resolveWriterShell({}, deps({ platform }))).toEqual({ dialect: "bash" });
+		}
+	});
+
+	it("Windows → 优先 PowerShell 7(标准安装目录),不再去撞 Git Bash", () => {
+		const r = resolveWriterShell(
+			{ shellKind: "auto" },
+			deps({
+				platform: "win32",
+				existing: ["C:\\Program Files\\PowerShell\\7\\pwsh.exe"],
+				env: { ProgramFiles: "C:\\Program Files" },
+			}),
+		);
+		expect(r).toEqual({ dialect: "pwsh", path: "C:\\Program Files\\PowerShell\\7\\pwsh.exe" });
+	});
+
+	it("Windows → 没有 pwsh 时回退系统自带 5.1,并带上方言差异 warning", () => {
+		const r = resolveWriterShell(
+			{ shellKind: "auto" },
+			deps({ platform: "win32", onPath: { "powershell.exe": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" }, existing: ["C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"] }),
+		);
+		expect(r.dialect).toBe("powershell");
+		expect(r.warning).toContain("5.1");
+	});
+
+	it("Windows → 一个 PowerShell 都没有时回落 bash,但必须给出「需要 Git Bash」的 warning", () => {
+		const r = resolveWriterShell({ shellKind: "auto" }, deps({ platform: "win32" }));
+		expect(r.dialect).toBe("bash");
+		expect(r.warning).toContain("Git Bash");
+	});
+
+	it("显式 bash / pwsh 不受 auto 影响", () => {
+		// 显式 bash 在 Windows 上仍是 bash(尊重显式选择,不做平台纠正)
+		expect(resolveWriterShell({ shellKind: "bash" }, deps({ platform: "win32" }))).toEqual({ dialect: "bash" });
+		// 显式 pwsh 在 Linux 上仍去找 pwsh
+		expect(resolveWriterShell({ shellKind: "pwsh" }, deps({ platform: "linux", onPath: { pwsh: "/usr/bin/pwsh" } }))).toEqual({
+			dialect: "pwsh",
+			path: "/usr/bin/pwsh",
+		});
+	});
+});
+
+describe("SHELL_KIND_LABELS", () => {
+	it("三种可选类型都有展示名(设置页下拉用)", () => {
+		expect(Object.keys(SHELL_KIND_LABELS).sort()).toEqual(["auto", "bash", "pwsh"]);
 	});
 });
 
