@@ -6,9 +6,12 @@ import {
 	debugUnlocked,
 	disableDebugMode,
 	enableDebugMode,
+	enterBehavior,
+	setEnterBehavior,
 	parseAutoExpandThinking,
 	parseClassicMode,
 	parseDebugMode,
+	parseEnterBehavior,
 	setAutoExpandThinking,
 	setClassicMode,
 	setDebugMode,
@@ -95,6 +98,28 @@ describe("旧「简化输出」键的一次性迁移", () => {
 		store.set(LEGACY_KEY, "1");
 		disableDebugMode();
 		expect(debugModeEnabled()).toBe(false);
+	});
+});
+
+describe("回车行为设置", () => {
+	it("缺省 newline:这是后加的开关,不替老用户改键位(回车仍是换行)", () => {
+		stubStorage();
+		expect(enterBehavior()).toBe("newline");
+	});
+	it("设成 send 后持久化并读回", () => {
+		const store = stubStorage();
+		setEnterBehavior("send");
+		expect(store.get("pi-writer-enter-behavior")).toBe("send");
+		expect(enterBehavior()).toBe("send");
+		setEnterBehavior("newline");
+		expect(enterBehavior()).toBe("newline");
+	});
+	it("parseEnterBehavior:仅 'send' 表示回车即发送,缺省/非法值一律换行", () => {
+		expect(parseEnterBehavior("send")).toBe("send");
+		expect(parseEnterBehavior(null)).toBe("newline");
+		expect(parseEnterBehavior(undefined)).toBe("newline");
+		expect(parseEnterBehavior("newline")).toBe("newline");
+		expect(parseEnterBehavior("junk")).toBe("newline");
 	});
 });
 

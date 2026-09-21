@@ -13,6 +13,7 @@ import { mkdir } from "node:fs/promises";
 import type { ThinkingLevel } from "../vendor/pi-agent-core/src/index.ts";
 import { SessionManager } from "../vendor/pi-coding-agent/src/index.ts";
 import { applyCacheRetention, getAgentDir, getBookDir, getBooksDir, resolveSkillsDir } from "./config.ts";
+import { createAskUserTool } from "./ask-user.ts";
 import {
 	addChapter,
 	createBook,
@@ -271,7 +272,8 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 		excludeTools: webExcludeTools(process.env, { shell: shellOn }),
 		initialActiveToolNames: webActiveTools(process.env, { shell: shellOn }),
 		// MCP 工具(经 customTools 注册;配置为空时是空数组,行为与之前一致)
-		customTools: mcpManager.getTools(),
+		// 主会话同样能用提问卡片(闸门是进程级单例,与编剧会话共用一张 pending 表)
+		customTools: [...mcpManager.getTools(), createAskUserTool()],
 	});
 
 	const host = new SessionHost({

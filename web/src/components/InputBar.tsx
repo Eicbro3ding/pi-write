@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { Lu } from "./Lu.tsx";
+import type { EnterBehavior } from "../settings.ts";
 import {
 	composeMessageWithAttachments,
 	keepSlashIndex,
@@ -28,6 +29,8 @@ interface InputBarProps {
 	context?: SlashContext;
 	/** 命令异步加载/动作失败时的提示回调(页面映射为自己的错误条)。 */
 	onCommandError?: (message: string) => void;
+	/** 回车行为(设置页开关);缺省 newline = 回车换行、Ctrl/Cmd+Enter 发送。 */
+	enterBehavior?: EnterBehavior;
 }
 
 /** 命令面板内部状态。 */
@@ -56,7 +59,9 @@ export interface InputBarHandle {
 const MAX_HEIGHT = 160;
 
 /**
- * 输入框:单行自动增高的 textarea,Ctrl+Enter 发送、Enter 换行;
+ * 输入框:单行自动增高的 textarea。**回车行为由设置决定**(enterBehavior):
+ * 缺省 newline = 回车换行、Ctrl/Cmd+Enter 发送;设为 send 则回车直接发送、Shift+Enter 换行
+ * (Ctrl/Cmd+Enter 在任何设置下都发送);
  * 流式中输入保持可用(可插话),按钮切换为「中断」。
  * `/node`、`/chapter` 类内容命令选中后挂「引用芯片」(紧凑 pill,可 × 移除,
  * 同 id 去重),发送时才展开为注入文本——输入框不再被整段原文撑爆。
@@ -72,6 +77,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 		commands,
 		context,
 		onCommandError,
+		enterBehavior = "newline",
 	},
 	ref,
 ) {
@@ -310,14 +316,16 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 				return;
 			}
 		}
-		if (e.ctrlKey && e.key === "Enter") {
+		if (e.key !== "Enter" || e.shiftKey) return;
+		// Ctrl/Cmd+Enter 在任何设置下都发送;Shift+Enter 恒换行(交给浏览器插入换行)
+		if (e.ctrlKey || e.metaKey || enterBehavior === "send") {
 			e.preventDefault();
 			send();
 		}
 	}
 
 	return (
-		<div className="inputbar">
+		<div className="inputbar" data-enter={enterBehavior}>
 			{menu && (
 				<div className="slash-menu" role="listbox" aria-label={menu.picker ? "命令选择" : `/${menu.command.trigger} 命令候选项`}>
 					<div className="slash-menu-head">
@@ -393,7 +401,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 					<button
 						className="btn-send"
 						aria-label="发送"
-						title="发送(Ctrl+Enter)"
+						title={enterBehavior === "send" ? "发送(Enter)" : "发送(Ctrl+Enter)"}
 						disabled={text.trim().length === 0 && chips.length === 0}
 						onClick={send}
 					>

@@ -48,6 +48,7 @@ import { ensureWorld, newId, readWorldEditRecord, saveWorld, WorldValidationErro
 import { buildChapterContext, DEFAULT_CONTEXT_BUDGET, trimMemory } from "../world-context.ts";
 import type { SessionHost } from "./session-host.ts";
 import { extractMessagesFromManager } from "./session-host.ts";
+import { askUserGate } from "../ask-user.ts";
 import { SessionManager } from "../../vendor/pi-coding-agent/src/index.ts";
 import { ProviderAuthError } from "./provider-auth.ts";
 import type { McpManager, McpServerStatus } from "../mcp/manager.ts";
@@ -531,6 +532,9 @@ export class WriterServer {
 			{ method: "PUT", segments: ["world"], handler: (ctx) => this.handlePutWorld(ctx) },
 			{ method: "GET", segments: ["confirm-cards"], handler: (ctx) => this.handleGetConfirmCards(ctx) },
 			{ method: "PUT", segments: ["confirm-cards"], handler: (ctx) => this.handlePutConfirmCards(ctx) },
+			// 提问卡片(ask_user 工具的回落路径:工具在等这个答案才会返回)
+			{ method: "POST", segments: ["ask-user", "answer"], handler: (ctx) => this.handlePostAskAnswer(ctx) },
+			{ method: "POST", segments: ["ask-user", "cancel"], handler: (ctx) => this.handlePostAskCancel(ctx) },
 			{ method: "GET", segments: ["draft"], handler: (ctx) => this.handleGetDraft(ctx) },
 			{ method: "PUT", segments: ["draft"], handler: (ctx) => this.handlePutDraft(ctx) },
 			// mcp(静态段 raw 必须在参数段 :name 之前)
@@ -1230,8 +1234,34 @@ export class WriterServer {
 		this.send(ctx.res, 200, { ok: true });
 	}
 
+	/**
+	 * POST /api/ask-user/answer {toolCallId, answers}:用户提交提问卡片的答案。
+	 *
+	 * 这是 ask_user 工具唯一的结算入口 —— 工具此刻正阻塞在 `execute` 里等它。
+	 * 提问已结束(被另一窗口答了 / 用户已关闭 / 会话重启)时**不报错**:用户点提交的
+	 * 意图已经达成(卡片该消失),返回 ok:false 让前端照常关掉卡片即可,不必区分。
+	 */
+	private async handlePostAskAnswer(ctx: RouteContext): Promise<void> {
+		const body = await readJsonBody(ctx.req);
+		const toolCallId = requireString(body, "toolCallId");
+		const answers = (body as { answers?: unknown }).answers;
+		if (!Array.isArray(answers) || answers.some((a) => typeof a !== "string")) {
+			throw new HttpError(400, "bad_request", "answers 必须是字符串数组");
+		}
+		this.send(ctx.res, 200, { ok: askUserGate.answer(toolCallId, answers as string[]) });
+	}
+
+	/** POST /api/ask-user/cancel {toolCallId}:用户关闭了提问卡片(工具结算为「未回答」)。 */
+	private async handlePostAskCancel(ctx: RouteContext): Promise<void> {
+		const body = await readJsonBody(ctx.req);
+		const toolCallId = requireString(body, "toolCallId");
+		this.send(ctx.res, 200, { ok: askUserGate.cancel(toolCallId) });
+	}
+
 	/** POST /api/abort:中止当前流式回复。 */
 	private async handleAbort(ctx: RouteContext): Promise<void> {
+		// 未决提问先结算为「未回答」:不然中断时工具还阻塞着,这轮永远结束不了
+		askUserGate.cancelAll();
 		await this.options.sessionHost.abort();
 		this.send(ctx.res, 200, { ok: true });
 	}
@@ -1900,6 +1930,7 @@ export class WriterServer {
 	private async handlePostWriterAbort(ctx: RouteContext): Promise<void> {
 		const writer = this.options.writerHost;
 		if (!writer) throw new HttpError(404, "not_found", "常驻编剧未启用");
+		askUserGate.cancelAll();
 		await writer.abort(ctx.params.slug!);
 		this.send(ctx.res, 200, { ok: true });
 	}

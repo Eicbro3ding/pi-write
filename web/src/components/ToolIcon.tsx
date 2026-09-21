@@ -9,18 +9,20 @@
  *   word_count   → hash           计数
  *   world_update → network        改世界树(节点与关系)
  *   world_find   → book-open      查世界书
+ *   ask_user     → user-round     向用户提问
  *   其他         → wrench         通用工具
  */
 import { Lu } from "./Lu.tsx";
 import type { ToolIcon as ToolIconKind } from "../tool-status.ts";
 
-const MAP: Record<ToolIconKind, "eye" | "pen-line" | "search" | "folder-search" | "hash" | "network" | "book-open" | "wrench"> = {
+const MAP: Record<ToolIconKind, "eye" | "pen-line" | "search" | "folder-search" | "hash" | "network" | "book-open" | "user-round" | "wrench"> = {
 	read: "eye",
 	edit: "pen-line",
 	search: "search",
 	find: "folder-search",
 	count: "hash",
 	world: "network",
+	ask: "user-round",
 	other: "wrench",
 };
 

@@ -613,6 +613,105 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .record > .act-row + .tool,
 .record > .act-row + .record-text { margin-top: 10px; }
 
+/* —— 提问卡片(ask_user,2026-09-21)——
+   从**当前可见的输入条**上沿弹出(位置由 AskUserCard 实测包围盒后内联给出:三页常驻
+   挂载,输入条宽度各不相同,写死居中会让编辑页的卡片飘到无关区域上方)。
+   薄遮罩而非全黑:工具阻塞着等回答,背后不该还能点,但视觉上是"贴着说话的地方弹出来",
+   不是"整页被一个弹窗接管"。 */
+.ask-layer { position: fixed; inset: 0; z-index: 60; }
+.ask-scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.42); }
+.ask-card {
+  position: fixed;
+  display: flex; flex-direction: column;
+  padding: 16px;
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--bg-elev); box-shadow: var(--shadow-1);
+}
+.ask-head { display: flex; align-items: center; gap: 10px; min-height: 22px; }
+.ask-question { flex: 1; min-width: 0; font-size: 14px; line-height: 1.5; color: var(--ink); }
+.ask-pager { flex: none; display: inline-flex; align-items: center; gap: 2px; color: var(--faint); font-size: 12px; }
+.ask-pager-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: var(--r-sm); color: var(--faint);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.ask-pager-btn:hover { color: var(--ink-2); background: var(--hover-tint); }
+.ask-pager-no { min-width: 28px; text-align: center; font-variant-numeric: tabular-nums; }
+.ask-close {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: var(--r-sm); color: var(--faint);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.ask-close:hover { color: var(--ink); background: var(--hover-tint); }
+
+.ask-options { display: flex; flex-direction: column; gap: 2px; margin-top: 12px; }
+.ask-option {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  min-height: 38px; padding: 0 10px; border-radius: var(--r-sm);
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+.ask-option:hover { background: var(--hover-tint); }
+.ask-option.on { background: var(--bg-elev-2); }
+/* 键盘导航(数字键选中、Tab 走到)时的焦点环:白描边一眼看出"当前是哪一行" */
+.ask-option:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--ink-2); }
+.ask-no {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: var(--r-sm);
+  background: var(--bg-elev-2); color: var(--muted);
+  font-size: 11px; font-variant-numeric: tabular-nums;
+}
+.ask-option.on .ask-no { background: var(--amber); color: var(--bg-elev); }
+.ask-no-icon { color: var(--faint); }
+/* 多选:复选框形态(形态本身说明"能选几个") */
+.ask-check {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; border-radius: 5px;
+  border: 1px solid var(--line-strong); background: transparent; color: transparent;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.ask-check.on { background: var(--amber); border-color: var(--amber); color: var(--bg-elev); }
+.ask-label { flex: 1; min-width: 0; font-size: 13px; color: var(--ink-2); overflow-wrap: break-word; }
+.ask-option.on .ask-label { color: var(--ink); }
+.ask-go { flex: none; color: var(--faint); opacity: 0; transition: opacity var(--dur-fast) var(--ease-out); }
+.ask-option:hover .ask-go, .ask-option.on .ask-go { opacity: 1; }
+.ask-other-input {
+  width: 100%; margin: 4px 0 2px; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--bg-elev-2); color: var(--ink);
+  font-family: var(--prose); font-size: 13px; line-height: 1.6; resize: vertical;
+}
+.ask-other-input:focus { outline: none; border-color: var(--line-strong); }
+
+.ask-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.ask-progress { margin-right: auto; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.ask-skip {
+  height: 30px; padding: 0 14px; border-radius: var(--r-full);
+  background: transparent; border: 1px solid var(--line); color: var(--muted);
+  font-size: 12px;
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.ask-skip:hover { color: var(--ink-2); background: var(--hover-tint); }
+.ask-submit {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: var(--r-full);
+  background: var(--amber); color: #1a1614;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.ask-submit:disabled { opacity: 0.35; cursor: not-allowed; }
+.ask-submit:not(:disabled):hover { opacity: 0.88; }
+
+/* 对话流里的等待占位:让「AI 问过、正等着」有个位置(作答控件在浮层里) */
+.ask-pending .act-icon { color: var(--amber); }
+.ask-pending .act-object { max-width: 46ch; }
+
+/* 已回答:折在工具块里的问答记录(问题一行 + 答案一行) */
+.ask-record { display: flex; flex-direction: column; gap: 10px; margin-top: 2px; }
+.ask-recap { display: flex; flex-direction: column; gap: 2px; }
+.ask-recap-q { font-size: 12px; color: var(--muted); }
+.ask-recap-a { font-size: 13px; color: var(--ink); }
+.ask-recap-a.empty { color: var(--faint); }
+
 /* —— 长内容折叠分档(设计稿 03-组件规范/04) ——
    短内容不折叠(组件侧直接铺开);中/长内容收到 12 行 + 底部渐隐 + 展开入口,
    展开后最高 480px、块内滚动 */

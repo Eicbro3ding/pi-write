@@ -92,6 +92,31 @@ export function subscribeDebugChanged(fn: () => void): () => void {
 	return () => window.removeEventListener(DEBUG_CHANGED_EVENT, fn);
 }
 
+/**
+ * 回车键行为。`newline` = 回车换行、Ctrl/Cmd+Enter 发送(旧行为,**缺省**);
+ * `send` = 回车直接发送、Shift+Enter 换行。
+ *
+ * 缺省保持旧行为:这是后加的开关,没有存量值时改默认等于替所有老用户改键位。
+ */
+export type EnterBehavior = "send" | "newline";
+
+const ENTER_BEHAVIOR_KEY = "pi-writer-enter-behavior";
+
+/** 解析存储值:仅显式 "send" 表示回车即发送,其余(含缺省)一律换行。 */
+export function parseEnterBehavior(raw: string | null | undefined): EnterBehavior {
+	return raw === "send" ? "send" : "newline";
+}
+
+/** 当前回车行为。 */
+export function enterBehavior(): EnterBehavior {
+	return parseEnterBehavior(localStorage.getItem(ENTER_BEHAVIOR_KEY));
+}
+
+/** 设置回车行为并持久化。 */
+export function setEnterBehavior(v: EnterBehavior): void {
+	localStorage.setItem(ENTER_BEHAVIOR_KEY, v);
+}
+
 /** 自动展开思考开关的 localStorage 键。 */
 const AUTO_EXPAND_THINKING_KEY = "pi-writer-auto-expand-thinking";
 

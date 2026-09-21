@@ -30,6 +30,10 @@ describe("toolRenderForm", () => {
 		expect(toolRenderForm("world_find", false)).toBe("hidden");
 	});
 
+	it("ask_user 是提问卡片形态:作答控件在浮层里,块内只留占位", () => {
+		expect(toolRenderForm("ask_user", false)).toBe("ask");
+	});
+
 	it("未知工具(MCP 等)退化为动作行,不会消失", () => {
 		expect(toolRenderForm("mcp__whatever__do_thing", false)).toBe("action");
 	});

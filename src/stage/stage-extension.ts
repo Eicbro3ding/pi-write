@@ -4,6 +4,7 @@ import { resolveSkillsDir, slugify } from "../config.ts";
 import { ensureWorld, type WorldData } from "../world-data.ts";
 import { loadPromptText, renderPrompt } from "../prompts.ts";
 import { wordCountTool, worldFindTool, worldUpdateTool } from "../tools.ts";
+import { createAskUserTool } from "../ask-user.ts";
 import { resolveWorldRefs } from "./assembler.ts";
 import { loadScript, reviseScript, saveScript } from "./script-store.ts";
 import { type ActorSpec, type ActorText, type InjectRule, type SceneScript, type ScriptPatch } from "./types.ts";
@@ -49,7 +50,9 @@ export function directorRole(orch: StageOrchestrator): RoleSpec {
 		extensions: [{ name: "stage-director", factory: (pi) => stageDirectorExtension(pi, orch) }],
 		excludeTools: ["bash"],
 		activeTools: ["read", "write", "edit", "ls", "grep"],
-		customTools: [scriptConfirmTool(orch), stageScriptTool(orch), stageReviseTool(orch), stageCastTool(orch), worldFindTool, worldUpdateTool, wordCountTool],
+		// ask_user:导演是舞台页的主交互,「剧情往哪走」正是最该问用户的岔路。
+		// 演员不给(角色扮演不该跳出剧情向用户要决定),收幕编剧也只给只读工具。
+		customTools: [scriptConfirmTool(orch), stageScriptTool(orch), stageReviseTool(orch), stageCastTool(orch), worldFindTool, worldUpdateTool, wordCountTool, createAskUserTool()],
 	};
 }
 

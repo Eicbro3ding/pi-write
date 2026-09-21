@@ -51,6 +51,13 @@ import { loadPromptText } from "../prompts.ts";
 import { buildWriterSystemPrompt, writerShellLine } from "../prompt.ts";
 import type { ShellDialect } from "../shell-kind.ts";
 import { wordCountTool, worldFindTool, worldUpdateTool } from "../tools.ts";
+import { createAskUserTool } from "../ask-user.ts";
+
+/**
+ * 提问卡片工具(ask_user)。闸门是进程级单例,所以工具本身可以复用一个实例 ——
+ * 它是无状态的薄壳,状态都在 `askUserGate` 里。
+ */
+const askUserTool = createAskUserTool();
 import { SessionHost } from "./session-host.ts";
 import { formatStageLines } from "../stage/assembler.ts";
 import { countStage } from "../stage/counters.ts";
@@ -306,8 +313,8 @@ export class WriterHost {
 			// read 全文翻找成本高(2026-08-12,审计后补);世界书建议写进 advice.md。
 			// 经典模式(单一写作 agent):补上 word_count 与 world_update,即完整写作工具集。
 			customTools: this.classicMode
-				? [wordCountTool, worldUpdateTool, worldFindTool, ...mcpTools]
-				: [worldFindTool, ...mcpTools],
+				? [wordCountTool, worldUpdateTool, worldFindTool, askUserTool, ...mcpTools]
+				: [worldFindTool, askUserTool, ...mcpTools],
 		});
 	}
 

@@ -4,7 +4,9 @@ import type { ChatMessage, ToolCallInfo } from "../types.ts";
 import { DUR, EASE, EDGE_IN, STAGGER } from "../motion.ts";
 import { renderMarkdown } from "../markdown.ts";
 import { blocksText, formatDuration, turnDurationMs } from "../blocks.ts";
+import { askAnswersOf, parseAskQuestions } from "../ask-user.ts";
 import type { PreviewData } from "../preview.ts";
+import { AskUserRecord } from "./AskUserCard.tsx";
 import { ConfirmCard, type ConfirmCardItem } from "./ConfirmCard.tsx";
 import { FoldablePre } from "./FoldablePre.tsx";
 import { Lu } from "./Lu.tsx";
@@ -178,6 +180,23 @@ function ToolBlock({
 	// 默认不显示的工具失败时强制露出:静默会让「AI 好像什么都没干」,而失败恰恰是要看的东西
 	if (form === "hidden") return t.isError ? <ToolActionRow t={t} /> : null;
 	if (form === "terminal" || form === "card") return <ToolCard t={t} />;
+	if (form === "ask") {
+		const questions = parseAskQuestions(t.args);
+		// 还没答:作答控件在浮层里(它必须模态,见 AskUserCard),块内只留占位,
+		// 让「AI 问过、正等着」在对话流里有个位置
+		if (t.result === null) {
+			return (
+				<div className="act-row ask-pending" title={questions[0]?.question}>
+					<span className="act-icon">
+						<ActionStateIcon state="run" />
+					</span>
+					<span className="act-verb">等待回答</span>
+					{questions[0] && <span className="act-object">{questions[0].question}</span>}
+				</div>
+			);
+		}
+		return <AskUserRecord questions={questions} answers={askAnswersOf(t.result, questions.length)} />;
+	}
 	if (form === "preview") {
 		const confirm = cards?.confirm?.get(t.id);
 		if (confirm) {

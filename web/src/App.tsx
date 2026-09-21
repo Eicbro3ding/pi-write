@@ -13,14 +13,17 @@ import {
 	autoExpandThinkingEnabled,
 	classicModeEnabled,
 	debugModeEnabled,
+	enterBehavior as readEnterBehavior,
 	debugUnlocked,
 	setAutoConfirmEdits as persistAutoConfirmEdits,
 	setAutoExpandThinking as persistAutoExpandThinking,
 	setClassicMode as persistClassicMode,
 	setDebugMode as persistDebugMode,
+	setEnterBehavior as persistEnterBehavior,
 	subscribeDebugChanged,
 } from "./settings.ts";
 import type { ResolvedShellDto, ShellKindDto, WriterSettingsDto } from "./types.ts";
+import type { EnterBehavior } from "./settings.ts";
 
 /** 顶层视图:舞台(默认,导演讨论室/演出现场)| 编辑(正文 + 编剧)| 世界书 | 设置。 */
 type View = "stage" | "edit" | "world" | "settings";
@@ -91,6 +94,12 @@ export function App() {
 	const setAutoExpandThinking = (v: boolean) => {
 		persistAutoExpandThinking(v);
 		setAutoExpandThinkingState(v);
+	};
+	/** 回车行为(send = 回车即发送 / newline = 回车换行),缺省 newline(旧行为)。 */
+	const [enterBehavior, setEnterBehaviorState] = useState<EnterBehavior>(() => readEnterBehavior());
+	const setEnterBehavior = (v: EnterBehavior) => {
+		persistEnterBehavior(v);
+		setEnterBehaviorState(v);
 	};
 	/** 编辑免确认(编剧编辑落盘即归档),缺省关闭;切换经设置页持久化。 */
 	const [autoConfirmEdits, setAutoConfirmEditsState] = useState<boolean>(() => autoConfirmEditsEnabled());
@@ -348,7 +357,7 @@ export function App() {
 				    服务端重新水合,状态不丢 */}
 				{!classicMode && (
 					<section className={`view ${view === "stage" ? "" : "hidden"}`}>
-						<StagePage client={client} library={library} active={view === "stage"} onGoEdit={() => setView("edit")} debug={debugMode} />
+						<StagePage client={client} library={library} active={view === "stage"} onGoEdit={() => setView("edit")} debug={debugMode} enterBehavior={enterBehavior} />
 					</section>
 				)}
 					<section className={`view ${view === "edit" ? "" : "hidden"}`}>
@@ -357,6 +366,7 @@ export function App() {
 							library={library}
 							onHeader={setHeader}
 							debug={debugMode}
+							enterBehavior={enterBehavior}
 							autoConfirmEdits={autoConfirmEdits}
 							classicMode={classicMode}
 						/>
@@ -373,6 +383,8 @@ export function App() {
 							onDebugModeChange={setDebugMode}
 							autoExpandThinking={autoExpandThinking}
 							onAutoExpandThinkingChange={setAutoExpandThinking}
+							enterBehavior={enterBehavior}
+							onEnterBehaviorChange={setEnterBehavior}
 							autoConfirmEdits={autoConfirmEdits}
 							onAutoConfirmEditsChange={setAutoConfirmEdits}
 							classicMode={classicMode}

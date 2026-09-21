@@ -426,6 +426,29 @@ export class ApiClient {
 		});
 	}
 
+	/**
+	 * 提交提问卡片的回答。ask_user 工具此刻正阻塞着,这个调用就是唤醒它的方式。
+	 * 返回 false 表示该提问已结束(另一窗口答了 / 已取消)——前端照常关卡片即可。
+	 */
+	async answerAskUser(toolCallId: string, answers: string[]): Promise<boolean> {
+		const r = await this.request<{ ok: boolean }>("/api/ask-user/answer", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ toolCallId, answers }),
+		});
+		return r.ok === true;
+	}
+
+	/** 关闭提问卡片(不回答):工具会结算为「用户未回答」并继续。 */
+	async cancelAskUser(toolCallId: string): Promise<boolean> {
+		const r = await this.request<{ ok: boolean }>("/api/ask-user/cancel", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ toolCallId }),
+		});
+		return r.ok === true;
+	}
+
 	/** 主题清单(内置资产 + 用户自定义;文件 + 全文,设置页自动发现与编辑器用)。 */
 	async getThemes(): Promise<ThemeManifest> {
 		return this.request<ThemeManifest>("/api/themes");

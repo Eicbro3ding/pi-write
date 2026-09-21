@@ -20,6 +20,9 @@ import {
 import { ChapterSidebar } from "../components/ChapterSidebar.tsx";
 import { InputBar } from "../components/InputBar.tsx";
 import { MessageList, type PreviewCardSlot } from "../components/MessageList.tsx";
+import { AskUserOverlay } from "../components/AskUserCard.tsx";
+import type { EnterBehavior } from "../settings.ts";
+import { findPendingAsk } from "../ask-user.ts";
 import { PreviewCard } from "../components/PreviewCard.tsx";
 import { Select } from "../components/Select.tsx";
 import { StageAvatar } from "../components/StageAvatar.tsx";
@@ -64,6 +67,7 @@ export function StagePage({
 	active,
 	onGoEdit,
 	debug,
+	enterBehavior,
 }: {
 	client: ApiClient;
 	/** 书库状态唯一真相源(App 持有,与编辑页共用——书库栏两页常驻且状态同步)。 */
@@ -74,6 +78,8 @@ export function StagePage({
 	onGoEdit?: () => void;
 	/** 简化输出(设置页「界面偏好」):导演对话工具卡片隐藏,只保留模型文本输出。 */
 	debug?: boolean;
+	/** 回车行为(设置页开关):send = 回车即发送,newline = 回车换行(缺省)。 */
+	enterBehavior?: EnterBehavior;
 }) {
 	const {
 		books,
@@ -621,6 +627,9 @@ export function StagePage({
 		return out;
 	}, [worldUpdateCallId, scriptConfirmCallId, worldPreview, scriptConfirm, confirmDismissed, busy]);
 
+	/** 导演会话里正在等待回答的提问(ask_user);有就弹模态浮层。 */
+	const pendingAsk = findPendingAsk(directorSession.messages);
+
 	let entryNo = 0;
 	return (
 		<div
@@ -887,7 +896,14 @@ export function StagePage({
 						</div>
 					)}
 
-					{/* 导演输入条(演出前后都是唯一活跃交互;InputBar 自带容器样式) */}
+					{pendingAsk && (
+				<AskUserOverlay
+					questions={pendingAsk.questions}
+					onSubmit={(answers) => void client.answerAskUser(pendingAsk.toolCallId, answers)}
+					onCancel={() => void client.cancelAskUser(pendingAsk.toolCallId)}
+				/>
+			)}
+			{/* 导演输入条(演出前后都是唯一活跃交互;InputBar 自带容器样式) */}
 				{directorUsageHint && (
 					<div className={`notice ${directorUsageHint.tone}`} role="status">
 						{directorUsageHint.text}
@@ -895,6 +911,7 @@ export function StagePage({
 				)}
 				<InputBar
 					streaming={false}
+					enterBehavior={enterBehavior}
 					onSend={sendDirector}
 					onAbort={() => {}}
 				commands={directorSlashCommands}

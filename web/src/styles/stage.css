@@ -213,6 +213,10 @@
 	display: block; text-align: center; margin-top: 6px;
 	font-family: var(--mono); font-size: var(--fs-11); color: var(--faint);
 }
+/* 键位提示跟着设置走:回车即发送时,换行改成 Shift+Enter */
+.stage-main .inputbar[data-enter="send"]::after {
+	content: "Enter 发送 · Shift+Enter 换行 · / 打开命令面板";
+}
 
 /* ── 气泡差分(设计稿 05;默认文档流,在设置里切换) ─────────────────
    用户:右对齐气泡(bg-elev-2)+ 右侧 28px 圆头像;

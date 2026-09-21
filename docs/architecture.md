@@ -71,6 +71,7 @@ agent 会话事件(pi vendor AgentSessionEvent)
 
 - **装配**:`createSessionRuntimeFactory`(src/session-factory.ts,唯一入口)。用 `excludeTools` 黑名单 + `initialActiveToolNames`,**不用** `tools` 白名单——那是白名单语义,会把不在名单的 MCP customTools 滤掉。
 - **系统提示**:`buildWriterSystemPrompt(customTools, shell)` 动态生成(文末追加 MCP 工具清单,shell 行按方言注入 `none/bash/pwsh/powershell`);静态 override 会整个替换 pi 的动态工具段。
+- **提问卡片**(`ask_user`,2026-09-21):`src/ask-user.ts` 提供阻塞式闸门 `AskUserGate` + 工具工厂;工具在 `execute` 里挂起,`POST /api/ask-user/answer|cancel` 结算,中断本轮时 `cancelAll`。前端不新增事件类型 —— 卡片以 `ask_user` 工具块为宿主(`result === null` 即等待中,见 `web/src/ask-user.ts` 的 `findPendingAsk`)。
 - **shell 与方言**(2026-09-18,2026-09-20 增 auto):`resolveWriterShell`(src/shell-kind.ts)把设置解析成「方言 + 可执行文件路径」;`shellKind` 缺省 `auto` = 按平台识别(Windows 优先 PowerShell,其余平台 bash),经 `settingsManager.shellPath` 交给 vendor(spawn 形态 `{shell, args:["-c"]}`);vendor 的工具 schema 固定叫 `bash`,故方言只改**执行哪个可执行文件**与**提示词怎么叙述**,不改工具名。解析不到(选了 pwsh 但本机没装)→ `dialect: "none"`:不激活 bash 工具 + 提示词如实说没有 shell。web 缺省不给 shell,由设置项 `enableShell` 显式放开(见 security.md)。
 - **世界书**:`world_update` 是唯一变更通道(提示词禁止 edit/write 直改);`applyWorldUpdate` 纯函数(判别联合 → clone → mutate → validateWorld),`withWorldLock` 串行化读-改-写(进程内;跨进程并发仍需外部文件锁)。
 - **守卫**:`installToolPathGuard(bookDir, readOnlyDirs)` 把文件工具限制在书目录内,`skills/` 目录只读放行;Web 多会话下通过 `AsyncLocalStorage` 按当前会话读取书目录 / 只读目录 / 正文白名单,避免并发会话互相覆盖。

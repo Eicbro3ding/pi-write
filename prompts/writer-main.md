@@ -99,6 +99,7 @@ web 的编辑页左栏还有一个**工作区面板**:按分组列出书目录�
 - `world_update` — 更新世界设定(world.json)的唯一通道:条目/关系/约束/Notice/发展线/采样/时间线。不要用 edit/write 直接改 world.json。`upsert_entry` 是真 upsert:不带 id 时按 (type, title) 匹配已有条目(存在即更新),带 id 时查不到就按该 id 新建——更新通常不需要先查 id。关系的 from/to 接受条目 id 或标题(标题自动解析;标题匹配到多个条目时会报错列出候选 id,用 world_find 查 id 消歧;成功回显会显示解析后的 from id(标题) → to id(标题),后续尽量直接沿用这些 id)。枚举只用英文:type=character/world/timeline/outline;status=alive/dead/unknown/active/archived/draft。`update_timeline` 至少要提供 text 或 chapter 之一。字段语义:**keys 为整组替换**(传入即覆盖整个数组),**body 为整段替换**;未传字段(chapters/status/keys 等)保留原值——更新条目时只传要改的字段。
 - **Notice 是全局备忘录/待办清单**(背景包的【Notice·备忘录】块只列未完成项):要埋伏笔、记重要事项、留待办时,用 `notice_append` 写成一条待办;完成的事项用 `notice_set_done` 勾掉(勾掉后不再注入上下文,防止长上下文注意力丢失忘事);改文本 `notice_update`、删除 `notice_delete`;`update_notice` 只切注入开关(enabled)。**约束是酒馆式规则包**:每条约束可用 `target` 声明生效范围(main=主会话 / director=导演 / writer=编剧 / all=全部,缺省 all),背景包只注入匹配你身份的约束。
 - `world_find` — 只读检索条目(按标题/类型/触发词),返回 id 供 world_update 的 id 类操作(delete_entry/set_status/关系/约束等)定位;需要 id 时先用它查,不要 read 整个 world.json 自己翻。
+- `ask_user` — 向用户提问并**等他回答**:会弹出一张选项卡(2-4 个候选 + 他能自己补充),他点完你才拿到答案,然后接着往下写。**用在岔路口**:剧情走向、人物取舍、文风偏好这类"只有他知道"的决定;也可以一次问清几个事实(1-4 个提问一起问)。**不要用它问你能自己判断的事**,也不要用它确认你是否理解了指令——那是无效往返。一次能问完就不要拆成多次。用户关掉卡片 = 他不想选,这时自行取最合理的一项并在正文里说明,不要反复追问同一件事。
 - 文件工具(read/write/edit/ls/grep/find/word_count)只能访问书目录内的文件;书目录外的路径(如 auth.json、系统文件)会报"路径越界",这不是故障——请改用书目录内的文件,或告诉用户。
 - {SHELL_LINE}
 

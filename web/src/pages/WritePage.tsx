@@ -32,6 +32,9 @@ import { FilePreview } from "../components/FilePreview.tsx";
 import { FullScreenEditor } from "../components/FullScreenEditor.tsx";
 import { InputBar, type InputBarHandle } from "../components/InputBar.tsx";
 import { MessageList } from "../components/MessageList.tsx";
+import { AskUserOverlay } from "../components/AskUserCard.tsx";
+import type { EnterBehavior } from "../settings.ts";
+import { findPendingAsk } from "../ask-user.ts";
 import { NoticeBoard } from "../components/NoticeBoard.tsx";
 import { WorkspacePanel } from "../components/WorkspacePanel.tsx";
 import { newId } from "../components/id.ts";
@@ -108,6 +111,7 @@ export function WritePage({
 	onHeader,
 	library,
 	debug,
+	enterBehavior,
 	autoConfirmEdits,
 	classicMode,
 }: {
@@ -117,6 +121,8 @@ export function WritePage({
 	library: Library;
 	/** 简化输出:隐藏工具调用卡片(设置页开关,缺省开启)。 */
 	debug: boolean;
+	/** 回车行为(设置页开关):send = 回车即发送,newline = 回车换行(缺省)。 */
+	enterBehavior: EnterBehavior;
 	/** 编辑免确认:编剧编辑落盘即归档(设置页开关,缺省关闭 = 默认走待确认卡)。 */
 	autoConfirmEdits: boolean;
 	/** 经典模式(单 agent):AI 是带全量工具的写作 agent,标签与文案不再称「编剧」。 */
@@ -1083,6 +1089,9 @@ export function WritePage({
 		});
 	}, [bookDetail, currentChapter, saveLabel, words, connected, onHeader]);
 
+	/** 编剧会话里正在等待回答的提问(ask_user);有就弹模态浮层。 */
+	const pendingAsk = useMemo(() => findPendingAsk(writerSession.messages), [writerSession.messages]);
+
 	return (
 		// 三栏壳:书库(轨 1 auto,宽度由 ChapterSidebar 决定并随折叠/拖拽动画)
 		// | 纸张 | AI 伙伴(轨 3 经 --companion-w 跟随左缘拖拽调宽);窄屏断点见 styles.css
@@ -1343,6 +1352,7 @@ export function WritePage({
 								commands={writerSlashCommands}
 								context={writerSlashContext}
 								onCommandError={(msg) => setError(`命令失败: ${msg}`)}
+								enterBehavior={enterBehavior}
 							/>
 						</div>
 						)}
@@ -1351,6 +1361,15 @@ export function WritePage({
 					)}
 				</motion.aside>
 			</>
+			{/* 提问卡片(ask_user):工具阻塞着等这个回答,所以是模态浮层。
+			    挂载条件从消息流推出来(未答的 ask_user 块),不另存一份 pending 状态 */}
+			{pendingAsk && (
+				<AskUserOverlay
+					questions={pendingAsk.questions}
+					onSubmit={(answers) => void client.answerAskUser(pendingAsk.toolCallId, answers)}
+					onCancel={() => void client.cancelAskUser(pendingAsk.toolCallId)}
+				/>
+			)}
 			{/* 全屏编辑器覆盖层(设计 §5.4) */}
 			{fsEditor && (
 				<FullScreenEditor

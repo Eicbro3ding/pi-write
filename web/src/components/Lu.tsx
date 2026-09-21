@@ -30,6 +30,7 @@ const NODES: Record<string, Array<[string, Record<string, string | number>]>> = 
 	"info": [["circle",{"cx":"12","cy":"12","r":"10"}],["path",{"d":"M12 16v-4"}],["path",{"d":"M12 8h.01"}]],
 	"chevron-down": [["path",{"d":"m6 9 6 6 6-6"}]],
 	"chevron-up": [["path",{"d":"m18 15-6-6-6 6"}]],
+	"chevron-left": [["path",{"d":"m15 18-6-6 6-6"}]],
 	"chevron-right": [["path",{"d":"m9 18 6-6-6-6"}]],
 	"chevrons-right": [["path",{"d":"m6 17 5-5-5-5"}],["path",{"d":"m13 17 5-5-5-5"}]],
 	"chevrons-left": [["path",{"d":"m11 17-5-5 5-5"}],["path",{"d":"m18 17-5-5 5-5"}]],

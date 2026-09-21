@@ -14,6 +14,7 @@ import {
 import type { AgentMessage, ThinkingLevel } from "../../vendor/pi-agent-core/src/index.ts";
 import type { AgentSessionEvent } from "../../vendor/pi-coding-agent/src/index.ts";
 import { buildActorContextBlocks, formatStageLines, resolveWorldInjection } from "./assembler.ts";
+import type { ChatContentPart } from "../session-text.ts";
 import { loadCast, saveCast, validateCast, validateSceneCast } from "./cast.ts";
 import { countStage } from "./counters.ts";
 import { loadScript, reviseScript, saveScript } from "./script-store.ts";
@@ -85,6 +86,19 @@ export interface StageOrchestratorOptions {
 }
 
 /** 每角色的会话装配参数。 */
+/**
+ * 导演对话的一条消息(与 web 侧 DirectorChatMessage 同形状:有序 content + 兼容投影)。
+ * 抽到 orchestrator 里是为了让 getDirectorChat 的返回类型有名有姓,便于前端对齐。
+ */
+export type DirectorChat = Array<{
+	role: "user" | "assistant";
+	text: string;
+	thinking?: string;
+	content?: ChatContentPart[];
+	startedAt?: number;
+	endedAt?: number;
+}>;
+
 export interface RoleSpec {
 	systemPrompt: string;
 	extensions: InlineExtension[];
@@ -614,19 +628,36 @@ export class StageOrchestrator {
 	 * 供快照恢复前端对话气泡——讨论只存于导演会话内存,快照不含历史时刷新页面
 	 * 气泡会全部消失(仅剩 directorLast 一行)。
 	 */
-	getDirectorChat(): Array<{ role: "user" | "assistant"; text: string; thinking?: string }> {
+	/**
+	 * 导演对话(快照下发)。**注意这里是从内存快照再投影一次** —— 2026-09-19 升级
+	 * 水合时漏掉了这一处:它只拷 role/text/thinking,且 `text` 为空就整条跳过,于是
+	 * 「只有思考 + 工具调用、没有正文」的记录(典型:ask_user 提问卡弹出来的时候)
+	 * 会在刷新后整条消失 —— 卡片跟着一起没了。
+	 *
+	 * 现在与 extractMessagesFromManager / readDirectorChatFromDisk 同口径:
+	 * 带上有序 content;只要 content 非空就不算空记录;text/thinking 留作兼容投影。
+	 */
+	getDirectorChat(): DirectorChat {
 		if (!this.director) return [];
-		const chat: Array<{ role: "user" | "assistant"; text: string; thinking?: string }> = [];
+		const chat: DirectorChat = [];
 		let skip = false;
 		for (const m of this.director.getState().messages) {
-			if (m.role === "user" || m.role === "assistant") {
-				const text = (m.text ?? "").trim();
-				if (text.length === 0) continue;
-				if (m.role === "user") {
-					skip = StageOrchestrator.AUTO_DIRECTOR_PREFIXES.some((p) => text.startsWith(p));
-				}
-				if (!skip) chat.push({ role: m.role, text, thinking: m.thinking });
+			if (m.role !== "user" && m.role !== "assistant") continue;
+			const text = (m.text ?? "").trim();
+			const content = m.content;
+			if (text.length === 0 && (content === undefined || content.length === 0)) continue;
+			if (m.role === "user") {
+				skip = StageOrchestrator.AUTO_DIRECTOR_PREFIXES.some((p) => text.startsWith(p));
 			}
+			if (skip) continue;
+			chat.push({
+				role: m.role,
+				text: m.text ?? "",
+				...(m.thinking ? { thinking: m.thinking } : {}),
+				...(content ? { content } : {}),
+				...(m.startedAt !== undefined ? { startedAt: m.startedAt } : {}),
+				...(m.endedAt !== undefined ? { endedAt: m.endedAt } : {}),
+			});
 		}
 		return chat;
 	}

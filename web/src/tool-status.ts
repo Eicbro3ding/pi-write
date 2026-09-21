@@ -55,7 +55,7 @@ export const TOOL_DONE: Record<string, string> = {
 export const DEFAULT_TOOL_DONE = "已调用";
 
 /** 图标族:组件侧按它选一枚线性 SVG(不用 emoji)。 */
-export type ToolIcon = "read" | "edit" | "search" | "find" | "count" | "world" | "other";
+export type ToolIcon = "read" | "edit" | "search" | "find" | "count" | "world" | "ask" | "other";
 
 /** 工具名 → 图标族。 */
 export function toolIcon(name: string): ToolIcon {
@@ -75,6 +75,8 @@ export function toolIcon(name: string): ToolIcon {
 		case "world_update":
 		case "world_find":
 			return "world";
+		case "ask_user":
+			return "ask";
 		default:
 			return "other";
 	}
@@ -140,11 +142,13 @@ export function toolActionRow(t: { name: string; args: string; result: string | 
  *   渲染成**预览卡**。卡片数据取不到时降级为动作行——取数失败、无实质变化、
  *   还没接上预览链路,都不是异常态,不该摆一张裸工具卡出来;
  * - `action`:读取型工具,压成一行「动词 + 宾语」;
+ * - `ask`:ask_user——提问卡片。**未回答时它自己就是弹窗**(见 AskUserCard),
+ *   所以块内不渲染输入控件,只留一行「等待回答」占位;答完原地变成问答记录;
  * - `hidden`:word_count / world_find——既不产生编辑也没有值得看一眼的读取内容,
  *   默认不占版面;**失败时强制露出**(静默会让「AI 好像什么都没干」,见 MessageList);
  * - `card`:原始完整卡(工具名 + 完整参数 + 完整结果),只在调试模式下出现。
  */
-export type ToolRenderForm = "terminal" | "preview" | "action" | "hidden" | "card";
+export type ToolRenderForm = "terminal" | "preview" | "action" | "hidden" | "card" | "ask";
 
 /** 按工具名判定渲染形态。debug(调试模式)下一切退回原始完整卡。 */
 export function toolRenderForm(name: string, debug: boolean): ToolRenderForm {
@@ -160,6 +164,8 @@ export function toolRenderForm(name: string, debug: boolean): ToolRenderForm {
 		case "word_count":
 		case "world_find":
 			return "hidden";
+		case "ask_user":
+			return "ask";
 		default:
 			return "action";
 	}

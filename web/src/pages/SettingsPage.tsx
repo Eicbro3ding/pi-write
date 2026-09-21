@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } 
 import { ApiError, type ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
 import type { PluginInfoDto, ResolvedShellDto, ShellDialectDto, ShellKindDto, UserThemeInfo, WorldDataDto } from "../types.ts";
+import type { EnterBehavior } from "../settings.ts";
 import { themeStarterCss, USER_THEME_PREFIX, userThemeFile, type ThemeId } from "../themes.ts";
 import { applyTheme, currentTheme } from "../theme.ts";
 import { ProviderList } from "../components/ProviderList.tsx";
@@ -122,7 +123,9 @@ export function SettingsPage({
 	debugShown,
 	onDebugModeChange,
 	autoExpandThinking,
+	enterBehavior,
 	onAutoExpandThinkingChange,
+	onEnterBehaviorChange,
 	autoConfirmEdits,
 	onAutoConfirmEditsChange,
 	classicMode,
@@ -144,9 +147,13 @@ export function SettingsPage({
 	debugShown: boolean;
 	/** 调试模式开关变化(仅解锁后可见,见 debugShown)。 */
 	onDebugModeChange: (enabled: boolean) => void;
+	/** 回车行为(send = 回车即发送 / newline = 回车换行)。 */
+	enterBehavior: EnterBehavior;
 	/** 自动展开思考开关状态(思考块默认展开;缺省开启)。 */
 	autoExpandThinking: boolean;
 	onAutoExpandThinkingChange: (enabled: boolean) => void;
+	/** 回车行为变化(设置页开关)。 */
+	onEnterBehaviorChange: (v: EnterBehavior) => void;
 	/** 编辑免确认开关状态(编剧编辑落盘即归档;缺省关闭,默认走待确认卡)。 */
 	autoConfirmEdits: boolean;
 	onAutoConfirmEditsChange: (enabled: boolean) => void;
@@ -874,6 +881,19 @@ export function SettingsPage({
 												<div className="s-pref-desc">思考块默认展开,无需逐条点击。</div>
 											</div>
 											<ToggleSwitch checked={autoExpandThinking} onChange={onAutoExpandThinkingChange} ariaLabel="自动展开思考" />
+										</div>
+										<div className="s-pref-item">
+											<div className="s-pref-text">
+												<div className="s-pref-title">回车直接发送</div>
+												<div className="s-pref-desc">
+													开启:回车发送、Shift+Enter 换行。关闭(默认):回车换行、Ctrl+Enter 发送。
+												</div>
+											</div>
+											<ToggleSwitch
+												checked={enterBehavior === "send"}
+												onChange={(v) => onEnterBehaviorChange(v ? "send" : "newline")}
+												ariaLabel="回车直接发送"
+											/>
 										</div>
 										<div className="s-pref-item">
 											<div className="s-pref-text">
