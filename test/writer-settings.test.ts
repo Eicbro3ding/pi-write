@@ -36,6 +36,16 @@ describe("parseWriterSettings", () => {
 			enableShell: false,
 			shellKind: "auto",
 			shellPath: "",
+			// 图片生成(实验,0.1.0):能力默认关、接入配置留空、三个「允许时机」默认开
+			enableImageGen: false,
+			imageProvider: "openai-images",
+			imageModel: "gpt-image-1",
+			imageSize: "3:2",
+			imageBaseUrl: "",
+			imageApiKey: "",
+			imageInReply: true,
+			imageWorldbook: true,
+			imageConfirmBeforeGen: true,
 		});
 	});
 
@@ -49,11 +59,8 @@ describe("parseWriterSettings", () => {
 
 	it("合法文件按字段还原(未知字段丢弃)", () => {
 		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, classicMode: true, enableShell: false, extra: 1 })).toEqual({
-			version: WRITER_SETTINGS_VERSION,
+			...defaultWriterSettings(),
 			classicMode: true,
-			enableShell: false,
-			shellKind: "auto",
-			shellPath: "",
 		});
 	});
 
@@ -87,7 +94,7 @@ describe("settings.json 读写", () => {
 	});
 
 	it("写入后落盘为 JSON 且父目录自动创建", async () => {
-		const written = { version: WRITER_SETTINGS_VERSION, classicMode: true, enableShell: false, shellKind: "pwsh" as const, shellPath: "C:\\pwsh.exe" };
+		const written = { ...defaultWriterSettings(), classicMode: true, shellKind: "pwsh" as const, shellPath: "C:\\pwsh.exe" };
 		await writeWriterSettings(written);
 		const path = getWriterSettingsPath();
 		expect(path).toBe(join(tmp, "settings.json"));
@@ -101,12 +108,43 @@ describe("settings.json 读写", () => {
 	});
 
 	it("updateWriterSettings 只改传入字段", async () => {
-		await writeWriterSettings({ version: WRITER_SETTINGS_VERSION, classicMode: true, enableShell: false, shellKind: "bash", shellPath: "" });
+		await writeWriterSettings({ ...defaultWriterSettings(), classicMode: true, shellKind: "bash" });
 		const same = await updateWriterSettings({});
 		expect(same.classicMode).toBe(true);
 		const off = await updateWriterSettings({ classicMode: false });
 		expect(off.classicMode).toBe(false);
-		await expect(readWriterSettings()).resolves.toEqual({ version: WRITER_SETTINGS_VERSION, classicMode: false, enableShell: false, shellKind: "bash", shellPath: "" });
+		await expect(readWriterSettings()).resolves.toEqual({ ...defaultWriterSettings(), classicMode: false, shellKind: "bash" });
+	});
+
+	it("图片生成(实验)字段可单独更新,且不影响其他开关", async () => {
+		await updateWriterSettings({ classicMode: true });
+		const on = await updateWriterSettings({ enableImageGen: true, imageModel: "dall-e-3", imageSize: "16:9" });
+		expect(on).toMatchObject({ classicMode: true, enableImageGen: true, imageModel: "dall-e-3", imageSize: "16:9" });
+		// 密钥/端点这类字符串字段照旧透传
+		const withKey = await updateWriterSettings({ imageBaseUrl: "https://api.example.com/v1", imageApiKey: "sk-test" });
+		expect(withKey).toMatchObject({ imageBaseUrl: "https://api.example.com/v1", imageApiKey: "sk-test" });
+		// 关掉能力不动配置(下次开还是这套)
+		const off = await updateWriterSettings({ enableImageGen: false });
+		expect(off).toMatchObject({ enableImageGen: false, imageModel: "dall-e-3" });
+	});
+
+	it("图片生成字段的非法值被丢弃(回落默认),而旧文件缺字段也取默认", () => {
+		// 旧文件(0.0.x)没有这些字段:能力必须是关的,不能因为缺字段而默认打开
+		const legacy = parseWriterSettings({ version: WRITER_SETTINGS_VERSION });
+		expect(legacy.enableImageGen).toBe(false);
+		expect(legacy.imageSize).toBe("3:2");
+		// 非法枚举/类型一律回落,不把未知值带进装配
+		const bad = parseWriterSettings({
+			version: WRITER_SETTINGS_VERSION,
+			enableImageGen: "yes",
+			imageSize: "21:9",
+			imageProvider: "midjourney",
+			imageModel: 42,
+		});
+		expect(bad.enableImageGen).toBe(false);
+		expect(bad.imageSize).toBe("3:2");
+		expect(bad.imageProvider).toBe("openai-images");
+		expect(bad.imageModel).toBe("gpt-image-1");
 	});
 
 	it("shell 方言与路径可单独更新(与经典模式/外部命令互不干扰)", async () => {

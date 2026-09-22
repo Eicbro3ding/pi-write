@@ -10,6 +10,7 @@
  */
 import type { AgentEventDto, ChatMessage, MessageBlock, SessionMessageDto, SessionViewState, ToolCallInfo } from "./types.ts";
 import { extractCacheHit } from "./context-usage.ts";
+import { describeChatError, providerModelLine } from "./chat-error.ts";
 
 /** 初始会话视图状态。 */
 export function initialSessionState(): SessionViewState {
@@ -73,7 +74,15 @@ export function messagesToEvents(messages: readonly SessionMessageDto[]): Array<
 		}
 		events.push({
 			type: "message_start",
-			message: { role: m.role, content },
+			message: {
+				role: m.role,
+				content,
+				// provider 侧报错随消息落盘(errorMessage + provider/model):水合时原样
+				// 递给 reducer,报错卡刷新/重开页面后仍在(与实时路径同一套字段)
+				...(m.errorMessage !== undefined ? { stopReason: "error", errorMessage: m.errorMessage } : {}),
+				...(m.provider !== undefined ? { provider: m.provider } : {}),
+				...(m.model !== undefined ? { model: m.model } : {}),
+			},
 			...(m.id ? { entryId: m.id } : {}),
 			...(m.startedAt !== undefined ? { startedAt: m.startedAt } : {}),
 			...(m.endedAt !== undefined ? { endedAt: m.endedAt } : {}),
@@ -254,6 +263,25 @@ function lastAssistantIndex(messages: ChatMessage[]): number {
 }
 
 /**
+ * 找「最后一轮的用户消息」——报错卡的「重试」用它定位要重放的那一轮(纯函数,便于单测)。
+ *
+ * 报错消息(`role === "error"`)**直接跳过**:它不是真实 entry,而且总是落在失败
+ * 那一轮的用户消息之后,不跳过就永远只看到报错卡,重试按钮等于死的。
+ *
+ * 返回 null 的两种情况:对话为空;最后一条真实消息不是 user —— 那一轮已经产出过
+ * assistant 输出(报错发生在更早的一轮里),「重放这一问」的语义不再成立,
+ * 调用方该退化成「直接再发一次」而不是去撤回。
+ */
+export function lastUserTurn(messages: readonly ChatMessage[]): ChatMessage | null {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const m = messages[i]!;
+		if (m.role === "error") continue;
+		return m.role === "user" ? m : null;
+	}
+	return null;
+}
+
+/**
  * 处理单个 AgentEventDto,返回新状态(不可变更新)。
  * 未知事件类型返回原状态。字段按实际 vendor 形状防御式处理:
  * message.content 可能是 string 或 block 数组;tool 的 args/result 可能是字符串或对象。
@@ -265,6 +293,30 @@ export function processAgentEvent(state: SessionViewState, event: AgentEventDto)
 			if (!m) return state;
 			// 非 user/assistant 角色(如 toolResult)不渲染为气泡,直接跳过
 			if (m.role !== "user" && m.role !== "assistant") return state;
+			/**
+			 * **provider 侧报错(需求 1 的真正主路径)**:vendor 在模型调用失败时
+			 * 不抛异常,而是给这条 assistant 消息落 `stopReason: "error"` +
+			 * `errorMessage`(content 恒空),回合照常结束 —— 所以永远不会走
+			 * `chat_error`(那条广播只在 chat() 本身 reject 时才发:未配置模型、
+			 * 会话创建失败之类)。实测 deepseek 401 的 message_start 就已经带全了
+			 * stopReason/errorMessage/provider/model,因此在首个事件就把气泡换成
+			 * 报错卡:不留一个空的「PI」(用户看到空气泡只会以为卡住了)。
+			 *
+			 * 与 chat_error 分支共用同一份渲染数据(describeChatError),区别只在于
+			 * 这里的原文来自消息本身、且能带上 provider/model 那行。
+			 */
+			const rawError = typeof m.errorMessage === "string" ? m.errorMessage : "";
+			if (m.role === "assistant" && rawError.length > 0) {
+				const msg: ChatMessage = {
+					id: event.entryId ?? localId(),
+					...(event.entryId ? { entryId: event.entryId } : {}),
+					role: "error",
+					blocks: [],
+					done: true,
+					error: describeChatError(rawError, providerModelLine(m)),
+				};
+				return { ...state, messages: [...state.messages, msg] };
+			}
 			// 思考块只属于 assistant;user 消息的 content 里即便混进 thinking 块也丢掉
 			// (防御式,渲染侧不该给用户消息画思考折叠块)
 			const seg = m.role === "user" ? blocksFromContent(m.content).filter((b) => b.kind === "text") : blocksFromContent(m.content);
@@ -409,6 +461,29 @@ export function processAgentEvent(state: SessionViewState, event: AgentEventDto)
 			// isStreaming 已为 true 说明本轮已在进行中(多轮工具调用的后续 turn):
 			// 保留首轮的计时起点,不重开表
 			return { ...state, isStreaming: true, turnStartedAt: state.isStreaming ? state.turnStartedAt : Date.now() };
+		/**
+		 * 模型报错(需求 1「错误原文照实显示」):**在对话流里落一张卡**,位置就在
+		 * 它发生的地方 —— 用户消息之后、下一次重试之前。原文逐字存进 `error.raw`,
+		 * 这里不做任何加工(标题/状态码的归类在 chat-error.ts,原文永远原样)。
+		 *
+		 * 为什么不是「顶部横幅 / toast」:报错恰恰是最需要被复制给供应商的东西,
+		 * 而横幅会随着下一次操作消失、切章即清、也没法把 request id 完整选出来。
+		 * 为什么不是一条 assistant 消息:它不是会话 entry(服务端只广播,不落盘),
+		 * 混进 assistant 会被「同轮回复合并」「回合计时」当成模型输出处理。
+		 *
+		 * 这里**不动 isStreaming**:报错时回合已经结束,agent_settled 会收拾它;
+		 * 若 sendMessage 在 turn_start 之前就抛(未配置模型),本来也没置起来。
+		 */
+		case "chat_error": {
+			const msg: ChatMessage = {
+				id: localId(),
+				role: "error",
+				blocks: [],
+				done: true,
+				error: describeChatError(event.message),
+			};
+			return { ...state, messages: [...state.messages, msg] };
+		}
 		case "agent_settled": {
 			// 回合真正结束:给本轮 assistant 气泡落结束时间,「已工作 X 分 Y 秒」据此定稿。
 			// 无 startedAt 的气泡(历史水合)不补 —— 没有起点的时长是假的

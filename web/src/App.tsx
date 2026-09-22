@@ -7,7 +7,7 @@ import { SetupWizard } from "./components/SetupWizard.tsx";
 import { WritePage, type HeaderInfo } from "./pages/WritePage.tsx";
 import { StagePage } from "./pages/StagePage.tsx";
 import { WorldPage } from "./pages/WorldPage.tsx";
-import { SettingsPage } from "./pages/SettingsPage.tsx";
+import { SettingsPage, type ImageSettingsSlice } from "./pages/SettingsPage.tsx";
 import {
 	autoConfirmEditsEnabled,
 	autoExpandThinkingEnabled,
@@ -63,6 +63,16 @@ export function App() {
 	const [classicMode, setClassicModeState] = useState<boolean>(() => classicModeEnabled());
 	/** 顶栏视图;经典模式(本地缓存已开启)首帧直接落在编辑页。 */
 	const [view, setView] = useState<View>(() => (classicModeEnabled() ? "edit" : "stage"));
+	/**
+	 * 「去设置模型」信号(报错卡的动作行):自增计数 → 设置页据此把左栏切回「模型」。
+	 * 设置页是常驻挂载的,不能靠重挂载回默认分类(见 SettingsPage 的 props 说明)。
+	 * 计数与导航一起做:点一次 = 切页 + 切分类,同一个动作两件事。
+	 */
+	const [settingsModelToken, setSettingsModelToken] = useState(0);
+	const openModelSettings = useCallback(() => {
+		setSettingsModelToken((n) => n + 1);
+		setView("settings");
+	}, []);
 	const [header, setHeader] = useState<HeaderInfo | null>(null);
 	/**
 	 * 调试模式(每个工具块退回原始工具名 + 完整参数 + 完整结果)。
@@ -174,6 +184,53 @@ export function App() {
 		[client, shellEnabled, applyShellEnabled, applyShellSettings],
 	);
 	/**
+	 * 图片生成(实验,0.1.0):整份子集以服务端为准 —— 它决定 `image_generate` 工具
+	 * 存不存在(关了就对 AI 不可见)。与 shell 开关同款,不落 localStorage。
+	 * 初值取默认设置,挂载后由 GET /api/settings 对账覆盖。
+	 */
+	const [imageSettings, setImageSettingsState] = useState<ImageSettingsSlice>(() => ({
+		enableImageGen: false,
+		imageProvider: "openai-images",
+		imageModel: "gpt-image-1",
+		imageSize: "3:2",
+		imageBaseUrl: "",
+		imageApiKey: "",
+		imageInReply: true,
+		imageWorldbook: true,
+		imageConfirmBeforeGen: true,
+	}));
+	const applyImageSettings = useCallback((settings: WriterSettingsDto) => {
+		setImageSettingsState({
+			enableImageGen: settings.enableImageGen,
+			imageProvider: settings.imageProvider,
+			imageModel: settings.imageModel,
+			imageSize: settings.imageSize,
+			imageBaseUrl: settings.imageBaseUrl,
+			imageApiKey: settings.imageApiKey,
+			imageInReply: settings.imageInReply,
+			imageWorldbook: settings.imageWorldbook,
+			imageConfirmBeforeGen: settings.imageConfirmBeforeGen,
+		});
+	}, []);
+	/**
+	 * 更新图片生成设置:先乐观置位(开关即时响应),再写服务端 —— 服务端是权威值,
+	 * 以它返回的完整设置回写;失败回滚并把错误抛给设置页展示。
+	 */
+	const changeImageSettings = useCallback(
+		async (patch: Partial<ImageSettingsSlice>) => {
+			const prev = imageSettings;
+			setImageSettingsState({ ...prev, ...patch });
+			try {
+				const { settings } = await client.putSettings(patch);
+				applyImageSettings(settings);
+			} catch (e) {
+				setImageSettingsState(prev);
+				throw e;
+			}
+		},
+		[client, imageSettings, applyImageSettings],
+	);
+	/**
 	 * 切换经典模式:先本地落盘 + 置位(开关即时响应),再写服务端;服务端是权威值,
 	 * 以它的返回为准回写(失败回滚本地并抛给调用方展示错误)。服务端写入会释放
 	 * 已建会话,下次对话按新装配重建 agent,所以这一步不能只改本地。
@@ -224,6 +281,7 @@ export function App() {
 				applyClassicMode(settings.classicMode);
 				applyShellEnabled(settings.enableShell);
 				applyShellSettings(settings, shell);
+				applyImageSettings(settings);
 			})
 			.catch(() => {
 				/* 读取失败:沿用本地缓存 */
@@ -233,6 +291,7 @@ export function App() {
 			applyClassicMode(e.settings.classicMode);
 			applyShellEnabled(e.settings.enableShell);
 			applyShellSettings(e.settings);
+			applyImageSettings(e.settings);
 		});
 		return () => {
 			cancelled = true;
@@ -369,6 +428,8 @@ export function App() {
 							enterBehavior={enterBehavior}
 							autoConfirmEdits={autoConfirmEdits}
 							classicMode={classicMode}
+							/* 报错卡的「去设置模型 ›」:导航由 App 独占(WritePage 只管请求) */
+							onOpenSettings={openModelSettings}
 						/>
 					</section>
 				<section className={`view ${view === "world" ? "" : "hidden"}`}>
@@ -395,6 +456,9 @@ export function App() {
 							shellPath={shellPath}
 							resolvedShell={resolvedShell}
 							onShellSettingsChange={changeShellSettings}
+							image={imageSettings}
+							onImageChange={changeImageSettings}
+							focusModelToken={settingsModelToken}
 							onRerunSetup={() => setRerunWizard(true)}
 						/>
 					</section>

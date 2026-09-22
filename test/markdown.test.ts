@@ -52,3 +52,54 @@ describe("renderMarkdown 安全性", () => {
 		expect(html).toContain("<li>列表项</li>");
 	});
 });
+
+/**
+ * 正文图片白名单(需求 11「AI 的回复内容可以嵌入图片」)。
+ * 图片 src 与链接 href 是**两条独立白名单**:图片走 <img>,脚本不执行,但 `file://`
+ * 能探测本地文件是否存在,裸绝对路径同理,都得拦。
+ */
+describe("renderMarkdown 图片白名单", () => {
+	it("书内相对路径交给 resolveImage 换成可访问 URL", () => {
+		const html = renderMarkdown("![灯塔草图](images/light.png)", {
+			resolveImage: (src) => `/api/books/fog/images/${src.replace(/^images\//, "")}`,
+		});
+		expect(html).toContain('src="/api/books/fog/images/light.png"');
+		expect(html).toContain('alt="灯塔草图"');
+		expect(html).toContain('class="md-img"');
+		expect(html).toContain('loading="lazy"');
+	});
+
+	it("没给 resolveImage 时相对路径原样保留", () => {
+		expect(renderMarkdown("![](images/a.png)")).toContain('src="images/a.png"');
+	});
+
+	it("http(s) 外链放行", () => {
+		expect(renderMarkdown("![](https://example.com/a.png)")).toContain('src="https://example.com/a.png"');
+	});
+
+	it("data:image 内联图放行(SVG 也放行 —— img 上下文里脚本不执行)", () => {
+		const png = "data:image/png;base64,iVBORw0KGgo=";
+		expect(renderMarkdown(`![](${png})`)).toContain(png);
+		expect(renderMarkdown("![](data:image/svg+xml;base64,PHN2Zy8+)")).toContain("data:image/svg+xml");
+	});
+
+	it("裸绝对路径被拦,降级成一行文本而不是静默消失", () => {
+		const html = renderMarkdown("![本地](/etc/passwd)");
+		expect(html).not.toContain("<img");
+		expect(html).toContain("md-img-blocked");
+		expect(html).toContain("本地");
+	});
+
+	it("file: scheme 被拦", () => {
+		expect(renderMarkdown("![](file:///etc/passwd)")).not.toContain("<img");
+	});
+
+	it("data:text/html 被拦(不能借图片语法塞 HTML)", () => {
+		expect(renderMarkdown("![](data:text/html;base64,PHNjcmlwdD4=)")).not.toContain("<img");
+	});
+
+	it("图片语法里的 HTML 不进 DOM(alt 已转义)", () => {
+		const html = renderMarkdown('![" onerror="alert(1)](images/a.png)');
+		expect(html).not.toContain("onerror=\"alert(1)\"");
+	});
+});

@@ -56,6 +56,14 @@ export interface SessionMessageDto {
 	startedAt?: number;
 	endedAt?: number;
 	id?: string;
+	/**
+	 * provider 侧报错原文(与 server 的 SessionStateSnapshot 对齐)。
+	 * 与实时事件同一份数据:vendor 把错误挂在 assistant 消息上,不抛异常(见 session-host)。
+	 */
+	errorMessage?: string;
+	/** 出错那一刻的 provider / model(报错卡原文框下面那行)。 */
+	provider?: string;
+	model?: string;
 }
 
 /** 会话状态快照(后端 session-host getState())。 */
@@ -167,7 +175,13 @@ export interface ChatMessage {
 	id: string;
 	/** 会话 entry 稳定 id(服务端下发的编辑/分支定位依据;实时消息在 message_end 时补上)。 */
 	entryId?: string;
-	role: "user" | "assistant";
+	/**
+	 * `error` = 模型报错卡(需求 1「错误原文照实显示」):不是会话里的真实 entry
+	 * (服务端只广播 chat_error,不落盘),只是**对话流里的一个位置**——让报错留在
+	 * 它发生的地方(用户消息之后、重试之前),而不是飘成一条转瞬即逝的横幅。
+	 * 报错消息 blocks 恒为空,内容在 `error` 字段里。
+	 */
+	role: "user" | "assistant" | "error";
 	/** 有序块序列(思考 / 正文 / 工具调用按到达顺序穿插)。 */
 	blocks: MessageBlock[];
 	/** 消息是否已结束(收到 message_end)。 */
@@ -179,7 +193,47 @@ export interface ChatMessage {
 	 */
 	startedAt?: number;
 	endedAt?: number;
+	/** 模型报错内容(仅 role === "error" 有;见 chat-error.ts 的 describeChatError)。 */
+	error?: ChatErrorInfo;
 }
+
+/**
+ * 模型报错卡要显示的一切(需求 1)。
+ *
+ * 分工是这一层的设计:`raw` 承担「照实」,其余字段只做标题行与徽标的旁注 ——
+ * 归类失败顶多标题笼统,原文永远完整、可复制给供应商。
+ */
+export interface ChatErrorInfo {
+	/** provider 的原始错误文本,**逐字保留**(不截断、不改写)。 */
+	raw: string;
+	/** 标题(按原文归类:API key 无效 / 余额不足 / 请求过于频繁 / …;认不出为「模型返回错误」)。 */
+	title: string;
+	/** HTTP 状态码徽标;原文里取不到为 null(不猜)。 */
+	code: number | null;
+	/** 归类(决定图标与后续分支)。 */
+	kind: ChatErrorKind;
+	/** 处置提示(仅「重试之外还得做什么」的类别给,如密钥/额度/模型名);无则 null。 */
+	hint: string | null;
+	/**
+	 * 出错那一刻的 `provider: x · model: y`(设计稿原文框里那第三行)。
+	 * 只有 provider 侧报错(vendor 消息带 provider/model)才有;本地前置检查类
+	 * (未配置密钥/未选模型)没有 provider 可写,为 null —— 不编。
+	 */
+	meta: string | null;
+}
+
+/** 报错归类。`other` = 认不出(仍按原文显示,只是标题笼统)。 */
+export type ChatErrorKind =
+	| "key"
+	| "balance"
+	| "rate"
+	| "timeout"
+	| "model"
+	| "context"
+	| "network"
+	| "auth"
+	| "server"
+	| "other";
 
 /** 工具调用卡片。 */
 export interface ToolCallInfo {
@@ -251,7 +305,20 @@ export interface SessionViewState {
 export type AgentEventDto =
 	| {
 			type: "message_start";
-			message: { role: string; content?: unknown };
+			message: {
+				role: string;
+				content?: unknown;
+				/**
+				 * provider 侧报错时 vendor 会带上这两个字段(实测 deepseek 401 的
+				 * message_start 就已带全):`stopReason: "error"` + `errorMessage: '401: {...}'`。
+				 * 注意这条路径**不抛异常、不广播 chat_error** —— 前端必须自己认,
+				 * 否则界面上只会留一个空的 PI 气泡(需求 1 的真正主路径)。
+				 */
+				stopReason?: string;
+				errorMessage?: string;
+				provider?: string;
+				model?: string;
+			};
 			entryId?: string;
 			/** 仅历史水合合成的事件携带(实时 SSE 无此字段):组内首末 entry 时间(ms),
 			 *  供 reducer 给气泡落 startedAt/endedAt,「已工作 X 分 Y 秒」刷新后仍在。 */
@@ -276,6 +343,9 @@ export type AgentEventDto =
 	// 服务端合成事件(server.ts broadcast,字段与发射点对齐;
 	// slug/bookSlug/chapterFile 可为 null——MCP reload 等路径无守卫直接取会话状态,
 	// 无会话时为 null;前端消费点均按可空处理)
+	// 发送/生成失败(未配置模型、认证被拒、限流、网络…)。**message 是 provider 的
+	// 原始错误文本**(server.ts 两处广播直接透传 err.message),前端不再用
+	// friendlyError 加工成一句人话,而是照实落成一张报错卡(需求 1,见 chat-error.ts)。
 	| { type: "chat_error"; message: string }
 	| { type: "session_changed"; bookSlug: string | null; chapterFile: string | null }
 	| { type: "world_changed"; slug: string; mtime: number }
@@ -321,7 +391,43 @@ export interface WriterSettingsDto {
 	shellKind: ShellKindDto;
 	/** 显式 shell 可执行文件路径;空 = 自动探测(见 src/shell-kind.ts)。 */
 	shellPath: string;
+	// —— 图片生成(实验,0.1.0;与 src/writer-settings.ts 对齐)——
+	/** 允许 AI 调图片模型(回复嵌图 / 世界书配图);缺省关闭。 */
+	enableImageGen: boolean;
+	/** 图片接口形态;目前只认 OpenAI 兼容的 images 端点。 */
+	imageProvider: ImageProviderDto;
+	/** 图片模型名。 */
+	imageModel: string;
+	/** 默认出图尺寸档位。 */
+	imageSize: ImageSizeDto;
+	/** 图片端点基址;空 = 用 provider 官方地址。 */
+	imageBaseUrl: string;
+	/** 图片接口密钥(只存本机;界面用 password 输入框显示)。 */
+	imageApiKey: string;
+	/** 允许 AI 在回复正文里嵌图。 */
+	imageInReply: boolean;
+	/** 允许 AI 更新世界书条目时写入配图。 */
+	imageWorldbook: boolean;
+	/** 每次生成前先确认。 */
+	imageConfirmBeforeGen: boolean;
 }
+
+/** 图片接口形态;目前只有一种,留联合类型便于以后加。 */
+export type ImageProviderDto = "openai-images";
+
+/** 出图尺寸档位(像素映射见 IMAGE_SIZE_PX_TEXT)。 */
+export type ImageSizeDto = "1:1" | "3:2" | "16:9";
+
+/**
+ * 尺寸档位 → 显示用像素文案。与服务端 IMAGE_SIZE_PX **必须一致** ——
+ * 前端不 import src/,所以这里单列一份(同 SHELL_DIALECT_TEXT 的做法)。
+ * 改一边记得改另一边。
+ */
+export const IMAGE_SIZE_PX_TEXT: Record<ImageSizeDto, string> = {
+	"1:1": "1024 × 1024",
+	"3:2": "1536 × 1024",
+	"16:9": "1792 × 1024",
+};
 
 /** 用户可选的 shell 类型;auto(缺省)= 按平台自动识别(Windows 优先 PowerShell)。 */
 export type ShellKindDto = "auto" | "bash" | "pwsh";

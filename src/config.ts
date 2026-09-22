@@ -117,6 +117,46 @@ export function resolveSkillsDir(env: Record<string, string | undefined> = proce
 }
 
 /**
+ * 额外技能目录(2026-09-22,「放开 skill 限制」)。
+ *
+ * pi-writer 原本只经 additionalSkillPaths 加载自带的 skills/(critique / outline /
+ * revise / stage-scripting)——那是 2026-08-11 为「独立身份」刻意收窄的(避免 ~/.agents
+ * 全局技能混进写作会话)。0.1.0 起改为**完全放开**:机器上已有的技能直接用,不必为
+ * 每本书复制一份。
+ *
+ * 扫描顺序(前者优先;同名冲突由 vendor loadSkills 记 collision 诊断):
+ * 1. `PI_WRITER_EXTRA_SKILLS_DIRS`(冒号分隔,与 PATH 同款;供测试与特殊布局)
+ * 2. `~/.agents/skills`(本机 agent 框架的全局技能约定目录)
+ *
+ * 不存在的目录直接滤掉——显式路径不存在时 loadSkills 会报诊断,而「用户没装那个
+ * 目录」不该在每次启动时刷噪音。
+ */
+export function resolveExtraSkillsDirs(env: Record<string, string | undefined> = process.env): string[] {
+	const dirs: string[] = [];
+	const override = env.PI_WRITER_EXTRA_SKILLS_DIRS;
+	if (override) {
+		for (const part of override.split(":")) {
+			const p = part.trim();
+			if (p.length > 0) dirs.push(p);
+		}
+	}
+	dirs.push(join(homedir(), ".agents", "skills"));
+	// 去重(env 里可能重复给同一目录)+ 滤掉不存在的
+	return dirs.filter((d, i) => dirs.indexOf(d) === i && existsSync(d));
+}
+
+/**
+ * 技能目录的**完整只读放行清单**:自带 skills/ + 全局技能目录。
+ *
+ * 路径守卫有两层——session-factory 里 installToolPathGuard 的兜底值,与 SessionHost
+ * 每次 sendMessage 写进 ALS 的会话上下文(**后者优先**)。两处都要给全,否则模型按
+ * 绝路径读全局技能文件时会被「工具路径越界」拦下(2026-08-09 曾有同款误拦)。
+ */
+export function resolveSkillReadOnlyDirs(env: Record<string, string | undefined> = process.env): string[] {
+	return [resolveSkillsDir(env), ...resolveExtraSkillsDirs(env)];
+}
+
+/**
  * 提示词缓存保留档位(vendor pi-ai 的 CacheRetention)。
  * 写作是间歇性交互,场景之间常超过默认 5 分钟 TTL——过期后整段上下文
  * 全价重算。`long` 映射 Anthropic `cache_control.ttl:"1h"`(写入 2x、

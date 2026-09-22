@@ -2,7 +2,7 @@
  * 会话装配工厂 —— cli.ts / web.ts / stage 编排器三处共用的
  * CreateAgentSessionRuntimeFactory 生成器。
  *
- * 三处装配的历史样板(路径基准注入、工具路径守卫、隐藏 skill 命令、
+ * 三处装配的历史样板(路径基准注入、工具路径守卫、技能目录、
  * 模型解析、createAgentSessionFromServices)完全一致,只差系统提示生成
  * 与工具集形态;本模块把它们收敛为一处,新增装配点不再复制样板。
  *
@@ -19,6 +19,7 @@ import {
 	type ResolveCliModelResult,
 } from "../vendor/pi-coding-agent/src/index.ts";
 import type { ThinkingLevel } from "../vendor/pi-agent-core/src/index.ts";
+import { resolveExtraSkillsDirs } from "./config.ts";
 import { installToolPathGuard } from "./tool-guard.ts";
 import { setWordCountCwd, setWorldUpdateBookDir } from "./tools.ts";
 
@@ -78,26 +79,39 @@ export function createSessionRuntimeFactory(opts: SessionFactoryOptions): Create
 		setWorldUpdateBookDir(cwd);
 		// 文件工具路径守卫:书目录内可读写;readOnlyDirs(skills 等)只读放行;
 		// draftFile 启用正文目录白名单(write 只允许写当前章节文件)
-		installToolPathGuard(cwd, opts.readOnlyDirs ?? [], opts.draftFile);
-			const services = await createAgentSessionServices({
-				cwd,
-				agentDir: opts.agentDir,
-				resourceLoaderOptions: {
-					systemPromptOverride: opts.systemPromptOverride,
-					appendSystemPromptOverride: () => [],
-					// 独立身份（2026-08-11）：不加载 ~/.agents 全局技能与祖先目录 AGENTS.md
-					// 项目上下文（导演实测混入主目录 skills/AGENTS.md 的根因）；技能只经
-					// additionalSkillPaths 显式加载（pi-writer 打包 skills）
-						noSkills: true,
-						noContextFiles: true,
-						...(opts.additionalSkillPaths ? { additionalSkillPaths: opts.additionalSkillPaths } : {}),
-						extensionFactories: opts.pluginFactories?.length
-							? [...opts.extensionFactories, ...opts.pluginFactories]
-							: opts.extensionFactories,
-					},
-			});
-		// 隐藏 skill 系统:会话的 / 菜单不再显示任何 /skill:xxx 命令
-		services.settingsManager.setEnableSkillCommands(false);
+		//
+		// 额外技能目录(2026-09-22「完全放开 skill」):全局技能目录在这里统一并入
+		// **三处装配点**(cli / web / stage),调用方不必各自记得——否则舞台演员读不到
+		// 全局技能文件。只读放行也要给,不然路径守卫会把技能目录挡在书目录之外。
+		const extraSkillDirs = resolveExtraSkillsDirs();
+		const skillPaths = [...(opts.additionalSkillPaths ?? []), ...extraSkillDirs];
+		const readOnlyDirs = [...(opts.readOnlyDirs ?? []), ...extraSkillDirs];
+		installToolPathGuard(cwd, readOnlyDirs, opts.draftFile);
+		const services = await createAgentSessionServices({
+			cwd,
+			agentDir: opts.agentDir,
+			resourceLoaderOptions: {
+				systemPromptOverride: opts.systemPromptOverride,
+				appendSystemPromptOverride: () => [],
+				// skill 加载:noSkills:false 让 vendor 把 packageManager 解析到的技能一并
+				// 装上(2026-08-11 曾为「独立身份」收窄为 true,2026-09-22 按需求放开);
+				// additionalSkillPaths 再显式挂上自带 skills/ 与全局技能目录。
+				// noContextFiles 保持 true —— 那是祖先目录 AGENTS.md **项目上下文**,
+				// 与技能无关,放开会把主目录的说明文件混进写作会话(2026-08-11 实测根因)。
+				noSkills: false,
+				noContextFiles: true,
+				...(skillPaths.length > 0 ? { additionalSkillPaths: skillPaths } : {}),
+				extensionFactories: opts.pluginFactories?.length
+					? [...opts.extensionFactories, ...opts.pluginFactories]
+					: opts.extensionFactories,
+			},
+		});
+		// skill 命令(2026-09-22):恢复注册,会话的 / 菜单重新列出 /skill:xxx。
+		// 此前被隐性关闭——技能只能靠模型自己 read 文件,用户无从主动调用。
+		// 只在值不对时写:该 setter 会落盘 agent/settings.json,每次会话都写是噪音。
+		if (!services.settingsManager.getEnableSkillCommands()) {
+			services.settingsManager.setEnableSkillCommands(true);
+		}
 		// shell 方言:vendor 的 getShellConfig() 只会 spawn bash(除非 settings.shellPath
 		// 指向别的可执行文件——PowerShell 的 -Command 可缩写为 -c,所以 pwsh 能借此跑起来)。
 		// 只在值变化时写:setShellPath 会落盘 agent/settings.json,每次会话都写是噪音。

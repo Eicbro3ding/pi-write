@@ -1,9 +1,15 @@
 /**
- * `/` 命令注册表(前端插件系统的第一个预留缝,2026-08):
+ * `/` 与 `@` 命令注册表(前端插件系统的第一个预留缝,2026-08):
  *
- * 内置 `/node`(注入世界树节点原文)与 `/chapter`(注入某一章原文)以同一套
+ * 内置 `/node`(注入世界书条目原文)与 `/chapter`(注入某一章原文)以同一套
  * `SlashCommand` 接口挂载;未来声明式用户插件只需注册新的命令定义,
  * 不触碰 InputBar / 页面装配代码。
+ *
+ * 两种触发符(2026-09-22,设计稿 ★输入区 · @ 菜单):
+ * - `/` 动作菜单——「让 AI 做点什么」(/compact、插件命令),先选命令再补参数;
+ * - `@` 引用菜单——「往正文里插一段内容」(世界书条目、章节原文),在文本**任意
+ *   位置**输入 `@` 唤起,一次并发搜全部来源、按命令分区列出。
+ * 命令用 `sigil` 声明归属,InputBar 据此分流(标 `@` 的命令不再出现在斜杠菜单)。
  *
  * 安全边界:命令是前端声明 + 页面提供的受信任回调,渲染进程不执行任何
  * 用户提供的任意代码(插件 JS 一律留在后端 / vendor ExtensionAPI 侧)。
@@ -109,13 +115,24 @@ export function keepSlashIndex(
 	return Math.min(Math.max(0, prev!.index), count - 1);
 }
 
-/** 一条 `/` 命令。 */
+/** 命令的触发符:`/` 是命令菜单,`@` 是引用菜单(设计稿 ★输入区 · @ 菜单)。 */
+export type CommandSigil = "/" | "@";
+
+/** 一条 `/` 或 `@` 命令。 */
 export interface SlashCommand {
-	/** 不带斜杠的触发名,如 "node"。 */
+	/** 不带前缀的触发名,如 "node"。 */
 	trigger: string;
 	aliases?: readonly string[];
 	/** 命令面板里的说明。 */
 	hint: string;
+	/**
+	 * 触发符(缺省 "/")。标 `@` 的命令**从斜杠菜单移出**,只在 @ 菜单里出现 ——
+	 * 它是「往正文里插一段内容」的引用命令,与 `/compact` 这类动作命令不是一回事
+	 * (2026-09-22,设计稿 ★输入区 · @ 菜单:引用命令与动作命令分家)。
+	 */
+	sigil?: CommandSigil;
+	/** `@` 菜单里的分区标题(缺省回退到 hint)。 */
+	group?: string;
 	/**
 	 * action 命令:选中直接执行,不插入文本(如 /compact)。
 	 * 返回非空字符串 = 结果文本插入输入框(插件命令语义:执行后端 handler 后把结果插回)。
@@ -158,6 +175,40 @@ export function parseSlashQuery(text: string, cursor: number): SlashQuery | null
 		start: slashIndex,
 		end: pos,
 	};
+}
+
+/** 光标处正在输入的 `@` 查询。 */
+export interface AtQuery {
+	/** `@` 之后的查询词(不含 @ 本身)。 */
+	term: string;
+	/** `@` 在文本中的下标(选中候选后替换 [start, end) 区间)。 */
+	start: number;
+	end: number;
+}
+
+/**
+ * 从输入框文本 + 光标位置解析 `@` 查询(设计稿 ★输入区 · @ 菜单)。
+ *
+ * 与 `parseSlashQuery` 的两点关键区别:
+ * - **不要求空白边界**。`/` 是「整条输入以一个命令开头」的形态,而 `@` 是「正文写到
+ *   一半随手引用」——`把@` / `, @` / 换行后的 `@` 都得唤起,这正是需求里「在文本的
+ *   任何位置搜索可用」的意思。
+ * - @ 到光标之间一旦出现空白就认为查询已结束(菜单该关),所以 `@灯塔的` 关掉、
+ *   `@灯塔` 开着。查询词里不含空格,与设计稿的「连续输入过滤候选」一致。
+ *
+ * 唯一的排除项是邮箱:`a@b.com` 里 `@` 前面是 ASCII 字母数字,那是在写地址不是在引用。
+ * 中文/标点/空白/行首都不拦(中文人名紧跟在引用符前是正常写法)。
+ */
+export function parseAtQuery(text: string, cursor: number): AtQuery | null {
+	const pos = Math.max(0, Math.min(cursor, text.length));
+	const prefix = text.slice(0, pos);
+	const at = prefix.lastIndexOf("@");
+	if (at < 0) return null;
+	const between = prefix.slice(at + 1);
+	if (/\s/.test(between)) return null;
+	const before = at > 0 ? prefix[at - 1]! : "";
+	if (/[A-Za-z0-9]/.test(before)) return null;
+	return { term: between, start: at, end: pos };
 }
 
 /** trigger 是否命中命令(前缀匹配;trigger 为空串 = 展示全部)。 */
@@ -216,7 +267,9 @@ export function makeNodeCommand(opts: {
 	return {
 		trigger: "node",
 		aliases: ["world", "entry"],
-		hint: "注入世界树节点原文(标题/触发词搜索)",
+		sigil: "@",
+		group: "世界书",
+		hint: "注入世界书条目原文(标题/触发词搜索)",
 		search: async (term, ctx) => {
 			if (!ctx.slug) return [];
 			const world = await opts.loadWorld();
@@ -236,6 +289,8 @@ export function makeChapterCommand(): SlashCommand {
 	return {
 		trigger: "chapter",
 		aliases: ["draft"],
+		sigil: "@",
+		group: "章节",
 		hint: "注入某一章原文(选中后读取当前草稿全文)",
 		search: async (term, ctx) => {
 			const chapters = ctx.bookDetail?.chapters ?? [];

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { contentTextOf, initialSessionState, messagesToEvents, processAgentEvent, resolveUserMessageEcho } from "../web/src/store.ts";
+import { contentTextOf, initialSessionState, lastUserTurn, messagesToEvents, processAgentEvent, resolveUserMessageEcho } from "../web/src/store.ts";
 import { blocksText, blocksThinking, blocksTools, formatDuration, turnDurationMs } from "../web/src/blocks.ts";
 import type { ChatMessage } from "../web/src/types.ts";
 
@@ -435,5 +435,119 @@ describe("外部命令的流式输出(tool_execution_update)", () => {
 		let s = bootWithBashCard();
 		s = processAgentEvent(s, ev(`{"type":"tool_execution_update","toolCallId":"b1","toolName":"bash","partialResult":"直接给文本"}`));
 		expect(blocksTools(s.messages[0].blocks)[0].stream).toBe("直接给文本");
+	});
+});
+
+describe("chat_error(需求 1:错误原文照实显示)", () => {
+	const RAW = "401 Invalid API key: the API key provided is invalid or has been revoked.";
+
+	it("落成对话流里的一条 role=error 消息(原文逐字保留)", () => {
+		let s = initialSessionState();
+		s = processAgentEvent(s, ev(`{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"续写"}]}}`));
+		s = processAgentEvent(s, { type: "chat_error", message: RAW });
+		expect(s.messages).toHaveLength(2);
+		const m = s.messages[1]!;
+		expect(m.role).toBe("error");
+		expect(m.done).toBe(true);
+		expect(m.blocks).toEqual([]);
+		expect(m.error?.raw).toBe(RAW);
+		expect(m.error?.title).toBe("API key 无效");
+		expect(m.error?.code).toBe(401);
+	});
+
+	it("位置就在失败那一轮之后,不覆盖前面的会话内容", () => {
+		let s = initialSessionState();
+		s = processAgentEvent(s, ev(`{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"续写"}]}}`));
+		const before = s.messages;
+		s = processAgentEvent(s, { type: "chat_error", message: RAW });
+		expect(s.messages.slice(0, 1)).toEqual(before);
+	});
+
+	it("不动流式标记(回合收尾归 agent_settled 管)", () => {
+		let s = initialSessionState();
+		s = processAgentEvent(s, ev(`{"type":"turn_start"}`));
+		expect(s.isStreaming).toBe(true);
+		s = processAgentEvent(s, { type: "chat_error", message: RAW });
+		expect(s.isStreaming).toBe(true);
+	});
+
+	it("连错两次就是两张卡(每次都照实留)", () => {
+		let s = initialSessionState();
+		s = processAgentEvent(s, { type: "chat_error", message: "429 rate limit exceeded" });
+		s = processAgentEvent(s, { type: "chat_error", message: RAW });
+		expect(s.messages.map((m) => m.error?.title)).toEqual(["请求过于频繁", "API key 无效"]);
+	});
+});
+
+describe("provider 侧报错(stopReason=error,不抛异常也不广播 chat_error)", () => {
+	/** 实测 deepseek 401 的形状:errorMessage 挂在 assistant 消息上,provider/model 同带。 */
+	const ERR_START = `{"type":"message_start","message":{"role":"assistant","content":[],"api":"openai-completions","provider":"deepseek","model":"deepseek-v4-pro","stopReason":"error","errorMessage":"401: {\\"message\\":\\"Authentication Fails, Your api key: ****test is invalid\\"}"}}`;
+
+	it("第一个事件(空 content + errorMessage)就落成报错卡,不留空气泡", () => {
+		let s = initialSessionState();
+		s = processAgentEvent(s, ev(`{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"续写"}]}}`));
+		s = processAgentEvent(s, ev(ERR_START));
+		expect(s.messages).toHaveLength(2);
+		const m = s.messages[1]!;
+		expect(m.role).toBe("error");
+		expect(m.blocks).toEqual([]);
+		expect(m.error?.title).toBe("API key 无效");
+		expect(m.error?.code).toBe(401);
+		// 原文框下面那行:provider/model 来自消息本身
+		expect(m.error?.meta).toBe("provider: deepseek · model: deepseek-v4-pro");
+		expect(m.error?.raw).toContain("Authentication Fails");
+	});
+
+	it("随后成对到达的 message_end / agent_settled 不会再补一张卡", () => {
+		let s = initialSessionState();
+		s = processAgentEvent(s, ev(ERR_START));
+		s = processAgentEvent(s, ev(`{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error"}}`));
+		s = processAgentEvent(s, ev(`{"type":"agent_settled"}`));
+		expect(s.messages.filter((m) => m.role === "error")).toHaveLength(1);
+		expect(s.isStreaming).toBe(false);
+	});
+
+	it("水合把 errorMessage 还原成同一张卡(刷新后报错不丢)", () => {
+		const events = messagesToEvents([
+			{ role: "user", text: "续写", id: "u1" },
+			{ role: "assistant", text: "", id: "a1", errorMessage: "401 nope", provider: "deepseek", model: "deepseek-v4-pro" },
+		]);
+		let s = initialSessionState();
+		for (const e of events) s = processAgentEvent(s, e);
+		expect(s.messages.map((m) => m.role)).toEqual(["user", "error"]);
+		expect(s.messages[1]!.error?.meta).toBe("provider: deepseek · model: deepseek-v4-pro");
+		// 报错记录没有正文,不该变成一个空的 assistant 气泡
+		expect(s.messages.filter((m) => m.role === "assistant")).toHaveLength(0);
+	});
+});
+
+describe("lastUserTurn(报错卡「重试」定位要重放的那一轮)", () => {
+	function user(text: string): ChatMessage {
+		return { id: `u-${text}`, role: "user", blocks: [{ kind: "text", text }], done: true };
+	}
+	function assistant(text: string): ChatMessage {
+		return { id: `a-${text}`, role: "assistant", blocks: [{ kind: "text", text }], done: true };
+	}
+	function error(raw: string): ChatMessage {
+		return {
+			id: `e-${raw}`,
+			role: "error",
+			blocks: [],
+			done: true,
+			error: { raw, title: "模型返回错误", code: null, kind: "other", hint: null, meta: null },
+		};
+	}
+
+	it("跳过报错消息(否则永远只看到报错卡,重试按钮是死的)", () => {
+		expect(lastUserTurn([user("续写"), error("502")])?.id).toBe("u-续写");
+		expect(lastUserTurn([user("续写"), error("502"), error("503")])?.id).toBe("u-续写");
+	});
+	it("最后一条真实消息是 assistant 时返回 null(那一轮不是用户问的,撤回语义不成立)", () => {
+		expect(lastUserTurn([user("续写"), assistant("写好了")])).toBeNull();
+		expect(lastUserTurn([user("续写"), assistant("写好了"), error("502")])).toBeNull();
+	});
+	it("空对话返回 null", () => {
+		expect(lastUserTurn([])).toBeNull();
+		expect(lastUserTurn([error("502")])).toBeNull();
 	});
 });

@@ -64,6 +64,18 @@ export interface SessionStateSnapshot {
 		startedAt?: number;
 		endedAt?: number;
 		id?: string;
+		/**
+		 * provider 侧报错的原文(vendor 不抛异常,而是给 assistant 消息落
+		 * `stopReason: "error"` + `errorMessage`,content 为空)。
+		 *
+		 * 这类 entry 以前被「无正文无思考即丢弃」的兜底整条丢掉 —— 于是刷新后
+		 * 报错凭空消失、只剩一个空气泡。原文要留着(需求 1),所以单独带出来。
+		 * provider / model 是出错那一刻的取值(与 vendor 消息字段同源),供前端
+		 * 在原文下方补一行「provider: x · model: y」——供应商排查要看这两个。
+		 */
+		errorMessage?: string;
+		provider?: string;
+		model?: string;
 	}>;
 	diagnostics: Array<{ type: "error" | "warning" | "info"; message: string }>;
 }
@@ -551,6 +563,12 @@ export function extractMessagesFromManager(sm: SessionManager): SessionStateSnap
 		return undefined;
 	};
 
+	/** 取字符串字段(缺省/非字符串 → undefined;防御 vendor 消息的异构形状)。 */
+	const strField = (m: { role?: string; content?: unknown }, key: string): string | undefined => {
+		const v = (m as Record<string, unknown>)[key];
+		return typeof v === "string" && v.length > 0 ? v : undefined;
+	};
+
 	// 只走 leaf 链(getBranch 沿 parentId 回溯):撤回后旧分支不显示,与上下文一致
 	for (const entry of sm.getBranch()) {
 		const msg = (entry as { message?: { role?: string; content?: unknown; toolCallId?: unknown } }).message;
@@ -585,6 +603,29 @@ export function extractMessagesFromManager(sm: SessionManager): SessionStateSnap
 		}
 		if (msg.role !== "assistant") continue;
 
+		// provider 侧报错:vendor 不抛异常,而是给 assistant 消息落
+		// stopReason="error" + errorMessage(content 为空)。必须**在**下面那句
+		// 「无正文无思考即丢弃」之前拦下 —— 否则整条报错被丢掉,界面上只剩一个
+		// 空气泡、刷新后连气泡都没了(需求 1「原文照实显示」的兜底数据源)。
+		const errorMessage = strField(msg, "errorMessage");
+		if (errorMessage !== undefined) {
+			// 独立成条(不参与同组合并:报错就是这一轮的终点),并把组状态清干净
+			out.push({
+				role: "assistant",
+				text: "",
+				content: [],
+				errorMessage,
+				...(strField(msg, "provider") !== undefined ? { provider: strField(msg, "provider")! } : {}),
+				...(strField(msg, "model") !== undefined ? { model: strField(msg, "model")! } : {}),
+				timestamp: typeof entry.timestamp === "string" ? entry.timestamp : undefined,
+				id: entry.id,
+			});
+			groupParts = [];
+			partById.clear();
+			groupStart = undefined;
+			continue;
+		}
+
 		const parts = chatContentOfMessage(msg as { role?: string; content?: unknown });
 		// 思考链一并提取(历史水合:刷新/重开页面后思考块仍在)
 		const thinking = chatThinkingOfMessage(msg as { role?: string; content?: unknown });
@@ -593,7 +634,9 @@ export function extractMessagesFromManager(sm: SessionManager): SessionStateSnap
 		const at = timeOf(entry as { timestamp?: unknown });
 		const timestamp = typeof entry.timestamp === "string" ? entry.timestamp : undefined;
 		const last = out[out.length - 1];
-		if (last && last.role === "assistant") {
+		// 报错记录不参与同组合并:它是这一轮的终点,合并会把 errorMessage 抹掉
+		// (合并分支只重建 text/thinking/content 三个字段)
+		if (last && last.role === "assistant" && !last.errorMessage) {
 			// 并入当前组:同轮回复的多段 assistant 输出(工具调用轮次)合并为一条气泡。
 			// **块按序追加**——顺序就是真实顺序,不再把多段 thinking 拼成一个字符串
 			groupParts.push(...parts);

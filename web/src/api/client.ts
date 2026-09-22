@@ -5,7 +5,7 @@
  * 注意:本文件不得在 import 时触碰 DOM 专属 API(EventSource 只在 subscribeEvents 内使用),
  * 以兼容 node 环境的 vitest 单测。
  */
-import type { AgentEventDto, BookDetail, BookFileTextDto, BookFilesDto, BookMeta, ChapterRef, ContextUsageDto, McpServerInfo, McpServerStatus, PluginInfoDto, PluginSettingsItemDto, ProviderDetailDto, ProviderInfo, ResolvedShellDto, SessionState, SessionTreeDto, SetupStateDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, WorldDataDto, ShellKindDto, WriterSettingsDto, WriterStateDto } from "../types.ts";
+import type { AgentEventDto, BookDetail, BookFileTextDto, BookFilesDto, BookMeta, ChapterRef, ContextUsageDto, ImageProviderDto, ImageSizeDto, McpServerInfo, McpServerStatus, PluginInfoDto, PluginSettingsItemDto, ProviderDetailDto, ProviderInfo, ResolvedShellDto, SessionState, SessionTreeDto, SetupStateDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, WorldDataDto, ShellKindDto, WriterSettingsDto, WriterStateDto } from "../types.ts";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
 
 /** 图片访问 URL(同源相对路径;生产/Electron 同源,vite dev 经代理)。 */
@@ -289,14 +289,24 @@ export class ApiClient {
 	}
 
 	/**
-	 * 更新服务端设置(只传要改的字段)。经典模式/外部命令/shell 方言切换都会重建
-	 * 服务端会话,下次对话按新装配重建;返回落盘后的完整设置与解析结果。
+	 * 更新服务端设置(只传要改的字段)。经典模式/外部命令/shell 方言/图片生成开关
+	 * 切换都会释放服务端会话,下次对话按新装配重建;返回落盘后的完整设置与解析结果。
 	 */
 	async putSettings(patch: {
 		classicMode?: boolean;
 		enableShell?: boolean;
 		shellKind?: ShellKindDto;
 		shellPath?: string;
+		// 图片生成(实验,0.1.0)
+		enableImageGen?: boolean;
+		imageProvider?: ImageProviderDto;
+		imageModel?: string;
+		imageSize?: ImageSizeDto;
+		imageBaseUrl?: string;
+		imageApiKey?: string;
+		imageInReply?: boolean;
+		imageWorldbook?: boolean;
+		imageConfirmBeforeGen?: boolean;
 	}): Promise<{ settings: WriterSettingsDto; shell: ResolvedShellDto }> {
 		return this.request<{ settings: WriterSettingsDto; shell: ResolvedShellDto }>("/api/settings", {
 			method: "PUT",

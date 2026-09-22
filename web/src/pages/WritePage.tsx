@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import type { ApiClient } from "../api/client.ts";
+import { bookFileUrl, imageUrl, type ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
-import { initialSessionState, messagesToEvents, RESET, sessionReducer } from "../store.ts";
+import { initialSessionState, lastUserTurn, messagesToEvents, RESET, sessionReducer } from "../store.ts";
+import { blocksText } from "../blocks.ts";
 import type {
 	AgentEventDto,
 	BookDetail,
@@ -20,6 +21,7 @@ import {
 	makeCompactCommand,
 	makeNodeCommand,
 	makePluginCommand,
+	worldEntryInsertText,
 	type SlashCommand,
 	type SlashContext,
 } from "../slash-commands.ts";
@@ -28,6 +30,7 @@ import { ChapterSidebar } from "../components/ChapterSidebar.tsx";
 import { IconEdit } from "../components/Icons.tsx";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
 import { DraftWorkspace } from "../components/DraftWorkspace.tsx";
+import { ExportPanel, type ExportChapterRef } from "../components/ExportPanel.tsx";
 import { FilePreview } from "../components/FilePreview.tsx";
 import { FullScreenEditor } from "../components/FullScreenEditor.tsx";
 import { InputBar, type InputBarHandle } from "../components/InputBar.tsx";
@@ -114,6 +117,7 @@ export function WritePage({
 	enterBehavior,
 	autoConfirmEdits,
 	classicMode,
+	onOpenSettings,
 }: {
 	client: ApiClient;
 	onHeader?: (h: HeaderInfo) => void;
@@ -127,6 +131,8 @@ export function WritePage({
 	autoConfirmEdits: boolean;
 	/** 经典模式(单 agent):AI 是带全量工具的写作 agent,标签与文案不再称「编剧」。 */
 	classicMode: boolean;
+	/** 打开设置页(报错卡的「去设置模型 ›」;App 提供,缺省不画该入口)。 */
+	onOpenSettings?: () => void;
 }) {
 	// 书库状态来自 App 级 useLibrary;以 React setState 同形别名接入,
 	// 既有调用点(setBooks/setBookDetail/...)零改动,状态实际存于共享 hook
@@ -241,6 +247,13 @@ export function WritePage({
 	const [writerUsage, setWriterUsage] = useState<ContextUsageDto | null>(null);
 	const writerCompactingRef = useRef(false);
 	writerCompactingRef.current = writerSession.compacting;
+	/** 编剧会话快照 ref:报错卡的「重试」要从 memo 化的卡片里出发(见 MessageList 的
+	 *  retryRef 说明),只能读 ref 拿「最新一轮用户消息 / 是否仍在流式」——直接闭包
+	 *  writerSession 会在卡片不重渲染时读到旧值。 */
+	const writerSessionRef = useRef(writerSession);
+	writerSessionRef.current = writerSession;
+	/** 最近一次发给编剧的文本(报错卡「重试」在服务端未落用户消息时的留底)。 */
+	const lastSentTextRef = useRef("");
 	/** `/node` 世界书缓存(按 slug;收到 world_changed 失效)。 */
 	const worldCacheRef = useRef<{ slug: string; world: WorldDataDto } | null>(null);
 	const worldLoadingRef = useRef<Promise<WorldDataDto | null> | null>(null);
@@ -281,6 +294,8 @@ export function WritePage({
 		confirmScopeRef.current = null;
 		writerCapture.clear();
 		writerAlignedRef.current = null;
+		// 换书/换章:报错卡的留底一并作废(那是上一章要重发的话,不该落到新章)
+		lastSentTextRef.current = "";
 		// 换书/换章后旧文件预览已不属当前上下文:关掉(避免看的是别书的 notes)
 		setFilePreview(null);
 	}
@@ -502,9 +517,10 @@ export function WritePage({
 						handleWriterToolStart(ev);
 					} else if (ev.type === "tool_execution_end") {
 						void handleWriterToolEnd(ev);
-					} else if (ev.type === "chat_error") {
-						setError(`编剧出错: ${friendlyError(ev.message)}`);
 					}
+					// chat_error 不再在这里吞成一条横幅 + friendlyError 的一句话:
+					// reducer 会把它落成对话流里的报错卡(原文照实,见 chat-error.ts),
+					// 位置就在失败那一轮的用户消息之后(需求 1)
 					writerDispatch(ev);
 					// 回合结束 / 压缩结束后刷新上下文占用,「建议 /compact」提示才有依据
 					if (ev.type === "agent_settled" || ev.type === "compaction_end") refreshWriterUsage();
@@ -774,6 +790,29 @@ export function WritePage({
 		}
 	}
 
+	/**
+	 * 导出面板的取数(2026-09-22,设计稿 ★导出 · 选项卡)。
+	 *
+	 * 章节正文走 client.getDraft —— 与 `@` 菜单的章节引用**同一条路径**,导出看到的
+	 * 正文和引用进来的是同一份;世界书附录复用 loadWorldForSlash 的按书缓存。
+	 * 路径换算留在这里,ExportPanel 只认「章节对象 → 文本」这一件事。
+	 */
+	async function loadExportChapterText(ch: ExportChapterRef): Promise<string> {
+		const file = `draft/${ch.file.replace(/\.jsonl$/, ".md")}`;
+		const { text } = await client.getDraft(file, bookDetailRef.current?.slug ?? undefined);
+		return text;
+	}
+
+	/** 世界书附录:条目原文逐条拼(与 @ 菜单引用条目时的注入块同款)。 */
+	async function loadExportAppendix(): Promise<{ text: string; count: number } | null> {
+		const world = await loadWorldForSlash();
+		if (!world || world.entries.length === 0) return null;
+		return {
+			text: world.entries.map((e) => worldEntryInsertText(e)).join("\n\n"),
+			count: world.entries.length,
+		};
+	}
+
 	/** 删除书:成功后若删的是当前书,自动打开另一本(或回空书引导)。 */
 	async function deleteBook(slug: string) {
 		setBusySlug(slug);
@@ -1005,6 +1044,10 @@ export function WritePage({
 	function sendWriter(text: string) {
 		const slug = bookDetailRef.current?.slug;
 		if (!slug || writerSession.isStreaming || writerSession.compacting) return;
+		// 本地留底:服务端在**前置检查**阶段就失败时(未配置模型/密钥,见 vendor 的
+		// prompt:那条路径在写用户消息之前就抛了)对话里一条用户消息都不会有,
+		// 报错卡的「重试」只能靠这份留底把话再说一遍(见 retryWriterTurn)。
+		lastSentTextRef.current = text;
 		void client
 			.writerChat(slug, text, currentChapterRef.current?.file ?? undefined)
 			.catch((err) => setError(`发送失败: ${friendlyError(err)}`));
@@ -1021,6 +1064,31 @@ export function WritePage({
 		} catch (err) {
 			setError(`编辑重发失败: ${friendlyError(err)}`);
 		}
+	}
+
+	/**
+	 * 报错卡的「重试」:把失败那一轮原样重放一次。
+	 *
+	 * 一条路径两种走法,因为**报错的时机不同**:
+	 * - 用户消息已落盘(provider 401/限流/超时,回合在写用户消息之后才炸)→ 走
+	 *   「撤回 + 重发」,即 `writerRetract(entryId, 同文本)`:不在会话里留孤儿用户
+	 *   消息,重试多次也只占一个分支。
+	 * - 对话里根本没有用户消息(未配置模型/密钥,服务端前置检查就抛了,用户消息
+	 *   从未落盘)→ 撤回无从谈起,直接拿**本地留底**把这句话重发一次。
+	 *   没有这份留底,这颗按钮在「没配密钥」这个最常见的场景下是死的。
+	 *
+	 * 只读 ref:本函数从 memo 化的报错卡触发(见 MessageList 的 retryRef),闭包里的
+	 * state 可能是旧的 —— `writerSessionRef` 每次渲染同步最新会话状态。
+	 */
+	function retryWriterTurn() {
+		const slug = bookDetailRef.current?.slug;
+		const cur = writerSessionRef.current;
+		if (!slug || cur.isStreaming || cur.compacting) return;
+		const last = lastUserTurn(cur.messages);
+		const text = last ? blocksText(last.blocks) : lastSentTextRef.current;
+		if (text.length === 0) return;
+		if (last?.entryId !== undefined) void editWriterMessage({ id: last.id, entryId: last.entryId }, text);
+		else sendWriter(text);
 	}
 
 	/** AI 伙伴栏左缘拖拽调宽:鼠标左移变宽(伙伴栏在右侧,手柄贴左缘),受限于 [300, 520](useDragResize)。 */
@@ -1071,6 +1139,31 @@ export function WritePage({
 
 	const draftFile = currentChapter ? `draft/${currentChapter.file.replace(/\.jsonl$/, ".md")}` : "draft/ch01.md";
 	const saveLabel = SAVE_LABELS[draftStatus];
+	/**
+	 * 正文图片解析(需求 11「AI 的回复内容可以嵌入图片」)。
+	 *
+	 * markdown 渲染层不知道当前书 slug,所以由页面注入:`images/xxx` 走专用图片端点
+	 * (与世界书条目图**同源**),其他相对路径(assets/…、draft/…)走工作区文件端点。
+	 * `http(s)://` 与 `data:image/…` 已在 markdown 白名单里直接放行,不会到这儿。
+	 * 引用必须稳定 —— Message 的 memo 比较器按引用比它,每次新建会让整列表失去 memo。
+	 */
+	const resolveImage = useCallback(
+		(src: string) => {
+			const slug = bookDetail?.slug;
+			if (!slug) return src;
+			if (src.startsWith("images/")) return imageUrl(slug, src.slice("images/".length));
+			return bookFileUrl(slug, src);
+		},
+		[bookDetail?.slug],
+	);
+
+	/** 导出面板的章节清单(bookDetail.chapters 与 ExportChapterRef 同形,显式映射避免耦合)。 */
+	const exportChapters: ExportChapterRef[] = (bookDetail?.chapters ?? []).map((c) => ({
+		id: c.id,
+		file: c.file,
+		title: c.title,
+		label: c.label,
+	}));
 	/** 上下文占用达到阈值时,输入框上方的「建议 /compact」提示。 */
 	const writerUsageHint = contextUsageHint(writerUsage);
 	/** 最近一轮提示词缓存命中徽标(观察缓存优化效果;provider 未上报时不显示)。 */
@@ -1175,6 +1268,16 @@ export function WritePage({
 							<div className="paper-status">
 								<span className="paper-file">{draftFile}</span>
 								<span className="paper-words">{words.toLocaleString("zh-CN")} 字</span>
+								{/* 导出(设计稿 ★导出 · 选项卡):按钮点开是一排格式页签,浮在纸张头下方 */}
+								<ExportPanel
+									bookTitle={bookDetail?.title ?? ""}
+									chapters={exportChapters}
+									currentChapterFile={currentChapter?.file ?? null}
+									currentChapterTitle={currentChapter?.title ?? ""}
+									loadChapterText={loadExportChapterText}
+									loadWorldAppendix={loadExportAppendix}
+									onError={setError}
+								/>
 								{currentChapter && (
 									<button className="paper-fs" onClick={openEditor} title="全屏编辑(Alt+E)" aria-label="全屏编辑">
 										<Lu icon="maximize-2" size={14} />
@@ -1322,6 +1425,9 @@ export function WritePage({
 								onConfirmCard={confirmCard}
 								onRevertCard={(id) => void revertCard(id)}
 								onEdit={(m, newText) => void editWriterMessage(m, newText)}
+								onRetry={() => retryWriterTurn()}
+								onOpenSettings={onOpenSettings}
+								resolveImage={resolveImage}
 								emptyText={
 									classicMode
 										? "向 AI 说一句话——它带着全套工具,可以直接改稿、查字数、维护世界书;修改会生成待确认卡,可随时回退;选中正文会自动填入选区"
@@ -1353,6 +1459,7 @@ export function WritePage({
 								context={writerSlashContext}
 								onCommandError={(msg) => setError(`命令失败: ${msg}`)}
 								enterBehavior={enterBehavior}
+								usage={writerUsage}
 							/>
 						</div>
 						)}

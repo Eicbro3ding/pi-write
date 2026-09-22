@@ -29,7 +29,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { getBookSessionsDir, initChapterFile } from "../book-manager.ts";
-import { getAgentDir, getBookDir, resolveSkillsDir } from "../config.ts";
+import { getAgentDir, getBookDir, resolveSkillReadOnlyDirs } from "../config.ts";
 import { createSessionRuntimeFactory } from "../session-factory.ts";
 import { chatTextOfMessage } from "../session-text.ts";
 import {
@@ -101,6 +101,11 @@ export interface WriterHostOptions {
 	shellDialect?: ShellDialect;
 	/** 显式 shell 可执行文件路径(string = 写进 vendor settings;null = 清空走 bash 探测链)。 */
 	shellPath?: string | null;
+	/**
+	 * 图片生成(实验,0.1.0):为 true 时给会话注册 `image_generate` 工具。
+	 * 与设置项 enableImageGen 同源;切换时释放全部会话,否则关掉开关工具还在。
+	 */
+	enableImageGen?: boolean;
 	/** 测试注入:自定义宿主工厂(缺省创建真实会话)。 */
 	createHost?: (slug: string) => Promise<SessionHost>;
 }
@@ -148,6 +153,8 @@ export class WriterHost {
 	private shellDialect: ShellDialect;
 	/** 显式 shell 路径(string = 写进 vendor settings;null = 清空)。 */
 	private shellPath: string | null;
+	/** 图片生成(实验,0.1.0)是否启用:决定 `image_generate` 工具存不存在。 */
+	private imageGen: boolean;
 
 	constructor(options: WriterHostOptions) {
 		this.options = options;
@@ -157,6 +164,7 @@ export class WriterHost {
 		this.shellEnabled = options.enableShell ?? false;
 		this.shellDialect = options.shellDialect ?? "none";
 		this.shellPath = options.shellPath ?? null;
+		this.imageGen = options.enableImageGen ?? false;
 	}
 
 	/**
@@ -166,6 +174,17 @@ export class WriterHost {
 	async setClassicMode(enabled: boolean): Promise<void> {
 		if (this.classicMode === enabled) return;
 		this.classicMode = enabled;
+		await this.disposeAll();
+	}
+
+	/**
+	 * 开关图片生成(实验,0.1.0)。变化时释放全部会话 —— 这个开关决定 `image_generate`
+	 * 工具**存不存在**,而工具集在会话创建时装配。不释放的话,设计稿那句「关闭时图片
+	 * 相关工具对 AI 不可见」就不成立(旧会话还揣着那个工具)。
+	 */
+	async setImageGen(enabled: boolean): Promise<void> {
+		if (this.imageGen === enabled) return;
+		this.imageGen = enabled;
 		await this.disposeAll();
 	}
 
@@ -241,7 +260,7 @@ export class WriterHost {
 			cwd: bookDir,
 			agentDir,
 			sessionManager,
-			toolGuard: { readOnlyDirs: [resolveSkillsDir()], draftFile },
+			toolGuard: { readOnlyDirs: resolveSkillReadOnlyDirs(), draftFile },
 		});
 		await host.start();
 		return host;
@@ -273,7 +292,7 @@ export class WriterHost {
 		return createSessionRuntimeFactory({
 			agentDir,
 			// skills 目录只读放行(与 web.ts 同款):模型经 read 工具加载 skill 文件时不被守卫误拦
-			readOnlyDirs: [resolveSkillsDir()],
+			readOnlyDirs: resolveSkillReadOnlyDirs(),
 			draftFile,
 			systemPromptOverride: this.classicMode
 				? () =>

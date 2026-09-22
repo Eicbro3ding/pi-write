@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { ApiError, type ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
-import type { PluginInfoDto, ResolvedShellDto, ShellDialectDto, ShellKindDto, UserThemeInfo, WorldDataDto } from "../types.ts";
+import { IMAGE_SIZE_PX_TEXT, type ImageProviderDto, type ImageSizeDto, type PluginInfoDto, type ResolvedShellDto, type ShellDialectDto, type ShellKindDto, type UserThemeInfo, type WorldDataDto, type WriterSettingsDto } from "../types.ts";
 import type { EnterBehavior } from "../settings.ts";
 import { themeStarterCss, USER_THEME_PREFIX, userThemeFile, type ThemeId } from "../themes.ts";
 import { applyTheme, currentTheme } from "../theme.ts";
@@ -30,16 +30,20 @@ const LuLayout = ({ size = 15 }: { size?: number }) => <Lu icon="layout-dashboar
 const LuBookOpen = ({ size = 15 }: { size?: number }) => <Lu icon="book-open" size={size} />;
 const LuPuzzle = ({ size = 15 }: { size?: number }) => <Lu icon="puzzle" size={size} />;
 const LuWrench = ({ size = 15 }: { size?: number }) => <Lu icon="wrench" size={size} />;
+const LuWand = ({ size = 15 }: { size?: number }) => <Lu icon="wand-sparkles" size={size} />;
 
 /**
- * 设置分类(左侧导航):模型 / 界面 / 世界书 / 集成 / 高级。
- * 设计稿 v1 把「危险设置」(外部命令 / Shell)从「界面」移出,单独成组。
+ * 设置分类(左侧导航):模型 / 界面 / 世界书 / 集成 / 实验 / 高级。
+ * 设计稿 v1 把「危险设置」(外部命令 / Shell)从「界面」移出,单独成组;
+ * 0.1.0 又在「集成」之后加了「实验」——图片生成这类尚未稳定的能力(2026-09-22,
+ * 设计稿 ★设置 v2 · 实验:分类紧跟在「集成」下面)。
  */
 const SETTING_CATS = [
 	{ id: "model", label: "模型", icon: LuSliders },
 	{ id: "ui", label: "界面", icon: LuLayout },
 	{ id: "world", label: "世界书", icon: LuBookOpen },
 	{ id: "integrations", label: "集成", icon: LuPuzzle },
+	{ id: "experimental", label: "实验", icon: LuWand },
 	{ id: "advanced", label: "高级", icon: LuWrench },
 ] as const;
 type SettingCat = (typeof SETTING_CATS)[number]["id"];
@@ -52,8 +56,37 @@ const CAT_HEAD: Record<string, { title: string; desc: string }> = {
 	ui: { title: "界面", desc: "主题与日常偏好。会改变 AI 在你机器上行为的选项,已移到「高级」。" },
 	world: { title: "世界书", desc: "决定 AI 每次对话时自动带上哪些世界书内容。" },
 	integrations: { title: "集成", desc: "为 AI 接入外部工具与扩展写作能力。" },
+	experimental: {
+		title: "实验",
+		desc: "尚未稳定的能力。开启前请理解它会改变 AI 的行为，并可能产生第三方费用。",
+	},
 	advanced: { title: "高级", desc: "会改变 AI 在你机器上行为的选项。这类设置的影响范围超出 pi-writer 自己,请在开启前读完说明。" },
 };
+
+/**
+ * 图片生成(实验)设置子集(设计稿 ★设置 v2 · 实验)。用 Pick 从完整设置里取,
+ * 避免两处各写一份字段清单 —— 服务端加字段时这边会跟着报类型错。
+ */
+export type ImageSettingsSlice = Pick<
+	WriterSettingsDto,
+	| "enableImageGen"
+	| "imageProvider"
+	| "imageModel"
+	| "imageSize"
+	| "imageBaseUrl"
+	| "imageApiKey"
+	| "imageInReply"
+	| "imageWorldbook"
+	| "imageConfirmBeforeGen"
+>;
+
+/** 出图尺寸档位选项(像素文案来自 IMAGE_SIZE_PX_TEXT,与服务端 IMAGE_SIZE_PX 对齐)。 */
+const IMAGE_SIZE_OPTIONS: ReadonlyArray<ImageSizeDto> = ["1:1", "3:2", "16:9"];
+
+/** 图片接口形态选项(目前只有一种)。 */
+const IMAGE_PROVIDER_OPTIONS: ReadonlyArray<{ value: ImageProviderDto; label: string }> = [
+	{ value: "openai-images", label: "OpenAI Images · 兼容" },
+];
 
 /**
  * shell 解析结果的可读名(与服务端 src/shell-kind.ts 的 SHELL_DIALECT_LABELS 对齐;
@@ -137,6 +170,9 @@ export function SettingsPage({
 	resolvedShell,
 	onShellSettingsChange,
 	onRerunSetup,
+	image,
+	onImageChange,
+	focusModelToken,
 }: {
 	client: ApiClient;
 	/** 当前打开的书 slug(世界书注入分组随打开书重拉;null = 未打开书)。 */
@@ -178,9 +214,27 @@ export function SettingsPage({
 	) => Promise<void>;
 	/** 重新运行首次启动配置向导(App 弹覆盖层;缺省不显示入口)。 */
 	onRerunSetup?: () => void;
+	/** 图片生成(实验)的设置子集(存服务端 settings.json)。 */
+	image: ImageSettingsSlice;
+	/** 更新图片生成设置(写服务端并释放会话;失败抛出由本页展示)。 */
+	onImageChange: (patch: Partial<ImageSettingsSlice>) => Promise<void>;
+	/**
+	 * 「切到模型分类」的信号(自增计数,值变化即生效)。
+	 *
+	 * 存在的理由:设置页在 App 里**常驻挂载**(切页只改 hidden,见 App 的说明),
+	 * 所以「去设置模型 ›」这类跨页入口没法靠卸载重挂载回到默认分类 —— 用户上次
+	 * 停在「界面」,点报错卡的链接进来会落在「界面」,那句话就成了谎。
+	 * 用自增计数而不是 `cat` 字符串:同一个目标连点两次也必须生效(dep 变化)。
+	 */
+	focusModelToken?: number;
 }) {
 	/** 当前分类(左侧导航激活项;默认「模型」;插件分类为 "plugin:<id>")。 */
 	const [cat, setCat] = useState<SettingCat | string>("model");
+	/** 「切到模型分类」信号(见 props.focusModelToken):值一变就切过去。 */
+	useEffect(() => {
+		if (focusModelToken === undefined) return;
+		setCat("model");
+	}, [focusModelToken]);
 	/** 插件设置分类(声明了 frontend.ui.settingsItems 的插件;左侧导航追加)。 */
 	const [pluginCats, setPluginCats] = useState<PluginInfoDto[] | null>(null);
 	useEffect(() => {
@@ -371,6 +425,32 @@ export function SettingsPage({
 
 	/** shell 方言切换中(避免连点;下拉先乐观置位,失败回滚)。 */
 	const [shellBusy, setShellBusy] = useState(false);
+
+	// —— 图片生成(实验,0.1.0 / 设计稿 ★设置 v2 · 实验)——
+	/** 图片设置提交中(避免连点)。 */
+	const [imageBusy, setImageBusy] = useState(false);
+	/**
+	 * 三个文本字段的草稿。**不能逐键提交**:每次提交都会写 settings.json 并释放已建
+	 * 会话(工具集要重装配),逐键提交等于把会话拆了重建几十次。失焦 / 点按钮才提交。
+	 */
+	const [imageDraft, setImageDraft] = useState({ model: image.imageModel, baseUrl: image.imageBaseUrl, key: image.imageApiKey });
+	useEffect(() => {
+		setImageDraft({ model: image.imageModel, baseUrl: image.imageBaseUrl, key: image.imageApiKey });
+	}, [image.imageModel, image.imageBaseUrl, image.imageApiKey]);
+
+	/** 提交图片生成设置(失败走操作错误条;成功由 App 侧更新 settings)。 */
+	async function applyImage(patch: Partial<ImageSettingsSlice>) {
+		setActErr(null);
+		setImageBusy(true);
+		try {
+			await onImageChange(patch);
+		} catch (e) {
+			setActErr(`图片生成设置未保存: ${friendlyError(e)}`);
+		} finally {
+			setImageBusy(false);
+		}
+	}
+
 	/** 路径输入草稿:打字不逐键写服务端,点「保存路径」才提交。 */
 	const [shellPathDraft, setShellPathDraft] = useState(shellPath);
 	useEffect(() => {
@@ -1196,6 +1276,194 @@ export function SettingsPage({
 								</section>
 							</div>
 							<aside className="st-col-side" />
+						</div>
+					)}
+
+					{/* 实验(0.1.0):图片生成模型。设计稿 ★设置 v2 · 实验 ——
+					    「测试连接 / 测试生成一张」两种按钮需要服务端的图片探测端点，
+					    这一版没有，所以**不做**（宁缺勿假）。 */}
+					{cat === "experimental" && (
+						<div className="st-cols">
+							<div className="st-col-main">
+								<section className="s-card">
+									<div className="st-card-head">
+										<span className="s-card-head">图片生成模型</span>
+										<span className="st-chip">实验</span>
+									</div>
+									<div className="s-card-desc">
+										允许 AI 在写作过程中调用图片模型：回复里直接嵌图，更新世界书条目时上传配图。
+									</div>
+									<div className="s-pref-list">
+										<div className="s-pref-item">
+											<div className="s-pref-text">
+												<div className="s-pref-title">启用图片生成</div>
+												<div className="s-pref-desc">关闭时图片相关工具对 AI 不可见，也不会出现在对话里。</div>
+											</div>
+											<ToggleSwitch
+												checked={image.enableImageGen}
+												disabled={imageBusy}
+												onChange={(v) => void applyImage({ enableImageGen: v })}
+												ariaLabel="启用图片生成"
+											/>
+										</div>
+									</div>
+
+									<div className="s-card-desc st-desc-tight">接入配置 · 兼容 OpenAI 图片接口</div>
+									<div className="s-field-grid">
+										<div className="s-field">
+											<label className="s-field-label">Provider</label>
+											<Select
+												className="sel-block"
+												value={image.imageProvider}
+												options={IMAGE_PROVIDER_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+												disabled={imageBusy}
+												ariaLabel="图片接口"
+												onChange={(v) => void applyImage({ imageProvider: v as ImageProviderDto })}
+											/>
+										</div>
+										<div className="s-field">
+											<label className="s-field-label">模型</label>
+											<input
+												className="s-input st-input-full"
+												value={imageDraft.model}
+												placeholder="gpt-image-1"
+												disabled={imageBusy}
+												onChange={(e) => setImageDraft((d) => ({ ...d, model: e.target.value }))}
+												onBlur={() => {
+													if (imageDraft.model !== image.imageModel) void applyImage({ imageModel: imageDraft.model });
+												}}
+											/>
+										</div>
+										<div className="s-field">
+											<label className="s-field-label">默认尺寸</label>
+											<div className="st-seg">
+												{IMAGE_SIZE_OPTIONS.map((s) => (
+													<button
+														key={s}
+														type="button"
+														className={image.imageSize === s ? "st-seg-item on" : "st-seg-item"}
+														disabled={imageBusy}
+														onClick={() => void applyImage({ imageSize: s })}
+													>
+														{s}
+													</button>
+												))}
+												<span className="st-mono muted">{IMAGE_SIZE_PX_TEXT[image.imageSize]}</span>
+											</div>
+										</div>
+										<div className="s-field">
+											<label className="s-field-label">Base URL</label>
+											<input
+												className="s-input st-input-full"
+												value={imageDraft.baseUrl}
+												placeholder="留空用官方地址"
+												disabled={imageBusy}
+												onChange={(e) => setImageDraft((d) => ({ ...d, baseUrl: e.target.value }))}
+												onBlur={() => {
+													if (imageDraft.baseUrl !== image.imageBaseUrl) void applyImage({ imageBaseUrl: imageDraft.baseUrl });
+												}}
+											/>
+										</div>
+										<div className="s-field">
+											<label className="s-field-label">API Key</label>
+											<input
+												className="s-input st-input-full"
+												type="password"
+												value={imageDraft.key}
+												placeholder="sk-…"
+												disabled={imageBusy}
+												onChange={(e) => setImageDraft((d) => ({ ...d, key: e.target.value }))}
+												onBlur={() => {
+													if (imageDraft.key !== image.imageApiKey) void applyImage({ imageApiKey: imageDraft.key });
+												}}
+											/>
+										</div>
+									</div>
+									<div className="s-card-desc st-desc-tight">
+										密钥只保存在本机（~/.pi/writer/settings.json）；生成请求由桌面端直接发出，不经过 pi-writer 服务器。
+									</div>
+									<div className="st-warn">
+										图片生成会把提示词与参考图发送给第三方服务，可能产生费用。每次调用都会在对话里以工具卡形式显示，包括成功与失败。
+									</div>
+								</section>
+							</div>
+
+							<aside className="st-col-side">
+								<section className="s-card">
+									<div className="s-card-head">实验性功能说明</div>
+									<div className="s-card-desc">
+										实验开关默认关闭。它们会改变 AI 的行为或界面，也可能在后续版本里被替换；关闭后相关工具立即对 AI 不可见。
+									</div>
+									<div className="s-pref-list">
+										<div className="s-pref-item">
+											<div className="s-pref-text">
+												<div className="s-pref-title">图片生成模型</div>
+												<div className="s-pref-desc">回复嵌图 · 世界书配图</div>
+											</div>
+											<span className={image.enableImageGen ? "s-val" : "s-val muted"}>
+												{image.enableImageGen ? "已开启" : "未开启"}
+											</span>
+										</div>
+										<div className="s-pref-item">
+											<div className="s-pref-text">
+												<div className="s-pref-title">语音朗读</div>
+												<div className="s-pref-desc">把当前章节读出来</div>
+											</div>
+											<span className="s-val muted">未开放</span>
+										</div>
+										<div className="s-pref-item">
+											<div className="s-pref-text">
+												<div className="s-pref-title">自动插图</div>
+												<div className="s-pref-desc">按场景批量生成插图</div>
+											</div>
+											<span className="s-val muted">未开放</span>
+										</div>
+									</div>
+								</section>
+
+								<section className="s-card">
+									<div className="s-card-head">允许 AI 调用的时机</div>
+									<div className="s-card-desc">控制图片工具在哪些环节出现。</div>
+									<div className="s-pref-list">
+										<div className="s-pref-item">
+											<div className="s-pref-text">
+												<div className="s-pref-title">在回复里嵌入生成的图片</div>
+												<div className="s-pref-desc">AI 判断需要配图时直接生成，插入到回复正文中。</div>
+											</div>
+											<ToggleSwitch
+												checked={image.imageInReply}
+												disabled={imageBusy}
+												onChange={(v) => void applyImage({ imageInReply: v })}
+												ariaLabel="在回复里嵌入生成的图片"
+											/>
+										</div>
+										<div className="s-pref-item">
+											<div className="s-pref-text">
+												<div className="s-pref-title">更新世界书条目时上传配图</div>
+												<div className="s-pref-desc">AI 新建或改写条目时，可以把图片写进条目的配图区。</div>
+											</div>
+											<ToggleSwitch
+												checked={image.imageWorldbook}
+												disabled={imageBusy}
+												onChange={(v) => void applyImage({ imageWorldbook: v })}
+												ariaLabel="更新世界书条目时上传配图"
+											/>
+										</div>
+										<div className="s-pref-item">
+											<div className="s-pref-text">
+												<div className="s-pref-title">每次生成前先确认</div>
+												<div className="s-pref-desc">生成前弹一次确认，避免意外消耗额度。</div>
+											</div>
+											<ToggleSwitch
+												checked={image.imageConfirmBeforeGen}
+												disabled={imageBusy}
+												onChange={(v) => void applyImage({ imageConfirmBeforeGen: v })}
+												ariaLabel="每次生成前先确认"
+											/>
+										</div>
+									</div>
+								</section>
+							</aside>
 						</div>
 					)}
 

@@ -459,10 +459,86 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .thinking-face { display: inline-block; animation: think-float 1.6s var(--ease-inout) infinite; }
 .thinking-label { color: var(--muted); }
 .thinking-dots { min-width: 1.4em; text-align: left; color: var(--faint); }
-/* 压缩上下文提示:琥珀色强调(与工具/思考提示区分,提示这是耗时整理阶段) */
-.thinking.compacting .thinking-label { color: var(--amber); }
-.thinking.compacting .thinking-face { animation: think-float 2.4s var(--ease-inout) infinite; }
+/* —— 上下文压缩提示(设计稿 ★对话 · 上下文压缩动画)——
+   只做「进行中」一态:标题 + 不确定进度的流光条 + 一句说明。
+   设计稿的「第 2 / 3 步」「约 8 秒」「12 条消息」都需要 compaction 事件带进度,
+   而现有事件只有 reason(manual / threshold / overflow),所以**一个数字都不写**;
+   流光表达"还在动",不假装知道百分比。 */
+.compact-card {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 13px 14px; margin-top: 4px;
+  background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-md);
+}
+.compact-head { display: flex; align-items: center; gap: 9px; }
+.compact-spin { display: inline-flex; color: var(--amber); animation: act-rotate 900ms linear infinite; }
+.compact-title { font-size: 13px; font-weight: 600; color: var(--ink); }
+.compact-bar {
+  position: relative; height: 5px; border-radius: 3px;
+  background: var(--line); overflow: hidden;
+}
+.compact-bar::after {
+  content: ""; position: absolute; top: 0; bottom: 0; width: 38%;
+  background: linear-gradient(90deg, transparent, var(--amber), transparent);
+  animation: compact-flow 1.4s var(--ease-inout) infinite;
+}
+@keyframes compact-flow {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(280%); }
+}
+.compact-note { font-size: 11px; color: var(--faint); }
 @keyframes think-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+
+/* ── 模型报错卡(需求 1「错误原文照实显示,不吞成一句『出错了』」;
+      设计稿 ★组件规范·回复渲染 v2 右列) ──
+   卡片自己就是一件「证物」:红图标 + 标题 + 状态码徽标 + 原文框 + 动作行。
+   视觉分工很明确——**原文框是主角**:面板底 + 更暗的框底 + 等宽字,把
+   「供应商的原话」与「我们加的标题/提示」在排版上分开;标题区不抢眼。 */
+.record.error { border-bottom: none; padding: 0; margin-bottom: 14px; }
+.err-card {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 12px 14px;
+  background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-md);
+}
+.err-head { display: flex; align-items: center; gap: 8px; }
+.err-icon { display: inline-flex; color: var(--red); }
+.err-title { font-size: var(--fs-13); font-weight: 600; color: var(--ink); }
+/* 状态码徽标:靠右、等宽、红淡底。取不到码时整个不渲染(见 chat-error.ts) */
+.err-code {
+  margin-left: auto; padding: 1px 8px; border-radius: var(--r-full);
+  background: var(--red-tint); color: var(--red);
+  font-family: var(--mono); font-size: var(--fs-11); letter-spacing: 0.04em;
+}
+/* 原文框:逐字、等宽、可换行、可滚动。**不折叠不截断** —— 用户要的是能整段
+   贴给供应商的东西;超过 260px 只滚动,不省略。 */
+.err-raw {
+  margin: 0; padding: 9px 11px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-sm);
+  font-family: var(--mono); font-size: var(--fs-12); line-height: 1.6; color: var(--ink-2);
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 260px; overflow: auto;
+}
+/* provider/model 那行:同在原文框里(照实信息的一部分,一起被复制),但用弱一档的
+   颜色区分「这是 provider 侧字段,不是错误正文」(设计稿原文框的第三行) */
+.err-raw-meta { color: var(--faint); }
+.err-actions { display: flex; align-items: center; gap: 8px; }
+.err-act {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong); color: var(--ink-2);
+  font-size: var(--fs-12); line-height: 1.5;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.err-act:hover { background: var(--hover-tint); color: var(--ink); }
+/* 「重试」是主路径(暖金);复制原文是辅助(中性边框)——设计稿同此轻重 */
+.err-act.primary { border-color: var(--amber-tint-strong); color: var(--amber); }
+.err-act.primary:hover { background: var(--amber-tint); }
+.err-link {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 2px;
+  color: var(--muted); font-size: var(--fs-12);
+}
+.err-link:hover { color: var(--amber); }
+/* 处置提示行:只在「重试之外还得做点什么」的类别出现(密钥/额度/模型名/上下文) */
+.err-hint { font-size: var(--fs-11); color: var(--faint); line-height: 1.7; }
 
 /* 记录式消息:无气泡,细分隔线 */
 .record { width: 100%; padding: 2px 0 12px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
@@ -514,7 +590,18 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .record-md th, .record-md td { border: 1px solid var(--line); padding: 4px 10px; }
 .record-md th { background: var(--hover-tint); }
 .record-md hr { border: none; border-top: 1px solid var(--line); margin: 12px 0; }
+/* 正文图片(需求 11「AI 的回复内容可以嵌入图片」):不超过正文列宽,圆角与卡片一致。
+   被 markdown 白名单拦下的图片降级成 .md-img-blocked 一行文本 —— 不静默吞掉,
+   用户至少知道 AI 这里放过一张图 */
 .record-md img { max-width: 100%; border-radius: var(--r-md); }
+.record-md .md-img {
+  display: block; height: auto; margin: 10px 0;
+  border: 1px solid var(--line); background: var(--bg-elev);
+}
+.md-img-blocked {
+  display: inline-block; padding: 2px 8px; border-radius: var(--r-sm);
+  background: var(--bg-elev-2); color: var(--muted); font-size: 12px;
+}
 
 /* 思考:元信息行内的胶囊(设计稿 03-组件规范/04:`› 思考 · 1,606 字`)
    —— 原先是一整块带左竖线的折叠块、自占一行,且没有底色,和设计稿对不上 */
@@ -559,17 +646,15 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .tool-head svg { flex: none; color: var(--muted); }
 .tool-name { font-weight: 500; flex: none; color: var(--ink); }
 .tool-args { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%; }
-/* 状态胶囊(padding 2/9 · 圆角 $r-full · 11 号) */
-.tool-state {
-  margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 5px;
-  font-size: 11px; line-height: 1; padding: 3px 9px; border-radius: var(--r-full);
-  color: var(--faint); background: var(--bg-elev-2);
+/* 状态标签(设计稿 ★组件规范·回复渲染 v2):行尾一颗方括号标签,推到最右。
+   状态不再靠整行/整块变色表达——工具卡与动作行共用这一颗 */
+.act-state {
+  margin-left: auto; flex: none; font-size: 11px; font-weight: 600; line-height: 1;
+  letter-spacing: 0.02em;
 }
-.tool-state-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
-.tool-state.ok { color: var(--green); }
-.tool-state.run { color: var(--amber); }
-.tool-state.err { color: var(--red); }
-.tool.err { border-color: var(--red-tint-strong); background: var(--red-tint); }
+.act-state.ok { color: var(--green); }
+.act-state.run { color: var(--amber); }
+.act-state.err { color: var(--red); }
 /* 外部命令(bash)的流式输出:快照整段替换,运行中自动滚到底(见 ToolCard)。
    运行中边框转暖金,提示「正在跑」;结束后回落普通边框,内容留作回看 */
 .tool-stream {
@@ -579,28 +664,36 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .tool[data-live="1"] { border-color: var(--amber-tint-strong); }
-.tool[data-live="1"] .tool-state { color: var(--amber); }
+.tool[data-live="1"] .act-state { color: var(--amber); }
 .tool[data-live="1"] .tool-stream { border-color: var(--amber-tint-strong); }
 
-/* —— 简化输出的工具动作流(设计稿 03-组件规范/05) ——
+/* —— 简化输出的工具动作流(设计稿 03-组件规范/05 + ★组件规范·回复渲染 v2) ——
    行高 26 · 行间距 2 · 无卡片外框(比工具卡轻一档);
-   进行中 spinner 13 $amber + 动词 12/500 $amber + 宾语 mono 11 $ink-2;
-   完成 ✓ 13 $green + 动词 $muted + 宾语 $faint;失败 ✕ $red 全套。 */
+   图标 13 随状态着色(✓ $green / spinner $amber / ✕ $red),动词与宾语保持中性;
+   状态收进行尾方括号标签(见 .act-state),失败另起一行缩进给原因(见 .act-error)。 */
 .act-flow { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
 .act-row { display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 0 2px; }
 .act-icon { flex: none; display: inline-flex; align-items: center; color: var(--green); }
-.act-row.run .act-icon { color: var(--amber); }
-.act-row.err .act-icon { color: var(--red); }
+.act-row[data-state="run"] .act-icon { color: var(--amber); }
+.act-row[data-state="err"] .act-icon { color: var(--red); }
 .act-spin { animation: act-rotate 900ms linear infinite; }
 @keyframes act-rotate { to { transform: rotate(360deg); } }
+/* 动词与宾语**不随状态变色**(设计稿 ★组件规范·回复渲染 v2:整行不再变色)——
+   状态全部交给行尾的 .act-state;进行中只把动词微提亮,当「这事还没完」的弱提示 */
 .act-verb { flex: none; font-size: 12px; font-weight: 500; color: var(--muted); }
-.act-row.run .act-verb { color: var(--amber); }
-.act-row.err .act-verb { color: var(--red); }
+.act-row[data-state="run"] .act-verb { color: var(--ink-2); }
 .act-object {
   min-width: 0; font-family: var(--mono); font-size: 11px; color: var(--faint);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.act-row.run .act-object { color: var(--ink-2); }
+.act-row[data-state="run"] .act-object { color: var(--muted); }
+/* 失败原因:缩进到动词之下,等宽小字(如 pandoc: command not found (exit 127));
+   整行太长时省略,全文在 title 与调试卡里 */
+.act-error {
+  margin: 2px 0 0 21px;
+  font-family: var(--mono); font-size: 11px; line-height: 1.5;
+  color: var(--red); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 /* —— 块序列的纵向节奏(2026-09-19 块化)——
    思考 / 正文 / 工具卡 / 动作行现在都是 .record 的直接子元素(不再各占一整段)。
    .think 自带 margin-bottom,其余块由相邻兄弟规则补间距,避免两者叠加成 20px */
@@ -702,7 +795,6 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .ask-submit:not(:disabled):hover { opacity: 0.88; }
 
 /* 对话流里的等待占位:让「AI 问过、正等着」有个位置(作答控件在浮层里) */
-.ask-pending .act-icon { color: var(--amber); }
 .ask-pending .act-object { max-width: 46ch; }
 
 /* 已回答:折在工具块里的问答记录(问题一行 + 答案一行) */
@@ -762,6 +854,115 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .slash-item-hint { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
 .slash-item-meta { flex: none; color: var(--faint); font-size: 11px; font-family: var(--mono); }
 .slash-menu-note { padding: 6px 8px; color: var(--amber); font-size: 12px; border-top: 1px solid var(--line); }
+
+/* —— `@` 引用菜单(设计稿 ★输入区 · @ 菜单)——
+   定位与 `/` 命令面板同款(浮在输入框上方),差别在内容:那是"先选命令再搜候选",
+   这里是**一次搜全部、按命令分区**并列出来(世界书 / 章节 / …),用户不必先判断
+   "我要找的东西属于哪条命令"。条目样式复用 .slash-item。 */
+.at-menu {
+  position: absolute; left: 14px; right: 14px; bottom: calc(100% - 6px); z-index: 20;
+  max-height: 300px; overflow-y: auto;
+  background: var(--bg-elev-2); border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg); box-shadow: var(--shadow-3);
+  animation: card-in-bottom 120ms var(--ease-out);
+}
+.at-menu-head {
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+  border-bottom: 1px solid var(--line); color: var(--muted);
+}
+.at-menu-head svg { flex: none; }
+.at-menu-query {
+  flex: 1; min-width: 0; font-size: 13px; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 搜索范围徽标(设计稿里的「全部」);当前只有全量搜索一种范围,留给后续按类型收窄 */
+.at-menu-scope {
+  flex: none; font-size: 11px; line-height: 1; padding: 4px 8px; border-radius: 999px;
+  color: var(--amber); background: var(--amber-tint);
+}
+.at-menu-body { padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+.at-group-title {
+  padding: 6px 8px 2px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+  color: var(--faint);
+}
+
+/* —— 导出面板(设计稿 ★导出 · 选项卡)——
+   导出按钮点开是一排页签(TXT / Markdown / EPUB / DOCX / 复制),浮在按钮下方;
+   宽度照设计稿 440。禁用页签照常显示但不响应 —— 用 title 说明为什么不可用。 */
+.export-anchor { position: relative; display: inline-flex; }
+.export-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 11px; border-radius: var(--r-sm);
+  background: var(--amber); color: #0f0e0c; border: 0;
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  transition: background var(--dur-fast);
+}
+.export-btn:hover { background: #e6b45a; }
+.export-panel {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 30;
+  width: 440px; max-height: min(70vh, 620px); overflow-y: auto;
+  background: var(--bg-elev); border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg); box-shadow: var(--shadow-3);
+  animation: card-in-bottom 120ms var(--ease-out);
+}
+.export-tabs { display: flex; padding: 0 6px; border-bottom: 1px solid var(--line); }
+.export-tab {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 7px;
+  padding: 11px 9px 0; background: transparent; border: 0; cursor: pointer;
+  font-size: 12px; color: var(--muted);
+}
+.export-tab:disabled { color: var(--faint); cursor: not-allowed; opacity: 0.5; }
+.export-tab.active { color: var(--amber); font-weight: 600; }
+.export-tab-line { height: 2px; width: 100%; background: transparent; border-radius: 1px; }
+.export-tab.active .export-tab-line { background: var(--amber); }
+.export-body { display: flex; flex-direction: column; gap: 12px; padding: 16px 18px; }
+.export-row { display: flex; align-items: center; gap: 10px; }
+.export-label { font-size: 11px; color: var(--faint); }
+.export-seg {
+  display: flex; gap: 2px; padding: 2px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-sm);
+}
+.export-seg-item {
+  padding: 4px 10px; border-radius: 6px; border: 0; background: transparent;
+  font-size: 11px; color: var(--muted); cursor: pointer;
+}
+.export-seg-item.active { background: var(--bg-elev-2); color: var(--ink); }
+.export-seg-item:disabled { color: var(--faint); cursor: not-allowed; opacity: 0.45; }
+.export-check { display: flex; align-items: center; gap: 9px; font-size: 12px; color: var(--ink-2); cursor: pointer; }
+.export-check.disabled { color: var(--muted); cursor: not-allowed; }
+.export-check input { accent-color: var(--amber); width: 14px; height: 14px; }
+.export-divider { height: 1px; background: var(--line); }
+.export-info { font-size: 11px; font-family: var(--mono); color: var(--faint); }
+.export-info-muted { color: var(--faint); }
+.export-actions { display: flex; gap: 9px; }
+.export-primary {
+  display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px;
+  background: var(--amber); color: #0f0e0c; border: 0; border-radius: var(--r-sm);
+  font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.export-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.export-secondary {
+  display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px;
+  background: transparent; color: var(--ink-2); border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm); font-size: 12px; cursor: pointer;
+}
+.export-secondary:hover:not(:disabled) { border-color: var(--muted); }
+.export-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* —— 分段控件(设计稿 ★设置 v2 · 实验的「默认尺寸」1:1 / 3:2 / 16:9)——
+   与导出面板的 .export-seg 同形,但那是局部的;这里升为通用分段控件,
+   右侧可跟一段 mono 说明(尺寸对应的像素) */
+.st-seg {
+  display: inline-flex; align-items: center; gap: 2px; padding: 2px;
+  background: var(--bg-elev-2); border: 1px solid var(--line); border-radius: var(--r-sm);
+}
+.st-seg-item {
+  padding: 5px 12px; border-radius: 6px; border: 0; background: transparent;
+  font-size: 12px; color: var(--muted); cursor: pointer;
+}
+.st-seg-item.on { background: var(--amber); color: #0f0e0c; font-weight: 600; }
+.st-seg-item:disabled { cursor: not-allowed; opacity: 0.55; }
+.st-seg > .st-mono { margin-left: 8px; font-size: 11px; }
 .inputbar-inner {
   display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px;
   background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-lg);
@@ -782,6 +983,18 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   font-size: 13px; line-height: 1; padding: 1px 5px; border-radius: var(--r-full);
 }
 .input-chip-x:hover { color: var(--ink); background: var(--line); }
+/* 上下文占用圆环(设计稿 ★输入区 · 上下文圆环):输入框内的比例环 + 百分比。
+   三档配色 —— 充足绿 / 正常琥珀 / 接近上限(≥80%)红;阈值与 context-usage.ts 的
+   COMPACT_HINT_PERCENT 对齐:环变红的那一刻,正好是「建议 /compact」该出现的那一刻 */
+.ctx-ring {
+  flex: none; display: inline-flex; align-items: center; gap: 5px; color: var(--green);
+}
+.ctx-ring.warn { color: var(--amber); }
+.ctx-ring.err { color: var(--red); }
+.ctx-ring-pct {
+  font-family: var(--mono); font-size: 11px; color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
 .inputbar-inner:focus-within { border-color: var(--amber); box-shadow: 0 0 0 3px var(--amber-tint); }
 .inputbar textarea {
   flex: 1; background: transparent; border: none; outline: none; resize: none;

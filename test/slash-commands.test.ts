@@ -10,6 +10,7 @@ import {
 	makeCompactCommand,
 	makeNodeCommand,
 	makePluginCommand,
+	parseAtQuery,
 	parseSlashQuery,
 	scoreWorldEntry,
 	slashArrowMove,
@@ -61,6 +62,35 @@ describe("parseSlashQuery", () => {
 	it("命令前有其他文本时区间只覆盖命令 token", () => {
 		const text = "帮我看下 /chapter ch02";
 		expect(parseSlashQuery(text, text.length)).toEqual({ trigger: "chapter", term: "ch02", start: 5, end: text.length });
+	});
+});
+
+describe("parseAtQuery", () => {
+	it("行首 `@灯` → term 与替换区间", () => {
+		expect(parseAtQuery("@灯", 2)).toEqual({ term: "灯", start: 0, end: 2 });
+	});
+	it("文本中间也触发(设计稿:在文本任何位置可用)", () => {
+		const text = "把@灯";
+		expect(parseAtQuery(text, text.length)).toEqual({ term: "灯", start: 1, end: text.length });
+	});
+	it("中文/标点紧贴 @ 不拦(只有 ASCII 字母数字才算邮箱)", () => {
+		const text = "，@灯";
+		expect(parseAtQuery(text, text.length)).toEqual({ term: "灯", start: 1, end: text.length });
+	});
+	it("邮箱不触发", () => {
+		expect(parseAtQuery("a@b.com", 7)).toBeNull();
+		expect(parseAtQuery("user1@x", 8)).toBeNull();
+	});
+	it("@ 到光标之间出现空白即认为查询结束", () => {
+		expect(parseAtQuery("@灯 塔", 4)).toBeNull();
+	});
+	it("没有 @ / 光标在 @ 之前 → null", () => {
+		expect(parseAtQuery("正文", 2)).toBeNull();
+		expect(parseAtQuery("@灯", 0)).toBeNull();
+	});
+	it("@ 在换行后照样触发", () => {
+		const text = "第一段\n@灯";
+		expect(parseAtQuery(text, text.length)).toEqual({ term: "灯", start: 4, end: text.length });
 	});
 });
 

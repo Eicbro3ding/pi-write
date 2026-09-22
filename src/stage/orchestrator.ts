@@ -1,7 +1,7 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { getBookSessionsDir, initChapterFile } from "../book-manager.ts";
-import { resolveSkillsDir } from "../config.ts";
+import { resolveSkillReadOnlyDirs, resolveSkillsDir } from "../config.ts";
 import { createSessionRuntimeFactory } from "../session-factory.ts";
 import { SessionHost, type SessionContextUsage } from "../web/session-host.ts";
 import type { WriterHost } from "../web/writer-host.ts";
@@ -456,7 +456,7 @@ export class StageOrchestrator {
 			agentDir,
 			// skills 目录只读放行(与 web.ts 同款):模型经 read 工具加载 skill
 			// 文件(绝对路径)时不能被守卫误拦(2026-08-09 修复)
-			readOnlyDirs: [resolveSkillsDir()],
+			readOnlyDirs: resolveSkillReadOnlyDirs(),
 			systemPromptOverride: () => spec.systemPrompt,
 			extensionFactories: spec.extensions,
 			model: spec.model ?? model,
@@ -479,7 +479,7 @@ export class StageOrchestrator {
 			cwd: this.bookDir,
 			agentDir: this.agentDir,
 			sessionManager,
-			toolGuard: { readOnlyDirs: [resolveSkillsDir()] },
+			toolGuard: { readOnlyDirs: resolveSkillReadOnlyDirs() },
 		});
 		await host.start();
 		return host;

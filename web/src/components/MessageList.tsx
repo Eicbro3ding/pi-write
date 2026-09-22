@@ -1,10 +1,11 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import type { ChatMessage, ToolCallInfo } from "../types.ts";
+import type { ChatErrorInfo, ChatMessage, ToolCallInfo } from "../types.ts";
 import { DUR, EASE, EDGE_IN, STAGGER } from "../motion.ts";
 import { renderMarkdown } from "../markdown.ts";
 import { blocksText, formatDuration, turnDurationMs } from "../blocks.ts";
 import { askAnswersOf, parseAskQuestions } from "../ask-user.ts";
+import { chatErrorIcon } from "../chat-error.ts";
 import type { PreviewData } from "../preview.ts";
 import { AskUserRecord } from "./AskUserCard.tsx";
 import { ConfirmCard, type ConfirmCardItem } from "./ConfirmCard.tsx";
@@ -53,23 +54,128 @@ function ThinkingIndicator() {
 );
 }
 
-/** 上下文压缩中提示(手动 /compact 或阈值/溢出自动压缩;样式与思考提示区分)。 */
+/**
+ * 上下文压缩中提示(手动 /compact 或阈值/溢出自动压缩;设计稿 ★对话 · 上下文压缩动画)。
+ *
+ * **只做「进行中」这一态,而且只做真实信息**:`compaction_start/end` 事件里只有
+ * `reason`(manual / threshold / overflow),**没有条数、字数、步骤数、预计耗时** ——
+ * 设计稿画的「第 2 / 3 步」「生成摘要 · 12 条消息 → 1 个摘要块」「约 8 秒」全都无从得来,
+ * 所以一律不写(编出来的进度比没有进度更坏)。
+ * 进度条走**不确定进度**的流光扫过 —— 这是"还在动"的诚实表达,不是假装知道百分比。
+ * (完成态 / 失败态同样缺数据:压缩结束后 compacting 直接落回 false,没有留下条数;
+ *  要做设计稿的「已压缩 N 条消息 · 摘要 M 字」得先让服务端把摘要条目数带出来。)
+ */
 function CompactingIndicator() {
-	const [tick, setTick] = useState(0);
-	useEffect(() => {
-		const t = setInterval(() => setTick((v) => v + 1), 150);
-		return () => clearInterval(t);
-	}, []);
-	const dots = ".".repeat((Math.floor(tick / 6) % 3) + 1);
 	return (
-		<div className="thinking compacting">
-			<span className="thinking-spin">{SPINNER_FRAMES[tick % SPINNER_FRAMES.length]}</span>
-			<span className="thinking-face">🗜️</span>
-			<span className="thinking-label">正在压缩上下文</span>
-			<span className="thinking-dots">{dots}</span>
+		<div className="compact-card" role="status">
+			<div className="compact-head">
+				<span className="compact-spin" aria-hidden="true">
+					<svg width="15" height="15" viewBox="0 0 16 16">
+						<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.6" opacity="0.28" />
+						<path d="M8 2a6 6 0 0 1 6 6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+					</svg>
+				</span>
+				<span className="compact-title">正在压缩上下文…</span>
+			</div>
+			<div className="compact-bar" aria-hidden="true" />
+			<div className="compact-note">压缩在后台进行，对话、输入框和发送都不会被阻塞。</div>
 		</div>
 	);
 }
+
+/**
+ * 模型报错卡(设计稿 ★组件规范·回复渲染 v2 右列;需求 1「原文照实显示」)。
+ *
+ * 结构照设计稿:红图标 + 标题 + 右侧状态码徽标 → **原文框**(等宽、逐字、不折叠)
+ * → 动作行(重试 / 复制原文 / 去设置模型 ›)→ 可选的处置提示行。
+ *
+ * 三条纪律:
+ * 1. **原文框是主角** —— `info.raw` 原样铺进 `<pre>`,不截断、不摘要、不改写。
+ *    用户要的是能整段贴给供应商的东西,标题与徽标只是旁注(归类失败也只是
+ *    标题笼统,原文照旧完整)。
+ * 2. **不编数字** —— 状态码来自 `info.code`(chat-error.ts 只认三种明确写法,
+ *    取不到就是 null,徽标不出现),提示行来自归类,不拼「约 8 秒」这类假信息。
+ * 3. **复制用原文** —— 复制按钮写的是 raw,不是卡片的可见标题,供应商要看的是原文。
+ *
+ * 动作按需出现:调用方没给 onRetry / onOpenSettings 就不画那颗按钮,而不是画一颗
+ * 点了没反应的死按钮(舞台导演对话链路目前不上报 chat_error,自然没有重试语义)。
+ */
+function ChatErrorCard({
+	info,
+	onRetry,
+	onOpenSettings,
+}: {
+	info: ChatErrorInfo;
+	onRetry?: () => void;
+	onOpenSettings?: () => void;
+}) {
+	/** 复制成功的短暂回执(1.6s 后落回「复制原文」)。 */
+	const [copied, setCopied] = useState(false);
+	useEffect(() => {
+		if (!copied) return;
+		const t = setTimeout(() => setCopied(false), 1600);
+		return () => clearTimeout(t);
+	}, [copied]);
+	/**
+	 * 复制的是**原文框里的全部内容**(原文 + provider/model 行),不是只复制 raw:
+	 * 用户复制这段就是为了贴给供应商,而供应商第一句问的往往正是「哪个模型、哪个
+	 * provider」。两行都是真实字段(不是拼出来的描述),照抄所见即所得。
+	 */
+	const copyText = info.meta ? `${info.raw}\n${info.meta}` : info.raw;
+	return (
+		// role="alert":报错是需要在对话流里被读屏念出来的东西(不是装饰)
+		<div className="err-card" role="alert">
+			<div className="err-head">
+				<span className="err-icon" aria-hidden="true">
+					<Lu icon={chatErrorIcon(info.kind)} size={14} />
+				</span>
+				<span className="err-title">{info.title}</span>
+				{info.code !== null && <span className="err-code">{info.code}</span>}
+			</div>
+			<pre className="err-raw">
+				{info.raw}
+				{info.meta && <span className="err-raw-meta">{`\n${info.meta}`}</span>}
+			</pre>
+			<div className="err-actions">
+				{onRetry && (
+					<button type="button" className="err-act primary" onClick={onRetry}>
+						<Lu icon="refresh-cw" size={12} />
+						重试
+					</button>
+				)}
+				<button
+					type="button"
+					className="err-act"
+					title="复制错误原文(含 request id / provider / model 等供应商侧字段)"
+					onClick={() => {
+						void navigator.clipboard?.writeText(copyText);
+						setCopied(true);
+					}}
+				>
+					<Lu icon="copy" size={12} />
+					{copied ? "已复制" : "复制原文"}
+				</button>
+				{onOpenSettings && (
+					<button type="button" className="err-link" onClick={onOpenSettings}>
+						去设置模型
+						<Lu icon="chevron-right" size={12} />
+					</button>
+				)}
+			</div>
+			{info.hint && <div className="err-hint">{info.hint}</div>}
+		</div>
+	);
+}
+
+/**
+ * 工具状态标签文案(设计稿 ★组件规范·回复渲染 v2):状态不再靠整行变色表达,
+ * 收进行尾一颗方括号标签——成功绿、失败红、运行中琥珀。
+ */
+const STATE_LABEL: Record<"run" | "ok" | "err", string> = {
+	run: "【运行中】",
+	ok: "【成功】",
+	err: "【失败】",
+};
 
 /** 工具调用卡片:名称 + 参数 + 运行中/完成/失败状态。 */
 /**
@@ -92,17 +198,13 @@ function ToolCard({ t }: { t: ToolCallInfo }) {
 	}, [t.stream, running]);
 
 	const state = t.isError ? "err" : running ? "run" : "ok";
-	const stateLabel = t.isError ? "失败" : running ? "运行中" : "完成";
 	return (
-		<div className={t.isError ? "tool err" : "tool"} data-live={running && detail !== null ? "1" : "0"} title={t.args}>
+		<div className="tool" data-state={state} data-live={running && detail !== null ? "1" : "0"} title={t.args}>
 			<div className="tool-head">
 				<ToolIcon kind={toolIcon(t.name)} />
 				<span className="tool-name">{t.name}</span>
 				<span className="tool-args">{t.args}</span>
-				<span className={`tool-state ${state}`}>
-					<span className="tool-state-dot" />
-					{stateLabel}
-				</span>
+				<span className={`act-state ${state}`}>{STATE_LABEL[state]}</span>
 			</div>
 			{/* bash 始终摊开输出;其他工具只在流式期间显示(结束后单行更省地方)。
 			    流式中不折叠(折叠会把最新几行藏起来,而运行中要看的正是尾部),
@@ -133,25 +235,47 @@ function ActionStateIcon({ state }: { state: "run" | "ok" | "err" }) {
 	return <Lu icon="check" size={13} />;
 }
 
+/** 失败时露出的错误详情:取首行、限长(全文在 title 与调试卡里)。 */
+function errorDetailLine(result: string | null): string | null {
+	if (!result) return null;
+	const first = result.split("\n").find((l) => l.trim().length > 0)?.trim();
+	if (!first) return null;
+	return first.length > 140 ? `${first.slice(0, 140)}…` : first;
+}
+
 /**
- * 读取型工具的**一行**(设计稿 03-组件规范/05):不是「什么都不显示」,而是把工具
- * 调用压成一行可读的动作——**带宾语**(在改哪个文件)、**不用 emoji**。
+ * 读取型工具的**一行**(设计稿 03-组件规范/05 + ★组件规范·回复渲染 v2):不是
+ * 「什么都不显示」,而是把工具调用压成一行可读的动作——**带宾语**(在改哪个文件)、
+ * **不用 emoji**。
  *
  * 与改造前的区别:那时是一整块「动作流」(所有工具挤在一处、只留最近 3 条),
  * 现在每个工具块各占一行、落在它真实发生的位置上,历史行不再被丢弃
  * (行有了位置,要省地方自己折)。
+ *
+ * **状态表达(2026-09-22)**:不再整行变色(动词/宾语跟着状态红/琥珀,整行看着像
+ * 在报错)——图标、动作、文件保持原样,状态收进行尾一颗方括号标签:成功绿、失败红;
+ * 失败时下方再缩进一行错误详情,给出真正的失败原因(如 `pandoc: command not found`)。
  */
 function ToolActionRow({ t }: { t: ToolCallInfo }) {
 	const r = toolActionRow(t);
 	const state = r.isError ? "err" : r.running ? "run" : "ok";
+	const detail = state === "err" ? errorDetailLine(t.result) : null;
 	return (
-		<div className={`act-row ${state}`} title={t.args}>
-			<span className="act-icon">
-				<ActionStateIcon state={state} />
-			</span>
-			<span className="act-verb">{r.verb}</span>
-			{r.object && <span className="act-object">{r.object}</span>}
-		</div>
+		<>
+			<div className="act-row" data-state={state} title={t.args}>
+				<span className="act-icon">
+					<ActionStateIcon state={state} />
+				</span>
+				<span className="act-verb">{r.verb}</span>
+				{r.object && <span className="act-object">{r.object}</span>}
+				<span className={`act-state ${state}`}>{STATE_LABEL[state]}</span>
+			</div>
+			{detail && (
+				<div className="act-error" title={t.result ?? undefined}>
+					{detail}
+				</div>
+			)}
+		</>
 	);
 }
 
@@ -186,7 +310,7 @@ function ToolBlock({
 		// 让「AI 问过、正等着」在对话流里有个位置
 		if (t.result === null) {
 			return (
-				<div className="act-row ask-pending" title={questions[0]?.question}>
+				<div className="act-row ask-pending" data-state="run" title={questions[0]?.question}>
 					<span className="act-icon">
 						<ActionStateIcon state="run" />
 					</span>
@@ -298,13 +422,36 @@ export function ThinkingBody({ text, open }: { text: string; open: boolean }) {
 	);
 }
 
-/** 思考块 = 胶囊 + 展开体(自管开合;消息流按块逐个挂)。 */
+/**
+ * 思考块 = 胶囊 + 展开体(自管开合;消息流按块逐个挂)。
+ *
+ * **开合时机(2026-09-22,设计稿 ★组件规范·回复渲染 v2)**:思考链**只在 output
+ * 期间自动展开,结束立刻折叠**——思考是过程,过程进行中值得看见,过程结束就该让位给
+ * 正文结论。交错思考里的短思考同理(output 中展开、结束折叠),所以这里按块各自成立,
+ * 不依赖「整轮思考」的汇总状态。
+ *
+ * 用户一旦手动点过,开合权就交给他,不再自动干预(否则读到一半被折叠)。
+ */
 export function ThinkingBlock({ text, done }: { text: string; done: boolean }) {
-	// 自动展开思考:挂载时读一次设置,之后点击由用户接管
-	const [open, setOpen] = useState(() => autoExpandThinkingEnabled());
+	// 自动展开思考:首帧就定下来(挂载后再由 effect 纠正),避免先折叠再展开的闪烁
+	const [open, setOpen] = useState(() => !done && text.length > 0 && autoExpandThinkingEnabled());
+	const touched = useRef(false);
+	useEffect(() => {
+		if (touched.current) return;
+		// 输出中 → 按设置展开;结束 → 立刻折叠
+		setOpen(!done && text.length > 0 && autoExpandThinkingEnabled());
+	}, [done, text.length]);
 	return (
 		<div className="think">
-			<ThinkingToggle text={text} done={done} open={open} onToggle={() => setOpen((v) => !v)} />
+			<ThinkingToggle
+				text={text}
+				done={done}
+				open={open}
+				onToggle={() => {
+					touched.current = true;
+					setOpen((v) => !v);
+				}}
+			/>
 			<ThinkingBody text={text} open={open} />
 		</div>
 	);
@@ -341,8 +488,11 @@ function Message({
 	streaming,
 	cards,
 	onEdit,
+	onRetry,
+	onOpenSettings,
 	onConfirmCard,
 	onRevertCard,
+	resolveImage,
 }: {
 	m: ChatMessage;
 	debug: boolean;
@@ -350,8 +500,14 @@ function Message({
 	/** 工具块卡片槽(由 MessageList 用 useMemo 构造:引用稳定,可作 memo 比较依据)。 */
 	cards?: ToolCardSlots;
 	onEdit?: (m: ChatMessage, newText: string) => void;
+	/** 报错卡的「重试」(重放失败那一轮;由页面决定怎么重放)。 */
+	onRetry?: (m: ChatMessage) => void;
+	/** 报错卡的「去设置模型 ›」。 */
+	onOpenSettings?: () => void;
 	onConfirmCard?: (id: string) => void;
 	onRevertCard?: (id: string) => void;
+	/** 正文图片的相对路径解析(见 MessageListProps.resolveImage)。 */
+	resolveImage?: (src: string) => string;
 }) {
 	const [editing, setEditing] = useState(false);
 	const [editText, setEditText] = useState("");
@@ -364,6 +520,20 @@ function Message({
 	const procShown = procOpen || !m.done;
 	// 编辑需要服务端 entry id 定位:历史水合与 message_end 后都有,乐观气泡(发送瞬间)没有
 	const canAct = m.role === "user" && !streaming && m.entryId !== undefined;
+	// 报错消息:没有发言人、没有过程、没有编辑/复制正文 —— 它整条就是一张卡
+	// (设计稿右列的卡自带标题与动作,再套一层『你/PI』元信息行只是噪音)
+	if (m.role === "error") {
+		if (!m.error) return null;
+		return (
+			<div className="record error">
+				<ChatErrorCard
+					info={m.error}
+					onRetry={onRetry ? () => onRetry(m) : undefined}
+					onOpenSettings={onOpenSettings}
+				/>
+			</div>
+		);
+	}
 	// data-who:气泡差分(舞台)用它给头像渲染首字,不必让消息流认识舞台/角色
 	return (
 		<div className={m.role === "user" ? "record user" : "record assistant"} data-who={m.role === "user" ? "你" : "PI"}>
@@ -467,7 +637,11 @@ function Message({
 								{b.text}
 							</div>
 						) : (
-							<div key={i} className="record-text record-md" dangerouslySetInnerHTML={{ __html: renderMarkdown(b.text) }} />
+							<div
+								key={i}
+								className="record-text record-md"
+								dangerouslySetInnerHTML={{ __html: renderMarkdown(b.text, { resolveImage }) }}
+							/>
 						);
 					})}
 				</>
@@ -497,10 +671,13 @@ function Message({
  * 比较器返回 true = 跳过重渲染。
  */
 function messagePropsEqual(
-	prev: { m: ChatMessage; debug: boolean; streaming: boolean; cards?: ToolCardSlots },
-	next: { m: ChatMessage; debug: boolean; streaming: boolean; cards?: ToolCardSlots },
+	prev: { m: ChatMessage; debug: boolean; streaming: boolean; cards?: ToolCardSlots; resolveImage?: (src: string) => string },
+	next: { m: ChatMessage; debug: boolean; streaming: boolean; cards?: ToolCardSlots; resolveImage?: (src: string) => string },
 ): boolean {
 	if (prev.debug !== next.debug || prev.streaming !== next.streaming) return false;
+	// resolveImage 由页面 useCallback 稳定(它依赖当前书 slug);变了必须重渲染,
+	// 否则切书后正文图片仍指着旧书的 URL
+	if (prev.resolveImage !== next.resolveImage) return false;
 	// cards 由 MessageList 的 useMemo 构造(toolCallId 映射),引用稳定;变异则整表重建
 	if (prev.cards !== next.cards) return false;
 	const a = prev.m;
@@ -508,6 +685,20 @@ function messagePropsEqual(
 	if (a === b) return true;
 	if (a.id !== b.id || a.entryId !== b.entryId || a.role !== b.role) return false;
 	if (a.done !== b.done || a.startedAt !== b.startedAt || a.endedAt !== b.endedAt) return false;
+	// 报错卡内容(role="error"):按字段比,漏比会让报错卡静默不更新(同 blocks 的道理)
+	if (a.error !== b.error) {
+		if (!a.error || !b.error) return false;
+		if (
+			a.error.raw !== b.error.raw ||
+			a.error.title !== b.error.title ||
+			a.error.code !== b.error.code ||
+			a.error.kind !== b.error.kind ||
+			a.error.hint !== b.error.hint ||
+			a.error.meta !== b.error.meta
+		) {
+			return false;
+		}
+	}
 	const ba = a.blocks;
 	const bb = b.blocks;
 	if (ba.length !== bb.length) return false;
@@ -557,7 +748,10 @@ export function MessageList({
 	onConfirmCard,
 	onRevertCard,
 	onEdit,
+	onRetry,
+	onOpenSettings,
 	emptyText = "向 pi 发一句话,开始今晚的写作",
+	resolveImage,
 }: {
 	messages: ChatMessage[];
 	/** AI 输出中:列表末尾显示动态状态提示(转圈 + 文案/颜文字轮换)。 */
@@ -575,12 +769,33 @@ export function MessageList({
 	onRevertCard?: (id: string) => void;
 	/** 编辑用户消息(撤回该消息及之后,以新文本重发);缺省隐藏编辑按钮。 */
 	onEdit?: (m: ChatMessage, newText: string) => void;
+	/** 报错卡的「重试」(重放失败那一轮);缺省不画这颗按钮。 */
+	onRetry?: (m: ChatMessage) => void;
+	/** 报错卡的「去设置模型 ›」;缺省不画这个入口。 */
+	onOpenSettings?: () => void;
 	/** 空态文案(编剧等复用场景传入专属文案;缺省为写作 agent 提示)。 */
 	emptyText?: string;
+	/**
+	 * 把正文 markdown 里图片的书内相对路径(images/xxx.png)换成可访问 URL。
+	 * 渲染层不知道当前书 slug,所以由页面注入(见 WritePage 的 resolveImage)。
+	 */
+	resolveImage?: (src: string) => string;
 }) {
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const stickRef = useRef(true);
 	const countRef = useRef(messages.length);
+	/**
+	 * 报错卡的两个动作经 ref 转发成稳定身份。理由与 onEdit 相同:Message 是 memo 的,
+	 * 比较器按设计忽略这两个 prop(它们的身份每次渲染都会变),所以卡片**可能不会**
+	 * 随父组件重渲染而更新闭包 —— 直接传函数会让「重试」点下去读到旧 state。
+	 * 用 ref 读最新值,身份稳定 + 行为永远最新,两个都要。
+	 */
+	const retryRef = useRef(onRetry);
+	retryRef.current = onRetry;
+	const settingsRef = useRef(onOpenSettings);
+	settingsRef.current = onOpenSettings;
+	const retryStable = useCallback((m: ChatMessage) => retryRef.current?.(m), []);
+	const openSettingsStable = useCallback(() => settingsRef.current?.(), []);
 	/**
 	 * 卡片槽(按 toolCallId 索引)。**必须是 memo 化的稳定引用**:Message 的 memo
 	 * 比较器按引用比 cards,每渲染重建 Map 会让整列表失去 memo(流式 delta 全量重渲)。
@@ -663,8 +878,11 @@ export function MessageList({
 									streaming={streaming}
 									cards={cards}
 									onEdit={onEdit}
+									onRetry={onRetry ? retryStable : undefined}
+									onOpenSettings={onOpenSettings ? openSettingsStable : undefined}
 									onConfirmCard={onConfirmCard}
 									onRevertCard={onRevertCard}
+									resolveImage={resolveImage}
 								/>
 							</motion.div>
 						);

@@ -2127,6 +2127,16 @@ export class WriterServer {
 		const rawShell = body?.enableShell;
 		const rawKind = body?.shellKind;
 		const rawPath = body?.shellPath;
+		// 图片生成(实验,0.1.0)
+		const rawImageGen = body?.enableImageGen;
+		const rawImageProvider = body?.imageProvider;
+		const rawImageModel = body?.imageModel;
+		const rawImageSize = body?.imageSize;
+		const rawImageBaseUrl = body?.imageBaseUrl;
+		const rawImageKey = body?.imageApiKey;
+		const rawImageInReply = body?.imageInReply;
+		const rawImageWorldbook = body?.imageWorldbook;
+		const rawImageConfirm = body?.imageConfirmBeforeGen;
 		if (rawClassic !== undefined && typeof rawClassic !== "boolean") {
 			throw new HttpError(400, "bad_request", "字段 classicMode 必须是布尔值");
 		}
@@ -2139,11 +2149,47 @@ export class WriterServer {
 		if (rawPath !== undefined && typeof rawPath !== "string") {
 			throw new HttpError(400, "bad_request", "字段 shellPath 必须是字符串");
 		}
+		if (rawImageGen !== undefined && typeof rawImageGen !== "boolean") {
+			throw new HttpError(400, "bad_request", "字段 enableImageGen 必须是布尔值");
+		}
+		if (rawImageProvider !== undefined && rawImageProvider !== "openai-images") {
+			throw new HttpError(400, "bad_request", "字段 imageProvider 只能是 openai-images");
+		}
+		if (rawImageSize !== undefined && rawImageSize !== "1:1" && rawImageSize !== "3:2" && rawImageSize !== "16:9") {
+			throw new HttpError(400, "bad_request", "字段 imageSize 只能是 1:1、3:2 或 16:9");
+		}
+		if (rawImageModel !== undefined && typeof rawImageModel !== "string") {
+			throw new HttpError(400, "bad_request", "字段 imageModel 必须是字符串");
+		}
+		if (rawImageBaseUrl !== undefined && typeof rawImageBaseUrl !== "string") {
+			throw new HttpError(400, "bad_request", "字段 imageBaseUrl 必须是字符串");
+		}
+		if (rawImageKey !== undefined && typeof rawImageKey !== "string") {
+			throw new HttpError(400, "bad_request", "字段 imageApiKey 必须是字符串");
+		}
+		if (rawImageInReply !== undefined && typeof rawImageInReply !== "boolean") {
+			throw new HttpError(400, "bad_request", "字段 imageInReply 必须是布尔值");
+		}
+		if (rawImageWorldbook !== undefined && typeof rawImageWorldbook !== "boolean") {
+			throw new HttpError(400, "bad_request", "字段 imageWorldbook 必须是布尔值");
+		}
+		if (rawImageConfirm !== undefined && typeof rawImageConfirm !== "boolean") {
+			throw new HttpError(400, "bad_request", "字段 imageConfirmBeforeGen 必须是布尔值");
+		}
 		const settings: WriterSettings = await updateWriterSettings({
 			...(rawClassic === undefined ? {} : { classicMode: rawClassic }),
 			...(rawShell === undefined ? {} : { enableShell: rawShell }),
 			...(rawKind === undefined ? {} : { shellKind: rawKind }),
 			...(rawPath === undefined ? {} : { shellPath: rawPath.trim().slice(0, 500) }),
+			...(rawImageGen === undefined ? {} : { enableImageGen: rawImageGen }),
+			...(rawImageProvider === undefined ? {} : { imageProvider: rawImageProvider }),
+			...(rawImageModel === undefined ? {} : { imageModel: rawImageModel.trim().slice(0, 200) }),
+			...(rawImageSize === undefined ? {} : { imageSize: rawImageSize }),
+			...(rawImageBaseUrl === undefined ? {} : { imageBaseUrl: rawImageBaseUrl.trim().slice(0, 500) }),
+			...(rawImageKey === undefined ? {} : { imageApiKey: rawImageKey.trim().slice(0, 500) }),
+			...(rawImageInReply === undefined ? {} : { imageInReply: rawImageInReply }),
+			...(rawImageWorldbook === undefined ? {} : { imageWorldbook: rawImageWorldbook }),
+			...(rawImageConfirm === undefined ? {} : { imageConfirmBeforeGen: rawImageConfirm }),
 		});
 		// 解析实际方言:选 pwsh 而本机没有 → none(会话按无 shell 装配,提示词如实叙述)
 		const shell = resolveWriterShell(settings);
@@ -2153,6 +2199,8 @@ export class WriterServer {
 			dialect: shell.dialect,
 			path: shell.path ?? null,
 		});
+		// 图片生成开关同理:它决定 image_generate 工具存不存在,变了就得释放会话
+		await this.options.writerHost?.setImageGen(settings.enableImageGen);
 		try {
 			await this.options.sessionHost.reloadRuntime();
 		} catch {

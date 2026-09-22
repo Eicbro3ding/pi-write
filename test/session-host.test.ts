@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../vendor/pi-coding-agent/src/index.ts";
-import { SessionHost } from "../src/web/session-host.ts";
+import { extractMessagesFromManager, SessionHost } from "../src/web/session-host.ts";
+
+/** extractMessagesFromManager 只吃 getBranch() 的 entry 形状,给个最小桩即可。 */
+function fakeManager(entries: Array<{ id: string; message: Record<string, unknown> }>) {
+	return { getBranch: () => entries.map((e) => ({ ...e, parentId: null })) } as never;
+}
 
 // 最小 fake runtime:注入的工厂返回 CreateAgentSessionRuntimeResult 形状,
 // 由 SessionHost 内部经 createAgentSessionRuntime 包装成 AgentSessionRuntime。
@@ -565,5 +570,45 @@ describe("SessionHost branchMessage", () => {
 		expect(host.getState().messages).toHaveLength(3);
 
 		await expect(host.navigateTo("no-such")).rejects.toThrow();
+	});
+});
+
+describe("extractMessagesFromManager(会话投影)", () => {
+	it("provider 侧报错(assistant + errorMessage)不再被当成空记录丢掉", () => {
+		const out = extractMessagesFromManager(
+			fakeManager([
+				{ id: "u1", message: { role: "user", content: [{ type: "text", text: "续写" }] } },
+				{
+					id: "a1",
+					message: {
+						role: "assistant",
+						content: [],
+						stopReason: "error",
+						errorMessage: "401: nope",
+						provider: "deepseek",
+						model: "deepseek-v4-pro",
+					},
+				},
+			]),
+		);
+		expect(out.map((m) => m.id)).toEqual(["u1", "a1"]);
+		expect(out[1]).toMatchObject({ errorMessage: "401: nope", provider: "deepseek", model: "deepseek-v4-pro", text: "" });
+	});
+
+	it("没有 errorMessage 的空 assistant 记录照旧丢掉(不引入空气泡)", () => {
+		const out = extractMessagesFromManager(fakeManager([{ id: "a1", message: { role: "assistant", content: [], stopReason: "error" } }]));
+		expect(out).toHaveLength(0);
+	});
+
+	it("报错记录不参与同组 assistant 合并(errorMessage 不会被合并分支抹掉)", () => {
+		const out = extractMessagesFromManager(
+			fakeManager([
+				{ id: "a1", message: { role: "assistant", content: [{ type: "text", text: "前半" }] } },
+				{ id: "a2", message: { role: "assistant", content: [], errorMessage: "500 boom" } },
+			]),
+		);
+		expect(out).toHaveLength(2);
+		expect(out[1]!.errorMessage).toBe("500 boom");
+		expect(out[1]!.text).toBe("");
 	});
 });

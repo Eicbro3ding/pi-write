@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import type { ApiClient } from "../api/client.ts";
+import { bookFileUrl, imageUrl, type ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
 import type { Library } from "../library.ts";
 import { useMediaQuery } from "../useMediaQuery.ts";
@@ -93,6 +93,15 @@ export function StagePage({
 		toggleSidebarCollapsed,
 	} = library;
 	const slug = bookDetail?.slug ?? null;
+	/** 正文图片解析(需求 11):与编辑页同款 —— images/ 走图片端点,其余走工作区文件端点。 */
+	const resolveImage = useCallback(
+		(src: string) => {
+			if (!slug) return src;
+			if (src.startsWith("images/")) return imageUrl(slug, src.slice("images/".length));
+			return bookFileUrl(slug, src);
+		},
+		[slug],
+	);
 	const [stage, dispatch] = useReducer(reduceStage, undefined, initialStageState);
 	/** `/node` 世界书缓存(按 slug;收到 world_changed 失效)。 */
 	const worldCacheRef = useRef<{ slug: string; world: WorldDataDto } | null>(null);
@@ -879,6 +888,7 @@ export function StagePage({
 							debug={debug === true}
 							previewCards={directorCards}
 							emptyText="向导演发一句话，讨论剧情、人物与悬念——导演会边聊边维护世界书"
+							resolveImage={resolveImage}
 						/>
 					)}
 				</div>
@@ -917,6 +927,7 @@ export function StagePage({
 				commands={directorSlashCommands}
 				context={directorSlashContext}
 				onCommandError={(msg) => dispatch({ type: "system", text: `命令失败: ${msg}`, err: true })}
+				usage={stage.snapshot?.directorUsage ?? null}
 					placeholder="向导演说话…"
 					ariaLabel="向导演说话"
 				/>

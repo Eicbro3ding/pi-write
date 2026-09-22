@@ -1528,6 +1528,8 @@ describe("WriterServer · /api/settings(全局设置 · 经典模式)", () => {
 	const classicCalls: boolean[] = [];
 	/** setShell 调用记录(外部命令开关 + shell 方言)。 */
 	const shellCalls: Array<{ enabled: boolean; dialect: string; path: string | null }> = [];
+	/** 图片生成开关的应用记录(0.1.0):它决定 image_generate 工具存不存在。 */
+	const imageGenCalls: boolean[] = [];
 	/** SSE 广播帧(验证 settings_changed 会推给其他窗口)。 */
 	const events: Array<{ type: string; settings?: { classicMode: boolean; enableShell: boolean } }> = [];
 
@@ -1543,6 +1545,9 @@ describe("WriterServer · /api/settings(全局设置 · 经典模式)", () => {
 			},
 			setShell: async (next: { enabled: boolean; dialect: string; path: string | null }) => {
 				shellCalls.push(next);
+			},
+			setImageGen: async (enabled: boolean) => {
+				imageGenCalls.push(enabled);
 			},
 		};
 		server = new WriterServer({
@@ -1697,6 +1702,47 @@ describe("WriterServer · /api/settings(全局设置 · 经典模式)", () => {
 		});
 		expect(res.status).toBe(400);
 		expect(await res.json()).toMatchObject({ error: { code: "bad_request" } });
+	});
+
+	// —— 图片生成(实验,0.1.0)——
+	// 放在本 describe 的最后:classicCalls / shellCalls / imageGenCalls 是共享的、
+	// 不随用例重置,插在中间会把「PUT 开启」那几条按序断言的用例打乱。
+
+	it("PUT 图片生成开关:落盘 + 应用到 WriterHost(工具集要重装配)", async () => {
+		const res = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ enableImageGen: true, imageModel: "dall-e-3", imageSize: "16:9" }),
+		});
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({
+			settings: { enableImageGen: true, imageModel: "dall-e-3", imageSize: "16:9" },
+		});
+		// 开关决定 image_generate 工具存不存在 → 必须落到 WriterHost 上(它会释放已建会话)
+		expect(imageGenCalls.at(-1)).toBe(true);
+		const persisted = JSON.parse(readFileSync(join(getWriterDir(), "settings.json"), "utf8")) as { enableImageGen: boolean };
+		expect(persisted.enableImageGen).toBe(true);
+	});
+
+	it("图片生成的非法枚举/类型返回 400", async () => {
+		const badSize = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ imageSize: "21:9" }),
+		});
+		expect(badSize.status).toBe(400);
+		const badProvider = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ imageProvider: "midjourney" }),
+		});
+		expect(badProvider.status).toBe(400);
+		const badToggle = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ enableImageGen: "yes" }),
+		});
+		expect(badToggle.status).toBe(400);
 	});
 });
 
