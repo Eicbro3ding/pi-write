@@ -1,6 +1,6 @@
 {
   "name": "pi-writer",
-  "version": "0.0.8",
+  "version": "0.1.0",
   "description": "Standalone creative writing agent built on pi: book/chapter sessions, world-book tree, writer tools",
   "type": "module",
   "bin": {
