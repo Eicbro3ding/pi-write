@@ -109,11 +109,18 @@ function ChatErrorCard({
 	onRetry?: () => void;
 	onOpenSettings?: () => void;
 }) {
-	/** 复制成功的短暂回执(1.6s 后落回「复制原文」)。 */
-	const [copied, setCopied] = useState(false);
+	/**
+	 * 复制回执:null = 还没点;true = 成功;false = 失败(剪贴板不可用)。
+	 *
+	 * 2026-09-23 修:此前 `void navigator.clipboard?.writeText(...); setCopied(true)`
+	 * 不看结果 —— 在非安全上下文(如用 `http://<局域网IP>` 打开,`navigator.clipboard`
+	 * 是 undefined)或用户拒绝授权时,复制其实没发生,按钮却回执「已复制」,
+	 * 用户拿去贴给供应商才发现是空的。
+	 */
+	const [copied, setCopied] = useState<boolean | null>(null);
 	useEffect(() => {
-		if (!copied) return;
-		const t = setTimeout(() => setCopied(false), 1600);
+		if (copied === null) return;
+		const t = setTimeout(() => setCopied(null), 1600);
 		return () => clearTimeout(t);
 	}, [copied]);
 	/**
@@ -122,6 +129,16 @@ function ChatErrorCard({
 	 * provider」。两行都是真实字段(不是拼出来的描述),照抄所见即所得。
 	 */
 	const copyText = info.meta ? `${info.raw}\n${info.meta}` : info.raw;
+	/** 复制原文:真的写进去了才算成功(失败也说出来,别假回执)。 */
+	async function copyRaw() {
+		try {
+			if (!navigator.clipboard) throw new Error("此环境不提供剪贴板接口");
+			await navigator.clipboard.writeText(copyText);
+			setCopied(true);
+		} catch {
+			setCopied(false);
+		}
+	}
 	return (
 		// role="alert":报错是需要在对话流里被读屏念出来的东西(不是装饰)
 		<div className="err-card" role="alert">
@@ -147,13 +164,10 @@ function ChatErrorCard({
 					type="button"
 					className="err-act"
 					title="复制错误原文(含 request id / provider / model 等供应商侧字段)"
-					onClick={() => {
-						void navigator.clipboard?.writeText(copyText);
-						setCopied(true);
-					}}
+					onClick={() => void copyRaw()}
 				>
-					<Lu icon="copy" size={12} />
-					{copied ? "已复制" : "复制原文"}
+					<Lu icon={copied === false ? "triangle-alert" : "copy"} size={12} />
+					{copied === null ? "复制原文" : copied ? "已复制" : "复制失败"}
 				</button>
 				{onOpenSettings && (
 					<button type="button" className="err-link" onClick={onOpenSettings}>

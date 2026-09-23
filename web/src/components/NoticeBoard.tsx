@@ -75,11 +75,14 @@ export function NoticeBoard({ client, slug, variant = "full", onItemsChange }: N
 			if (!worldRef.current) return;
 			setWorld({ ...worldRef.current, notice: next });
 			clearTimeout(timer.current);
+			// 记下这一刻的书:定时器回调里再读闭包里的 slug 会读到过期的那个
+			// (切书后回调仍带旧 slug,轻则 409、重则把这本书的世界书写进另一本,2026-09-23)
+			const targetSlug = slug ?? undefined;
 			timer.current = setTimeout(() => {
 				const w = worldRef.current;
 				if (!w) return;
 				void client
-					.putWorld(w, mtimeRef.current, slug ?? undefined)
+					.putWorld(w, mtimeRef.current, targetSlug)
 					.then((m) => {
 						mtimeRef.current = m;
 						setSaveConflict(false);
@@ -96,8 +99,13 @@ export function NoticeBoard({ client, slug, variant = "full", onItemsChange }: N
 					});
 			}, SAVE_DELAY_MS);
 		},
-		[client],
+		[client, slug, reload],
 	);
+
+	/** 换书时丢掉上一本书还没发出去的防抖保存(否则会把旧书的内容写进新书)。 */
+	useEffect(() => {
+		return () => clearTimeout(timer.current);
+	}, [slug]);
 
 	const addItem = () => {
 		const text = draft.trim();

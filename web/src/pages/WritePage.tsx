@@ -12,6 +12,7 @@ import type {
 	ContextUsageDto,
 	DraftStatus,
 	SessionTreeDto,
+	SessionUsageStatsDto,
 	TextSelectionSnapshot,
 	WorldDataDto,
 } from "../types.ts";
@@ -34,6 +35,7 @@ import { ExportPanel, type ExportChapterRef } from "../components/ExportPanel.ts
 import { FilePreview } from "../components/FilePreview.tsx";
 import { FullScreenEditor } from "../components/FullScreenEditor.tsx";
 import { InputBar, type InputBarHandle } from "../components/InputBar.tsx";
+import { UsagePanel } from "../components/UsagePanel.tsx";
 import { MessageList } from "../components/MessageList.tsx";
 import { AskUserOverlay } from "../components/AskUserCard.tsx";
 import type { EnterBehavior } from "../settings.ts";
@@ -245,6 +247,11 @@ export function WritePage({
 	const [writerSession, writerDispatch] = useReducer(sessionReducer, undefined, initialSessionState);
 	/** 编剧会话上下文占用(「建议 /compact」提示;agent_settled / 压缩结束 / 对齐时刷新)。 */
 	const [writerUsage, setWriterUsage] = useState<ContextUsageDto | null>(null);
+	/** 会话用量浮层(点输入条的上下文圆环展开):开合 / 数据 / 载入中 / 错误。 */
+	const [usageOpen, setUsageOpen] = useState(false);
+	const [usageStats, setUsageStats] = useState<SessionUsageStatsDto | null>(null);
+	const [usageBusy, setUsageBusy] = useState(false);
+	const [usageErr, setUsageErr] = useState<string | null>(null);
 	const writerCompactingRef = useRef(false);
 	writerCompactingRef.current = writerSession.compacting;
 	/** 编剧会话快照 ref:报错卡的「重试」要从 memo 化的卡片里出发(见 MessageList 的
@@ -356,17 +363,31 @@ export function WritePage({
 		const scope = `${slug}:${ch?.file ?? ""}`;
 		if (writerAlignedRef.current === scope) return;
 		writerAlignedRef.current = scope;
-		client
-			.getWriterState(slug, ch?.file ?? null)
-			.then((st) => {
-				if (writerAlignedRef.current !== scope) return; // 对齐期间又切书/切章:放弃
-				writerDispatch(RESET);
-				for (const ev of messagesToEvents(st.messages)) writerDispatch(ev);
-				refreshWriterUsage();
-			})
-			.catch(() => {
-				/* 对齐失败(服务暂不可用):保持本地状态 */
-			});
+		const run = (attempt: number): void => {
+			client
+				.getWriterState(slug, ch?.file ?? null)
+				.then((st) => {
+					if (writerAlignedRef.current !== scope) return; // 对齐期间又切书/切章:放弃
+					writerDispatch(RESET);
+					for (const ev of messagesToEvents(st.messages)) writerDispatch(ev);
+					refreshWriterUsage(true);
+				})
+				.catch(() => {
+					/*
+					 * 对齐失败(服务刚重启 / 网络瞬断)。2026-09-23 修:此前 catch 是空的、
+					 * 而标记在发请求前就置好了 —— 守卫会拦住之后**所有**同 scope 的对齐,
+					 * 于是编剧对话永久空白(既没有历史也没有报错),只有一次断线重连的
+					 * onOpen 才能救回来。现在退避重试一次,仍失败则把标记放回去留给下次触发。
+					 */
+					if (writerAlignedRef.current !== scope) return;
+					if (attempt >= 2) {
+						writerAlignedRef.current = null;
+						return;
+					}
+					window.setTimeout(() => run(attempt + 1), 1200);
+				});
+		};
+		run(1);
 		refreshWriterTree();
 	}
 
@@ -537,7 +558,7 @@ export function WritePage({
 				// 不回显,2026-08-10 根因)
 				writerAlignedRef.current = null;
 				alignWriter();
-				refreshWriterUsage();
+				refreshWriterUsage(true);
 			},
 		);
 		return unsub;
@@ -971,13 +992,46 @@ export function WritePage({
 		return p;
 	}
 
-	/** 拉取编剧会话上下文占用(静默失败:提示是优化,不打断使用)。 */
-	function refreshWriterUsage() {
+	/**
+	 * 开合「本会话用量」浮层(点输入条的上下文圆环)。
+	 * 打开时现拉一次(warm:服务重启后内存里还没宿主也能拿到历史用量),
+	 * 数字就是点下去那一刻的,不依赖 SSE 事件恰好刷过。
+	 */
+	async function toggleUsage() {
+		if (usageOpen) {
+			setUsageOpen(false);
+			return;
+		}
+		setUsageOpen(true);
+		setUsageBusy(true);
+		setUsageErr(null);
+		try {
+			const slug = bookDetailRef.current?.slug;
+			if (!slug) {
+				setUsageStats(null);
+				return;
+			}
+			setUsageStats(await client.writerStats(slug, currentChapterRef.current?.file ?? null, true));
+		} catch (e) {
+			setUsageErr(`用量读取失败: ${friendlyError(e)}`);
+		} finally {
+			setUsageBusy(false);
+		}
+	}
+
+	/**
+	 * 拉取编剧会话上下文占用(静默失败:提示是优化,不打断使用)。
+	 *
+	 * `warm` = 让服务端在磁盘已有该章会话时顺带把会话带起来。打开页面/切章/SSE 重连时
+	 * 传 true —— 否则服务重启后内存里没有会话宿主,`usage` 恒为 null,输入条上的上下文
+	 * 圆环要等用户在本章说第一句话才出现(2026-09-23 实测)。
+	 */
+	function refreshWriterUsage(warm = false) {
 		const slug = bookDetailRef.current?.slug;
 		if (!slug) return;
 		const ch = currentChapterRef.current;
 		void client
-			.writerContext(slug, ch?.file ?? null)
+			.writerContext(slug, ch?.file ?? null, warm)
 			.then((usage) => {
 				// 期间切书/切章:丢弃过期快照
 				if (bookDetailRef.current?.slug === slug && currentChapterRef.current?.file === ch?.file) {
@@ -1040,10 +1094,11 @@ export function WritePage({
 	];
 
 	/** 发送给编剧(常驻编辑 agent):202 即返回,流式/工具事件走 writer_event SSE;
-	 *  用户消息回显经 SSE 到达,无需乐观气泡。 */
-	function sendWriter(text: string) {
+	 *  用户消息回显经 SSE 到达,无需乐观气泡。
+	 *  返回 false = **这一条没收** —— 输入条据此不清空输入框(否则流式中打字点发送会丢字)。 */
+	function sendWriter(text: string): boolean {
 		const slug = bookDetailRef.current?.slug;
-		if (!slug || writerSession.isStreaming || writerSession.compacting) return;
+		if (!slug || writerSession.isStreaming || writerSession.compacting) return false;
 		// 本地留底:服务端在**前置检查**阶段就失败时(未配置模型/密钥,见 vendor 的
 		// prompt:那条路径在写用户消息之前就抛了)对话里一条用户消息都不会有,
 		// 报错卡的「重试」只能靠这份留底把话再说一遍(见 retryWriterTurn)。
@@ -1051,6 +1106,7 @@ export function WritePage({
 		void client
 			.writerChat(slug, text, currentChapterRef.current?.file ?? undefined)
 			.catch((err) => setError(`发送失败: ${friendlyError(err)}`));
+		return true;
 	}
 
 	/** 编剧消息「编辑重发」:撤回该用户消息(及之后)并以新文本重发(服务端 retract +
@@ -1447,6 +1503,8 @@ export function WritePage({
 							<InputBar
 								ref={writerInputRef}
 								streaming={writerSession.isStreaming}
+								/* 压缩中不发(要等总结回合结束):置灰 + 提示,而不是打完字被吞 */
+								sendDisabled={writerSession.compacting}
 								onSend={sendWriter}
 								onAbort={() => {
 									const s = bookDetailRef.current?.slug;
@@ -1460,6 +1518,17 @@ export function WritePage({
 								onCommandError={(msg) => setError(`命令失败: ${msg}`)}
 								enterBehavior={enterBehavior}
 								usage={writerUsage}
+								onUsageClick={() => void toggleUsage()}
+								usagePanel={
+									usageOpen ? (
+										<UsagePanel
+											stats={usageStats}
+											loading={usageBusy}
+											err={usageErr}
+											onClose={() => setUsageOpen(false)}
+										/>
+									) : null
+								}
 							/>
 						</div>
 						)}
@@ -1473,8 +1542,14 @@ export function WritePage({
 			{pendingAsk && (
 				<AskUserOverlay
 					questions={pendingAsk.questions}
-					onSubmit={(answers) => void client.answerAskUser(pendingAsk.toolCallId, answers)}
-					onCancel={() => void client.cancelAskUser(pendingAsk.toolCallId)}
+					/* 提交/取消失败要说出来(2026-09-23):此前 `void` 掉 promise,
+					   请求失败时浮层原地不动、无提示,用户会反复点提交 */
+					onSubmit={(answers) =>
+						void client.answerAskUser(pendingAsk.toolCallId, answers).catch((e) => setError(`提交回答失败: ${friendlyError(e)}`))
+					}
+					onCancel={() =>
+						void client.cancelAskUser(pendingAsk.toolCallId).catch((e) => setError(`取消提问失败: ${friendlyError(e)}`))
+					}
 				/>
 			)}
 			{/* 全屏编辑器覆盖层(设计 §5.4) */}

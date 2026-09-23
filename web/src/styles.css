@@ -995,6 +995,48 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   font-family: var(--mono); font-size: 11px; color: var(--faint);
   font-variant-numeric: tabular-nums;
 }
+/* 圆环可点(有会话用量可看时):按钮化但外观不变,只补悬停底 */
+.ctx-ring.clickable {
+  border: 0; background: transparent; padding: 0 4px; border-radius: var(--r-sm);
+  cursor: pointer; font: inherit;
+}
+.ctx-ring.clickable:hover { background: var(--hover-tint); }
+
+/* —— 会话用量卡(2026-09-23):点输入条的上下文圆环展开,贴输入框上方浮出 ——
+   与 .slash-menu 同一套定位约定(父级 .inputbar 是 position: relative) */
+.usage-pop {
+  position: absolute; right: 14px; bottom: calc(100% - 6px); z-index: 20;
+  width: min(340px, calc(100% - 28px));
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 12px 12px; background: var(--bg-elev-2); border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg); box-shadow: var(--shadow-3);
+  animation: card-in-bottom 120ms var(--ease-out);
+}
+.usage-head { display: flex; align-items: center; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.usage-title { font-size: 13px; font-weight: 500; color: var(--ink); }
+.usage-note { font-size: 11px; color: var(--faint); flex: 1; }
+.usage-close {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--faint); cursor: pointer;
+}
+.usage-close:hover { color: var(--ink); background: var(--hover-tint); }
+.usage-rows { display: flex; flex-direction: column; gap: 4px; }
+.usage-row { display: flex; align-items: baseline; gap: 10px; font-size: 12px; }
+.usage-k { color: var(--muted); flex: none; width: 86px; }
+.usage-v { color: var(--ink-2); flex: 1; min-width: 0; text-align: right; }
+.usage-v.mono, .usage-bval.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.usage-sub { color: var(--faint); margin-left: 4px; }
+.usage-muted { font-size: 12px; color: var(--muted); padding: 4px 0; }
+.usage-err { font-size: 12px; color: var(--red); padding: 4px 0; }
+.usage-break { display: flex; flex-direction: column; gap: 4px; padding-top: 8px; border-top: 1px solid var(--line); }
+.usage-sub-title { font-size: 11px; color: var(--faint); letter-spacing: 0.06em; }
+.usage-brow { display: flex; align-items: baseline; gap: 10px; font-size: 12px; }
+.usage-bkey {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-family: var(--mono); font-size: 11px;
+}
+.usage-bval { flex: none; color: var(--muted); font-size: 11px; }
 .inputbar-inner:focus-within { border-color: var(--amber); box-shadow: 0 0 0 3px var(--amber-tint); }
 .inputbar textarea {
   flex: 1; background: transparent; border: none; outline: none; resize: none;

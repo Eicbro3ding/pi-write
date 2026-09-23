@@ -565,6 +565,7 @@ export class WriterServer {
 			{ method: "GET", segments: ["writer", ":slug", "tree"], handler: (ctx) => this.handleGetWriterTree(ctx) },
 			{ method: "POST", segments: ["writer", ":slug", "navigate"], handler: (ctx) => this.handlePostWriterNavigate(ctx) },
 			{ method: "GET", segments: ["writer", ":slug", "context"], handler: (ctx) => this.handleGetWriterContext(ctx) },
+			{ method: "GET", segments: ["writer", ":slug", "stats"], handler: (ctx) => this.handleGetWriterStats(ctx) },
 			{ method: "POST", segments: ["writer", ":slug", "compact"], handler: (ctx) => this.handlePostWriterCompact(ctx) },
 			// themes(用户自定义主题资产文件)
 			{ method: "GET", segments: ["themes"], handler: (ctx) => this.handleGetThemes(ctx) },
@@ -1304,7 +1305,11 @@ export class WriterServer {
 			thinking: state.thinkingLevel,
 			temperature: state.temperature,
 			topP: state.topP,
-			errors: [...result.errors.values()].map((e) => e.message),
+			// 2026-09-23:改成结构化 —— 前端「测试连接」要按 provider 过滤,
+			// 之前只有一句拼好的字符串(`DeepSeek models request failed: 401 …`),
+			// 只能靠包含匹配 provider 名,脆且容易错判。map 的 key 是 provider id
+			// (pi-ai 的 ModelsRefreshResult.errors: ReadonlyMap<string, Error>)。
+			errors: [...result.errors.entries()].map(([provider, e]) => ({ provider, message: e.message })),
 		});
 	}
 
@@ -1988,14 +1993,32 @@ export class WriterServer {
 	}
 
 	/**
+	 * GET /api/writer/:slug/stats?chapterFile=&warm=1:编剧会话**用量统计**
+	 * (2026-09-23 接上 vendor 原生的 getSessionStats:累计 token / 成本 / 按模型拆分)。
+	 * 口径是整个会话文件(含被压缩掉的历史)—— 与 /context 的"现在多大"不同;
+	 * 响应里顺带带上 contextUsage,前端一次请求就能把用量卡和圆环都填上。
+	 */
+	private async handleGetWriterStats(ctx: RouteContext): Promise<void> {
+		const writer = this.options.writerHost;
+		if (!writer) throw new HttpError(404, "not_found", "常驻编剧未启用");
+		const chapterFile = ctx.url.searchParams.get("chapterFile");
+		const warm = ctx.url.searchParams.get("warm") === "1";
+		const stats = await writer.sessionStats(ctx.params.slug!, chapterFile, { warm });
+		this.send(ctx.res, 200, { stats });
+	}
+
+	/**
 	 * GET /api/writer/:slug/context?chapterFile=:编剧会话上下文占用(纯读;
 	 * 无活跃会话/压缩后尚无新的模型响应时 usage 为 null)。
+	 * `warm=1`:磁盘上已有该章会话文件时把会话带起来再读(打开页面就有圆环数据;见
+	 * writer-host.contextUsage 的注释)。
 	 */
 	private async handleGetWriterContext(ctx: RouteContext): Promise<void> {
 		const writer = this.options.writerHost;
 		if (!writer) throw new HttpError(404, "not_found", "常驻编剧未启用");
 		const chapterFile = ctx.url.searchParams.get("chapterFile");
-		const usage = await writer.contextUsage(ctx.params.slug!, chapterFile);
+		const warm = ctx.url.searchParams.get("warm") === "1";
+		const usage = await writer.contextUsage(ctx.params.slug!, chapterFile, { warm });
 		this.send(ctx.res, 200, { usage });
 	}
 

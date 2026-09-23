@@ -92,16 +92,27 @@
    只读信息去掉输入框外观,模型按族聚合
    ════════════════════════════════════════════════════════════════ */
 
-/* 弹窗本体:932 宽(与 README 的组件规格一致) */
-.pvd-panel { width: min(932px, 94vw); }
+/* 弹窗本体:1040 宽(2026-09-23 从 932 放宽 —— 左栏要列全部供应商并带「已配置」胶囊) */
+.pvd-panel { width: min(1040px, 94vw); }
 .pvd-head { align-items: flex-start; }
 .pvd-head-text { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
 .pvd-sub { font-size: var(--fs-12); color: var(--muted); }
-.pvd-body .pvc-card { min-height: 460px; }
+.pvd-body .pvc-card { min-height: 460px; max-height: min(620px, calc(100vh - 250px)); }
 .pvd-body .pvc-detail { max-height: 520px; }
 
 .pvc-card { display: flex; gap: var(--sp-3); }
-.pvc-side { width: 208px; }
+/* 左栏宽度:原来写死 208px,装不下 "Qwen Token Plan CN" / "qwen-token-plan-cn" 再加
+   「已配置」胶囊(2026-09-23 用户反馈"列表那一栏宽度好像不够")。改成弹性区间:
+   窄屏不少于 240,宽屏最多 304,右栏不至于被挤瘦。 */
+.pvc-side { width: clamp(240px, 26%, 304px); }
+/*
+ * 列表要在栏内滚动,不能把弹窗撑高(2026-09-23)。
+ * `overflow-y: auto` 单独写在 flex 子项上是**不会滚的** —— flex 子项的 min-height
+ * 默认是 `auto`(内容高),于是列表直接长到 17 行的高度,把「添加自定义供应商」和页脚
+ * 顶到视口外面。实测:只列 1 行时看不出来,列全 17 个后 `pvc-card` 高 1097px(视口 900)。
+ * 补一个 `min-height: 0` 才真正触发内部滚动。
+ */
+.pvc-list { min-height: 0; }
 
 /* 左栏:标题计数 + 搜索 + 已配置列表 + 添加 + 计数脚注 */
 .pvc-side-title { font-size: var(--fs-11); color: var(--faint); letter-spacing: 0.06em; padding: 2px 2px var(--sp-2); }
@@ -111,11 +122,22 @@
 .pvc-item-name { font-size: var(--fs-13); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pvc-item-sub { font-size: var(--fs-11); font-family: var(--mono); color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pvc-item.sel .pvc-item-sub { color: var(--muted); }
+/* 未配置的整行降一级:名字不再用正文色,但仍可点开看(2026-09-23) */
+.pvc-item:not(.on) .pvc-item-name { color: var(--ink-2); }
+/* 行内「已配置」胶囊:flex:none 保证它不会被长名字挤扁,名字那边负责省略 */
+.pvc-item-pill {
+  flex: none; font-size: var(--fs-11); font-weight: 500;
+  padding: 1px 8px; border-radius: var(--r-full);
+  color: var(--green); background: var(--green-tint-strong);
+}
 
 /* 右栏详情头部:测试连接 / 移除凭据 */
 .pvc-d-head { gap: var(--sp-2); flex-wrap: wrap; }
 .pvc-head-btn { padding: 4px 12px; font-size: var(--fs-12); }
 .pvc-test-msg { font-size: var(--fs-12); color: var(--muted); line-height: 1.6; margin-top: var(--sp-2); }
+/* 测试结论必须一眼分得出真假:失败红、通过绿(2026-09-23,此前一律灰字) */
+.pvc-test-msg.err { color: var(--red); }
+.pvc-test-msg.ok { color: var(--green); }
 
 /* 只读信息行:没有输入框外观,只在悬停时显出一层底 */
 .pvc-info {
@@ -124,6 +146,8 @@
   border-radius: var(--r-sm); word-break: break-all;
 }
 .pvc-info:hover { background: var(--hover-tint); }
+/* 替代输入框的那行说明(纯 oauth / 本机凭据的供应商):不假装是个可编辑字段 */
+.pvc-note { color: var(--muted); font-size: var(--fs-12); line-height: 1.7; }
 .pvc-key-mask { letter-spacing: 2px; flex: 1; min-width: 0; }
 .pvc-label { font-size: var(--fs-12); color: var(--muted); }
 

@@ -11,7 +11,7 @@ import { ToggleSwitch } from "./ToggleSwitch.tsx";
  * 边界:插件与主进程同权(似 Obsidian/酒馆社区插件);「完全信任」额外解锁
  * 插件后端自定义路由 + 前端 JS(renderer 执行插件代码),开启需二次确认。
  */
-export function PluginList({ client }: { client: ApiClient }) {
+export function PluginList({ client, onChanged }: { client: ApiClient; onChanged?: () => void }) {
 	const [plugins, setPlugins] = useState<PluginInfoDto[] | null>(null);
 	const [loadErr, setLoadErr] = useState<string | null>(null);
 	const [busyId, setBusyId] = useState<string | null>(null);
@@ -40,6 +40,7 @@ export function PluginList({ client }: { client: ApiClient }) {
 		setRowErr(null);
 		try {
 			setPlugins(await client.setPluginEnabled(p.id, !p.enabled));
+			onChanged?.();
 		} catch (e) {
 			setRowErr(`状态切换失败: ${friendlyError(e)}`);
 		} finally {
@@ -54,6 +55,7 @@ export function PluginList({ client }: { client: ApiClient }) {
 		try {
 			setPlugins(await client.setPluginTrusted(p.id, !p.trusted));
 			setConfirmTrust(null);
+			onChanged?.();
 		} catch (e) {
 			setRowErr(`信任变更失败: ${friendlyError(e)}`);
 		} finally {
@@ -68,6 +70,7 @@ export function PluginList({ client }: { client: ApiClient }) {
 		try {
 			setPlugins(await client.deletePlugin(p.id));
 			setConfirmDelete(null);
+			onChanged?.();
 		} catch (e) {
 			setRowErr(`删除失败: ${friendlyError(e)}`);
 		} finally {

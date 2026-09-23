@@ -36,6 +36,7 @@ import {
 	extractMessagesFromManager,
 	type SessionCompactionResult,
 	type SessionContextUsage,
+	type SessionUsageStats,
 } from "./session-host.ts";
 import type { AgentMessage, ThinkingLevel } from "../../vendor/pi-agent-core/src/index.ts";
 import type { ToolDefinition } from "../../vendor/pi-coding-agent/src/index.ts";
@@ -480,11 +481,33 @@ export class WriterHost {
 		};
 	}
 
-	/** 编剧会话上下文占用(纯读,不创建会话;无活跃会话返回 null)。 */
-	async contextUsage(slug: string, chapterFile?: string | null): Promise<SessionContextUsage | null> {
+	/**
+	 * 取某书某章的编剧会话宿主。
+	 * 默认**纯读**:只认内存里已存在的宿主(不建会话)。
+	 * `warm: true` 时多一步:磁盘上已有该章会话文件、而内存里还没宿主(比如服务刚重启),
+	 * 就把宿主带起来 —— 否则打开页面拿不到占用/用量数据,输入条上的上下文圆环要等用户
+	 * 在本章说第一句话才出现(2026-09-23)。没有会话文件的章节不建(没数据可算)。
+	 */
+	private async resolveHost(slug: string, chapterFile?: string | null, warm?: boolean): Promise<SessionHost | null> {
 		const file = chapterFile ?? this.currentChapter.get(slug) ?? null;
-		const host = this.hosts.get(WriterHost.key(slug, file));
+		const key = WriterHost.key(slug, file);
+		const existing = this.hosts.get(key);
+		if (existing) return existing;
+		if (!warm) return null;
+		if (!readSessionFromDisk(slug, file)) return null;
+		return await this.getOrCreate(slug, file);
+	}
+
+	/** 编剧会话上下文占用(见 resolveHost 对 warm 的说明)。 */
+	async contextUsage(slug: string, chapterFile?: string | null, opts?: { warm?: boolean }): Promise<SessionContextUsage | null> {
+		const host = await this.resolveHost(slug, chapterFile, opts?.warm);
 		return host?.getContextUsage() ?? null;
+	}
+
+	/** 编剧会话用量统计(累计 token / 成本 / 按模型拆分;口径见 SessionUsageStats)。 */
+	async sessionStats(slug: string, chapterFile?: string | null, opts?: { warm?: boolean }): Promise<SessionUsageStats | null> {
+		const host = await this.resolveHost(slug, chapterFile, opts?.warm);
+		return host?.getSessionStats() ?? null;
 	}
 
 	/** 手动压缩编剧会话上下文(惰性建会话后执行;失败抛出由 server 映射为错误体)。 */

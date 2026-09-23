@@ -58,7 +58,7 @@ const STEP_FOOT_HINT: Record<WizardStepId, string> = {
 	intro: "共 5 步,随时可以跳过,稍后在设置里补",
 	provider: "key 只存在本地,不会上传。稍后可在「设置 → 模型」中修改",
 	model: "保存后立即生效;稍后可在「设置 → 模型」里修改",
-	book: "书名留空即跳过,之后随时在编辑页新建",
+	book: "首启已自动建了一本「未命名」,这里起名即复用它;留空则保持默认名",
 	prefs: "完成后可在「设置」里随时修改这些偏好",
 };
 
@@ -253,6 +253,19 @@ export function SetupWizard({
 		} catch (e) {
 			setKeyErr(`认证状态刷新失败: ${friendlyError(e)}`);
 		}
+		/*
+		 * 存完立刻探一次(2026-09-23):此前这一步对密钥**零校验** —— 粘贴一把已被供应商
+		 * 删掉的 key 也会挂上「已配置」并放行到下一步,第一次真对话才炸。
+		 * 目录刷新会带上该 provider 的鉴权错误(会联网拉模型目录的供应商当场就能验出),
+		 * 所以这里读一次 errors 就能当场说清。探测本身失败不阻塞保存。
+		 */
+		try {
+			const r = await client.refreshModels();
+			const fail = (r.errors ?? []).find((e) => e.provider === providerId);
+			if (fail) setKeyErr(`已保存到本机,但供应商拒绝了这个密钥: ${fail.message}`);
+		} catch {
+			/* 探测失败:保持"已保存"的结论,别把探测故障说成密钥问题 */
+		}
 		setKeyBusy(false);
 	}
 
@@ -322,6 +335,21 @@ export function SetupWizard({
 		}
 	}
 
+	/**
+	 * 首启自动建的那本空书(服务端 resolveInitialBook 建的「未命名」)。
+	 * 只在「书库里正好只有这一本、且它就叫未命名」时返回它 —— 多一本书的情况
+	 * (用户已有别的工作区)不动它,照旧新建。
+	 */
+	async function findAutoCreatedBook(): Promise<{ slug: string } | null> {
+		try {
+			const books = await client.getBooks();
+			const only = books.length === 1 ? books[0] : undefined;
+			return only && only.title === "未命名" ? { slug: only.slug } : null;
+		} catch {
+			return null; // 读不到列表就别乱复用,走新建
+		}
+	}
+
 	/** 选主题:立即应用(所见即所得)+ 标记偏好步走过。 */
 	function selectTheme(id: ThemeId) {
 		setTheme(id);
@@ -365,7 +393,10 @@ export function SetupWizard({
 			return;
 		}
 		if (step === 1) {
-			// provider 步不强求配置(列表内部自行处理错误);认证与否都放行
+			// provider 步不强求配置(列表内部自行处理错误);认证与否都放行。
+			// 但**已经配好的供应商也算这一步走过** —— 否则重跑向导(或上次已经存过 key)
+			// 时该标记永远是 false,用户看着像"我明明配过"(2026-09-23)。
+			if (selectedProvider?.configured) mark("provider");
 			setStep(2);
 			return;
 		}
@@ -394,7 +425,14 @@ export function SetupWizard({
 			if (bookBusy) return;
 			setBookBusy(true);
 			try {
-				const book = await client.createBook(title);
+				/*
+				 * 首启时服务端**已经**自动建了一本「未命名」(src/web.ts 的 resolveInitialBook:
+				 * 一本书都没有就建一本,否则主会话没有落脚点)。2026-09-23 修:此前这一步再
+				 * createBook 一次 —— 走完向导书库里就是两本(未命名 + 用户刚起名的)。
+				 * 现在只在「确实只有这一本自动建的空书」时复用它(改名),其余情况照旧新建。
+				 */
+				const reuse = await findAutoCreatedBook();
+				const book = reuse ? await client.renameBook(reuse.slug, title) : await client.createBook(title);
 				if (chapterTitle.trim().length > 0) await client.createChapter(book.slug, chapterTitle.trim());
 				mark("book");
 				try {

@@ -18,6 +18,8 @@ import {
 	SessionManager,
 } from "../../vendor/pi-coding-agent/src/index.ts";
 import type { AuthInteraction } from "../../vendor/pi-ai/src/index.ts";
+// getUsageCostBreakdown 没有从 vendor 的 index 再导出,只能按相对源码路径取(本项目一贯做法)
+import { getUsageCostBreakdown } from "../../vendor/pi-coding-agent/src/core/usage-totals.ts";
 import { getBooksDir } from "../config.ts";
 import { toolGuardContext } from "../tool-guard.ts";
 import {
@@ -85,6 +87,25 @@ export interface SessionContextUsage {
 	tokens: number | null;
 	contextWindow: number;
 	percent: number | null;
+}
+
+/**
+ * 会话用量统计(与 vendor AgentSession.getSessionStats 对齐 + 按模型拆成本)。
+ * 口径是**整个会话文件**(含被压缩掉的历史),即"花了多少",不是"现在上下文多大"。
+ */
+export interface SessionUsageStats {
+	userMessages: number;
+	assistantMessages: number;
+	toolCalls: number;
+	toolResults: number;
+	totalMessages: number;
+	tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+	/** 累计成本(供应商侧计价,单位随供应商;DeepSeek 等按美元)。 */
+	cost: number;
+	/** 当前上下文占用(与 /context 同一个值,顺便带出来省一次请求)。 */
+	contextUsage: SessionContextUsage | null;
+	/** 按 provider/model 拆的成本与 token(含 "Tools/summaries" 这一桶);按 cost 倒序。 */
+	breakdown: Array<{ key: string; cost: number; tokens: number }>;
 }
 
 /** 手动压缩返回摘要(与 vendor CompactionResult 对齐)。 */
@@ -259,6 +280,44 @@ export class SessionHost {
 		if (!rt) return null;
 		const usage = rt.session.getContextUsage();
 		return usage ? { tokens: usage.tokens, contextWindow: usage.contextWindow, percent: usage.percent } : null;
+	}
+
+	/**
+	 * 会话用量统计(2026-09-23):vendor 的 `getSessionStats()` 原生就有
+	 * —— 消息计数 + tokens(input/output/cacheRead/cacheWrite/total)+ **cost**
+	 * + 顺带 contextUsage。它累加**整个会话文件**的条目(含被压缩掉的历史),
+	 * 口径是「真实计费」,不是「当前上下文多大」(那个看 getContextUsage)。
+	 *
+	 * 另外把 vendor 的 `getUsageCostBreakdown()`(按 provider/model 拆成本)也带上;
+	 * 它没从 vendor 的 index 再导出,只能按相对源码路径 import(本项目一贯做法)。
+	 *
+	 * 注意:`sessionFile` / `sessionId` 不外传 —— 前端不需要绝对路径。
+	 */
+	getSessionStats(): SessionUsageStats | null {
+		const rt = this.runtime;
+		if (!rt) return null;
+		const s = rt.session.getSessionStats();
+		let breakdown: Array<{ key: string; cost: number; tokens: number }> = [];
+		try {
+			breakdown = getUsageCostBreakdown(rt.session.sessionManager.getEntries()).map((b) => ({
+				key: b.key,
+				cost: b.cost,
+				tokens: b.tokens,
+			}));
+		} catch {
+			/* 拆分失败不影响总量(老会话条目形状异常等) */
+		}
+		return {
+			userMessages: s.userMessages,
+			assistantMessages: s.assistantMessages,
+			toolCalls: s.toolCalls,
+			toolResults: s.toolResults,
+			totalMessages: s.totalMessages,
+			tokens: { ...s.tokens },
+			cost: s.cost,
+			contextUsage: this.getContextUsage(),
+			breakdown,
+		};
 	}
 
 	/**

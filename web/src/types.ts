@@ -261,6 +261,25 @@ export interface ContextUsageDto {
 	percent: number | null;
 }
 
+/**
+ * 会话用量统计(2026-09-23;来源 vendor 原生的 `AgentSession.getSessionStats()`)。
+ * 口径是**整个会话文件**(含被压缩掉的历史)—— 回答"花了多少",不是"现在上下文多大"。
+ */
+export interface SessionUsageStatsDto {
+	userMessages: number;
+	assistantMessages: number;
+	toolCalls: number;
+	toolResults: number;
+	totalMessages: number;
+	tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+	/** 累计成本(供应商侧计价)。 */
+	cost: number;
+	/** 当前上下文占用(与 /context 同值,顺手带出来)。 */
+	contextUsage: ContextUsageDto | null;
+	/** 按 provider/model 拆的成本与 token(含 "Tools/summaries" 一桶);按 cost 倒序。 */
+	breakdown: Array<{ key: string; cost: number; tokens: number }>;
+}
+
 /** 最近一轮 assistant 消息的提示词缓存命中(usage.cacheRead 投影;2026-08-22)。 */
 export interface CacheHitInfo {
 	/** 命中率 0..1(cacheRead / 全部提示词 token)。 */
@@ -683,6 +702,16 @@ export interface ProviderInfo {
 	authKind: "api_key" | "oauth" | "both" | "ambient";
 	source?: string;
 	label?: string;
+}
+
+/**
+ * POST /api/models/refresh 里某一条刷新失败(provider 是 **id**,与 ProviderInfo.id 同域)。
+ * 2026-09-23 从 `string[]` 改成结构化:前端「测试连接」要按 provider 过滤,
+ * 拼好的字符串只能靠包含匹配 provider 名,脆。
+ */
+export interface ProviderRefreshError {
+	provider: string;
+	message: string;
 }
 
 /** 模型条目最小形状(vendor Model 字段子集;来源 /api/providers/:id,不按认证过滤)。 */

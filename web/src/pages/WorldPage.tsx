@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import type { ApiClient } from "../api/client.ts";
+import { ApiError, type ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
 import { useCrossWindowReload } from "../cross-window-sync.ts";
 import type { ChapterRef, WorldDataDto, WorldEntryDto } from "../types.ts";
@@ -80,6 +80,8 @@ export function WorldPage({
 	worldRef.current = world;
 	const dirtyRef = useRef(dirty);
 	dirtyRef.current = dirty;
+	/** 编辑序号:save() 用它判断「保存期间是否又改过」,避免清掉未落盘的脏标记(2026-09-23)。 */
+	const editSeqRef = useRef(0);
 	/** 最近一次加载/保存成功时的磁盘文件 mtime(If-Match 条件写依据;0 = 未知)。 */
 	const lastWorldMtimeRef = useRef(0);
 	/** 撤销栈:保存"修改前"的世界快照;编辑会话(干净→脏)开始时入栈。 */
@@ -101,7 +103,15 @@ export function WorldPage({
 					if (cancelled) return;
 					// 重载 GET 返回时用户已开始编辑(脏):保留本地修改,放弃重载
 					// (旧版上的编辑保存时由 If-Match 409 兜底,不会静默覆盖)
-					if (dirtyRef.current) return;
+					if (dirtyRef.current) {
+						// 但**必须采纳磁盘的新 mtime**(2026-09-23)。否则 409 之后本地
+						// 一直拿旧 mtime 去 If-Match,每次保存都 409,而重载又因为脏而
+						// 跳过 —— 用户除 F5 之外没有出路(实测:AI 写过 world.json 后
+						// 页面彻底存不进去)。采纳新 mtime 后,下一次保存=覆盖外部改动,
+						// 正是冲突条文案「保存将覆盖」承诺的行为。
+						lastWorldMtimeRef.current = r.mtime;
+						return;
+					}
 					setWorld(r.world);
 					setDirty(false);
 					lastWorldMtimeRef.current = r.mtime; // 磁盘版本,保存时作 If-Match
@@ -138,15 +148,31 @@ export function WorldPage({
 	 *  磁盘 mtime 已变(其他窗口/AI 已改)时 409,提示后重载收敛。 */
 	async function save() {
 		if (!worldRef.current || !dirtyRef.current || saving) return;
+		// 保存期间用户又改了没?改了就别把脏标记清掉(2026-09-23):
+		// 此前无条件 setDirty(false),而这次编辑触发的防抖 save() 又被 `saving` 挡掉,
+		// 于是那笔改动既没写盘、也不再显示「未保存」,静默丢失。
+		const seqAtStart = editSeqRef.current;
 		setSaving(true);
 		setSaveErr(null);
 		try {
 			const mtime = await client.putWorld(worldRef.current, lastWorldMtimeRef.current || undefined, slug ?? undefined);
-			setDirty(false);
 			if (mtime > 0) lastWorldMtimeRef.current = mtime;
 			markSaved(); // 记录保存时间:自己的回显(1s 内)跳过
+			if (editSeqRef.current === seqAtStart) {
+				setDirty(false);
+			} else {
+				// 还有新改动没落盘:排下一轮把它写下去(脏标记保持 true)
+				scheduleAutoSave();
+			}
 		} catch (e) {
-			setSaveErr(`保存失败: ${friendlyError(e)}`);
+			if (e instanceof ApiError && e.status === 409) {
+				// 磁盘被外部改过。借一次重载把新 mtime 拿回来(脏状态只采纳 mtime、不动内容),
+				// 这样用户再按一次保存就能覆盖,而不是每次都被 409 挡回去(2026-09-23)
+				setSaveErr("世界书已被其他窗口或 AI 修改;再保存一次将以本地版本覆盖");
+				setReloadKey((k) => k + 1);
+			} else {
+				setSaveErr(`保存失败: ${friendlyError(e)}`);
+			}
 		} finally {
 			setSaving(false);
 		}
@@ -206,6 +232,7 @@ export function WorldPage({
 		setWorld((w) => (w ? fn(w) : w));
 		setDirty(true);
 		setSaveErr(null);
+		editSeqRef.current += 1;
 		scheduleAutoSave();
 	}
 
@@ -231,6 +258,7 @@ export function WorldPage({
 		setRedoCount(redoStack.current.length);
 		// 快照里可能没有当前选中条目:清空失效选中
 		setSelId((cur) => (cur && snap.entries.some((e) => e.id === cur) ? cur : null));
+		editSeqRef.current += 1;
 		void saveRef.current();
 	}
 

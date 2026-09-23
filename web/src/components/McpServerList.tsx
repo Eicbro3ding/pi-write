@@ -323,6 +323,10 @@ export function McpServerList({ client }: { client: ApiClient }) {
 				</div>
 			)}
 			{/* 直接编辑文件:原样读写 mcp.json(支持 imports/mcpServers 等表单表达不了的形状) */}
+			{/* 错误必须渲染在面板**外面**(2026-09-23 修):`openRaw` 失败时只 setRawErr 不
+			    开面板,而错误原本在 `{rawOpen && …}` 里面 —— 于是「直接编辑文件」点下去
+			    毫无反应,看起来像按钮坏了。 */}
+			{rawErr && <div className="notice err">{rawErr}</div>}
 			{rawOpen && (
 				<div className="s-mcp-raw">
 					<div className="s-hint">直接编辑 mcp.json(位于 ~/.pi/writer/agent/)。支持自有 servers 数组或 Claude Code 的 mcpServers 对象 + imports；保存时校验 JSON 与结构，原样落盘。</div>
@@ -333,7 +337,6 @@ export function McpServerList({ client }: { client: ApiClient }) {
 						onChange={(e) => setRawText(e.target.value)}
 						placeholder='{\n  "imports": ["claude-code"],\n  "mcpServers": {\n    "tavily": { "command": "npx", "args": ["-y", "tavily-mcp"] }\n  }\n}'
 					/>
-					{rawErr && <div className="notice err">{rawErr}</div>}
 					<div>
 						<button className="btn-ghost" disabled={busy} onClick={() => void saveRaw()}>
 							{busy ? "保存中…" : "保存"}

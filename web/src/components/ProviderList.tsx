@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
+import { currentModelOf, filterProviders, providerCanHoldApiKey, providerCountLabel, providerCounts, providerRowSub, unconfiguredHint } from "../provider-list-logic.ts";
 import type { ModelDto, ProviderDetailDto, ProviderInfo } from "../types.ts";
 import { AddModelDialog, type AddModelMode } from "./AddModelDialog.tsx";
 import { IconPlus } from "./Icons.tsx";
@@ -43,9 +44,11 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 	/** 移除凭据确认态。 */
 	const [confirmRemove, setConfirmRemove] = useState(false);
 	const [removeBusy, setRemoveBusy] = useState(false);
-	/** 测试连接进行中与结果(走只读的 models 目录查询,不写任何东西)。 */
+	/** 测试连接进行中与结果(只读:刷新模型目录,不写任何配置)。 */
 	const [testBusy, setTestBusy] = useState(false);
 	const [testMsg, setTestMsg] = useState<string | null>(null);
+	/** 结果色调:null = 还没测;true/false = 通过/失败(失败必须看得见)。 */
+	const [testOk, setTestOk] = useState<boolean | null>(null);
 	/** 模型列表视图:按族聚合 / 全部。 */
 	const [grouped, setGrouped] = useState(true);
 	/** 展开的族 key 集合(聚合视图下显示子版本)。 */
@@ -120,6 +123,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 	/** 切换供应商时收拾临时状态(测试结果 / key 编辑 / 展开的族)。 */
 	useEffect(() => {
 		setTestMsg(null);
+		setTestOk(null);
 		setOpenFamilies({});
 		setConfirmRemove(false);
 		resetKeyEdit();
@@ -127,12 +131,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [selectedId]);
 
-	const filtered = useMemo(() => {
-		const list = providers ?? [];
-		if (query.trim().length === 0) return list;
-		const q = query.trim().toLowerCase();
-		return list.filter((p) => p.id.toLowerCase().includes(q) || p.name.toLowerCase().includes(q));
-	}, [providers, query]);
+	const filtered = useMemo(() => filterProviders(providers ?? [], query), [providers, query]);
 
 	/** 清理 key 编辑状态(关闭/成功共用)。 */
 	function resetKeyEdit() {
@@ -212,20 +211,41 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 	}
 
 	/**
-	 * 测试连接:读一次该供应商的模型目录(GET /api/models 触发动态 provider 刷新),
-	 * 能读到模型 = 可用。只读、不写配置、不覆盖当前模型选择。
+	 * 测试连接:联网刷新一次模型目录(POST /api/models/refresh),**按这次刷新报出的错误判定**。
+	 *
+	 * 2026-09-23 修。此前只看「模型数 > 0」,而模型列表来自 catalog、只按「该 provider 有没有
+	 * 存过凭据」过滤(vendor `model-runtime.ts` 的 `configuredProviders`),与密钥有效性无关 ——
+	 * 实测:已删除的密钥也报「连接正常,该供应商有 3 个模型可用」,而同一把密钥真发消息是 401。
+	 * 现在读 `refreshModels()` 返回的 `errors`(按 provider id 过滤)。
+	 *
+	 * 仍要说清的一点:目录刷新只能对**会联网拉模型目录**的供应商验出鉴权失败(本版只有
+	 * DeepSeek 那种 provider 会发这次请求),目录来自内置清单的供应商这里验不了 key ——
+	 * 所以成功时也只说「目录刷新无误」,不说「凭据有效」。
 	 */
 	async function testConnection() {
 		if (testBusy) return;
 		setTestBusy(true);
 		setTestMsg(null);
+		setTestOk(null);
 		try {
-			await client.refreshModels();
+			const r = await client.refreshModels();
+			const fail = (r.errors ?? []).find((e) => e.provider === selectedId);
 			// 用刚拉到的详情判断,避免闭包里的旧 detail
 			const fresh = await reloadDetail();
-			const count = fresh?.models?.length ?? 0;
-			setTestMsg(count > 0 ? `连接正常,该供应商有 ${count} 个模型可用` : "连接正常,但未返回模型(检查 Base URL 与 API 格式)");
+			if (fail) {
+				setTestOk(false);
+				setTestMsg(`连接失败: ${fail.message}`);
+			} else if (!fresh) {
+				// 详情接口本身失败。此前这里会走 count=0 的分支,被写成「连接正常,但未返回模型」
+				setTestOk(false);
+				setTestMsg("详情读取失败(接口异常),无法判断该供应商是否可用");
+			} else {
+				const count = fresh.models?.length ?? 0;
+				setTestOk(count > 0);
+				setTestMsg(count > 0 ? `目录刷新无误,该供应商有 ${count} 个模型可用` : "目录刷新无误,但没有可用模型(检查 Base URL 与 API 格式)");
+			}
 		} catch (e) {
+			setTestOk(false);
 			setTestMsg(`连接失败: ${friendlyError(e)}`);
 		} finally {
 			setTestBusy(false);
@@ -236,20 +256,37 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 	const detailProvider = detail?.provider;
 	const isConfigured = detailProvider?.configured ?? false;
 	const modelFamilies = useMemo(() => groupModelFamilies(detail?.models ?? []), [detail]);
+	/** 不能填 key 的供应商(纯 oauth / 本机凭据)该给的那行说明;null = 可以填 key。 */
+	const apiKeyHint = detailProvider ? unconfiguredHint(detailProvider) : null;
+	/** 未配置时直接摆出输入框 —— 藏在一支铅笔后面等于没有入口(2026-09-23)。 */
+	const showKeyInput = apiKeyHint === null && (editingKey || !isConfigured);
 
-	/** 左栏:只列已配置(设计稿 14:左侧只有「已配置 N」)。 */
-	const configuredList = filtered.filter((p) => p.configured);
-	const configuredTotal = (providers ?? []).filter((p) => p.configured).length;
-	const totalCount = (providers ?? []).length;
+	/**
+	 * 左栏:列**全部**供应商(已配置的排前面 + 带「已配置」胶囊)。
+	 *
+	 * 2026-09-23 改:此前只列 `configured`,而页脚写着「共 17 个可选,点上方浏览全部」
+	 * —— 那颗「添加供应商」通向的是**自定义供应商表单**,不是服务商目录,于是那 17 个
+	 * 在设置页里根本没有入口(向导第 2 步反而有完整列表)。现在直接列全:
+	 * 顺序沿用 `/api/providers`(后端已按「已配置优先 → id」排好),本组件不重排。
+	 */
+	const counts = providerCounts(providers ?? []);
+	const searching = query.trim().length > 0;
 
 	function renderProviderItem(p: ProviderInfo, selected: boolean) {
 		return (
-			<button type="button" key={p.id} className={`pvc-item${selected ? " sel" : ""}`} onClick={() => setSelectedId(p.id)}>
-				<span className="pvc-dot" />
+			<button
+				type="button"
+				key={p.id}
+				className={`pvc-item${selected ? " sel" : ""}${p.configured ? " on" : ""}`}
+				onClick={() => setSelectedId(p.id)}
+			>
+				{/* 圆点:已配置绿、未配置灰(基类是绿的,所以未配置加 .off) */}
+				<span className={`pvc-dot${p.configured ? "" : " off"}`} />
 				<span className="pvc-item-text">
 					<span className="pvc-item-name">{p.name}</span>
-					<span className="pvc-item-sub">{currentModelOf(currentModel, p.id) ?? p.id}</span>
+					<span className="pvc-item-sub">{providerRowSub(p, currentModel)}</span>
 				</span>
+				{p.configured && <span className="pvc-item-pill">已配置</span>}
 			</button>
 		);
 	}
@@ -258,9 +295,9 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 		<>
 			{loadErr && <div className="notice err">{loadErr}</div>}
 			<div className="pvc-card">
-				{/* 左栏:已配置列表 + 搜索 + 添加供应商 */}
+				{/* 左栏:全部供应商(已配置优先)+ 搜索 + 自定义供应商入口 */}
 				<div className="pvc-side">
-					<div className="pvc-side-title">已配置 {configuredTotal}</div>
+					<div className="pvc-side-title">{providerCountLabel(counts)}</div>
 					<input
 						className="s-search pvc-search"
 						type="search"
@@ -269,21 +306,26 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 						onChange={(e) => setQuery(e.target.value)}
 					/>
 					<div className="pvc-list">
-						{configuredList.length === 0 ? (
+						{providers === null ? (
 							<div className="s-empty-row">
-								<span className="s-val muted">
-									{query.trim().length > 0 ? "未找到匹配的已配置供应商" : "还没有配置任何供应商"}
-								</span>
+								<span className="s-val muted">加载中…</span>
+							</div>
+						) : filtered.length === 0 ? (
+							<div className="s-empty-row">
+								<span className="s-val muted">{searching ? `没有匹配「${query.trim()}」的供应商` : "服务端没有返回任何供应商"}</span>
 							</div>
 						) : (
-							configuredList.map((p) => renderProviderItem(p, selectedId === p.id))
+							// key 用 id:未搜索时列表是后端顺序(已配置优先),搜索时顺序不变
+							filtered.map((p) => renderProviderItem(p, selectedId === p.id))
 						)}
 					</div>
 					<button type="button" className="pvc-add-provider" onClick={() => setAddDialog("provider")}>
 						<IconPlus size={14} />
-						添加供应商
+						添加自定义供应商
 					</button>
-					<div className="pvc-side-foot">共 {totalCount} 个可选,点上方浏览全部</div>
+					{/* 页脚不再写「点上方浏览全部」:那颗按钮通向自定义表单,不提供"全部"。
+					    上面列的就是全部,这里只交代"为什么有的没配"。 */}
+					{counts.configured < counts.total && <div className="pvc-side-foot">未配置的也能点开看;填好 key 后即可用。</div>}
 				</div>
 
 				{/* 右栏:详情 */}
@@ -306,9 +348,13 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 								<span className="pvc-d-title">{detailProvider?.id}</span>
 								{isConfigured ? <span className="pvc-badge-on">已配置</span> : <span className="pvc-badge-off">未配置</span>}
 								<span className="pvc-d-spacer" />
-								<button type="button" className="btn-ghost pvc-head-btn" disabled={testBusy} onClick={() => void testConnection()}>
-									{testBusy ? "测试中…" : "测试连接"}
-								</button>
+								{/* 未配置没有凭据可测 —— 隐藏而不是给一个必然"正常"的结论(2026-09-23)。
+								    已配置的走 testConnection,由它读 /api/models/refresh 的 errors 判真假。 */}
+								{isConfigured && (
+									<button type="button" className="btn-ghost pvc-head-btn" disabled={testBusy} onClick={() => void testConnection()}>
+										{testBusy ? "测试中…" : "测试连接"}
+									</button>
+								)}
 								{confirmRemove ? (
 									<span className="pvc-remove-confirm">
 										<span>移除凭据后该供应商将不可用,确认?</span>
@@ -331,7 +377,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 									</button>
 								)}
 							</header>
-							{testMsg && <div className="pvc-test-msg">{testMsg}</div>}
+							{testMsg && <div className={`pvc-test-msg${testOk === false ? " err" : testOk === true ? " ok" : ""}`}>{testMsg}</div>}
 
 							{/* 只读信息行(设计稿 14:去掉输入框外观) */}
 							<div className="pvc-field">
@@ -346,7 +392,10 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 
 							<div className="pvc-field">
 								<label className="pvc-label">API Key</label>
-								{editingKey ? (
+								{apiKeyHint !== null ? (
+									/* 纯 oauth / 本机凭据:给说明,不给一个写了也会 400 的输入框 */
+									<div className="pvc-info pvc-note">{apiKeyHint}</div>
+								) : showKeyInput ? (
 									<div className="pvc-key-row">
 										<input
 											type={keyVisible ? "text" : "password"}
@@ -373,13 +422,15 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 										<button type="button" className="btn-ghost" disabled={keyBusy || keyValue.trim().length === 0} onClick={() => void saveKey()}>
 											{keyBusy ? "保存中…" : "保存"}
 										</button>
-										<button type="button" className="btn-ghost" disabled={keyBusy} onClick={resetKeyEdit}>
-											取消
-										</button>
+										{isConfigured && (
+											<button type="button" className="btn-ghost" disabled={keyBusy} onClick={resetKeyEdit}>
+												取消
+											</button>
+										)}
 									</div>
 								) : (
 									<div className="pvc-key-row">
-										<div className="pvc-info mono pvc-key-mask">{isConfigured ? "••••••••••••••••" : "未配置"}</div>
+										<div className="pvc-info mono pvc-key-mask">••••••••••••••••</div>
 										<button
 											type="button"
 											className="icon-btn"
@@ -524,14 +575,6 @@ function modelRefOf(m: unknown): string | null {
 	const o = m as Record<string, unknown>;
 	if (typeof o.provider !== "string" || typeof o.id !== "string") return null;
 	return `${o.provider}/${o.id}`;
-}
-
-/** 当前模型属于该供应商时返回模型 id,否则 null(左栏行内小字)。 */
-function currentModelOf(current: string | null, providerId: string): string | null {
-	if (!current) return null;
-	const sep = current.indexOf("/");
-	if (sep < 0) return null;
-	return current.slice(0, sep) === providerId ? current.slice(sep + 1) : null;
 }
 
 /** 一族模型(同前缀的多个版本收成一条;单模型族 versions 只有一项)。 */

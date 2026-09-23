@@ -237,6 +237,11 @@ export function SettingsPage({
 	}, [focusModelToken]);
 	/** 插件设置分类(声明了 frontend.ui.settingsItems 的插件;左侧导航追加)。 */
 	const [pluginCats, setPluginCats] = useState<PluginInfoDto[] | null>(null);
+	/** 插件集变更代数:PluginList 里启停/信任/删除后 +1,触发下面重拉左栏分类。
+	 *  2026-09-23 修:此前只在挂载时拉一次,而 SettingsPage 是四页常驻挂载 ——
+	 *  在「集成」里启用带设置项的插件后,左栏不会出现对应分类(删除后也不会消失,
+	 *  停在已删插件的分类上会一直显示「插件不存在或已删除」),要刷新页面才恢复。 */
+	const [pluginCatToken, setPluginCatToken] = useState(0);
 	useEffect(() => {
 		let cancelled = false;
 		client
@@ -251,7 +256,7 @@ export function SettingsPage({
 		return () => {
 			cancelled = true;
 		};
-	}, [client]);
+	}, [client, pluginCatToken]);
 	/** null = 加载中;[] = 已加载但为空(或加载失败)。 */
 	const [models, setModels] = useState<ModelInfo[] | null>(null);
 	const [current, setCurrent] = useState<string | null>(null);
@@ -1482,7 +1487,7 @@ export function SettingsPage({
 									<div className="s-card-desc">
 										扩展写作能力(工具/事件/命令)。插件目录 ~/.pi/writer/plugins/&lt;id&gt;,内含 plugin.json 与入口 index.mjs;切换启用后会话重建生效。
 									</div>
-									<PluginList client={client} />
+									<PluginList client={client} onChanged={() => setPluginCatToken((k) => k + 1)} />
 								</section>
 							</div>
 							<aside className="st-col-side" />

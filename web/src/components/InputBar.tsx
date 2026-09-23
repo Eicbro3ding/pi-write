@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from "react";
 import { Lu } from "./Lu.tsx";
 import type { EnterBehavior } from "../settings.ts";
 import type { ContextUsageDto } from "../types.ts";
@@ -20,7 +20,18 @@ import {
 interface InputBarProps {
 	/** 是否正在流式生成;为 true 时按钮变为「中断」。 */
 	streaming: boolean;
-	onSend: (text: string) => void;
+	/**
+	 * 发送回调。**返回 false = 页面此刻不接受这条**(流式中 / 未开书 / 舞台长命令进行中),
+	 * 此时输入框**不清空** —— 清了就等于把用户刚打的字丢了(2026-09-23 修的实测 bug:
+	 * 舞台页回合进行中点发送,文字消失、没发出去、还没有任何提示)。
+	 */
+	onSend: (text: string) => boolean | void;
+	/**
+	 * 页面自知此刻不能发送(流式 / 压缩 / 长命令中)。
+	 * 与 `onSend` 返回 false 是两道保险:这个负责**提示**(置灰发送键 + 回车不吞),
+	 * 那个负责**兜底**(万一状态没同步上,也只是不发送,不会丢字)。
+	 */
+	sendDisabled?: boolean;
 	onAbort: () => void;
 	/** 占位文案;缺省保持现有对话提示。 */
 	placeholder?: string;
@@ -36,6 +47,10 @@ interface InputBarProps {
 	enterBehavior?: EnterBehavior;
 	/** 上下文占用(设计稿 ★输入区·上下文圆环):给值就在发送按钮左侧显示比例圆环。 */
 	usage?: ContextUsageDto | null;
+	/** 点圆环的回调(给了就把圆环做成按钮)。页面据此展开「本会话用量」浮层。 */
+	onUsageClick?: () => void;
+	/** 用量浮层(由页面渲染,`usage-pop` 自带定位;贴输入框上方浮出)。 */
+	usagePanel?: ReactNode;
 }
 
 /** 命令面板内部状态。 */
@@ -91,7 +106,7 @@ const MAX_HEIGHT = 160;
  * 四类,而 ContextUsageDto 只有总量(tokens / contextWindow / percent),没有分类
  * 拆分。**不编造数字**,悬停只给总量。
  */
-function ContextRing({ usage }: { usage: ContextUsageDto }) {
+function ContextRing({ usage, onOpen }: { usage: ContextUsageDto; onOpen?: () => void }) {
 	if (usage.percent === null) return null;
 	const pct = Math.max(0, Math.min(100, usage.percent));
 	const tone = pct >= 80 ? "err" : pct >= 60 ? "warn" : "ok";
@@ -99,8 +114,8 @@ function ContextRing({ usage }: { usage: ContextUsageDto }) {
 	const circumference = 2 * Math.PI * radius;
 	const tokens = usage.tokens?.toLocaleString("zh-CN") ?? "?";
 	const window = usage.contextWindow.toLocaleString("zh-CN");
-	return (
-		<span className={`ctx-ring ${tone}`} title={`上下文 ${tokens} / ${window} tokens`}>
+	const body = (
+		<>
 			<svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true">
 				<circle cx="13" cy="13" r={radius} fill="none" stroke="var(--line-strong)" strokeWidth="2.5" />
 				<circle
@@ -117,6 +132,19 @@ function ContextRing({ usage }: { usage: ContextUsageDto }) {
 				/>
 			</svg>
 			<span className="ctx-ring-pct">{Math.round(pct)}%</span>
+		</>
+	);
+	// 有 onOpen 就做成按钮:点了展开会话用量卡(累计 token / 成本 / 按模型拆分)
+	if (onOpen) {
+		return (
+			<button type="button" className={`ctx-ring ${tone} clickable`} title={`上下文 ${tokens} / ${window} tokens · 点击看用量`} onClick={onOpen}>
+				{body}
+			</button>
+		);
+	}
+	return (
+		<span className={`ctx-ring ${tone}`} title={`上下文 ${tokens} / ${window} tokens`}>
+			{body}
 		</span>
 	);
 }
@@ -134,6 +162,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 	{
 		streaming,
 		onSend,
+		sendDisabled = false,
 		onAbort,
 		placeholder = "说点什么…",
 		ariaLabel = "消息输入",
@@ -142,6 +171,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 		onCommandError,
 		enterBehavior = "newline",
 		usage,
+		onUsageClick,
+		usagePanel,
 	},
 	ref,
 ) {
@@ -416,9 +447,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 		// 芯片可以独立发送(只引用不说话);两者皆空才忽略
 		if (t.length === 0 && chips.length === 0) return;
 		const message = composeMessageWithAttachments(chips, t);
+		// 页面拒收就原样留着 —— 先清空再问页面,等于把这条消息吃掉(2026-09-23)
+		if (onSend(message) === false) return;
 		setText("");
 		setChips([]);
-		onSend(message);
 	}
 
 	// 无依赖数组:每次渲染重建句柄,保证闭包读到最新 text
@@ -488,6 +520,9 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 			}
 		}
 		if (e.key !== "Enter" || e.shiftKey) return;
+		// 此刻页面不收(流式/压缩/长命令中):**别 preventDefault**,让回车正常换行
+		// —— 吞掉回车又发不出去,用户只会以为键盘坏了(2026-09-23)
+		if (sendDisabled) return;
 		// Ctrl/Cmd+Enter 在任何设置下都发送;Shift+Enter 恒换行(交给浏览器插入换行)
 		if (e.ctrlKey || e.metaKey || enterBehavior === "send") {
 			e.preventDefault();
@@ -611,7 +646,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 					}}
 					onClick={(e) => refreshMenus(e.currentTarget)}
 				/>
-				{usage && <ContextRing usage={usage} />}
+				{usage && <ContextRing usage={usage} onOpen={onUsageClick} />}
+				{usagePanel}
 				{streaming ? (
 					<button className="btn-abort" aria-label="停止生成" onClick={onAbort}>
 						中断
@@ -620,8 +656,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 					<button
 						className="btn-send"
 						aria-label="发送"
-						title={enterBehavior === "send" ? "发送(Enter)" : "发送(Ctrl+Enter)"}
-						disabled={text.trim().length === 0 && chips.length === 0}
+						title={sendDisabled ? "正在生成,先中断或等这一轮结束" : enterBehavior === "send" ? "发送(Enter)" : "发送(Ctrl+Enter)"}
+						disabled={sendDisabled || (text.trim().length === 0 && chips.length === 0)}
 						onClick={send}
 					>
 						{/* 设计稿 04/06:两处输入条都是「琥珀圆形 ↑」,不再用「发送」文字按钮 */}

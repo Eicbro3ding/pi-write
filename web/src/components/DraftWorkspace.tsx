@@ -167,10 +167,15 @@ export function DraftWorkspace({
 
 	/**
 	 * 多窗口同步:其他窗口保存了本文件时,draft_changed 事件到达。
-	 * 干净/save-error → 重载收敛(复用 retryKey 加载路径);脏 → 提示冲突但不重载
-	 * (不覆盖未保存修改);保存中/加载中 → 跳过(保存完成后自然收敛);
+	 * 脏/save-error → 提示冲突但不重载;干净 → 重载收敛;
+	 * 保存中/加载中 → 跳过(保存完成后自然收敛);
 	 * 自己保存的回显(1s 内)跳过,避免保存后清选区等副作用。
 	 * (决策逻辑收敛于 useCrossWindowReload,见 cross-window-sync.ts)
+	 *
+	 * 2026-09-23 修:`save-error` 归为 **dirty** 而不是 clean。写盘失败的本地文本
+	 * 是"用户唯一的一份",此前归 clean 会让 onReload 直接拿磁盘内容盖掉它、且不弹冲突条
+	 * —— 用户本地那批没保存上的修改无声消失。现在给冲突条,让用户自己选
+	 * 「重新加载(丢弃本地修改)」还是继续编辑后重存。
 	 */
 	const markSaved = useCrossWindowReload({
 		client,
@@ -179,7 +184,7 @@ export function DraftWorkspace({
 		state: () => {
 			const st = statusRef.current;
 			if (st === "saving" || st === "loading") return "busy";
-			if (st === "dirty") return "dirty";
+			if (st === "dirty" || st === "save-error") return "dirty";
 			return "clean";
 		},
 		onConflict: () => setExternalConflict(true),

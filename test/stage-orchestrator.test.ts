@@ -22,6 +22,27 @@ import type { DirectorMode, SceneRules, SceneScript } from "../src/stage/types.t
 
 const rules: SceneRules = { minLines: 10, maxLines: 20, wrapUpWindow: 3, turn: "round-robin" };
 
+/*
+ * 每个用例都把 bookDir / agentDir 指向自己的 mkdtemp,但**舞台演员的会话文件**走的是
+ * getWriterDir()(config.ts 默认 ~/.pi/writer,可用 PI_WRITER_DIR 覆盖)——
+ * 不重定向的话,每个用例都会在**真实家目录**的 ~/.pi/writer/sessions/ 下留一个
+ * piw-* 目录,只清临时目录清不掉它(实测攒到 131 个,2026-09-23)。
+ * 文件级钩子在这里统一把 writer 根指到临时目录,真实家目录一行不碰。
+ * (文件级 beforeEach 先于 describe 级执行、afterEach 后于 describe 级执行,顺序正合适)
+ */
+let writerRoot: string;
+let prevWriterDir: string | undefined;
+beforeEach(() => {
+	prevWriterDir = process.env.PI_WRITER_DIR;
+	writerRoot = mkdtempSync(join(tmpdir(), "piw-root-"));
+	process.env.PI_WRITER_DIR = writerRoot;
+});
+afterEach(() => {
+	if (prevWriterDir === undefined) delete process.env.PI_WRITER_DIR;
+	else process.env.PI_WRITER_DIR = prevWriterDir;
+	rmSync(writerRoot, { recursive: true, force: true });
+});
+
 describe("decideTurnAction（收幕决策状态机）", () => {
 	it("正常状态继续演", () => {
 		expect(decideTurnAction("normal", 5, rules)).toBe("speak");

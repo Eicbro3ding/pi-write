@@ -162,7 +162,10 @@ export function useLibrary(client: ApiClient, onBookChange?: (slug: string | nul
 				a.href = url;
 				a.download = `${slug}.zip`;
 				a.click();
-				URL.revokeObjectURL(url);
+				// 别同步 revoke(2026-09-23):点击后立刻回收 blob URL,在 Firefox/Safari 上
+				// 有把下载取消掉的历史行为。同项目 ExportPanel.downloadBlob 用的是延迟回收,
+				// 这里对齐(下一个宏任务再回收,下载已经开始读了)。
+				setTimeout(() => URL.revokeObjectURL(url), 0);
 			} finally {
 				setBusySlug(null);
 			}

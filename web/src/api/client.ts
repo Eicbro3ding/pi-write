@@ -5,7 +5,7 @@
  * 注意:本文件不得在 import 时触碰 DOM 专属 API(EventSource 只在 subscribeEvents 内使用),
  * 以兼容 node 环境的 vitest 单测。
  */
-import type { AgentEventDto, BookDetail, BookFileTextDto, BookFilesDto, BookMeta, ChapterRef, ContextUsageDto, ImageProviderDto, ImageSizeDto, McpServerInfo, McpServerStatus, PluginInfoDto, PluginSettingsItemDto, ProviderDetailDto, ProviderInfo, ResolvedShellDto, SessionState, SessionTreeDto, SetupStateDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, WorldDataDto, ShellKindDto, WriterSettingsDto, WriterStateDto } from "../types.ts";
+import type { AgentEventDto, BookDetail, BookFileTextDto, BookFilesDto, BookMeta, ChapterRef, ContextUsageDto, ImageProviderDto, ImageSizeDto, McpServerInfo, McpServerStatus, PluginInfoDto, PluginSettingsItemDto, ProviderDetailDto, ProviderInfo, ProviderRefreshError, ResolvedShellDto, SessionState, SessionUsageStatsDto, SessionTreeDto, SetupStateDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, WorldDataDto, ShellKindDto, WriterSettingsDto, WriterStateDto } from "../types.ts";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
 
 /** 图片访问 URL(同源相对路径;生产/Electron 同源,vite dev 经代理)。 */
@@ -194,8 +194,8 @@ export class ApiClient {
 	}
 
 	/** 联网刷新模型目录(远程 catalog / 动态 provider),返回最新模型与可选刷新错误。 */
-	async refreshModels(): Promise<{ models: unknown[]; current: unknown; thinking: unknown; temperature: unknown; topP: unknown; errors?: string[] }> {
-		return this.request<{ models: unknown[]; current: unknown; thinking: unknown; temperature: unknown; topP: unknown; errors?: string[] }>("/api/models/refresh", {
+	async refreshModels(): Promise<{ models: unknown[]; current: unknown; thinking: unknown; temperature: unknown; topP: unknown; errors?: ProviderRefreshError[] }> {
+		return this.request<{ models: unknown[]; current: unknown; thinking: unknown; temperature: unknown; topP: unknown; errors?: ProviderRefreshError[] }>("/api/models/refresh", {
 			method: "POST",
 		});
 	}
@@ -644,15 +644,34 @@ export class ApiClient {
 		await this.request<{ ok: boolean }>(`/api/writer/${encodeURIComponent(slug)}/abort`, { method: "POST" });
 	}
 
-	/** 编剧会话上下文占用(无会话/未知 → null;供「建议 /compact」提示)。 */
-	async writerContext(slug: string, chapterFile?: string | null): Promise<ContextUsageDto | null> {
+	/** 编剧会话上下文占用(无会话/未知 → null;供「建议 /compact」提示与输入条的圆环)。
+	 *  `warm` = 磁盘上已有该章会话时请服务端顺带把会话带起来 —— 打开页面/重连时用,
+	 *  否则服务重启后圆环要等本章说一句话才出现(2026-09-23)。 */
+	async writerContext(slug: string, chapterFile?: string | null, warm?: boolean): Promise<ContextUsageDto | null> {
 		const q = new URLSearchParams();
 		if (chapterFile) q.set("chapterFile", chapterFile);
+		if (warm) q.set("warm", "1");
 		const qs = q.toString();
 		const r = await this.request<{ usage: ContextUsageDto | null }>(
 			`/api/writer/${encodeURIComponent(slug)}/context${qs ? `?${qs}` : ""}`,
 		);
 		return r.usage;
+	}
+
+	/**
+	 * 编剧会话用量统计(累计 token / 成本 / 按模型拆分;口径是整个会话文件)。
+	 * `warm` 同 writerContext:磁盘已有该章会话就带起来再读,否则服务重启后首次打开
+	 * 会拿到 null(2026-09-23)。
+	 */
+	async writerStats(slug: string, chapterFile?: string | null, warm?: boolean): Promise<SessionUsageStatsDto | null> {
+		const q = new URLSearchParams();
+		if (chapterFile) q.set("chapterFile", chapterFile);
+		if (warm) q.set("warm", "1");
+		const qs = q.toString();
+		const r = await this.request<{ stats: SessionUsageStatsDto | null }>(
+			`/api/writer/${encodeURIComponent(slug)}/stats${qs ? `?${qs}` : ""}`,
+		);
+		return r.stats;
 	}
 
 	/** 手动压缩编剧会话上下文(内部有模型总结回合,可耗时 1-10 分钟,用长超时)。 */

@@ -136,6 +136,10 @@ export function ExportPanel({
 	const [busy, setBusy] = useState(false);
 	/** 统计(章数 / 字数 / 附录条数);null = 还没算出来。 */
 	const [stat, setStat] = useState<{ chapters: number; chars: number; appendix: number } | null>(null);
+	/** 统计失败(如某章草稿读不到)。**必须与「还在算」区分开** —— 2026-09-23:
+	 *  此前失败也走 setStat(null),而 null 恰好就是"统计中…"的渲染态,面板永远停在
+	 *  「统计中…」,用户以为卡死。 */
+	const [statErr, setStatErr] = useState(false);
 	const anchorRef = useRef<HTMLDivElement>(null);
 	/** 统计请求代数:关掉面板后回来的结果不许再写状态。 */
 	const statSeqRef = useRef(0);
@@ -168,6 +172,7 @@ export function ExportPanel({
 	const refreshStat = useCallback(async () => {
 		const seq = ++statSeqRef.current;
 		setStat(null);
+		setStatErr(false);
 		try {
 			const list = targets();
 			let chars = 0;
@@ -183,8 +188,12 @@ export function ExportPanel({
 			if (seq !== statSeqRef.current) return;
 			setStat({ chapters: list.length, chars, appendix });
 		} catch {
-			// 统计失败不该弹错误条(正文导出本身可能仍然成功):静默留「统计中」
-			if (seq === statSeqRef.current) setStat(null);
+			// 统计失败仍不弹错误条(正文导出本身可能照样成功),但要**说清是没算出来**,
+			// 不能让它一直显示「统计中…」
+			if (seq === statSeqRef.current) {
+				setStat(null);
+				setStatErr(true);
+			}
 		}
 	}, [targets, loadChapterText, withAppendix, loadWorldAppendix]);
 
@@ -352,7 +361,11 @@ export function ExportPanel({
 
 						<div className="export-info">
 							{stat === null ? (
-								<span className="export-info-muted">统计中…</span>
+								statErr ? (
+									<span className="export-info-muted">统计不可用(仍可直接导出)</span>
+								) : (
+									<span className="export-info-muted">统计中…</span>
+								)
 							) : (
 								<span>
 									{stat.chapters} 章 · {stat.chars.toLocaleString("zh-CN")} 字

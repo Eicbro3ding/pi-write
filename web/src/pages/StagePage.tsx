@@ -159,11 +159,18 @@ export function StagePage({
 	/** 快照响应代数:并发 refresh(切章/激活/重连/开演)后发先至时,旧快照覆盖新快照。
 	 *  每次 refresh 自增,过期响应丢弃(2026-08-13)。 */
 	const stageGenRef = useRef(0);
+	/** `applyStageSnapshot` 的最新闭包。
+	 *  2026-09-23 修:`refresh` 只依赖 [slug, client],直接用组件里的函数会永远拿到
+	 *  **初次渲染**那份闭包 —— 它的 `directorSession` 是空态,「同一进行中回合」判定
+	 *  恒为 false,于是每次快照都对正在流式的回复做 RESET 全量对齐,该条回复从那一刻
+	 *  起不再接收增量(截断),而这里恰恰是 2026-08-13 那段注释想避免的场景。
+	 *  组件内其余同类函数都刻意走了 ref,这里是漏网的一处。 */
+	const applyStageSnapshotRef = useRef<((snap: StageSnapshotDto) => void) | null>(null);
 	const refresh = useCallback(async () => {
 		if (!slug) return;
 		const gen = ++stageGenRef.current;
 		const apply = (snap: StageSnapshotDto) => {
-			if (stageGenRef.current === gen) applyStageSnapshot(snap);
+			if (stageGenRef.current === gen) applyStageSnapshotRef.current?.(snap);
 		};
 		try {
 			apply(await client.getStage(slug, currentChapterRef.current?.file ?? null));
@@ -363,6 +370,8 @@ export function StagePage({
 			setConfirmDismissed(false);
 		}
 	}
+	// refresh 的闭包只能通过 ref 取到这里的最新版本(见 applyStageSnapshotRef 的注释)
+	applyStageSnapshotRef.current = applyStageSnapshot;
 
 	/** 确认开演(confirm_script 同步命令):确认后服务端自动唤起导演回合调
 	 *  stage_script 开演(2026-08-11 起,无需用户补发「开演」);成功后刷新快照。 */
@@ -399,9 +408,11 @@ export function StagePage({
 	}
 
 	/** 向导演说话:长命令(director)进行中禁止;用户消息经 SSE 回显(与编剧同款,不乐观)。 */
-	function sendDirector(text: string) {
-		if (!slug || busy) return;
+	/** 发给导演。返回 false = 没收(未开书 / 长命令进行中),输入条据此不清空输入框。 */
+	function sendDirector(text: string): boolean {
+		if (!slug || busy) return false;
 		void runCommand("director", { text });
+		return true;
 	}
 
 	// ---- 书库栏(数据层,无会话;会话同步只属于编辑页) ----
@@ -654,11 +665,19 @@ export function StagePage({
 				onNewChapter={() => void newChapter()}
 				onSelectBook={selectBook}
 				onNewBook={newBook}
-				onExportBook={(s) => void library.exportBook(s).catch(() => {})}
+				/* 导出/重命名失败要说出来:此前两个 .catch(() => {}) 把磁盘满、权限不足、
+				   服务端报错全吞了,用户以为成功(2026-09-23) */
+				onExportBook={(s) =>
+					void library.exportBook(s).catch((e) => dispatch({ type: "system", text: `导出失败: ${friendlyError(e)}`, err: true }))
+				}
 				onRenameBook={renameBook}
 				onDeleteBook={deleteBook}
 				onImportBook={importBook}
-				onRenameChapter={(ch, title) => void library.renameChapterData(ch, title).catch(() => {})}
+				onRenameChapter={(ch, title) =>
+					void library
+						.renameChapterData(ch, title)
+						.catch((e) => dispatch({ type: "system", text: `重命名失败: ${friendlyError(e)}`, err: true }))
+				}
 				importing={importing}
 				busySlug={busySlug}
 				width={sidebarWidth}
@@ -909,8 +928,18 @@ export function StagePage({
 					{pendingAsk && (
 				<AskUserOverlay
 					questions={pendingAsk.questions}
-					onSubmit={(answers) => void client.answerAskUser(pendingAsk.toolCallId, answers)}
-					onCancel={() => void client.cancelAskUser(pendingAsk.toolCallId)}
+					/* 提交/取消失败要说出来(2026-09-23):此前 `void` 掉 promise,
+					   失败时浮层原地不动、无提示 */
+					onSubmit={(answers) =>
+						void client
+							.answerAskUser(pendingAsk.toolCallId, answers)
+							.catch((e) => dispatch({ type: "system", text: `提交回答失败: ${friendlyError(e)}`, err: true }))
+					}
+					onCancel={() =>
+						void client
+							.cancelAskUser(pendingAsk.toolCallId)
+							.catch((e) => dispatch({ type: "system", text: `取消提问失败: ${friendlyError(e)}`, err: true }))
+					}
 				/>
 			)}
 			{/* 导演输入条(演出前后都是唯一活跃交互;InputBar 自带容器样式) */}
@@ -921,6 +950,10 @@ export function StagePage({
 				)}
 				<InputBar
 					streaming={false}
+					/* 导演回合/长命令进行中:置灰发送键,别让用户白打一段字。
+					   (本地没有中断入口 —— 导演会话是编排器自己的 StageDirector 会话,
+					   `/api/abort` 打的是主会话,接不上;要做得先加 stage 侧的中断端点。) */
+					sendDisabled={busy}
 					enterBehavior={enterBehavior}
 					onSend={sendDirector}
 					onAbort={() => {}}
