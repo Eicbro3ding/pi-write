@@ -14,6 +14,8 @@ import { Select } from "../components/Select.tsx";
 import { ThemeCardsFromManifest } from "../components/ThemeCards.tsx";
 import { IconBook, IconDoc, IconGear, IconGlobe, IconStage, IconX } from "../components/Icons.tsx";
 import { Lu } from "../components/Lu.tsx";
+import { MobileHeader } from "../components/MobileHeader.tsx";
+import { useIsPhone } from "../useMediaQuery.ts";
 
 /** 思考级别选项(与后端 session-host 的 ThinkingLevel 对齐)。 */
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -173,6 +175,7 @@ export function SettingsPage({
 	image,
 	onImageChange,
 	focusModelToken,
+	nav,
 }: {
 	client: ApiClient;
 	/** 当前打开的书 slug(世界书注入分组随打开书重拉;null = 未打开书)。 */
@@ -227,9 +230,13 @@ export function SettingsPage({
 	 * 用自增计数而不是 `cat` 字符串:同一个目标连点两次也必须生效(dep 变化)。
 	 */
 	focusModelToken?: number;
+	/** 手机端页头导航(App 提供):设置页「←」回到编辑页。 */
+	nav?: { view: string; onNavigate: (view: string) => void };
 }) {
 	/** 当前分类(左侧导航激活项;默认「模型」;插件分类为 "plugin:<id>")。 */
 	const [cat, setCat] = useState<SettingCat | string>("model");
+	/** 手机端(≤700px):桌面分类栏变横排胶囊,页头由 MobileHeader 接管。 */
+	const isPhone = useIsPhone();
 	/** 「切到模型分类」信号(见 props.focusModelToken):值一变就切过去。 */
 	useEffect(() => {
 		if (focusModelToken === undefined) return;
@@ -761,6 +768,16 @@ export function SettingsPage({
 
 	return (
 		<div className="settings">
+			{/* 手机端页头(设计稿 ★移动版「设置」):← 回编辑 | 设置 + 本机存储说明。
+			    桌面分类栏(.settings-side 的标题)在手机端已被 ≤900px 规则换成横排胶囊 */}
+			{isPhone && (
+				<MobileHeader
+					leading={{ icon: "chevron-left", label: "返回编辑", onPress: () => nav?.onNavigate("edit") }}
+					title="设置"
+					subtitle="配置只存在本机,不上传任何服务器"
+					tone="ok"
+				/>
+			)}
 			{/* 左侧分类导航(约 180;设计稿 11:模型 / 界面 / 世界书 / 集成 / 高级 + 插件组) */}
 			<aside className="settings-side">
 				<div className="settings-side-title">设置</div>
@@ -1519,16 +1536,26 @@ export function SettingsPage({
 			</main>
 			{/* 模型提供商管理弹窗:双栏卡片悬浮层(关闭即卸载,列表状态在下一次打开时重建) */}
 			{providersOpen && (
-				<div className="dlg-overlay" role="dialog" aria-modal="true" aria-label="模型提供商">
+				<div className={isPhone ? "dlg-overlay pvd-overlay" : "dlg-overlay"} role="dialog" aria-modal="true" aria-label="模型提供商">
 					<div className="dlg-panel pvd-panel">
+						{/* 手机端:整屏页 + 返回箭头(设计稿 ★移动版「管理供应商」);桌面端保持弹窗 + 关闭叉 */}
 						<header className="pvd-head">
+							{isPhone && (
+								<button type="button" className="m-icon-btn" aria-label="返回设置" title="返回设置" onClick={() => setProvidersOpen(false)}>
+									<Lu icon="chevron-left" size={18} />
+								</button>
+							)}
 							<div className="pvd-head-text">
-								<span className="pvd-title">模型提供商</span>
-								<span className="pvd-sub">配置 API key 后,其模型会出现在设置页的模型列表里。</span>
+								<span className="pvd-title">{isPhone ? "管理供应商" : "模型提供商"}</span>
+								<span className="pvd-sub">
+									{isPhone ? "API Key 只存在本机,不上传任何服务器。" : "配置 API key 后,其模型会出现在设置页的模型列表里。"}
+								</span>
 							</div>
-							<button type="button" className="icon-btn" aria-label="关闭" onClick={() => setProvidersOpen(false)}>
-								<IconX size={16} />
-							</button>
+							{!isPhone && (
+								<button type="button" className="icon-btn" aria-label="关闭" onClick={() => setProvidersOpen(false)}>
+									<IconX size={16} />
+								</button>
+							)}
 						</header>
 						<div className="pvd-body">
 							<ProviderList client={client} onAuthChanged={handleAuthChanged} />

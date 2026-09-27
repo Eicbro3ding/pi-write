@@ -6,6 +6,7 @@ import type { ModelDto, ProviderDetailDto, ProviderInfo } from "../types.ts";
 import { AddModelDialog, type AddModelMode } from "./AddModelDialog.tsx";
 import { IconPlus } from "./Icons.tsx";
 import { Lu } from "./Lu.tsx";
+import { useIsPhone } from "../useMediaQuery.ts";
 
 /**
  * 模型供应商配置(双栏卡片:左列表 + 右详情),设置页「模型」分类与首次启动
@@ -23,6 +24,8 @@ import { Lu } from "./Lu.tsx";
  *   POST /api/models/custom(经 AddModelDialog)。
  */
 export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onAuthChanged: () => void | Promise<void> }) {
+	/** 手机端(≤700px):主从两栏改「列表 → 详情」两级(设计稿 ★移动版「管理供应商」)。 */
+	const isPhone = useIsPhone();
 	/** null = 加载中;[] = 已加载但为空(或加载失败)。 */
 	const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
 	const [loadErr, setLoadErr] = useState<string | null>(null);
@@ -91,12 +94,18 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 		};
 	}, [client]);
 
-	/** 选中供应商变化/供应商列表刷新后:拉取详情(未选中时自动选第一个已配置)。 */
+	/**
+	 * 选中供应商变化/供应商列表刷新后:拉取详情。
+	 *
+	 * 手机端不自动选中:那里是「列表 → 详情」两级,一进来就替用户挑一个供应商等于
+	 * 把列表页吞掉(设计稿「管理供应商」首屏就是列表)。桌面双栏才需要自动选中。
+	 */
 	useEffect(() => {
 		if (providers === null) return;
+		if (isPhone && selectedId === null) return;
 		const current = selectedId && providers.some((p) => p.id === selectedId) ? selectedId : providers.find((p) => p.configured)?.id ?? providers[0]?.id ?? null;
 		if (current !== selectedId) setSelectedId(current);
-	}, [providers, selectedId]);
+	}, [providers, selectedId, isPhone]);
 
 	useEffect(() => {
 		if (!selectedId) {
@@ -294,7 +303,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 	return (
 		<>
 			{loadErr && <div className="notice err">{loadErr}</div>}
-			<div className="pvc-card">
+			<div className={`pvc-card${isPhone && selectedId ? " pvc-phone-detail" : ""}`}>
 				{/* 左栏:全部供应商(已配置优先)+ 搜索 + 自定义供应商入口 */}
 				<div className="pvc-side">
 					<div className="pvc-side-title">{providerCountLabel(counts)}</div>
@@ -330,6 +339,12 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 
 				{/* 右栏:详情 */}
 				<div className="pvc-detail">
+					{isPhone && selectedId && (
+						<button type="button" className="pvc-back" onClick={() => setSelectedId(null)}>
+							<Lu icon="chevron-left" size={16} />
+							<span>全部服务</span>
+						</button>
+					)}
 					{!selectedId ? (
 						<div className="pvc-empty">
 							<span className="s-val muted">从左侧选择一个供应商查看配置,或添加自定义供应商。</span>
