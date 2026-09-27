@@ -1852,7 +1852,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .toggle-switch.on .toggle-knob { transform: translateX(16px); }
 
 /* —— 预览卡片(AI 编辑结果,消息流内嵌;设计稿 03-组件规范/03) —— */
-.preview-card { margin: 6px 0; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; background: var(--bg-elev); box-shadow: var(--shadow-1); flex: none; }
+.previem-wcard { margin: 6px 0; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; background: var(--bg-elev); box-shadow: var(--shadow-1); flex: none; }
 .preview-toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px; background: transparent; border: none; color: var(--muted); font-size: 12px; cursor: pointer; text-align: left; transition: color var(--dur-fast); }
 .preview-toggle:hover { color: var(--ink); }
 .preview-arrow { color: var(--faint); font-size: 11px; }
@@ -2116,6 +2116,10 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .st-name.narr { color: var(--faint); font-style: italic; font-weight: 500; }
 .st-text { flex: 1; min-width: 0; font-size: 14px; line-height: 1.7; color: var(--ink-2); }
 .st-text.narr { color: var(--faint); font-style: italic; }
+/* 舞台条目的「名字行 + 正文」分组:桌面端 display:contents 让分组在布局上等于不存在
+   (保持原来的一行 flex 结构),手机端才变成两行一列(设计稿 ★移动版「舞台」) */
+.st-body, .st-line { display: contents; }
+.st-entry .st-tag { display: none; }
 .st-entry .st-actions { opacity: 0; margin-left: auto; }
 .st-entry:hover .st-actions { opacity: 1; }
 .st-actions button { font-size: 12px; color: var(--muted); padding: 2px 8px; border-radius: var(--r-sm); }

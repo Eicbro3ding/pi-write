@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useReducer, useRef, useState
 import { bookFileUrl, imageUrl, type ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
 import type { Library } from "../library.ts";
-import { useMediaQuery } from "../useMediaQuery.ts";
+import { useMediaQuery, useIsPhone } from "../useMediaQuery.ts";
 import { useDragResize } from "../use-drag-resize.ts";
 import { initialSessionState, messagesToEvents, processAgentEvent, RESET, sessionReducer } from "../store.ts";
 import { blocksText, blocksThinking } from "../blocks.ts";
@@ -18,6 +18,8 @@ import {
 	type SlashContext,
 } from "../slash-commands.ts";
 import { ChapterSidebar } from "../components/ChapterSidebar.tsx";
+import { Lu } from "../components/Lu.tsx";
+import { MobileHeader } from "../components/MobileHeader.tsx";
 import { InputBar } from "../components/InputBar.tsx";
 import { MessageList, type PreviewCardSlot } from "../components/MessageList.tsx";
 import { AskUserOverlay } from "../components/AskUserCard.tsx";
@@ -68,6 +70,7 @@ export function StagePage({
 	onGoEdit,
 	debug,
 	enterBehavior,
+	nav,
 }: {
 	client: ApiClient;
 	/** 书库状态唯一真相源(App 持有,与编辑页共用——书库栏两页常驻且状态同步)。 */
@@ -80,6 +83,8 @@ export function StagePage({
 	debug?: boolean;
 	/** 回车行为(设置页开关):send = 回车即发送,newline = 回车换行(缺省)。 */
 	enterBehavior?: EnterBehavior;
+	/** 手机端页头导航(App 提供):舞台页抽屉里的四个入口。 */
+	nav?: { view: string; onNavigate: (view: string) => void };
 }) {
 	const {
 		books,
@@ -127,6 +132,12 @@ export function StagePage({
 	const [drawerOpen, setDrawerOpen] = useState(false);
 	/** 窄屏(<900px)判定:书库栏变抽屉(与写作页同断点)。 */
 	const isNarrow = useMediaQuery("(max-width: 900px)");
+	/** 手机端(≤700px):换 52px 页头(设计稿 ★移动版「舞台」)。 */
+	const isPhone = useIsPhone();
+	/** 手机端页头 ⋯ 菜单是否展开。 */
+	const [phoneMenu, setPhoneMenu] = useState(false);
+	/** 手机端右面板(剧本/选角/修订/备忘录)是否以底部抽屉展开:≤900px 桌面右栏是 display:none。 */
+	const [phonePanel, setPhonePanel] = useState(false);
 	/** 右侧面板宽度(px,左缘拖拽手柄调整,280–520;**缺省 340**:设计稿 04 定稿宽度)。 */
 	const [panelWidth, setPanelWidth] = useState(340);
 	/** 右侧面板收起态(48px 竖条;localStorage 持久化,与编辑页 AI 伙伴栏同一套语言)。 */
@@ -533,6 +544,9 @@ export function StagePage({
 	const nextDisabled = busy || stage.turnPending || autoMode;
 	const narratorActor = (actorId: string): boolean =>
 		snap?.cast.actors.find((a) => a.id === actorId)?.type === "narrator";
+	/** 演员类型(named / pool / narrator):手机端按它给头像圈与名字上色(设计稿「舞台」)。 */
+	const actorType = (actorId: string): "named" | "pool" | "narrator" =>
+		snap?.cast.actors.find((a) => a.id === actorId)?.type ?? "named";
 	const phaseCls: Record<StagePhaseDto, string> = {
 		idle: "st-badge muted",
 		casting: "st-badge amber",
@@ -546,6 +560,13 @@ export function StagePage({
 		directing: "导演",
 	};
 	const castChars = script ? Object.values(script.definition.cast).map((c) => c[0] ?? "") : [];
+	/** 手机端「下一步 · 可选」候选:剧本节拍前 3 条(点一条即把该节拍发给导演推进)。 */
+	const nextBeats = script ? script.text.shared.beats.filter((b) => b.trim().length > 0).slice(0, 3) : [];
+	/** 节拍 → 芯片短标签(节拍常是一整句,芯片只放前 12 字,全文进 title)。 */
+	function beatLabel(beat: string): string {
+		const t = beat.trim();
+		return t.length > 12 ? `${t.slice(0, 12)}…` : t;
+	}
 
 	/** 模式显示(「▾ 讨论模式」):模式由导演侧编排驱动(stage 编排器按剧本阶段
 	 *  切换,HTTP 命令面只有查询没有设置,见 src/web/stage-host.ts 的 "mode"),
@@ -688,6 +709,7 @@ export function StagePage({
 				onClose={() => setDrawerOpen(false)}
 				railMode={railMode}
 				onRailModeChange={setRailMode}
+				nav={nav}
 				workspace={
 					<WorkspacePanel
 						client={client}
@@ -702,6 +724,67 @@ export function StagePage({
 				}
 			/>
 			<div className="stage-main">
+				{/* 手机端页头(设计稿 ★移动版「舞台」):☰ 抽屉 | 舞台 + 章节/轮次/演员 | 剧本 · ⋯。
+				    桌面场景头(.stage-head)在 ≤700px 由 CSS 隐藏 */}
+				{isPhone && (
+					<MobileHeader
+						leading={{ icon: "menu", label: "文件抽屉", onPress: () => setDrawerOpen((d) => !d) }}
+						title="舞台"
+						tone={busy ? "busy" : snap && snap.phase !== "idle" ? "ok" : "idle"}
+						subtitle={`${currentChapter?.title ?? "还没有一幕"}${snap ? ` · 轮次 ${snap.counts.turn} · ${Object.keys(snap.counts.perActor).length} 位演员` : ""}`}
+						actions={[
+							{ key: "script", icon: "book-open", label: "剧本与设定", accent: phonePanel, onPress: () => { setTab("script"); setPhonePanel((v) => !v); } },
+							{ key: "more", icon: "ellipsis-vertical", label: "更多", onPress: () => setPhoneMenu((v) => !v) },
+						]}
+					/>
+				)}
+				{isPhone && phoneMenu && (
+					<>
+						<div className="m-menu-mask" aria-hidden="true" onClick={() => setPhoneMenu(false)} />
+						<div className="m-menu" role="menu" aria-label="更多">
+							<button
+								type="button"
+								role="menuitem"
+								className="m-menu-item"
+								onClick={() => {
+									setPhoneMenu(false);
+									onGoEdit?.();
+								}}
+							>
+								<Lu icon="square-pen" size={16} />
+								<span>去编辑页</span>
+							</button>
+							{nav && (
+								<>
+									<button
+										type="button"
+										role="menuitem"
+										className="m-menu-item"
+										onClick={() => {
+											setPhoneMenu(false);
+											nav.onNavigate("world");
+										}}
+									>
+										<Lu icon="globe" size={16} />
+										<span>世界书</span>
+									</button>
+									<button
+										type="button"
+										role="menuitem"
+										className="m-menu-item"
+										onClick={() => {
+											setPhoneMenu(false);
+											nav.onNavigate("settings");
+										}}
+									>
+										<Lu icon="settings" size={16} />
+										<span>设置</span>
+									</button>
+								</>
+							)}
+						</div>
+					</>
+				)}
 				{/* 场景头(设计稿 04):**一行**——左边场景名(18 号)+ 状态胶囊;
 				    右边模式显示(「▾ 讨论模式」)+ mono 小字计数;窄屏书库抽屉开关在最左。
 				    原来把「还没有一幕 | 待命 | 讨论」和「导演: …」挤在同一行,杂糅又抢视线,
@@ -827,10 +910,48 @@ export function StagePage({
 
 				{/* 舞台流:演出前 = 讨论室(引导卡居上 + 导演对话);演出中 = 条目 + 系统行
 				    (导演对话隐藏,主区让给演员);收幕后 = 条目归档、导演对话恢复。
-				    chat-bubble = 气泡差分(设计稿 05,设置里开启;缺省文档流) */}
-				<div className={chatStyle === "bubble" ? "stage-scroll chat-bubble" : "stage-scroll"}>
+				    chat-bubble = 气泡差分(设计稿 05,设置里开启;缺省文档流);
+				    手机端恒用气泡形态——设计稿 ★移动版「舞台」就是气泡流,表单形态在
+				    393px 下头像/名字/正文挤成一行读不出来(桌面偏好不带到手机) */}
+				{/* 手机端演员条(设计稿 ★移动版「舞台」):演员 pills + 「＋」开选角面板 */}
+				{isPhone && snap && (
+					<div className="m-castbar">
+						<span className="m-castbar-label">演员</span>
+						{snap.cast.actors.map((a) => {
+							const name = a.character ?? a.id;
+							return (
+								<span key={a.id} className={`m-cast-pill a-${a.type}`}>
+									<span className="m-cast-avatar">
+										<StageAvatar slug={slug ?? ""} name={name} narrator={a.type === "narrator"} img={snap.avatars[name] ?? null} />
+									</span>
+									<span className="m-cast-name">{name}</span>
+								</span>
+							);
+						})}
+						<span className="m-cast-gap" />
+						<button
+							type="button"
+							className="m-cast-add"
+							aria-label="选角"
+							title="选角"
+							onClick={() => {
+								setTab("cast");
+								setPhonePanel(true);
+							}}
+						>
+							<Lu icon="plus" size={14} />
+						</button>
+					</div>
+				)}
+				<div className={chatStyle === "bubble" || isPhone ? "stage-scroll chat-bubble" : "stage-scroll"}>
 					{/* 引导卡只在「无场景 + 导演对话为空」时显示:发出第一条消息后(导演对话
 					    有水合/回显内容)即隐藏,让主区让给对话流 */}
+					{isPhone && !noScene && (
+						<div className="m-scene-pill">
+							<Lu icon="clapperboard" size={12} />
+							<span>场景 · {sceneTitle}</span>
+						</div>
+					)}
 					{noScene && directorSession.messages.length === 0 && (
 						<div className="guide-card">
 							<div className="g-title">◇ 与导演共谋一幕</div>
@@ -855,11 +976,18 @@ export function StagePage({
 							const narr = narratorActor(e.actor);
 							return (
 								<Fragment key={i}>
-									<div className="st-entry">
+									<div className={`st-entry a-${actorType(e.actor)}`}>
 										<span className="st-idx">{String(entryNo).padStart(2, "0")}</span>
 										<StageAvatar slug={slug ?? ""} name={e.character} narrator={narr} img={snap?.avatars[e.character] ?? null} />
-										<span className={narr ? "st-name narr" : "st-name"}>{e.character}</span>
-										<span className={narr ? "st-text narr" : "st-text"}>{stageEntryText(e)}</span>
+										{/* .st-body 桌面端 display:contents(布局等于不存在),手机端变成
+										    「名字行 + 气泡」两行一列(设计稿 ★移动版「舞台」) */}
+										<span className="st-body">
+											<span className="st-line">
+												<span className={narr ? "st-name narr" : "st-name"}>{e.character}</span>
+												<span className="st-tag">{e.actor}{e.character ? ` · ${e.character}` : ""}</span>
+											</span>
+											<span className={narr ? "st-text narr" : "st-text"}>{stageEntryText(e)}</span>
+										</span>
 										<span className="st-actions">
 											<button type="button" onClick={() => setFeedbackFor(entryNo)}>
 												反馈
@@ -896,6 +1024,30 @@ export function StagePage({
 						}
 						return null;
 					})}
+						{/* 下一步 · 可选(设计稿 ★移动版「舞台」):剧本节拍当前 3 条,点一条直接发给导演推进 */}
+						{isPhone && snap?.phase !== "closed" && nextBeats.length > 0 && (
+							<div className="m-next">
+								<div className="m-next-head">
+									<span>下一步 · 可选</span>
+									<span className="m-next-gap" />
+									<span>由你决定</span>
+								</div>
+								<div className="m-next-chips">
+									{nextBeats.map((b, i) => (
+										<button
+											key={b}
+											type="button"
+											className={i === 0 ? "m-next-chip active" : "m-next-chip"}
+											title={b}
+											disabled={busy}
+											onClick={() => sendDirector(b)}
+										>
+											{beatLabel(b)}
+										</button>
+									))}
+								</div>
+							</div>
+						)}
 						{/* 导演对话(2026-08-11 统一重构):与编剧/主会话同款 MessageList——
 					    思考折叠/流式/工具卡片复用同一套渲染,零新逻辑。
 					    演出中(running/wrapping)隐藏,主区让给舞台流;收幕后恢复 */}
@@ -965,6 +1117,7 @@ export function StagePage({
 					ariaLabel="向导演说话"
 				/>
 			</div>
+			{isPhone && phonePanel && <div className="m-menu-mask" aria-hidden="true" onClick={() => setPhonePanel(false)} />}
 			<aside className="stage-panel">
 				{/* 左缘拖拽调宽手柄(窄屏面板收起时隐藏;面板收起成 48px 竖条时同) */}
 				{!isNarrow && !panelShut && <div className="sp-resize" onMouseDown={onPanelResizeStart} title="拖拽调整宽度" />}
