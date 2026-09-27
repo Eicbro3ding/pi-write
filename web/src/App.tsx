@@ -416,7 +416,15 @@ export function App() {
 				    服务端重新水合,状态不丢 */}
 				{!classicMode && (
 					<section className={`view ${view === "stage" ? "" : "hidden"}`}>
-						<StagePage client={client} library={library} active={view === "stage"} onGoEdit={() => setView("edit")} debug={debugMode} enterBehavior={enterBehavior} />
+						<StagePage
+							client={client}
+							library={library}
+							active={view === "stage"}
+							onGoEdit={() => setView("edit")}
+							debug={debugMode}
+							enterBehavior={enterBehavior}
+							nav={{ view, onNavigate: (v) => setView(v as View) }}
+						/>
 					</section>
 				)}
 					<section className={`view ${view === "edit" ? "" : "hidden"}`}>
@@ -430,10 +438,17 @@ export function App() {
 							classicMode={classicMode}
 							/* 报错卡的「去设置模型 ›」:导航由 App 独占(WritePage 只管请求) */
 							onOpenSettings={openModelSettings}
+							/* 手机端顶栏下线,四个页面入口收进书库抽屉(App 持有当前页与切页) */
+							nav={{ view, onNavigate: (v) => setView(v as View) }}
 						/>
 					</section>
 				<section className={`view ${view === "world" ? "" : "hidden"}`}>
-					<WorldPage client={client} slug={currentSlug} active={view === "world"} />
+					<WorldPage
+						client={client}
+						slug={currentSlug}
+						active={view === "world"}
+						nav={{ view, onNavigate: (v) => setView(v as View) }}
+					/>
 				</section>
 					<section className={`view ${view === "settings" ? "" : "hidden"}`}>
 						<SettingsPage
@@ -460,6 +475,7 @@ export function App() {
 							onImageChange={changeImageSettings}
 							focusModelToken={settingsModelToken}
 							onRerunSetup={() => setRerunWizard(true)}
+							nav={{ view, onNavigate: (v) => setView(v as View) }}
 						/>
 					</section>
 			</div>
