@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { DUR, EASE } from "../motion.ts";
-import { useMediaQuery } from "../useMediaQuery.ts";
+import { useMediaQuery, PHONE_QUERY } from "../useMediaQuery.ts";
 import { useDragResize } from "../use-drag-resize.ts";
 import type { BookMeta, ChapterRef } from "../types.ts";
 import { IconBook } from "./Icons.tsx";
@@ -47,6 +47,10 @@ interface ChapterSidebarProps {
 	onRailModeChange?: (mode: "chapters" | "workspace") => void;
 	/** 「工作区」模式的内容(由页面注入;未传则该模式显示占位提示)。 */
 	workspace?: ReactNode;
+	/** 手机端抽屉主导航:当前页 + 切页回调(设计稿「文件抽屉」的舞台/编辑/世界书/设置)。 */
+	nav?: { view: string; onNavigate: (view: string) => void };
+	/** 当前章节字数(手机端抽屉页脚的「本地草稿 · 不上传 | N 字」)。 */
+	words?: number | null;
 }
 
 /** 侧栏宽度限制(px)。 */
@@ -83,6 +87,8 @@ export function ChapterSidebar({
 	railMode = "chapters",
 	onRailModeChange,
 	workspace,
+	nav,
+	words,
 }: ChapterSidebarProps) {
 	/** 新建书内联输入框是否展开。 */
 	const [addingBook, setAddingBook] = useState(false);
@@ -94,6 +100,8 @@ export function ChapterSidebar({
 	/** 重命名中的书 slug:非空时该书按钮下方渲染内联输入条。 */
 	const [renamingSlug, setRenamingSlug] = useState<string | null>(null);
 	const [renameTitle, setRenameTitle] = useState("");
+	/** 手机端抽屉搜索词(按章节名/书名过滤;桌面端不渲染搜索框)。 */
+	const [query, setQuery] = useState("");
 	/** 打开操作菜单(⋯)的章节 id:非空时该章节行渲染弹出菜单。 */
 	const [menuChapterId, setMenuChapterId] = useState<string | null>(null);
 	/** 重命名中的章节 id:非空时该章节行渲染内联输入。 */
@@ -101,8 +109,16 @@ export function ChapterSidebar({
 	const [chapterRenameTitle, setChapterRenameTitle] = useState("");
 	/** 窄屏抽屉:仅窄屏时 aside 被 fixed 定位并受 x 位移控制;宽屏恒为网格子项。 */
 	const isNarrow = useMediaQuery("(max-width: 900px)");
+	/** 手机端(≤700px):抽屉整屏内容改成「品牌头 + 主导航 + 章节/工作区」。 */
+	const isPhone = useMediaQuery(PHONE_QUERY);
+	/** 手机端忽略折叠态:折叠是桌面语言(56px 图标条),手机端抽屉恒为全宽。 */
+	const collapsedNow = collapsed && !isPhone;
 	/** 隐藏的文件选择框(底部「＋ 导入书」按钮触发)。 */
 	const fileRef = useRef<HTMLInputElement>(null);
+	/** 抽屉搜索命中的章节/书(手机端用;桌面端不渲染搜索框,恒等于全量)。 */
+	const q = query.trim().toLowerCase();
+	const shownChapters = q.length === 0 ? chapters : chapters.filter((c) => c.title.toLowerCase().includes(q));
+	const shownBooks = q.length === 0 ? books : books.filter((b) => b.title.toLowerCase().includes(q) || b.slug.toLowerCase().includes(q));
 
 	// 操作菜单打开时,点击页面其他位置(含切换书/章节)关闭菜单。
 	// 注意:⋯ 按钮的 onClick 必须 stopPropagation——React 对 discrete click 事件
@@ -179,10 +195,10 @@ export function ChapterSidebar({
 			<motion.aside
 				className={
 					drawerOpen
-						? `chapters ${collapsed ? "collapsed" : ""} ${resizing ? "resizing" : ""} drawer-open`
-						: `chapters ${collapsed ? "collapsed" : ""} ${resizing ? "resizing" : ""}`
+						? `chapters ${collapsedNow ? "collapsed" : ""} ${resizing ? "resizing" : ""} drawer-open`
+						: `chapters ${collapsedNow ? "collapsed" : ""} ${resizing ? "resizing" : ""}`
 				}
-				style={width !== undefined ? { width: collapsed ? 56 : width } : undefined}
+				style={width !== undefined && !isPhone ? { width: collapsedNow ? 56 : width } : undefined}
 				initial={false}
 				animate={!isNarrow || drawerOpen ? "open" : "closed"}
 				variants={{
@@ -198,7 +214,7 @@ export function ChapterSidebar({
 						×
 					</button>
 				)}
-				{collapsed ? (
+				{collapsedNow ? (
 					/* 折叠态:当前书首字按钮,点击展开书库 */
 					activeBook && (
 						<button type="button" className="c-collapsed-book" title={activeBook.title} onClick={onToggleCollapse}>
@@ -207,6 +223,54 @@ export function ChapterSidebar({
 					)
 					) : (
 						<>
+						{/* 手机端:品牌头 + 主导航(设计稿「文件抽屉」)——手机端顶栏下线,
+						    四个页面的入口收到这里;点条目先切页再关抽屉 */}
+						{isPhone && (
+							<>
+								<div className="m-drawer-head">
+									<span className="m-brand">
+										pi<i>·writer</i>
+									</span>
+									{onClose && (
+										<button type="button" className="m-icon-btn" aria-label="关闭" title="关闭" onClick={onClose}>
+											<Lu icon="x" size={18} />
+										</button>
+									)}
+								</div>
+								{nav && (
+									<div className="m-nav" role="navigation" aria-label="主导航">
+										{([
+											["stage", "clapperboard", "舞台"],
+											["edit", "square-pen", "编辑"],
+											["world", "globe", "世界书"],
+											["settings", "settings", "设置"],
+										] as const).map(([id, icon, label]) => (
+											<button
+												key={id}
+												type="button"
+												className={nav.view === id ? "m-nav-item active" : "m-nav-item"}
+												aria-current={nav.view === id ? "page" : undefined}
+												onClick={() => nav.onNavigate(id)}
+											>
+												<Lu icon={icon} size={17} />
+												<span className="m-nav-label">{label}</span>
+												{nav.view === id && <i className="m-nav-bar" />}
+											</button>
+										))}
+									</div>
+								)}
+								<div className="m-nav-divider" />
+								<label className="m-drawer-search">
+									<Lu icon="search" size={14} />
+									<input
+										value={query}
+										onChange={(e) => setQuery(e.target.value)}
+										placeholder="搜索章节与书"
+										aria-label="搜索章节与书"
+									/>
+								</label>
+							</>
+						)}
 						{/* 左栏内容切换:章节(默认,书 + 章节列表)/ 工作区(书目录里看得见的东西)。
 						    位置就是原来章节栏的顶上——工作区与章节列表是同一层级的两块内容,
 						    不是第五个页面,所以不占顶栏。折叠态整条隐藏(见 styles.css)。
@@ -242,7 +306,7 @@ export function ChapterSidebar({
 								<div className="c-head">书</div>
 									<div className="c-books">
 										<AnimatePresence initial={false}>
-											{books.map((b) => (
+											{shownBooks.map((b) => (
 												// 无 layout/入场动画:顶层标签页切换时 display 重挂会触发 framer
 												// layout 重放(scale+位移),与容器滑入叠加成双重动画;条目移除保留 exit
 												<motion.div
@@ -367,12 +431,14 @@ export function ChapterSidebar({
 						)}
 						<div className="c-head">
 							章节
-							{chapters.length > 0 && <span className="c-head-count">{chapters.length}</span>}
+							{(q.length > 0 ? shownChapters.length : chapters.length) > 0 && (
+								<span className="c-head-count">{q.length > 0 ? shownChapters.length : chapters.length}</span>
+							)}
 						</div>
 						<nav className="c-list">
 							{chapters.length === 0 && <div className="c-empty">还没有章节</div>}
 							<AnimatePresence initial={false}>
-								{chapters.map((ch, i) =>
+								{shownChapters.map((ch, i) =>
 									renamingChapterId === ch.id ? (
 										<motion.div
 											key={ch.id}
@@ -503,6 +569,13 @@ export function ChapterSidebar({
 						)}
 						</div>
 						</>
+					)}
+					{isPhone && (
+						<div className="m-drawer-foot">
+							<span>本地草稿 · 不上传</span>
+							<span className="m-gap" />
+							{words != null && <span className="m-mono">{words.toLocaleString("zh-CN")} 字</span>}
+						</div>
 					)}
 					{onToggleCollapse && (
 					<button type="button" className="c-collapse" onClick={onToggleCollapse} title={collapsed ? "展开书库" : "收起书库"}>

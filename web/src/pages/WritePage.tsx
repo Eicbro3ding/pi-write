@@ -47,9 +47,10 @@ import { createEditCapture } from "../edit-capture.ts";
 import { isLegacyConfirmCard, parseToolArgs, pathFromArgs } from "../preview.ts";
 import type { Library } from "../library.ts";
 import { DUR, EASE } from "../motion.ts";
-import { useMediaQuery } from "../useMediaQuery.ts";
+import { useMediaQuery, useIsPhone } from "../useMediaQuery.ts";
 import { useDragResize } from "../use-drag-resize.ts";
 import { Lu } from "../components/Lu.tsx";
+import { MobileHeader } from "../components/MobileHeader.tsx";
 
 /** 顶栏信息(由 App 顶栏展示)。 */
 export interface HeaderInfo {
@@ -120,6 +121,7 @@ export function WritePage({
 	autoConfirmEdits,
 	classicMode,
 	onOpenSettings,
+	nav,
 }: {
 	client: ApiClient;
 	onHeader?: (h: HeaderInfo) => void;
@@ -135,6 +137,8 @@ export function WritePage({
 	classicMode: boolean;
 	/** 打开设置页(报错卡的「去设置模型 ›」;App 提供,缺省不画该入口)。 */
 	onOpenSettings?: () => void;
+	/** 手机端抽屉主导航:当前页与切页回调(App 提供;手机端顶栏下线后入口收进抽屉)。 */
+	nav?: { view: string; onNavigate: (view: string) => void };
 }) {
 	// 书库状态来自 App 级 useLibrary;以 React setState 同形别名接入,
 	// 既有调用点(setBooks/setBookDetail/...)零改动,状态实际存于共享 hook
@@ -226,6 +230,14 @@ export function WritePage({
 	const [mobileDrawer, setMobileDrawer] = useState<"chapters" | "companion" | null>(null);
 	/** 窄屏(<900px)判定:书库/伙伴栏变抽屉。 */
 	const isNarrow = useMediaQuery("(max-width: 900px)");
+	/** 手机端(≤700px)判定:换 52px 页头 + 底部常驻输入条(设计稿 ★移动版)。 */
+	const isPhone = useIsPhone();
+	/** 手机端页头 ⋯ 菜单是否展开。 */
+	const [phoneMenu, setPhoneMenu] = useState(false);
+	/** 手机端整屏导出页(设计稿 ★移动版「导出」)是否打开。 */
+	const [phoneExport, setPhoneExport] = useState(false);
+	/** 整屏导出页的容器:受控模式下 ExportPanel 靠它判断「点面板外关闭」。 */
+	const phoneExportRef = useRef<HTMLDivElement>(null);
 	/**
 	 * 对齐串行队列(C 档保留骨架,2026-08):原为「RESET + 逐条追加」主会话水合串行
 	 * 队列;主会话消息已无 UI、水合已删,现只承载 alignWithServer 的会话定位对齐,
@@ -1241,6 +1253,39 @@ export function WritePage({
 	/** 编剧会话里正在等待回答的提问(ask_user);有就弹模态浮层。 */
 	const pendingAsk = useMemo(() => findPendingAsk(writerSession.messages), [writerSession.messages]);
 
+	/**
+	 * 编剧输入条(设计稿 ★输入区):桌面端挂在伙伴栏底部,手机端提到壳层底部
+	 * (.m-composer)——手机端编辑页与伙伴页共用同一条输入区,所以实例只有这一个,
+	 * 按 isPhone 决定挂在哪;两处不同时渲染,不会出现两份草稿文本。
+	 */
+	const writerInputBar = (
+		<InputBar
+			ref={writerInputRef}
+			streaming={writerSession.isStreaming}
+			/* 压缩中不发(要等总结回合结束):置灰 + 提示,而不是打完字被吞 */
+			sendDisabled={writerSession.compacting}
+			onSend={sendWriter}
+			onAbort={() => {
+				const s = bookDetailRef.current?.slug;
+				if (s) void client.writerAbort(s);
+			}}
+			/* 占位符只留短句(设计稿 06);键位与 / 命令的说明不再塞进输入框 */
+			placeholder={classicMode ? "向 AI 说话…" : "向编剧说话…"}
+			ariaLabel={classicMode ? "向 AI 说话" : "向编剧说话"}
+			commands={writerSlashCommands}
+			context={writerSlashContext}
+			onCommandError={(msg) => setError(`命令失败: ${msg}`)}
+			enterBehavior={enterBehavior}
+			usage={writerUsage}
+			onUsageClick={() => void toggleUsage()}
+			usagePanel={
+				usageOpen ? (
+					<UsagePanel stats={usageStats} loading={usageBusy} err={usageErr} onClose={() => setUsageOpen(false)} />
+				) : null
+			}
+		/>
+	);
+
 	return (
 		// 三栏壳:书库(轨 1 auto,宽度由 ChapterSidebar 决定并随折叠/拖拽动画)
 		// | 纸张 | AI 伙伴(轨 3 经 --companion-w 跟随左缘拖拽调宽);窄屏断点见 styles.css
@@ -1272,6 +1317,8 @@ export function WritePage({
 				onClose={() => setMobileDrawer(null)}
 				railMode={railMode}
 				onRailModeChange={setRailMode}
+				nav={nav}
+				words={words}
 				workspace={
 					<WorkspacePanel
 						client={client}
@@ -1284,6 +1331,90 @@ export function WritePage({
 				}
 			/>
 			<section className="paper-zone">
+				{/* 手机端页头(设计稿 ★移动版「编辑」):☰ 文件抽屉 | 章节名 + 保存/字数 | 伙伴 · ⋯。
+				    桌面页头(.paper-head)在 ≤700px 由 CSS 隐藏,两套不并存 */}
+				{isPhone && (
+					<MobileHeader
+						leading={{ icon: "menu", label: "文件抽屉", onPress: () => setMobileDrawer((d) => (d === "chapters" ? null : "chapters")) }}
+						title={currentChapter?.title ?? "草稿"}
+						tone={draftStatus === "saved" ? "ok" : draftStatus === "save-error" ? "err" : "busy"}
+						subtitle={`${saveLabel} · ${words.toLocaleString("zh-CN")} 字`}
+						actions={[
+							{
+								key: "companion",
+								icon: "message-square",
+								label: "AI 伙伴",
+								accent: mobileDrawer === "companion",
+								onPress: () => setMobileDrawer((d) => (d === "companion" ? null : "companion")),
+								badge: confirmCards.filter((c) => !c.auto).length,
+								live: writerSession.isStreaming,
+							},
+							{ key: "more", icon: "ellipsis-vertical", label: "更多", onPress: () => setPhoneMenu((v) => !v) },
+						]}
+					/>
+				)}
+				{isPhone && phoneMenu && (
+					<>
+						<div className="m-menu-mask" aria-hidden="true" onClick={() => setPhoneMenu(false)} />
+						<div className="m-menu" role="menu" aria-label="更多">
+							{currentChapter && (
+								<button
+									type="button"
+									role="menuitem"
+									className="m-menu-item"
+									onClick={() => {
+										setPhoneMenu(false);
+										openEditor();
+									}}
+								>
+									<Lu icon="maximize-2" size={16} />
+									<span>全屏编辑</span>
+								</button>
+							)}
+							{/* 导出:手机端是整屏页(设计稿 ★移动版「导出」),从页头 ⋯ 进入 */}
+							<button
+								type="button"
+								role="menuitem"
+								className="m-menu-item"
+								onClick={() => {
+									setPhoneMenu(false);
+									setPhoneExport(true);
+								}}
+							>
+								<Lu icon="upload" size={16} />
+								<span>导出</span>
+							</button>
+							{nav && (
+								<>
+									<button
+										type="button"
+										role="menuitem"
+										className="m-menu-item"
+										onClick={() => {
+											setPhoneMenu(false);
+											nav.onNavigate("world");
+										}}
+									>
+										<Lu icon="globe" size={16} />
+										<span>世界书</span>
+									</button>
+									<button
+										type="button"
+										role="menuitem"
+										className="m-menu-item"
+										onClick={() => {
+											setPhoneMenu(false);
+											nav.onNavigate("settings");
+										}}
+									>
+										<Lu icon="settings" size={16} />
+										<span>设置</span>
+									</button>
+								</>
+							)}
+						</div>
+					</>
+				)}
 				{/* 服务端诊断(认证缺失等):error 红色、warning 琥珀,渲染在纸张顶部(设计 §4.3) */}
 				{diags.map((d, i) => (
 					<div key={i} className={d.type === "error" ? "notice err" : "notice warn"}>
@@ -1405,6 +1536,34 @@ export function WritePage({
 				>
 					{/* 左缘拖拽调宽手柄(窄屏抽屉模式隐藏;收起态无宽度可调) */}
 					{!isNarrow && !companionCollapsed && <div className="comp-resize" onMouseDown={onCompanionResizeStart} title="拖拽调整宽度" />}
+					{/* 手机端伙伴页头(设计稿 ★移动版「伙伴对话」):← 回编辑 | 编剧 + 上下文占用 | 备忘录/⋯ */}
+					{isPhone && (
+						<MobileHeader
+							leading={{ icon: "chevron-left", label: "回到编辑", onPress: () => setMobileDrawer(null) }}
+							title={classicMode ? "AI" : "编剧"}
+							tone={writerSession.isStreaming ? "busy" : "ok"}
+							subtitle={
+								writerUsage?.percent != null
+									? `${currentChapter?.title ?? "草稿"} · 上下文 ${Math.round(writerUsage.percent)}%`
+									: (currentChapter?.title ?? "草稿")
+							}
+							actions={[
+								{
+									key: "memo",
+									icon: "sticky-note",
+									label: "备忘录",
+									accent: memoTab === "memo",
+									onPress: () => changeMemoTab(memoTab === "memo" ? "chat" : "memo"),
+								},
+								{
+									key: "usage",
+									icon: "activity",
+									label: "上下文用量",
+									onPress: () => void toggleUsage(),
+								},
+							]}
+						/>
+					)}
 					{companionCollapsed ? (
 						/* 收起态 = 与舞台右栏同一套图标/标签栏:点别的标签只换选中,
 						   点当前标签才展开(设计稿的「再点一次已选中的项 = 第二动作」) */
@@ -1500,36 +1659,9 @@ export function WritePage({
 									{writerUsageHint.text}
 								</div>
 							)}
-							<InputBar
-								ref={writerInputRef}
-								streaming={writerSession.isStreaming}
-								/* 压缩中不发(要等总结回合结束):置灰 + 提示,而不是打完字被吞 */
-								sendDisabled={writerSession.compacting}
-								onSend={sendWriter}
-								onAbort={() => {
-									const s = bookDetailRef.current?.slug;
-									if (s) void client.writerAbort(s);
-								}}
-								/* 占位符只留短句(设计稿 06);键位与 / 命令的说明不再塞进输入框 */
-								placeholder={classicMode ? "向 AI 说话…" : "向编剧说话…"}
-								ariaLabel={classicMode ? "向 AI 说话" : "向编剧说话"}
-								commands={writerSlashCommands}
-								context={writerSlashContext}
-								onCommandError={(msg) => setError(`命令失败: ${msg}`)}
-								enterBehavior={enterBehavior}
-								usage={writerUsage}
-								onUsageClick={() => void toggleUsage()}
-								usagePanel={
-									usageOpen ? (
-										<UsagePanel
-											stats={usageStats}
-											loading={usageBusy}
-											err={usageErr}
-											onClose={() => setUsageOpen(false)}
-										/>
-									) : null
-								}
-							/>
+							{/* 桌面:输入条留在伙伴栏底部;手机端它被提到壳层底部(.m-composer),
+							    所以这里按 isPhone 二者取一(设计稿:编辑页与伙伴页共用同一条输入区) */}
+							{!isPhone && writerInputBar}
 						</div>
 						)}
 					</div>
@@ -1537,6 +1669,33 @@ export function WritePage({
 					)}
 				</motion.aside>
 			</>
+			{/* 手机端底部常驻输入条(设计稿 ★输入区):编辑页与伙伴页共用,内容与桌面同一个实例 */}
+			{isPhone && <div className="m-composer">{writerInputBar}</div>}
+			{/* 手机端整屏导出(设计稿 ★移动版「导出」):受控的 ExportPanel,自带触发按钮不渲染 */}
+			{isPhone && phoneExport && (
+				<div className="m-sheet" role="dialog" aria-label="导出">
+					<div className="m-sheet-head">
+						<button type="button" className="m-icon-btn" aria-label="返回" title="返回" onClick={() => setPhoneExport(false)}>
+							<Lu icon="chevron-left" size={18} />
+						</button>
+						<span className="m-sheet-title">导出</span>
+						<span className="m-head-sub-text">{bookDetail?.title ?? ""}</span>
+					</div>
+					<div className="m-sheet-body" ref={phoneExportRef}>
+						<ExportPanel
+							bookTitle={bookDetail?.title ?? ""}
+							chapters={exportChapters}
+							currentChapterFile={currentChapter?.file ?? null}
+							currentChapterTitle={currentChapter?.title ?? ""}
+							loadChapterText={loadExportChapterText}
+							loadWorldAppendix={loadExportAppendix}
+							onError={setError}
+							control={{ open: true, onClose: () => setPhoneExport(false) }}
+							panelRef={phoneExportRef}
+						/>
+					</div>
+				</div>
+			)}
 			{/* 提问卡片(ask_user):工具阻塞着等这个回答,所以是模态浮层。
 			    挂载条件从消息流推出来(未答的 ask_user 块),不另存一份 pending 状态 */}
 			{pendingAsk && (
