@@ -8,9 +8,13 @@ import { DUR, EASE } from "../motion.ts";
 import { newId } from "../components/id.ts";
 import { WorldTree } from "../components/WorldTree.tsx";
 import { Lu } from "../components/Lu.tsx";
+import { MobileHeader } from "../components/MobileHeader.tsx";
+import { useIsPhone } from "../useMediaQuery.ts";
+import { ENTRY_TYPES, ENTRY_TYPE_LABELS } from "../world-entry.ts";
 import { EntryForm, EntryInfoPanel } from "../components/EntryForm.tsx";
 import { RelationGraph } from "../components/RelationGraph.tsx";
 import { EntryCard } from "../components/EntryCard.tsx";
+import { WorldEntryDetail } from "../components/WorldEntryDetail.tsx";
 import { WorldSummaryPanel } from "../components/WorldSummaryPanel.tsx";
 import { StorylinePanel } from "../components/StorylinePanel.tsx";
 import { TimelinePanel } from "../components/TimelinePanel.tsx";
@@ -31,11 +35,14 @@ export function WorldPage({
 	client,
 	slug,
 	active,
+	nav,
 }: {
 	client: ApiClient;
 	slug: string | null;
 	/** 页面是否处于激活显示状态(三页常驻挂载,由 App 上报视图切换)。 */
 	active?: boolean;
+	/** 手机端页头导航(App 提供):世界书的「←」回到编辑页。 */
+	nav?: { view: string; onNavigate: (view: string) => void };
 }) {
 	/** null = 尚未加载成功(或加载失败)。 */
 	const [world, setWorld] = useState<WorldDataDto | null>(null);
@@ -58,6 +65,17 @@ export function WorldPage({
 	confirmDeleteRef.current = confirmDelete;
 	/** 视图:条目 / 关系图 / 设定。 */
 	const [view, setView] = useState<WorldView>("entries");
+	/** 手机端(≤700px):换 52px 页头 + 卡片列表(设计稿 ★移动版「世界书」)。 */
+	const isPhone = useIsPhone();
+	/** 手机端列表的搜索词与类型筛选。 */
+	const [wQuery, setWQuery] = useState("");
+	const [wType, setWType] = useState<WorldEntryDto["type"] | "all">("all");
+	/** 手机端页头「搜索」按钮聚焦的输入框。 */
+	const phoneSearchRef = useRef<HTMLInputElement>(null);
+	/** 手机端条目页:只读详情 / 编辑表单(设计稿「条目详情」→「编辑条目」两级)。 */
+	const [phoneEdit, setPhoneEdit] = useState(false);
+	/** 手机端「更换配图」:借用表单里的隐藏文件输入(避免复制一份上传逻辑)。 */
+	const phoneAvatarRef = useRef<HTMLButtonElement>(null);
 	/** 关系图视图懒挂载(P7,2026-08):首次切到关系图才构建 cytoscape——大世界书
 	 *  只开条目页时省去建图 + 布局成本。已挂载后保持常驻(切走再切回不丢图内
 	 *  选中/连线/右键态;缩放平移另有 localStorage 持久化,见 graph-persistence)。 */
@@ -302,9 +320,18 @@ export function WorldPage({
 	function createEntry() {
 		const title = createTitle.trim();
 		if (!title || !world) return;
-		const entry: WorldEntryDto = {
+		const entry = makeEntry(createType, title);
+		updateWorld((w) => ({ ...w, entries: [...w.entries, entry] }));
+		setSelId(entry.id);
+		setCreateTitle("");
+		setCreating(false);
+	}
+
+	/** 创建一个最小条目(桌面端内联命名与手机端「＋」共用一份字段默认值)。 */
+	function makeEntry(type: WorldEntryDto["type"], title: string): WorldEntryDto {
+		return {
 			id: newId("entry"),
-			type: createType,
+			type,
 			title,
 			keys: [],
 			chapters: [],
@@ -317,10 +344,22 @@ export function WorldPage({
 			images: [],
 			updatedAt: Date.now(),
 		};
+	}
+
+	/** 手机端「＋」:直接建一个待命名条目并打开详情(桌面端由分类树的内联输入命名)。 */
+	/** 选中条目(手机端列表卡片):进详情,不直接进表单。 */
+	function selectEntry(id: string | null) {
+		setSelId(id);
+		setPhoneEdit(false);
+	}
+
+	/** 手机端「＋」:建一个待命名条目并直接进编辑(新条目没内容可看)。 */
+	function createEntryQuick() {
+		if (!world) return;
+		const entry = makeEntry("character", "新条目");
 		updateWorld((w) => ({ ...w, entries: [...w.entries, entry] }));
 		setSelId(entry.id);
-		setCreateTitle("");
-		setCreating(false);
+		setPhoneEdit(true);
 	}
 
 	/** 删除条目:其子条目的 parent 清空(转根条目),相关关系一并移除(后端校验要求)。 */
@@ -369,12 +408,60 @@ export function WorldPage({
 
 	const selEntry = world ? (world.entries.find((e) => e.id === selId) ?? null) : null;
 
+	/** 手机端筛选后的条目列表(设计稿「世界书」:类型 chips + 卡片列表)。 */
+	const phoneEntries = world
+		? world.entries.filter((e) => {
+				if (wType !== "all" && e.type !== wType) return false;
+				const q = wQuery.trim().toLowerCase();
+				if (q.length === 0) return true;
+				return (
+					e.title.toLowerCase().includes(q) ||
+					e.body.toLowerCase().includes(q) ||
+					e.keys.some((k) => k.toLowerCase().includes(q)) ||
+					e.tags.some((t) => t.toLowerCase().includes(q))
+				);
+			})
+		: [];
+	/** 条目 → 关联数(卡片右上角「3 关联」)。 */
+	const relationCount = (id: string) => (world ? world.relations.filter((r) => r.from === id || r.to === id).length : 0);
+
 	/** 视图容器 class(与 styles.css 的 .world-stage 双常驻叠放/滑入滑出规则对齐)。 */
 	const viewCls = (v: WorldView, base: string) =>
 		view === v ? `${base} active` : leaving === v ? `${base} leaving` : base;
 
 	return (
-		<>
+		<div className="world-page">
+			{/* 手机端页头(设计稿 ★移动版「世界书」/「条目详情」):详情态显示条目名 + 返回列表 */}
+			{isPhone && world !== null && (
+				<MobileHeader
+					leading={{
+						icon: "chevron-left",
+						label: selEntry ? (phoneEdit ? "返回详情" : "返回列表") : "返回编辑",
+						onPress: () => {
+							if (!selEntry) {
+								nav?.onNavigate("edit");
+							} else if (phoneEdit) {
+								setPhoneEdit(false);
+							} else {
+								setSelId(null);
+							}
+						},
+					}}
+					title={selEntry ? selEntry.title : "世界书"}
+					subtitle={
+						selEntry
+							? phoneEdit
+								? `编辑中 · ${ENTRY_TYPE_LABELS[selEntry.type]}`
+								: ENTRY_TYPE_LABELS[selEntry.type]
+							: `${world.entries.length} 条目`
+					}
+					tone={dirty ? "busy" : "ok"}
+					actions={[
+						{ key: "search", icon: "search", label: "搜索条目", onPress: () => phoneSearchRef.current?.focus() },
+						{ key: "new", icon: "plus", label: "新建条目", accent: true, onPress: createEntryQuick },
+					]}
+				/>
+			)}
 			{world === null ? (
 				<div className="world-loading">
 					{loadErr ? (
@@ -460,7 +547,101 @@ export function WorldPage({
 					   cytoscape 容器恒有尺寸),active 自右滑入、leaving 向左滑出 */
 					<div className="world-stage">
 						<div className={`${viewCls("entries", "world-scroll")} w-view-entries`}>
-							<div className="w-entries-main">
+							{isPhone && selEntry && !phoneEdit ? (
+								/* 手机端条目详情(设计稿 ★移动版「世界书 · 条目详情」):只读一屏,
+								    底部「编辑条目」进表单;页头 ← 回列表 */
+								<div className="m-wdetail m-only">
+									<WorldEntryDetail
+										entry={selEntry}
+										slug={slug}
+										chapters={chapters}
+										relationCount={relationCount(selEntry.id)}
+										onEdit={() => setPhoneEdit(true)}
+										onDelete={() => setConfirmDelete(selEntry)}
+										onChangeAvatar={() => setPhoneEdit(true)}
+									/>
+								</div>
+							) : isPhone && selEntry ? (
+								/* 手机端条目编辑:表单 + 信息栏(配图在信息栏里上传) */
+								<div className="m-wdetail m-only">
+									<EntryForm
+										key={selEntry.id}
+										entry={selEntry}
+										onChange={changeEntry}
+										onRequestDelete={() => setConfirmDelete(selEntry)}
+									/>
+									{/* 信息栏(配图 / 条目信息 / 关联)桌面在右栏,手机端顺排在表单下方 */}
+									<EntryInfoPanel
+										key={`info-${selEntry.id}`}
+										entry={selEntry}
+										entries={world.entries}
+										chapters={chapters}
+										chaptersOk={chaptersOk}
+										slug={slug}
+										client={client}
+										onChange={changeEntry}
+									/>
+								</div>
+							) : isPhone ? (
+								/* 手机端:搜索 + 类型 chips + 卡片列表;点卡片进条目详情(页头 ← 回列表) */
+								<div className="m-wlist m-only">
+									<div className="m-wfilter">
+											<div className="m-wsearch">
+												<Lu icon="search" size={14} />
+												<input
+													ref={phoneSearchRef}
+													value={wQuery}
+													onChange={(e) => setWQuery(e.target.value)}
+													placeholder="搜索条目、关联或标签"
+													aria-label="搜索条目"
+												/>
+											</div>
+											<div className="m-wchips">
+												{([["all", "全部"], ...ENTRY_TYPES.map((t) => [t, ENTRY_TYPE_LABELS[t]])] as const).map(([id, label]) => (
+													<button
+														key={id}
+														type="button"
+														className={wType === id ? "m-wchip active" : "m-wchip"}
+														onClick={() => setWType(id as WorldEntryDto["type"] | "all")}
+													>
+														{label}
+													</button>
+												))}
+											</div>
+									</div>
+									<div className="m-wcards">
+										{phoneEntries.length === 0 && <div className="w-empty">没有匹配的条目</div>}
+										{phoneEntries.map((e) => (
+											<button key={e.id} type="button" className="m-wcard" onClick={() => selectEntry(e.id)}>
+												<span className="m-wrow">
+													<i className="m-wdot" style={{ background: `var(--type-${e.type})` }} />
+													<span className="m-wtype" style={{ color: `var(--type-${e.type})` }}>
+														{ENTRY_TYPE_LABELS[e.type]}
+													</span>
+													<span className="m-wgap" />
+													<span className="m-wrel">{relationCount(e.id)} 关联</span>
+												</span>
+												<span className="m-wtitle">{e.title || "未命名"}</span>
+												{e.body.trim().length > 0 && <span className="m-wdesc">{e.body.trim().slice(0, 60)}</span>}
+												<span className="m-wrow">
+													{e.tags.slice(0, 3).map((t) => (
+														<span key={t} className="m-wtag">
+															{t}
+														</span>
+													))}
+													<span className="m-wgap" />
+													<Lu icon="chevron-right" size={14} />
+												</span>
+											</button>
+										))}
+									</div>
+									<button type="button" className="m-wnew" onClick={createEntryQuick}>
+										<Lu icon="plus" size={16} /> 新建条目
+									</button>
+								</div>
+							) : (
+								<>
+								<div className="w-entries-main">
 								{selEntry ? (
 									<EntryForm
 										key={selEntry.id}
@@ -495,6 +676,8 @@ export function WorldPage({
 									client={client}
 									onChange={changeEntry}
 								/>
+							)}
+							</>
 							)}
 						</div>
 						{graphMounted && (
@@ -604,6 +787,6 @@ export function WorldPage({
 					</div>
 				</div>
 			)}
-		</>
+		</div>
 	);
 }
