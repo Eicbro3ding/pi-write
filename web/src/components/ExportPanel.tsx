@@ -59,6 +59,16 @@ export interface ExportPanelProps {
 	onError: (message: string) => void;
 	/** 打开面板时是否自动预取统计(缺省 true)。 */
 	prefetch?: boolean;
+	/**
+	 * 受控打开 + 隐藏自带触发按钮(手机端整屏导出用)。
+	 *
+	 * 手机端(≤700px)页头一行放不下「导出」按钮,导出从页头 ⋯ 进入并占满一屏;
+	 * 受控模式下 .export-panel 不再绝对定位(由外层 .m-sheet 定位),锚点只作为
+	 * 「点面板外部关闭」的判定范围,所以 panelRef 也一并被认作内部。
+	 */
+	control?: { open: boolean; onClose: () => void };
+	/** 受控模式下的外层容器(面板外点击不关闭;由外层遮罩负责关闭)。 */
+	panelRef?: React.RefObject<HTMLElement | null>;
 }
 
 /** 读上次用的格式(设置项「把上次使用的格式设为默认」写进来的)。 */
@@ -124,8 +134,20 @@ export function ExportPanel({
 	loadWorldAppendix,
 	onError,
 	prefetch = true,
+	control,
+	panelRef,
 }: ExportPanelProps) {
-	const [open, setOpen] = useState(false);
+	const [openState, setOpenState] = useState(false);
+	/** 受控时以外层状态为准(手机端整屏导出);否则用内部状态(桌面端页头按钮)。 */
+	const open = control ? control.open : openState;
+	const setOpen = (v: boolean | ((prev: boolean) => boolean)) => {
+		if (control) {
+			const next = typeof v === "function" ? v(control.open) : v;
+			if (!next) control.onClose();
+			return;
+		}
+		setOpenState(v);
+	};
 	const [format, setFormat] = useState<ExportFormat>(readLastFormat);
 	const [scope, setScope] = useState<ExportScope>("chapter");
 	const [withTitle, setWithTitle] = useState(true);
@@ -217,7 +239,9 @@ export function ExportPanel({
 			if (e.key === "Escape") setOpen(false);
 		};
 		const onClick = (e: MouseEvent) => {
-			if (!anchorRef.current?.contains(e.target as Node)) setOpen(false);
+			const t = e.target as Node;
+			if (anchorRef.current?.contains(t) || panelRef?.current?.contains(t)) return;
+			setOpen(false);
 		};
 		window.addEventListener("keydown", onKey);
 		// 捕获阶段:输入框里的 mousedown 会 preventDefault,冒泡阶段可能收不到
@@ -285,17 +309,19 @@ export function ExportPanel({
 
 	return (
 		<div className="export-anchor" ref={anchorRef}>
-			<button
-				type="button"
-				className="export-btn"
-				aria-haspopup="dialog"
-				aria-expanded={open}
-				title="导出(选择格式与范围)"
-				onClick={() => setOpen((v) => !v)}
-			>
-				<Lu icon="upload" size={13} strokeWidth={1.8} />
-				<span>导出</span>
-			</button>
+			{!control && (
+				<button
+					type="button"
+					className="export-btn"
+					aria-haspopup="dialog"
+					aria-expanded={open}
+					title="导出(选择格式与范围)"
+					onClick={() => setOpen((v) => !v)}
+				>
+					<Lu icon="upload" size={13} strokeWidth={1.8} />
+					<span>导出</span>
+				</button>
+			)}
 
 			{open && (
 				<div className="export-panel" role="dialog" aria-label="导出">
