@@ -12,6 +12,8 @@ import "./styles/stage.css";
 import "./styles/settings.css";
 import "./styles/wizard.css";
 import "./styles/dialog.css";
+// 手机端样式(设计稿 ★移动版):必须排在各页样式之后加载,才能压过 .stage-head、.w-bar 等
+import "./styles/mobile.css";
 
 initTheme(); // 首帧应用持久化主题,避免闪烁
 
