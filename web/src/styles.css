@@ -971,6 +971,8 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 /* 引用芯片行:/node、/chapter 选中后挂载,发送时才展开注入文本(zcode/GPT 式引用);
    占满整行把 textarea 挤到下一行,芯片本身可换行排列 */
 .inputbar-chips { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 6px 0; }
+/* 手机端的输入框胶囊外壳:桌面端在布局上等于不存在(输入框仍是 .inputbar-inner 里的一行) */
+.ib-field { display: contents; }
 .input-chip {
   display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%;
   padding: 3px 5px 3px 10px; font-size: 12px; color: var(--ink-2);

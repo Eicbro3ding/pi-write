@@ -625,27 +625,32 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 						))}
 					</div>
 				)}
-				<textarea
-					ref={taRef}
-					rows={1}
-					value={text}
-					placeholder={placeholder}
-					aria-label={ariaLabel}
-					onChange={(e) => {
-						setText(e.target.value);
-						refreshMenus(e.target);
-					}}
-					onKeyDown={handleKey}
-					onKeyUp={(e) => {
-						// 菜单吃掉的方向键不回灌给刷新逻辑,否则选中项会被打回第一项
-						if (e.key === menuKeyRef.current) {
-							menuKeyRef.current = null;
-							return;
-						}
-						refreshMenus(e.currentTarget);
-					}}
-					onClick={(e) => refreshMenus(e.currentTarget)}
-				/>
+				{/* .ib-field 只是手机端的胶囊外壳:桌面端 display:contents(布局上等于不存在,
+				    输入框仍是那条宽带描边容器里的一行);手机端它才是「输入框胶囊」,圆环与
+				    发送钮留在胶囊外(设计稿「输入区」) */}
+				<div className="ib-field">
+					<textarea
+						ref={taRef}
+						rows={1}
+						value={text}
+						placeholder={placeholder}
+						aria-label={ariaLabel}
+						onChange={(e) => {
+							setText(e.target.value);
+							refreshMenus(e.target);
+						}}
+						onKeyDown={handleKey}
+						onKeyUp={(e) => {
+							// 菜单吃掉的方向键不回灌给刷新逻辑,否则选中项会被打回第一项
+							if (e.key === menuKeyRef.current) {
+								menuKeyRef.current = null;
+								return;
+							}
+							refreshMenus(e.currentTarget);
+						}}
+						onClick={(e) => refreshMenus(e.currentTarget)}
+					/>
+				</div>
 				{usage && <ContextRing usage={usage} onOpen={onUsageClick} />}
 				{usagePanel}
 				{streaming ? (

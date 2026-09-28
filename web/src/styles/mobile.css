@@ -63,14 +63,6 @@
   padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
 }
 .m-composer .inputbar { border: 0; padding: 0; background: transparent; }
-.m-composer .inputbar-inner {
-  align-items: center; flex-wrap: nowrap; min-height: 40px;
-  padding: 5px 6px 5px 16px; border-radius: var(--r-full); border-color: var(--line-strong);
-  background: var(--bg-elev);
-}
-.m-composer .inputbar-chips { flex-basis: auto; order: -1; }
-.m-composer textarea { font-size: var(--fs-13); max-height: 104px; }
-.m-composer .inputbar textarea { padding: 4px 0; }
 
 @media (max-width: 700px) {
   /* —— 壳:顶栏下线,页面自己管标题与状态 —— */
@@ -502,11 +494,34 @@
   }
   /* 导演输入条与编辑页同款胶囊;键位提示在触屏上无意义 */
   .stage-main .inputbar::after { display: none; }
+
+  /* —— 输入区(设计稿「输入区」):[输入框胶囊] [上下文圆环] [发送] ——
+     桌面那条宽带描边容器在手机端退场,胶囊只包输入框,圆环与发送钮是胶囊外的兄弟元素。
+     写入页底部条(.m-composer)与舞台页底部条(.stage-main)共用同一套规则。 */
+  .m-composer .inputbar-inner,
   .stage-main .inputbar-inner {
-    align-items: center; flex-wrap: nowrap; min-height: 40px;
-    padding: 5px 6px 5px 16px; border-radius: var(--r-full); border-color: var(--line-strong);
+    align-items: center; flex-wrap: wrap; gap: 8px; min-height: 40px;
+    padding: 0; border: 0; background: transparent;
   }
-  .stage-main textarea { font-size: var(--fs-13); }
+  .m-composer .ib-field,
+  .stage-main .ib-field {
+    flex: 1 1 auto; min-width: 0; display: flex; align-items: center;
+    height: 40px; padding: 0 16px;
+    background: var(--bg-elev); border: 1px solid var(--line-strong); border-radius: var(--r-full);
+  }
+  .m-composer .ib-field textarea,
+  .stage-main .ib-field textarea { padding: 0; font-size: var(--fs-13); max-height: 104px; }
+  /* 发送/中断钮:设计稿是 34 的圆,且必须在胶囊里居中对齐 ——
+     桌面那条 .btn-send{align-self:flex-end} 是为多行文本贴底设计的,手机上就是「歪」的来源 */
+  .m-composer .inputbar .btn-send,
+  .stage-main .inputbar .btn-send { width: 34px; height: 34px; align-self: center; }
+  .m-composer .inputbar.compact .btn-send,
+  .stage-main .inputbar.compact .btn-send { width: 34px; height: 34px; }
+  .m-composer .inputbar .btn-abort,
+  .stage-main .inputbar .btn-abort { align-self: center; padding: 7px 12px; font-size: var(--fs-12); }
+  /* 引用芯片占整行(在胶囊上方),不挤压输入框 */
+  .m-composer .inputbar-chips,
+  .stage-main .inputbar-chips { flex-basis: 100%; order: -1; padding: 0 2px; }
 
   /* —— 触屏:热区与字号(沿用 ≤600 段口径,提到 700 断点内) —— */
   .m-menu-item, .m-icon-btn { min-height: 34px; }
