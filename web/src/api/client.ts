@@ -284,8 +284,8 @@ export class ApiClient {
 	 * `shell` 是服务端按当前设置解析出的**实际**方言/路径(选 pwsh 但本机没装时
 	 * dialect 为 "none" 并带 warning),设置页据此提示而不是等调用报错。
 	 */
-	async getSettings(): Promise<{ settings: WriterSettingsDto; shell: ResolvedShellDto }> {
-		return this.request<{ settings: WriterSettingsDto; shell: ResolvedShellDto }>("/api/settings");
+	async getSettings(): Promise<{ settings: WriterSettingsDto; shell: ResolvedShellDto; appVersion: string }> {
+		return this.request<{ settings: WriterSettingsDto; shell: ResolvedShellDto; appVersion: string }>("/api/settings");
 	}
 
 	/**

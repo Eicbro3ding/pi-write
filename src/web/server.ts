@@ -30,7 +30,7 @@ import {
 	updateChapter,
 } from "../book-manager.ts";
 import { getPluginFrontendPath, listPlugins, loadPlugins, readPluginSettings, removePlugin, writePluginEnabled, writePluginSettings, writePluginTrusted, type PluginRouteDef, type PluginRuntimeInfo, type PluginWebCommandHandler } from "../plugin-loader.ts";
-import { getAgentDir, getBookDir, getThemesDir, getWriterDir } from "../config.ts";
+import { getAgentDir, getBookDir, getThemesDir, getWriterDir, VERSION } from "../config.ts";
 import { atomicWriteFile } from "../atomic-write.ts";
 import {
 	SETUP_VERSION,
@@ -2127,7 +2127,9 @@ export class WriterServer {
 	 */
 	private async handleGetSettings(ctx: RouteContext): Promise<void> {
 		const settings = await readWriterSettings();
-		this.send(ctx.res, 200, { settings, shell: resolveWriterShell(settings) });
+		// appVersion:包版本(package.json),设置页页脚展示用 —— 前端没有别的来源,
+		// 而排障时「用户报的是哪个版本」是第一个要问的问题
+		this.send(ctx.res, 200, { settings, shell: resolveWriterShell(settings), appVersion: VERSION });
 	}
 
 	/**

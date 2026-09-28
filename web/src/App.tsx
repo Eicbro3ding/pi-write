@@ -188,6 +188,8 @@ export function App() {
 	 * 存不存在(关了就对 AI 不可见)。与 shell 开关同款,不落 localStorage。
 	 * 初值取默认设置,挂载后由 GET /api/settings 对账覆盖。
 	 */
+	/** 应用版本(GET /api/settings 附带;设置页页脚展示)。null = 还没拿到。 */
+	const [appVersion, setAppVersion] = useState<string | null>(null);
 	const [imageSettings, setImageSettingsState] = useState<ImageSettingsSlice>(() => ({
 		enableImageGen: false,
 		imageProvider: "openai-images",
@@ -276,8 +278,9 @@ export function App() {
 		let cancelled = false;
 		client
 			.getSettings()
-			.then(({ settings, shell }) => {
+			.then(({ settings, shell, appVersion }) => {
 				if (cancelled) return;
+				setAppVersion(appVersion);
 				applyClassicMode(settings.classicMode);
 				applyShellEnabled(settings.enableShell);
 				applyShellSettings(settings, shell);
@@ -476,6 +479,7 @@ export function App() {
 							focusModelToken={settingsModelToken}
 							onRerunSetup={() => setRerunWizard(true)}
 							nav={{ view, onNavigate: (v) => setView(v as View) }}
+							appVersion={appVersion}
 						/>
 					</section>
 			</div>
