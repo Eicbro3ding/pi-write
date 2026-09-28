@@ -226,6 +226,94 @@
   .settings .s-card { border-radius: var(--r-lg); padding: 0 14px 4px; }
   .settings .s-card-head { padding: 12px 0 10px; }
 
+  /* —— 世界书 · 关系图(设计稿「关系图」):全屏画布 + 顶部芯片 + 悬浮控件 + 底部详情卡 —— */
+  .m-wseg {
+    flex: none; display: inline-flex; align-items: center; gap: 2px; padding: 2px;
+    background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-full);
+  }
+  .m-wseg-btn {
+    width: 34px; height: 30px; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: var(--r-sm); color: var(--muted);
+  }
+  .m-wseg-btn.active { background: var(--amber-tint); color: var(--amber); }
+  .m-graph { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .m-graph .graph-toolbar { display: none; }
+  .m-graph-filters {
+    flex: none; display: flex; align-items: center; gap: 8px; height: 56px; padding: 0 14px;
+    overflow-x: auto; scrollbar-width: none;
+  }
+  .m-graph-filters::-webkit-scrollbar { display: none; }
+  /* 画布:整块铺满,控件浮在上面 */
+  .m-graph .graph-canvas { flex: 1; min-height: 0; position: relative; }
+  .m-graph .graph-cytoscape { position: absolute; inset: 0; }
+  .m-graph-tools {
+    position: absolute; top: 10px; right: 12px; z-index: 3;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end;
+    max-width: calc(100% - 24px);
+  }
+  .m-graph-tools .graph-hint {
+    flex-basis: 100%; text-align: right; font-size: var(--fs-11); color: var(--faint);
+  }
+  /* 连线胶囊(设计稿右上「连线」):琥珀描边 + 淡底 */
+  .m-graph .graph-link-btn { flex: none; padding: 7px 12px; border-radius: var(--r-full); background: var(--amber-tint); border: 1px solid var(--amber); color: var(--amber); font-size: var(--fs-12); font-weight: 600; }
+  .m-graph .graph-link-btn.on { background: var(--amber); color: var(--bg); }
+  .m-graph .graph-tool-btn {
+    flex: none; width: 34px; height: 34px; padding: 0; border-radius: var(--r-full);
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--bg-elev); border: 1px solid var(--line); color: var(--muted);
+    font-size: 0; /* 手机端只留图标(文字在桌面工具条里) */
+  }
+  .m-graph .graph-tool-btn svg { font-size: initial; }
+  /* 缩放条:设计稿放在画布底部居中(桌面是右下) */
+  .m-graph .graph-zoom-bar {
+    top: auto; bottom: 12px; left: 50%; right: auto; transform: translateX(-50%);
+    background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-full);
+    padding: 4px 6px; gap: 4px;
+  }
+  .m-graph .graph-zoom-btn { width: 26px; height: 24px; display: inline-flex; align-items: center; justify-content: center; }
+  .m-graph .graph-zoom-pct { font-size: var(--fs-11); color: var(--muted); }
+  /* 底部详情卡(设计稿:抓手 + 头像/名称/元信息 + 关系清单 + 两个动作) */
+  .m-graph-sheet {
+    flex: none; display: flex; flex-direction: column; background: var(--bg-elev);
+    border-top: 1px solid var(--line); border-radius: var(--r-lg) var(--r-lg) 0 0;
+    padding-bottom: calc(6px + env(safe-area-inset-bottom));
+    max-height: 58vh; overflow-y: auto;
+  }
+  .m-graph-grip { flex: none; display: flex; align-items: center; justify-content: center; height: 18px; }
+  .m-graph-grip::before { content: ""; width: 36px; height: 4px; border-radius: var(--r-full); background: var(--line-strong); }
+  .m-graph-head { flex: none; display: flex; align-items: center; gap: 12px; padding: 0 16px 10px; }
+  .m-graph-av {
+    flex: none; width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--line);
+    display: inline-flex; align-items: center; justify-content: center; overflow: hidden;
+    background: var(--bg-elev-2); font-size: var(--fs-14); font-weight: 600;
+  }
+  .m-graph-av.img { border-color: var(--line); }
+  .m-graph-av img { width: 100%; height: 100%; object-fit: cover; }
+  .m-graph-namecol { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .m-graph-name { font-size: var(--fs-14); font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .m-graph-meta { display: flex; align-items: center; gap: 6px; font-size: var(--fs-11); color: var(--faint); }
+  .m-graph-collapse { flex: none; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--r-sm); color: var(--muted); }
+  .m-graph-rels { display: flex; flex-direction: column; gap: 6px; padding: 0 16px; }
+  .m-graph-rels-title { font-size: var(--fs-11); font-weight: 600; letter-spacing: 1.2px; color: var(--faint); }
+  .m-graph-rel-empty { font-size: var(--fs-11); color: var(--faint); }
+  .m-graph-rel { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; border-radius: var(--r-sm); background: var(--bg); text-align: left; }
+  .m-graph-relav {
+    flex: none; width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--line);
+    display: inline-flex; align-items: center; justify-content: center; background: var(--bg-elev-2);
+    font-size: var(--fs-11); font-weight: 600;
+  }
+  .m-graph-relname { flex: 1; min-width: 0; font-size: var(--fs-12); font-weight: 500; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .m-graph-reltype { flex: none; font-size: var(--fs-11); color: var(--muted); }
+  .m-graph-rel svg { flex: none; color: var(--line-strong); }
+  .m-graph-actions { display: flex; align-items: center; gap: 8px; padding: 10px 16px 4px; }
+  .m-graph-primary { flex: 1; display: inline-flex; align-items: center; justify-content: center; min-height: 38px; border-radius: var(--r-sm); background: var(--amber); color: var(--bg); font-size: var(--fs-12); font-weight: 600; }
+  .m-graph-secondary {
+    flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 38px; padding: 0 14px;
+    border-radius: var(--r-sm); border: 1px solid var(--line-strong); color: var(--ink-2); font-size: var(--fs-12);
+  }
+  /* 收起态:只剩抓手 + 标题行 */
+  .m-graph-sheet.collapsed { max-height: none; overflow: hidden; }
+
   /* —— 世界书页:桌面工具条退场,交给手机页头 —— */
   .world-page { flex-direction: column; }
   .world-body > .w-bar { display: none; }

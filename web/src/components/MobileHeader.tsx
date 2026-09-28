@@ -41,6 +41,7 @@ export function MobileHeader({
 	subtitle,
 	tone = "idle",
 	actions = [],
+	right,
 	children,
 }: {
 	/** 左端主导操作(☰ 打开抽屉 / ← 返回);省略则不留位。 */
@@ -50,6 +51,8 @@ export function MobileHeader({
 	subtitle?: ReactNode;
 	tone?: MobileHeaderTone;
 	actions?: MobileHeaderAction[];
+	/** 右侧自定控件(如视图切换段控件);排在图标按钮组之后。 */
+	right?: ReactNode;
 	/** 顶部附加内容(如世界书页的搜索框 + 筛选chips),渲染在页头之下。 */
 	children?: ReactNode;
 }) {
@@ -84,6 +87,7 @@ export function MobileHeader({
 						{a.live && <span className="m-live" />}
 					</button>
 				))}
+				{right}
 			</div>
 			{children}
 		</div>

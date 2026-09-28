@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ApiError, type ApiClient } from "../api/client.ts";
+import { ApiError, imageUrl, type ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
 import { useCrossWindowReload } from "../cross-window-sync.ts";
 import type { ChapterRef, WorldDataDto, WorldEntryDto } from "../types.ts";
@@ -11,6 +11,7 @@ import { Lu } from "../components/Lu.tsx";
 import { MobileHeader } from "../components/MobileHeader.tsx";
 import { useIsPhone } from "../useMediaQuery.ts";
 import { ENTRY_TYPES, ENTRY_TYPE_LABELS } from "../world-entry.ts";
+import { ENTRY_STATUS_OPTIONS } from "../components/EntryForm.tsx";
 import { EntryForm, EntryInfoPanel } from "../components/EntryForm.tsx";
 import { RelationGraph } from "../components/RelationGraph.tsx";
 import { EntryCard } from "../components/EntryCard.tsx";
@@ -74,6 +75,8 @@ export function WorldPage({
 	const phoneSearchRef = useRef<HTMLInputElement>(null);
 	/** 手机端条目页:只读详情 / 编辑表单(设计稿「条目详情」→「编辑条目」两级)。 */
 	const [phoneEdit, setPhoneEdit] = useState(false);
+	/** 手机端关系图底部详情卡是否展开(设计稿「关系图」:⌄ 收起后只剩一行)。 */
+	const [phoneSheetOpen, setPhoneSheetOpen] = useState(true);
 	/** 手机端「更换配图」:借用表单里的隐藏文件输入(避免复制一份上传逻辑)。 */
 	const phoneAvatarRef = useRef<HTMLButtonElement>(null);
 	/** 关系图视图懒挂载(P7,2026-08):首次切到关系图才构建 cytoscape——大世界书
@@ -425,6 +428,30 @@ export function WorldPage({
 	/** 条目 → 关联数(卡片右上角「3 关联」)。 */
 	const relationCount = (id: string) => (world ? world.relations.filter((r) => r.from === id || r.to === id).length : 0);
 
+	/** 条目状态文案(详情卡元信息行:「在世 · 激活」)。 */
+	const entryStatusLabel = (e: WorldEntryDto) => {
+		const s = ENTRY_STATUS_OPTIONS.find((o) => o.value === e.status)?.label ?? e.status;
+		return e.active ? `${s} · 激活` : s;
+	};
+
+	/** 关系图底部详情卡的关系清单:选中条目的每条关系 + 对端条目(手机端用)。 */
+	const sheetRels = (() => {
+		if (!world || !selEntry) return [];
+		return world.relations
+			.filter((r) => r.from === selEntry.id || r.to === selEntry.id)
+			.map((r) => {
+				const otherId = r.from === selEntry.id ? r.to : r.from;
+				const other = world.entries.find((e) => e.id === otherId);
+				return {
+					id: r.id,
+					otherId,
+					otherTitle: other?.title ?? "",
+					otherType: other?.type ?? selEntry.type,
+					label: r.label || r.type || "关系",
+				};
+			});
+	})();
+
 	/** 视图容器 class(与 styles.css 的 .world-stage 双常驻叠放/滑入滑出规则对齐)。 */
 	const viewCls = (v: WorldView, base: string) =>
 		view === v ? `${base} active` : leaving === v ? `${base} leaving` : base;
@@ -432,7 +459,40 @@ export function WorldPage({
 	return (
 		<div className="world-page">
 			{/* 手机端页头(设计稿 ★移动版「世界书」/「条目详情」):详情态显示条目名 + 返回列表 */}
-			{isPhone && world !== null && (
+			{/* 手机端关系图页头(设计稿 ★移动版「关系图」):← 回列表 | 标题 | 列表 / 关系图 / 设定 切换 */}
+			{isPhone && world !== null && view !== "entries" && (
+				<MobileHeader
+					leading={{
+						icon: "chevron-left",
+						label: "返回世界书",
+						onPress: () => {
+							switchView("entries");
+							setSelId(null);
+						},
+					}}
+					title={view === "graph" ? "关系图" : "设定"}
+					subtitle={view === "graph" ? `${world.entries.length} 条目 · ${world.relations.length} 条关系` : "世界观 · 发展线 · 时间线"}
+					tone="ok"
+					right={
+						<div className="m-wseg" role="tablist" aria-label="世界书视图">
+							{([["entries", "list"], ["graph", "network"], ["settings", "sliders-horizontal"]] as const).map(([v, icon]) => (
+								<button
+									key={v}
+									type="button"
+									role="tab"
+									aria-selected={view === v}
+									className={view === v ? "m-wseg-btn active" : "m-wseg-btn"}
+									aria-label={v === "entries" ? "列表" : v === "graph" ? "关系图" : "设定"}
+									onClick={() => switchView(v as WorldView)}
+								>
+									<Lu icon={icon} size={16} />
+								</button>
+							))}
+						</div>
+					}
+				/>
+			)}
+			{isPhone && world !== null && view === "entries" && (
 				<MobileHeader
 					leading={{
 						icon: "chevron-left",
@@ -459,6 +519,7 @@ export function WorldPage({
 					actions={[
 						{ key: "search", icon: "search", label: "搜索条目", onPress: () => phoneSearchRef.current?.focus() },
 						{ key: "new", icon: "plus", label: "新建条目", accent: true, onPress: createEntryQuick },
+						{ key: "graph", icon: "network", label: "关系图", onPress: () => switchView("graph") },
 					]}
 				/>
 			)}
@@ -699,7 +760,70 @@ export function WorldPage({
 									canRedo={redoCount > 0}
 									onRedo={redo}
 								/>
-								{selEntry ? (
+								{isPhone ? (
+									/* 手机端详情卡(设计稿「关系图」底部面板):抓手 + 头像/名称/元信息 +
+									   关系清单 + 「查看词条 / 在舞台使用」;⌄ 收起后只剩标题行 */
+									selEntry && (
+										<div className={phoneSheetOpen ? "m-graph-sheet" : "m-graph-sheet collapsed"}>
+											<div className="m-graph-grip" aria-hidden="true" />
+											<div className="m-graph-head">
+												{selEntry.avatar ? (
+													<span className="m-graph-av img">
+														<img src={imageUrl(slug, selEntry.avatar)} alt={selEntry.title} />
+													</span>
+												) : (
+													<span className="m-graph-av" style={{ color: `var(--type-${selEntry.type})`, borderColor: `var(--type-${selEntry.type})` }}>
+														{(selEntry.title || "?").slice(0, 1)}
+													</span>
+												)}
+												<span className="m-graph-namecol">
+													<span className="m-graph-name">{selEntry.title || "未命名"}</span>
+													<span className="m-graph-meta">
+														<i className="m-wdot" style={{ background: `var(--type-${selEntry.type})` }} />
+														<span style={{ color: `var(--type-${selEntry.type})` }}>{ENTRY_TYPE_LABELS[selEntry.type]}</span>
+														<span className="m-detail-sep">·</span>
+														<span>{entryStatusLabel(selEntry)}</span>
+													</span>
+												</span>
+												<button
+													type="button"
+													className="m-graph-collapse"
+													aria-label={phoneSheetOpen ? "收起详情" : "展开详情"}
+													onClick={() => setPhoneSheetOpen((v) => !v)}
+												>
+													<Lu icon={phoneSheetOpen ? "chevron-down" : "chevron-up"} size={16} />
+												</button>
+											</div>
+											{phoneSheetOpen && (
+												<>
+													<div className="m-graph-rels">
+														<div className="m-graph-rels-title">关系 · {sheetRels.length}</div>
+														{sheetRels.length === 0 && <div className="m-graph-rel-empty">还没有关系,点画布右上「连线」建立</div>}
+														{sheetRels.map((r) => (
+															<button key={r.id} type="button" className="m-graph-rel" onClick={() => setSelId(r.otherId)}>
+																<span className="m-graph-relav" style={{ color: `var(--type-${r.otherType})`, borderColor: `var(--type-${r.otherType})` }}>
+																	{(r.otherTitle || "?").slice(0, 1)}
+																</span>
+																<span className="m-graph-relname">{r.otherTitle || "未命名"}</span>
+																<span className="m-graph-reltype">{r.label}</span>
+																<Lu icon="chevron-right" size={12} />
+															</button>
+														))}
+													</div>
+													<div className="m-graph-actions">
+														<button type="button" className="m-graph-primary" onClick={() => switchView("entries")}>
+															查看词条
+														</button>
+														<button type="button" className="m-graph-secondary" onClick={() => nav?.onNavigate("stage")}>
+															<Lu icon="clapperboard" size={13} />
+															在舞台使用
+														</button>
+													</div>
+												</>
+											)}
+										</div>
+									)
+								) : selEntry ? (
 									<EntryCard
 										key={selEntry.id}
 										entry={selEntry}
