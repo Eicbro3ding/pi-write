@@ -80,7 +80,6 @@
   .paper-zone { padding-bottom: calc(66px + env(safe-area-inset-bottom)); }
   .paper-surface .d-body { padding: 0 20px; }
   .paper-surface .d-body .cm-content { padding: 22px 0; }
-  .paper-surface .d-hint { display: none; }
   /* 顶部诊断条贴边(桌面是卡片内浮出的) */
   .paper-zone > .notice { margin: 8px 12px 0; }
 

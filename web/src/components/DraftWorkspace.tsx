@@ -31,27 +31,6 @@ interface DraftWorkspaceProps {
 }
 
 /**
- * 保存状态 → 中文提示。Record<DraftStatus, string> 由 tsc 穷举校验:
- * 联合成员增删都会在此编译期报错(多了「多余属性」,少了「缺少属性」)。
- */
-const STATUS_HINTS: Record<DraftStatus, string> = {
-	loading: "加载中…",
-	saved: "✓ 已保存",
-	dirty: "● 未保存",
-	saving: "● 保存中…",
-	"save-error": "✗ 保存失败 · Ctrl+S 重试",
-};
-
-/** 保存状态 → d-hint 颜色 class(与顶栏 stat-icon 同色系)。 */
-const HINT_CLASS: Record<DraftStatus, string> = {
-	loading: "",
-	saved: "ok",
-	dirty: "dirty",
-	saving: "busy",
-	"save-error": "err",
-};
-
-/**
  * 正文主编辑 workspace:CodeMirror 编辑器 + 800ms debounce 自动保存 + Ctrl+S 立即保存 +
  * Alt+E 聚焦 + 保存状态机(loading/saved/dirty/saving/save-error)+ 选区快照上报
  * (编剧「选中文本自动填入」的数据源)。批注退役后不再暴露命令句柄(原 apply/undo/
@@ -335,21 +314,8 @@ export function DraftWorkspace({
 					onSelectionChange={handleSelectionChange}
 				/>
 			</div>
-			<div className={`d-hint ${HINT_CLASS[status]}`}>
-				{/* 键位段包 .d-keys:窄屏/触屏下经 CSS 隐藏(F3) */}
-				<span className="d-keys">Alt+E 进入编辑 · Ctrl+S 保存 · </span>
-				{/* 稳态「已保存」顶栏已展示,底部不再重复(F4);异常态(加载中/未保存/保存中/失败)保留本地提示 */}
-				{status !== "saved" && `${statusHint(status, loadError !== null)} · `}
-				{wordCount} 字
-			</div>
 		</aside>
 	);
-}
-
-/** 保存状态的中文提示(加载失败与保存失败共用 save-error 状态,文案区分)。 */
-function statusHint(status: DraftStatus, hasLoadError: boolean): string {
-	if (status === "save-error") return hasLoadError ? "✗ 加载失败" : STATUS_HINTS["save-error"];
-	return STATUS_HINTS[status];
 }
 
 /** 字数统计:CJK 逐字计数 + 拉丁按空白分词,与 TUI writer-ui.ts 的 countWriting 一致。 */

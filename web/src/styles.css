@@ -316,7 +316,6 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .paper-status { margin-left: auto; font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 10px; flex: none; }
 .paper-file { font-family: var(--mono); font-size: 11px; color: var(--faint); }
 .paper-words { font-variant-numeric: tabular-nums; }
-.paper-status .d-hint { border: none; padding: 0; }
 .paper-fs {
   flex: none; display: inline-flex; align-items: center; justify-content: center;
   width: 26px; height: 26px; color: var(--muted);
@@ -339,19 +338,6 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 /* 正文阅读宽度:纸张卡片本身已固定 728,编辑器铺满卡内(窄屏自动收窄) */
 .d-body .cm-editor { max-width: 100%; margin: 0 auto; }
 /* 底部状态条:mono 细条 */
-.d-hint {
-  flex: none; padding: 9px 16px; border-top: 1px solid var(--line);
-  font-family: var(--mono); font-size: 11px; color: var(--faint);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.d-hint.ok { color: var(--green); }
-.d-hint.dirty { color: var(--amber); }
-.d-hint.busy { color: var(--amber); }
-.d-hint.err { color: var(--red); }
-/* 触屏/窄屏下键盘快捷键提示无意义,隐藏(键位段由 .d-keys 包裹) */
-@media (max-width: 768px) {
-  .d-hint .d-keys { display: none; }
-}
 /* 加载错误/冲突提示框(原硬编码内联样式收敛为 CSS 类) */
 .d-error {
   flex: none; margin: 0 10px 8px; padding: 8px 12px; font-size: 12px;
