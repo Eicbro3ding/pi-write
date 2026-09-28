@@ -4,7 +4,15 @@
  * 纯逻辑:闸门是内存 Map,工具只依赖注入的闸门 —— 不碰真实会话,不阻塞。
  */
 import { describe, expect, it, vi } from "vitest";
-import { ASK_CANCELLED_TEXT, AskUserGate, createAskUserTool, normalizeQuestions } from "../src/ask-user.ts";
+import { SessionManager } from "../vendor/pi-coding-agent/src/index.ts";
+import {
+	ASK_CANCELLED_TEXT,
+	AskUserGate,
+	createAskUserTool,
+	normalizeQuestions,
+	settleDanglingAskParts,
+	settleDanglingAsks,
+} from "../src/ask-user.ts";
 
 describe("normalizeQuestions", () => {
 	it("单行化 + 去空白(卡片标题是一行,模型常带换行)", () => {
@@ -184,5 +192,85 @@ describe("createAskUserTool", () => {
 		expect(spy).toBeDefined();
 		// 不真的执行(会永久挂起):这里只断言工厂在不传参时可用
 		expect(tool.name).toBe("ask_user");
+	});
+});
+
+/** 推一条「assistant 发起 ask_user 工具调用」的消息(真实内存 SessionManager)。 */
+function pushAskCall(sm: SessionManager, id: string): void {
+	sm.appendMessage({
+		role: "assistant",
+		content: [{ type: "toolCall", id, name: "ask_user", arguments: { questions: [{ question: "问?", options: ["A"] }] } }],
+		timestamp: Date.now(),
+	} as never);
+}
+
+describe("AskUserGate.has", () => {
+	it("未决提问为 true,结算后为 false", async () => {
+		const gate = new AskUserGate();
+		const p = gate.ask("t1", [{ question: "问", options: [] }]);
+		expect(gate.has("t1")).toBe(true);
+		gate.answer("t1", ["A"]);
+		await p;
+		expect(gate.has("t1")).toBe(false);
+		expect(gate.has("不存在")).toBe(false);
+	});
+});
+
+describe("settleDanglingAsks(悬空提问清扫:重启后不再弹死卡)", () => {
+	it("分支末尾未配对的 ask_user → 补一条「未回答」的 toolResult", () => {
+		const sm = SessionManager.inMemory("/tmp/book");
+		pushAskCall(sm, "t1");
+		expect(settleDanglingAsks(sm)).toBe(1);
+		const last = sm.getBranch().at(-1) as { message: { role: string; toolCallId: string; details: unknown; content: Array<{ text: string }> } };
+		expect(last.message.role).toBe("toolResult");
+		expect(last.message.toolCallId).toBe("t1");
+		expect(last.message.details).toEqual({ cancelled: true });
+		expect(last.message.content[0]!.text).toBe(ASK_CANCELLED_TEXT);
+	});
+
+	it("已配对的提问不动(结果存在 → 末尾是 toolResult,不是悬空)", () => {
+		const sm = SessionManager.inMemory("/tmp/book");
+		pushAskCall(sm, "t1");
+		sm.appendMessage({ role: "toolResult", toolCallId: "t1", toolName: "ask_user", content: [{ type: "text", text: "→ A" }], isError: false, timestamp: Date.now() } as never);
+		expect(settleDanglingAsks(sm)).toBe(0);
+		expect(sm.getBranch()).toHaveLength(2);
+	});
+
+	it("闸门里还活着的提问跳过,不替它结算", () => {
+		const sm = SessionManager.inMemory("/tmp/book");
+		pushAskCall(sm, "t1");
+		expect(settleDanglingAsks(sm, () => true)).toBe(0);
+		expect(sm.getBranch()).toHaveLength(1);
+	});
+
+	it("悬空提问不是末尾消息(后面还有 user)→ 不强行补(历史被改过/另有分支)", () => {
+		const sm = SessionManager.inMemory("/tmp/book");
+		pushAskCall(sm, "t1");
+		sm.appendMessage({ role: "user", content: [{ type: "text", text: "后来的消息" }], timestamp: Date.now() } as never);
+		expect(settleDanglingAsks(sm)).toBe(0);
+	});
+
+	it("无关工具调用不受影响", () => {
+		const sm = SessionManager.inMemory("/tmp/book");
+		sm.appendMessage({
+			role: "assistant",
+			content: [{ type: "toolCall", id: "r1", name: "read", arguments: { path: "a.md" } }],
+			timestamp: Date.now(),
+		} as never);
+		expect(settleDanglingAsks(sm)).toBe(0);
+	});
+});
+
+describe("settleDanglingAskParts(只读会话视图清扫)", () => {
+	it("未配对的 ask_user 块标成已取消;已答/无关块不动", () => {
+		const messages = [
+			{ content: [{ type: "toolCall", id: "t1", name: "ask_user", arguments: "{}" }] },
+			{ content: [{ type: "toolCall", id: "t2", name: "ask_user", arguments: "{}", result: "1. 问?\n   → A" }] },
+			{ content: [{ type: "toolCall", id: "t3", name: "read", arguments: "{}" }] },
+		];
+		expect(settleDanglingAskParts(messages as never)).toBe(1);
+		expect((messages[0]!.content![0] as { result?: string }).result).toBe(ASK_CANCELLED_TEXT);
+		expect((messages[1]!.content![0] as { result?: string }).result).toBe("1. 问?\n   → A");
+		expect((messages[2]!.content![0] as { result?: string }).result).toBeUndefined();
 	});
 });

@@ -49,6 +49,11 @@ interface ChapterSidebarProps {
 	workspace?: ReactNode;
 	/** 手机端抽屉主导航:当前页 + 切页回调(设计稿「文件抽屉」的舞台/编辑/世界书/设置)。 */
 	nav?: { view: string; onNavigate: (view: string) => void };
+	/**
+	 * 经典模式(单 agent):抽屉主导航去掉「舞台」入口,与顶栏(桌面)一致。
+	 * 缺省 false(多 agent:舞台/编辑/世界书/设置四个入口)。
+	 */
+	classicMode?: boolean;
 	/** 当前章节字数(手机端抽屉页脚的「本地草稿 · 不上传 | N 字」)。 */
 	words?: number | null;
 }
@@ -56,6 +61,19 @@ interface ChapterSidebarProps {
 /** 侧栏宽度限制(px)。 */
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 340;
+
+/**
+ * 手机端抽屉主导航条目(设计稿「文件抽屉」)。
+ *
+ * 经典模式(单 agent)下舞台页整个不挂载(见 App),这里也必须去掉「舞台」——
+ * 否则点进去只会切到一个不存在的页(view="stage" 但 StagePage 未渲染),停白屏。
+ */
+const MOBILE_NAV_ITEMS = [
+	{ id: "stage", icon: "clapperboard", label: "舞台" },
+	{ id: "edit", icon: "square-pen", label: "编辑" },
+	{ id: "world", icon: "globe", label: "世界书" },
+	{ id: "settings", icon: "settings", label: "设置" },
+] as const;
 
 /**
  * 书库栏:书列表 + 当前书的章节列表(章节带序号),底部新建章节/新建书/导入书。
@@ -88,6 +106,7 @@ export function ChapterSidebar({
 	onRailModeChange,
 	workspace,
 	nav,
+	classicMode = false,
 	words,
 }: ChapterSidebarProps) {
 	/** 新建书内联输入框是否展开。 */
@@ -239,12 +258,10 @@ export function ChapterSidebar({
 								</div>
 								{nav && (
 									<div className="m-nav" role="navigation" aria-label="主导航">
-										{([
-											["stage", "clapperboard", "舞台"],
-											["edit", "square-pen", "编辑"],
-											["world", "globe", "世界书"],
-											["settings", "settings", "设置"],
-										] as const).map(([id, icon, label]) => (
+										{(classicMode
+											? MOBILE_NAV_ITEMS.filter((item) => item.id !== "stage")
+											: MOBILE_NAV_ITEMS
+										).map(({ id, icon, label }) => (
 											<button
 												key={id}
 												type="button"

@@ -668,8 +668,14 @@ export function StagePage({
 		return out;
 	}, [worldUpdateCallId, scriptConfirmCallId, worldPreview, scriptConfirm, confirmDismissed, busy]);
 
+	/** 服务端已判定「提问已结束」的 toolCallId(ok:false;说明见 WritePage 同名字段)。 */
+	const [settledAskIds, setSettledAskIds] = useState<ReadonlySet<string>>(() => new Set());
+
 	/** 导演会话里正在等待回答的提问(ask_user);有就弹模态浮层。 */
-	const pendingAsk = findPendingAsk(directorSession.messages);
+	const pendingAsk = useMemo(() => {
+		const ask = findPendingAsk(directorSession.messages);
+		return ask && !settledAskIds.has(ask.toolCallId) ? ask : null;
+	}, [directorSession.messages, settledAskIds]);
 
 	let entryNo = 0;
 	return (
@@ -1081,17 +1087,25 @@ export function StagePage({
 				<AskUserOverlay
 					questions={pendingAsk.questions}
 					/* 提交/取消失败要说出来(2026-09-23):此前 `void` 掉 promise,
-					   失败时浮层原地不动、无提示 */
-					onSubmit={(answers) =>
+					   失败时浮层原地不动、无提示。ok:false = 服务端已结束,本地关掉别卡住 */
+					onSubmit={(answers) => {
+						const id = pendingAsk.toolCallId;
 						void client
-							.answerAskUser(pendingAsk.toolCallId, answers)
-							.catch((e) => dispatch({ type: "system", text: `提交回答失败: ${friendlyError(e)}`, err: true }))
-					}
-					onCancel={() =>
+							.answerAskUser(id, answers)
+							.then((ok) => {
+								if (!ok) setSettledAskIds((s) => new Set(s).add(id));
+							})
+							.catch((e) => dispatch({ type: "system", text: `提交回答失败: ${friendlyError(e)}`, err: true }));
+					}}
+					onCancel={() => {
+						const id = pendingAsk.toolCallId;
 						void client
-							.cancelAskUser(pendingAsk.toolCallId)
-							.catch((e) => dispatch({ type: "system", text: `取消提问失败: ${friendlyError(e)}`, err: true }))
-					}
+							.cancelAskUser(id)
+							.then((ok) => {
+								if (!ok) setSettledAskIds((s) => new Set(s).add(id));
+							})
+							.catch((e) => dispatch({ type: "system", text: `取消提问失败: ${friendlyError(e)}`, err: true }));
+					}}
 				/>
 			)}
 			{/* 导演输入条(演出前后都是唯一活跃交互;InputBar 自带容器样式) */}

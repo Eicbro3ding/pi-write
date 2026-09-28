@@ -23,7 +23,11 @@
  */
 
 import { Type } from "typebox";
-import { defineTool, type ToolDefinition } from "../vendor/pi-coding-agent/src/index.ts";
+import { defineTool, type SessionManager, type ToolDefinition } from "../vendor/pi-coding-agent/src/index.ts";
+import type { ChatContentPart } from "./session-text.ts";
+
+/** 工具名唯一真相源(工具注册、悬空提问清扫共用;前端对应 ASK_USER_TOOL 同值)。 */
+export const ASK_USER_TOOL_NAME = "ask_user";
 
 /** 一个提问:标题 + 候选项(用户还可以选「其他补充」自己写)。 */
 export interface AskQuestion {
@@ -91,6 +95,11 @@ export class AskUserGate {
 		return [...this.pending.keys()];
 	}
 
+	/** 某个 toolCallId 是否还在等回答(悬空提问清扫据此判断能不能替它结算)。 */
+	has(toolCallId: string): boolean {
+		return this.pending.has(toolCallId);
+	}
+
 	/**
 	 * 挂起一次提问,等用户作答。
 	 * @returns 用户提交的答案(与提问等长);用户取消 → null。
@@ -139,6 +148,81 @@ export const ASK_CANCELLED_TEXT =
 	"用户关闭了提问卡片,没有回答。不要再重复问同一件事;确实需要抉择时自行取最合理的一项,并在回复里说明你替他做了决定。";
 
 /**
+ * 收敛会话里「悬空的提问」——进程/会话已经没了,那张卡却还挂在消息流里(result
+ * 恒为 null),前端从消息流推出模态浮层,可它永远等不到 `tool_execution_end`:
+ * 用户点提交/关闭只会拿到 ok:false,浮层原地不动,整个界面被卡住(2026-09 修)。
+ *
+ * 做法:在当前 leaf 链的最后一条 assistant 消息上找未配对的 ask_user 工具调用
+ * (工具阻塞时它必然是分支上最后一条消息),补一条「用户未回答」的 toolResult —
+ * 历史自洽后,重载不会再弹卡片,之后的新回合上下文也不再悬着一个没有 tool_result
+ * 的 tool_use(多数 provider 会直接拒)。
+ *
+ * `isLive` 判断某个 toolCallId 是否还有活的闸门条目:命中就跳过(正在等用户回答,
+ * 不能替它结算)。缺省用共享 `askUserGate`。
+ *
+ * @returns 补写的条数。
+ */
+export function settleDanglingAsks(
+	sm: SessionManager,
+	isLive: (toolCallId: string) => boolean = (id) => askUserGate.has(id),
+): number {
+	if (typeof (sm as { getBranch?: unknown }).getBranch !== "function") return 0;
+	const answered = new Set<string>();
+	/** 当前 leaf 链上的最后一条消息(悬空提问只可能挂在它上面)。 */
+	let lastMessage: { role?: string; content?: unknown } | undefined;
+	for (const entry of sm.getBranch()) {
+		if (entry.type !== "message") continue;
+		const msg = (entry as { message?: { role?: string; content?: unknown; toolCallId?: unknown } }).message;
+		if (!msg) continue;
+		if (msg.role === "toolResult") {
+			if (typeof msg.toolCallId === "string") answered.add(msg.toolCallId);
+			continue;
+		}
+		lastMessage = msg;
+	}
+	if (!lastMessage || lastMessage.role !== "assistant" || !Array.isArray(lastMessage.content)) return 0;
+	let settled = 0;
+	for (const part of lastMessage.content as Array<{ type?: string; id?: string; name?: string }>) {
+		if (part?.type !== "toolCall" || part.name !== ASK_USER_TOOL_NAME || typeof part.id !== "string") continue;
+		if (answered.has(part.id) || isLive(part.id)) continue;
+		const details: AskUserDetails = { cancelled: true };
+		sm.appendMessage({
+			role: "toolResult",
+			toolCallId: part.id,
+			toolName: ASK_USER_TOOL_NAME,
+			content: [{ type: "text", text: ASK_CANCELLED_TEXT }],
+			details,
+			isError: false,
+			timestamp: Date.now(),
+		});
+		settled++;
+	}
+	return settled;
+}
+
+/**
+ * 只读会话视图版的悬空提问清扫:把没有结果的 ask_user 工具块原地标成「用户未回答」。
+ *
+ * 用在**没有运行时**的磁盘恢复路径(writer-host.readSessionFromDisk,服务重启后
+ * state() 纯读磁盘):此时提问必然等不到回答,不标掉的话前端水合后又弹出一张死卡。
+ * 不写盘(纯读函数不该有副作用),写盘那条走 settleDanglingAsks。
+ *
+ * @returns 标记的条数。
+ */
+export function settleDanglingAskParts(messages: Array<{ content?: ChatContentPart[] }>): number {
+	let settled = 0;
+	for (const m of messages) {
+		if (!Array.isArray(m.content)) continue;
+		for (const part of m.content) {
+			if (part.type !== "toolCall" || part.name !== ASK_USER_TOOL_NAME || part.result != null) continue;
+			part.result = ASK_CANCELLED_TEXT;
+			settled++;
+		}
+	}
+	return settled;
+}
+
+/**
  * 造工具。闸门可注入,便于单测(不给默认值就走共享单例)。
  */
 export function createAskUserTool(gate: AskUserGate = askUserGate): ToolDefinition {
@@ -162,7 +246,7 @@ export function createAskUserTool(gate: AskUserGate = askUserGate): ToolDefiniti
 	});
 
 	return defineTool({
-		name: "ask_user",
+		name: ASK_USER_TOOL_NAME,
 		label: "Ask User",
 		description:
 			"向用户提问并**等待回答**:适合在岔路口让用户选方向(剧情走向、人物取舍、文风偏好),或者一次问清几个只有用户知道的事实。会弹出一张选项卡,用户点选或自己补充。会阻塞当前回合直到用户作答,所以只在真的需要用户决定时才用;能自己判断的不要问,一次能问完的不要拆成多次。",

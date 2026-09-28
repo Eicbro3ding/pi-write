@@ -198,13 +198,14 @@
 
   /* —— 设置页:页头接管,侧栏胶囊保留(≤900 段已横排) —— */
   .settings { padding-top: 0; }
-  /* 手机端分类胶囊不换行:横向滚动一行,把纵向空间还给内容(设计稿把设置项直接铺开) */
+  /* 手机端分类胶囊换行铺开。早先做成「一行横向滚动 + 隐藏滚动条」,靠后的分类
+     (实验/高级,以及插件分类)落到屏幕外,又没有滚动提示,看起来就是「显示不全」。
+     改为换行:分类全部可见,多占一行由内容区自己的滚动吸收。 */
   .settings-side {
-    flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden;
-    scrollbar-width: none; padding: 8px 12px;
+    flex-wrap: wrap; overflow: visible;
+    padding: 8px 12px;
   }
-  .settings-side::-webkit-scrollbar { display: none; }
-  .settings-nav { flex-wrap: nowrap; }
+  .settings-nav { flex-wrap: wrap; }
   .st-cat { flex: none; }
 
   /* —— 世界书页:桌面工具条退场,交给手机页头 —— */

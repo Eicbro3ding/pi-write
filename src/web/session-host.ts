@@ -20,6 +20,7 @@ import {
 import type { AuthInteraction } from "../../vendor/pi-ai/src/index.ts";
 // getUsageCostBreakdown 没有从 vendor 的 index 再导出,只能按相对源码路径取(本项目一贯做法)
 import { getUsageCostBreakdown } from "../../vendor/pi-coding-agent/src/core/usage-totals.ts";
+import { settleDanglingAsks } from "../ask-user.ts";
 import { getBooksDir } from "../config.ts";
 import { toolGuardContext } from "../tool-guard.ts";
 import {
@@ -129,6 +130,9 @@ export class SessionHost {
 	constructor(options: SessionHostOptions) {
 		this.options = options;
 		this.sessionManager = options.sessionManager;
+		// 上一进程/上一运行时留下的未答提问:闸门是纯内存的,重启后那张卡永远
+		// 等不到回答,不补结果的话前端重载会弹出一张点不动的死卡(2026-09)。
+		settleDanglingAsks(this.sessionManager);
 	}
 
 	async start(): Promise<void> {

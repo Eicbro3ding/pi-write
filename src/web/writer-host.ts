@@ -52,7 +52,7 @@ import { loadPromptText } from "../prompts.ts";
 import { buildWriterSystemPrompt, writerShellLine } from "../prompt.ts";
 import type { ShellDialect } from "../shell-kind.ts";
 import { wordCountTool, worldFindTool, worldUpdateTool } from "../tools.ts";
-import { createAskUserTool } from "../ask-user.ts";
+import { createAskUserTool, settleDanglingAskParts } from "../ask-user.ts";
 
 /**
  * 提问卡片工具(ask_user)。闸门是进程级单例,所以工具本身可以复用一个实例 ——
@@ -630,6 +630,9 @@ function readSessionFromDisk(slug: string, chapterFile: string | null): {
 		if (!existsSync(abs)) return null;
 		const sm = SessionManager.open(abs, sessionsDir, getBookDir(slug));
 		const messages = extractMessagesFromManager(sm);
+		// 纯读路径没有运行时:上一进程留下的未答提问永远等不到回答,标成「未回答」,
+		// 避免前端水合后弹出一张点不动的死卡(写盘那条走 SessionHost 构造里的清扫)。
+		settleDanglingAskParts(messages);
 		// 分支树:与 SessionHost.getSessionTree 同款 walk(叶子 + 当前 leaf 指针为候选)
 		const roots = sm.getTree() as unknown as Array<{ entry: { id: string }; children: unknown[] }>;
 		const leaves: string[] = [];

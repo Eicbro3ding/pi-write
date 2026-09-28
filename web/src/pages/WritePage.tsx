@@ -1250,8 +1250,20 @@ export function WritePage({
 		});
 	}, [bookDetail, currentChapter, saveLabel, words, connected, onHeader]);
 
+	/**
+	 * 服务端已判定「提问已结束」的 toolCallId(ok:false)。
+	 *
+	 * 闸门在服务端是纯内存的:进程重启后那张未答的卡已经没人能结算,可消息流里
+	 * 仍是 result=null。此时点提交/关闭只会拿到 {ok:false},若不理它,模态浮层
+	 * 会永远盖在界面上(卡死)。拿到 ok:false 就把该 id 记下来,不再弹这一张。
+	 */
+	const [settledAskIds, setSettledAskIds] = useState<ReadonlySet<string>>(() => new Set());
+
 	/** 编剧会话里正在等待回答的提问(ask_user);有就弹模态浮层。 */
-	const pendingAsk = useMemo(() => findPendingAsk(writerSession.messages), [writerSession.messages]);
+	const pendingAsk = useMemo(() => {
+		const ask = findPendingAsk(writerSession.messages);
+		return ask && !settledAskIds.has(ask.toolCallId) ? ask : null;
+	}, [writerSession.messages, settledAskIds]);
 
 	/**
 	 * 编剧输入条(设计稿 ★输入区):桌面端挂在伙伴栏底部,手机端提到壳层底部
@@ -1318,6 +1330,7 @@ export function WritePage({
 				railMode={railMode}
 				onRailModeChange={setRailMode}
 				nav={nav}
+				classicMode={classicMode}
 				words={words}
 				workspace={
 					<WorkspacePanel
@@ -1510,7 +1523,10 @@ export function WritePage({
 			{/* AI 伙伴:编剧对话单栏(批注 2026-08-10 退役并入编剧);宽屏常驻右栏,窄屏右侧抽屉 */}
 			<>
 				<AnimatePresence>
-					{isNarrow && mobileDrawer === "companion" && (
+					{/* 手机端(≤700px)伙伴页是整屏(设计稿「伙伴对话」),没有「点外面关闭」这回事;
+					    此时遮罩必须不渲染:它 z-index 48 压过伙伴栏(z-index 40),会把整页盖住,
+					    导致抽屉里的对话既不能滚动也不能点(2026-09 修)。窄屏(701–900)抽屉才需要遮罩。 */}
+					{isNarrow && !isPhone && mobileDrawer === "companion" && (
 						<motion.div
 							key="companion-mask"
 							className="drawer-mask"
@@ -1702,13 +1718,26 @@ export function WritePage({
 				<AskUserOverlay
 					questions={pendingAsk.questions}
 					/* 提交/取消失败要说出来(2026-09-23):此前 `void` 掉 promise,
-					   请求失败时浮层原地不动、无提示,用户会反复点提交 */
-					onSubmit={(answers) =>
-						void client.answerAskUser(pendingAsk.toolCallId, answers).catch((e) => setError(`提交回答失败: ${friendlyError(e)}`))
-					}
-					onCancel={() =>
-						void client.cancelAskUser(pendingAsk.toolCallId).catch((e) => setError(`取消提问失败: ${friendlyError(e)}`))
-					}
+					   请求失败时浮层原地不动、无提示,用户会反复点提交。
+					   ok:false = 这张提问在服务端已经结束(闸门没了),本地关掉别卡住 */
+					onSubmit={(answers) => {
+						const id = pendingAsk.toolCallId;
+						void client
+							.answerAskUser(id, answers)
+							.then((ok) => {
+								if (!ok) setSettledAskIds((s) => new Set(s).add(id));
+							})
+							.catch((e) => setError(`提交回答失败: ${friendlyError(e)}`));
+					}}
+					onCancel={() => {
+						const id = pendingAsk.toolCallId;
+						void client
+							.cancelAskUser(id)
+							.then((ok) => {
+								if (!ok) setSettledAskIds((s) => new Set(s).add(id));
+							})
+							.catch((e) => setError(`取消提问失败: ${friendlyError(e)}`));
+					}}
 				/>
 			)}
 			{/* 全屏编辑器覆盖层(设计 §5.4) */}
