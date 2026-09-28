@@ -10,6 +10,7 @@ import { disconnectEntry } from "../graph-logic.ts";
 import { buildGraphStyles, genInitialDataUrl, themeVar, TYPE_FALLBACKS, TYPE_TOKENS } from "../graph-styles.ts";
 import { loadPositions, loadViewport, savePositions, saveViewport } from "../graph-persistence.ts";
 import { Lu } from "./Lu.tsx";
+import { useIsPhone } from "../useMediaQuery.ts";
 
 cytoscape.use(cola);
 
@@ -27,6 +28,18 @@ cytoscape.use(cola);
  * 节点展示标题(设计稿 10):第一行名字(超长截断防巨节点),第二行关系条数。
  * cytoscape 单个 label 只能有一种字号/字色,两行同款样式。
  */
+/**
+ * 关系标签显示文本。
+ *
+ * 标签是自由文本,可能是一整句(「在镇上开钟表铺,守了十几年」)。cytoscape 的
+ * ellipsis 换行按空格断词,中文长句没有空格,所以要从数据侧截断:画布上只留短词,
+ * 完整内容在下方详情卡的关系清单里能看到(那里不截断)。
+ */
+function edgeLabel(raw: string): string {
+	const t = raw.trim();
+	return t.length > 9 ? `${t.slice(0, 9)}…` : t;
+}
+
 function nodeLabel(title: string, relCount: number): string {
 	const t = title.trim() || "未命名";
 	const name = t.length > 12 ? `${t.slice(0, 12)}…` : t;
@@ -231,6 +244,8 @@ export function RelationGraph({
 	const [zoomPct, setZoomPct] = useState(100);
 	/** 图重建计数:驱动 focus 联动在重建后重新选中。 */
 	const [epoch, setEpoch] = useState(0);
+	/** 用户是否自己调过视野(滚轮/缩放条/拖动):调过就别在容器变尺寸时抢回控制权。 */
+	const userMovedRef = useRef(false);
 	/** 按 type 过滤开关;默认人物 + 世界(地点/设定)。 */
 	const [typesOn, setTypesOn] = useState<Record<WorldEntryDto["type"], boolean>>(() => ({
 		character: true,
@@ -309,7 +324,7 @@ export function RelationGraph({
 				id: r.id,
 				source: r.from,
 				target: r.to,
-				label: r.label || r.type || "关系",
+				label: edgeLabel(r.label || r.type || "关系"),
 				emphasized: r.emphasized,
 				arrow: r.arrow ?? "double",
 			},
@@ -330,6 +345,18 @@ export function RelationGraph({
 		// cola 已在模块级经 cytoscape.use() 全局注册(见文件顶部)
 		cyRef.current = cy;
 
+		// 手机端:条目少时首次布局自带的 fit 会把缩放顶到 200% 以上,节点圈与名字
+		// 直接溢出画布;这里把缩放钳回可读区间。有存档视口时不动(用户上次的视野优先)。
+		// 布局同步跑完(animate:false)时 layoutstop 不会再补发,所以直接钳 + 下一帧兜一次
+		// (首帧容器尺寸偶尔还没定下来)。
+		if (isPhone && !hasStored) {
+			const clampPhoneZoom = () => {
+				if (cyRef.current === cy && cy.nodes().length > 0) fitNodes(cy);
+			};
+			clampPhoneZoom();
+			requestAnimationFrame(clampPhoneZoom);
+		}
+
 		// 恢复按书持久化的视口(缩放/平移),保持编辑关系前后视野一致(仅 preset 场景)
 			const vp = loadViewport(slug);
 			if (vp && hasStored) {
@@ -346,7 +373,7 @@ export function RelationGraph({
 				const outOfView =
 					box.x1 < margin || box.y1 < margin || box.x2 > cy.width() - margin || box.y2 > cy.height() - margin;
 				if (outOfView) {
-					cy.fit(cy.nodes(), 40);
+					fitNodes(cy);
 					saveViewport(slug, cy.zoom(), cy.pan());
 				}
 			}
@@ -482,6 +509,7 @@ export function RelationGraph({
 			const pos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
 			const z = c.zoom();
 			const dir = e.deltaY > 0 ? -1 : 1; // 向下滚动 = 缩小
+			userMovedRef.current = true;
 			const base = 1 + (Math.min(Math.abs(e.deltaY), 240) / 100) * 0.12; // 一格 ≈ 1.12
 			const smart = 1 + Math.log2(Math.max(z, 0.15)) * 0.15; // 倍率越高步长越大
 			c.zoom({ level: z * Math.pow(base, dir * smart), renderedPosition: pos });
@@ -492,7 +520,24 @@ export function RelationGraph({
 		const onResize = () => cy.resize();
 		window.addEventListener("resize", onResize);
 
+		/**
+		 * 容器尺寸变化(手机端底部详情卡展开/收起、键盘弹出、转屏)也要自适应。
+		 *
+		 * 手机端画布会随详情卡一起变矮,原来只在 window resize 时 resize(),卡一开
+		 * 节点就被面板切掉下半截。这里补一个容器观察:自适应之后,如果用户还没自己
+		 * 缩放过(没动过滚轮/缩放条/节点),就把视野重新钳回可读区间。
+		 */
+		let containerSize = { w: container.clientWidth, h: container.clientHeight };
+		const ro = new ResizeObserver(() => {
+			if (container.clientWidth === containerSize.w && container.clientHeight === containerSize.h) return;
+			containerSize = { w: container.clientWidth, h: container.clientHeight };
+			cy.resize();
+			if (isPhone && !userMovedRef.current && cy.nodes().length > 0) fitNodes(cy);
+		});
+		ro.observe(container);
+
 		return () => {
+			ro.disconnect();
 			window.removeEventListener("resize", onResize);
 			container.removeEventListener("wheel", onWheel);
 			window.cancelAnimationFrame(renderFrame);
@@ -586,11 +631,62 @@ export function RelationGraph({
 	}, []);
 
 	const visibleCount = entries.filter((e) => typesOn[e.type]).length;
+	/** 手机端(≤700px):画布全屏 + 悬浮控件,桌面那条工具条退场(设计稿 ★移动版「关系图」)。 */
+	const isPhone = useIsPhone();
+
+	/** 连线开关(桌面工具条与手机端悬浮按钮共用一份实现)。 */
+	const linkButton = (
+		<button
+			type="button"
+			className={linking ? "graph-link-btn on" : "graph-link-btn"}
+			onClick={() => {
+				setLinking((v) => !v);
+				setLinkFrom(null);
+			}}
+		>
+			<>{linking ? "取消连线" : <><Lu icon="link-2" size={13} /> 连线</>}</>
+		</button>
+	);
+	/** 撤销/重做(同上:两处共用)。 */
+	const undoRedo = (
+		<>
+			<button type="button" className="graph-tool-btn" disabled={!canUndo} onClick={() => onUndo?.()} title="撤销(Ctrl+Z)">
+				<Lu icon="undo-2" size={13} /> 撤销
+			</button>
+			<button type="button" className="graph-tool-btn" disabled={!canRedo} onClick={() => onRedo?.()} title="重做(Ctrl+Shift+Z)">
+				<Lu icon="redo-2" size={13} /> 重做
+			</button>
+		</>
+	);
+	/** 类型过滤开关(两处共用同一份状态与副作用:过滤可能把连线起点藏掉,要清状态)。 */
+	const toggleType = (t: WorldEntryDto["type"]) => {
+		setTypesOn((prev) => ({ ...prev, [t]: !prev[t] }));
+		setLinking(false);
+		setLinkFrom(null);
+		setCtxMenu(null);
+	};
+	/** 全部类型都可见(手机端「全部」芯片的激活判定)。 */
+	const allTypesOn = ENTRY_TYPES.every((t) => typesOn[t]);
 
 	/** 缩放一步(相对当前倍率;以画布中心为锚)。cytoscape 3.34 无 zoomBy,用 cy.zoom({level})。 */
+	/**
+	 * 适应画布 + 手机端钳制缩放上限。
+	 *
+	 * 条目少时 fit 会把缩放顶到 200% 以上(两个节点也能撑满一屏),节点圈与名字跟着
+	 * 放大到溢出画布,看着像坏图。手机端把上限压到 115%,宁可四周留白。
+	 */
+	function fitNodes(cy: Core) {
+		cy.fit(cy.nodes(), 40);
+		if (isPhone && cy.zoom() > 1.15) {
+			cy.zoom({ level: 1.15, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+		}
+		userMovedRef.current = false;
+	}
+
 	function zoomBy(factor: number) {
 		const cy = cyRef.current;
 		if (!cy) return;
+		userMovedRef.current = true;
 		const w = cy.width();
 		const h = cy.height();
 		cy.zoom({ level: cy.zoom() * factor, renderedPosition: { x: w / 2, y: h / 2 } });
@@ -620,12 +716,41 @@ export function RelationGraph({
 	function fitGraph() {
 		const cy = cyRef.current;
 		if (!cy || cy.nodes().length === 0) return;
-		cy.fit(cy.nodes(), 40);
+		fitNodes(cy);
 		saveViewport(slug, cy.zoom(), cy.pan());
 	}
 
 	return (
-		<div className="graph-wrap">
+		<div className={isPhone ? "graph-wrap m-graph" : "graph-wrap"}>
+			{/* 手机端:类型芯片一行(设计稿「关系图」),桌面那条工具条整条退场 */}
+			{isPhone && (
+				<div className="m-graph-filters">
+					<button
+						type="button"
+						className={allTypesOn ? "m-wchip active" : "m-wchip"}
+						onClick={() => {
+							setTypesOn({ character: true, world: true, timeline: true, outline: true });
+							setLinking(false);
+							setLinkFrom(null);
+							setCtxMenu(null);
+						}}
+					>
+						全部
+					</button>
+					{ENTRY_TYPES.map((t) => (
+						<button
+							key={t}
+							type="button"
+							className={typesOn[t] ? "m-wchip active" : "m-wchip"}
+							aria-pressed={typesOn[t]}
+							onClick={() => toggleType(t)}
+						>
+							{ENTRY_TYPE_LABELS[t]}
+						</button>
+					))}
+				</div>
+			)}
+			{!isPhone && (
 			<div className="graph-toolbar">
 				<div className="graph-filters">
 					{ENTRY_TYPES.map((t) => (
@@ -655,31 +780,47 @@ export function RelationGraph({
 							{linkFrom ? "点击目标节点创建关系(再点同一点取消)" : "点击起始节点"}
 						</span>
 					)}
-					<button
-						type="button"
-						className={linking ? "graph-link-btn on" : "graph-link-btn"}
-						onClick={() => {
-							setLinking((v) => !v);
-							setLinkFrom(null);
-						}}
-					>
-						<>{linking ? "取消连线" : <><Lu icon="link-2" size={13} /> 连线</>}</>
-					</button>
-					<button type="button" className="graph-tool-btn" disabled={!canUndo} onClick={() => onUndo?.()} title="撤销(Ctrl+Z)">
-						<Lu icon="undo-2" size={13} /> 撤销
-					</button>
-					<button type="button" className="graph-tool-btn" disabled={!canRedo} onClick={() => onRedo?.()} title="重做(Ctrl+Shift+Z)">
-						<Lu icon="redo-2" size={13} /> 重做
-					</button>
+					{linkButton}
+					{undoRedo}
 				</div>
 			</div>
+			)}
 			{/* 画布恒挂载(过滤走 show()/hide() 不重建实例,P7);无可见条目时覆盖空态提示 */}
 			<div className="graph-canvas">
 				<div className="graph-cytoscape" ref={containerRef} />
+				{/* 手机端悬浮控件(设计稿右上「连线」胶囊):连线中的提示就近显示 */}
+				{isPhone && (
+					<div className="m-graph-tools" onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
+						{linking && <span className="graph-hint">{linkFrom ? "点目标节点建立关系" : "点起始节点"}</span>}
+						{linkButton}
+						{undoRedo}
+					</div>
+				)}
 				{visibleCount === 0 && <div className="graph-empty">没有符合条件的条目,请先在列表视图添加条目或调整类型过滤</div>}
 						{/* 图操作条:一键排列 + 缩放横条(放缩/百分比/适应);滚轮缩放灵敏度随倍率自适应。
 						    mousedown 阻断冒泡:cytoscape 容器空白 tap 会清选中/菜单 */}
 						<div className="graph-zoom-bar" onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
+							{isPhone ? (
+								<>
+									{/* 手机端:图标按钮(设计稿缩放条 = 排列 | − | 比例 | + | 适应) */}
+									<button type="button" className="graph-zoom-btn" onClick={runAutoLayout} title="一键排列(cola 力导向)" aria-label="一键排列">
+										<Lu icon="layout-grid" size={14} />
+									</button>
+									<span className="graph-zoom-sep" />
+									<button type="button" className="graph-zoom-btn" onClick={() => zoomBy(1 / 1.3)} title="缩小" aria-label="缩小">
+										<Lu icon="minus" size={14} />
+									</button>
+									<span className="graph-zoom-pct">{zoomPct}%</span>
+									<button type="button" className="graph-zoom-btn" onClick={() => zoomBy(1.3)} title="放大" aria-label="放大">
+										<Lu icon="plus" size={14} />
+									</button>
+									<span className="graph-zoom-sep" />
+									<button type="button" className="graph-zoom-btn" onClick={fitGraph} title="适应画布" aria-label="适应画布">
+										<Lu icon="maximize" size={14} />
+									</button>
+								</>
+							) : (
+								<>
 							<button type="button" className="graph-zoom-btn" onClick={runAutoLayout} title="一键排列(cola 力导向)">
 								⟳ 排列
 							</button>
@@ -695,6 +836,8 @@ export function RelationGraph({
 							<button type="button" className="graph-zoom-btn" onClick={fitGraph} title="适应画布">
 								⛶ 适应
 							</button>
+								</>
+							)}
 						</div>
 					{ctxMenu && ctxMenu.kind === "edge" && (
 						<div

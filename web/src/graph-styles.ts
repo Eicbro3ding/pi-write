@@ -96,6 +96,11 @@ export function buildGraphStyles(): cytoscape.StylesheetJson {
 				"font-size": 11,
 				color: themeVar("--muted", "#9a9184"),
 				"text-rotation": "autorotate",
+				// 关系标签是用户可填的自由文本,可能是一整句(「在镇上开钟表铺,守了十几年」)。
+				// 不截断就会沿边斜着铺满画布,还盖住节点:超过宽度收成省略号,完整内容在
+				// 详情卡的关系清单里能看全。
+				"text-max-width": "96",
+				"text-wrap": "ellipsis",
 				// 连线标签底色随主题(浅色主题下为浅底深字,不再黑底灰字)
 				"text-background-color": themeVar("--bg-elev-2", "#1e1a16"),
 				"text-background-opacity": 1,
