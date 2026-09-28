@@ -196,17 +196,35 @@
   .pvc-key-input { flex: 1 1 100%; }
   .pvc-m-list { grid-template-columns: 1fr; }
 
-  /* —— 设置页:页头接管,侧栏胶囊保留(≤900 段已横排) —— */
+  /* —— 设置(设计稿「设置」:一屏分组索引)——
+     小节标题 + 卡片 + 行(图标 | 名称/说明 | 值 | ›);分类页里桌面那套左栏与页头退场 */
+  .m-set { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; padding: 14px 14px 20px; }
+  .m-set-sec { display: flex; flex-direction: column; gap: 8px; }
+  .m-set-sec-title { font-size: var(--fs-11); font-weight: 600; letter-spacing: 0.6px; color: var(--faint); }
+  .m-set-card { background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
+  .m-set-row { position: relative; display: flex; align-items: center; gap: 12px; width: 100%; padding: 11px 14px; border-bottom: 1px solid var(--line); text-align: left; }
+  .m-set-row:last-child { border-bottom: none; }
+  .m-set-row > svg:first-child { flex: none; color: var(--muted); }
+  .m-set-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .m-set-name { font-size: var(--fs-13); font-weight: 500; color: var(--ink); }
+  .m-set-sub { font-size: var(--fs-11); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .m-set-val { flex: none; max-width: 42%; font-size: var(--fs-12); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .m-set-arrow { flex: none; color: var(--faint); }
+  /* 整行热区:铺在行内容之上,让「图标 + 文字 + 值」整块可点(开关行不铺) */
+  .m-set-hit { position: absolute; inset: 0; background: transparent; border: 0; }
+  .m-set-row:active .m-set-hit { background: var(--hover-tint); }
+  .m-set-foot { padding-top: 6px; text-align: center; font-size: var(--fs-11); color: var(--faint); }
+  /* 分类页:页头已给分类名,页内的桌面页头与左栏都不再重复;
+     分类切换靠索引页,手机端不保留胶囊条 */
+  .settings-side { display: none; }
+  .st-head { display: none; }
+  .settings-main { padding-top: 0; }
+  /* 分类页内容:桌面那套居中内边距在手机端收紧 */
   .settings { padding-top: 0; }
-  /* 手机端分类胶囊换行铺开。早先做成「一行横向滚动 + 隐藏滚动条」,靠后的分类
-     (实验/高级,以及插件分类)落到屏幕外,又没有滚动提示,看起来就是「显示不全」。
-     改为换行:分类全部可见,多占一行由内容区自己的滚动吸收。 */
-  .settings-side {
-    flex-wrap: wrap; overflow: visible;
-    padding: 8px 12px;
-  }
-  .settings-nav { flex-wrap: wrap; }
-  .st-cat { flex: none; }
+  .settings-inner { padding: 14px 14px 32px; }
+  /* 卡片也换成设计稿的圆角与描边(桌面是 12px 圆角 + 更松的内边距) */
+  .settings .s-card { border-radius: var(--r-lg); padding: 0 14px 4px; }
+  .settings .s-card-head { padding: 12px 0 10px; }
 
   /* —— 世界书页:桌面工具条退场,交给手机页头 —— */
   .world-page { flex-direction: column; }

@@ -3,7 +3,7 @@ import { ApiError, type ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
 import { IMAGE_SIZE_PX_TEXT, type ImageProviderDto, type ImageSizeDto, type PluginInfoDto, type ResolvedShellDto, type ShellDialectDto, type ShellKindDto, type UserThemeInfo, type WorldDataDto, type WriterSettingsDto } from "../types.ts";
 import type { EnterBehavior } from "../settings.ts";
-import { themeStarterCss, USER_THEME_PREFIX, userThemeFile, type ThemeId } from "../themes.ts";
+import { NIGHT_THEME, themeLabelFromCss, themeStarterCss, USER_THEME_PREFIX, userThemeFile, type ThemeId } from "../themes.ts";
 import { applyTheme, currentTheme } from "../theme.ts";
 import { ProviderList } from "../components/ProviderList.tsx";
 import { McpServerList } from "../components/McpServerList.tsx";
@@ -13,12 +13,23 @@ import { ToggleSwitch } from "../components/ToggleSwitch.tsx";
 import { Select } from "../components/Select.tsx";
 import { ThemeCardsFromManifest } from "../components/ThemeCards.tsx";
 import { IconBook, IconDoc, IconGear, IconGlobe, IconStage, IconX } from "../components/Icons.tsx";
-import { Lu } from "../components/Lu.tsx";
+import { Lu, type LucideName } from "../components/Lu.tsx";
 import { MobileHeader } from "../components/MobileHeader.tsx";
 import { useIsPhone } from "../useMediaQuery.ts";
 
 /** 思考级别选项(与后端 session-host 的 ThinkingLevel 对齐)。 */
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+/** 思考级别显示名(索引页「思考级别」行的值;下拉里仍用原值,模型侧认的就是它)。 */
+const THINKING_LABELS: Record<string, string> = {
+	off: "关闭",
+	minimal: "最少",
+	low: "低",
+	medium: "中",
+	high: "高",
+	xhigh: "很高",
+	max: "最高",
+};
 
 /** vendor 模型元素的最小形状(id/provider 必填,其余字段忽略)。 */
 interface ModelInfo {
@@ -176,6 +187,7 @@ export function SettingsPage({
 	onImageChange,
 	focusModelToken,
 	nav,
+	appVersion,
 }: {
 	client: ApiClient;
 	/** 当前打开的书 slug(世界书注入分组随打开书重拉;null = 未打开书)。 */
@@ -232,15 +244,29 @@ export function SettingsPage({
 	focusModelToken?: number;
 	/** 手机端页头导航(App 提供):设置页「←」回到编辑页。 */
 	nav?: { view: string; onNavigate: (view: string) => void };
+	/** 应用版本(页脚「pi·writer vX · 数据仅保存在本机」;拿不到就不显示版本段)。 */
+	appVersion?: string | null;
 }) {
 	/** 当前分类(左侧导航激活项;默认「模型」;插件分类为 "plugin:<id>")。 */
 	const [cat, setCat] = useState<SettingCat | string>("model");
-	/** 手机端(≤700px):桌面分类栏变横排胶囊,页头由 MobileHeader 接管。 */
+	/** 手机端(≤700px):桌面分类栏与页头由手机端布局接管。 */
 	const isPhone = useIsPhone();
+	/**
+	 * 手机端当前分类:null = 索引页(设计稿「设置」:一屏分组列表),非空 = 进了某个分类。
+	 * 桌面端不用它(左栏常驻,切分类不换页)。
+	 */
+	const [phoneCat, setPhoneCat] = useState<string | null>(null);
 	/** 「切到模型分类」信号(见 props.focusModelToken):值一变就切过去。 */
+	/** 「切到模型分类」见没见过的令牌:首帧的同值不算「跳过来」(初值也有定义)。 */
+	const focusTokenSeenRef = useRef(focusModelToken);
 	useEffect(() => {
 		if (focusModelToken === undefined) return;
+		if (focusTokenSeenRef.current === focusModelToken) return;
+		focusTokenSeenRef.current = focusModelToken;
 		setCat("model");
+		// 手机端索引页也要跟着进分类 —— 报错卡的「去设置模型 ›」跳过来,
+		// 停在索引等于要多点一次,而这句文案承诺的就是「直接到模型设置」
+		setPhoneCat("model");
 	}, [focusModelToken]);
 	/** 插件设置分类(声明了 frontend.ui.settingsItems 的插件;左侧导航追加)。 */
 	const [pluginCats, setPluginCats] = useState<PluginInfoDto[] | null>(null);
@@ -766,15 +792,161 @@ export function SettingsPage({
 		);
 	}
 
-	return (
-		<div className="settings">
-			{/* 手机端页头(设计稿 ★移动版「设置」):← 回编辑 | 设置 + 本机存储说明。
-			    桌面分类栏(.settings-side 的标题)在手机端已被 ≤900px 规则换成横排胶囊 */}
-			{isPhone && (
+	/** 当前主题显示名(索引页「主题」行的值;自定义主题按文件列表取名)。 */
+	const themeLabel = useMemo(() => {
+		// 主题清单里只有文件名与 CSS 原文,显示名要从 CSS 里取(与主题卡同一份逻辑)
+		if (theme === NIGHT_THEME.id) return NIGHT_THEME.label;
+		const hit = [...builtinThemes, ...userThemes].find((t) => {
+			const name = t.file.replace(/\.css$/, "");
+			return name === theme || `${USER_THEME_PREFIX}${name}` === theme;
+		});
+		return hit ? themeLabelFromCss(hit.css, hit.file) : theme;
+	}, [theme, builtinThemes, userThemes]);
+
+	/**
+	 * 手机端设置索引(设计稿 ★移动版「设置」:一屏分组列表)。
+	 *
+	 * 手机端不做「左栏 + 内容」那套:一屏放不下 6 个分类的导航与内容,设计稿给的形态是
+	 * 一页分组索引 —— 小节标题 + 卡片 + 行(图标 | 名称 | 值 | ›),点一行进该分类。
+	 * 行只列真实存在的设置,不为了对齐设计稿造开关;能就地切的用开关,其余跳分类。
+	 */
+	const phoneIndex: Array<{ title: string; rows: Array<{
+		key: string;
+		icon: LucideName;
+		label: string;
+		sub?: string;
+		value?: string;
+		cat?: string;
+		on?: boolean;
+		onToggle?: (v: boolean) => void;
+		action?: () => void;
+	}> }> = [
+		{
+			title: "外观",
+			rows: [
+				{ key: "theme", icon: "sun", label: "主题", value: themeLabel, cat: "ui" },
+				{ key: "ui-pref", icon: "sliders-horizontal", label: "界面偏好", sub: "回车行为 · 自动展开思考", cat: "ui" },
+				{ key: "theme-css", icon: "pen-line", label: "自定义主题", sub: "写一份 CSS 换掉配色", cat: "ui" },
+			],
+		},
+		{
+			title: "模型与服务",
+			rows: [
+				{ key: "model", icon: "layers", label: "模型", value: current ?? "未选择", cat: "model" },
+				{ key: "thinking", icon: "activity", label: "思考级别", value: thinking ? (THINKING_LABELS[thinking] ?? thinking) : "默认", cat: "model" },
+				{ key: "sampling", icon: "shuffle", label: "采样参数", sub: "temperature · top_p", cat: "model" },
+				{
+					key: "provider",
+					icon: "key-round",
+					label: "供应商",
+					sub: "API Key 只存在本机",
+					// 已配置的供应商 = 当前模型清单里出现过的服务(没有专门的计数接口)
+					value: models === null ? "…" : `${new Set(models.map((m) => m.provider)).size} 个服务`,
+					action: () => setProvidersOpen(true),
+				},
+			],
+		},
+		{
+			title: "写作",
+			rows: [
+				{ key: "world", icon: "book-open", label: "世界书注入", value: world ? `${world.entries.length} 条目` : "…", cat: "world" },
+				{ key: "auto-confirm", icon: "check", label: "编辑免确认", sub: "编剧改稿直接落盘,不逐条确认", on: autoConfirmEdits, onToggle: onAutoConfirmEditsChange },
+			],
+		},
+		{
+			title: "实验",
+			rows: [
+				{ key: "image", icon: "image", label: "图片生成", value: image.enableImageGen ? (image.imageModel || "已开启") : "关", cat: "experimental" },
+				{ key: "image-when", icon: "refresh-cw", label: "允许调用的时机", cat: "experimental" },
+				...(debugShown
+					? [{ key: "debug", icon: "eye" as LucideName, label: "调试模式", sub: "工具块退回原始参数与结果", on: debugMode, onToggle: onDebugModeChange }]
+					: []),
+			],
+		},
+		{
+			title: "高级",
+			rows: [
+				{ key: "shell", icon: "wrench", label: "执行命令(shell)", value: shellEnabled ? (resolvedShell?.dialect ?? shellKind) : "关", cat: "advanced" },
+				{ key: "agent", icon: "users", label: "Agent 形态", value: classicMode ? "经典(单 agent)" : "多 agent", cat: "advanced" },
+				{ key: "deps", icon: "info", label: "依赖", sub: "运行环境与版本要求", cat: "advanced" },
+				...(onRerunSetup ? [{ key: "wizard", icon: "wand-sparkles" as LucideName, label: "重新运行配置向导", action: onRerunSetup }] : []),
+			],
+		},
+		{
+			title: "集成",
+			rows: [
+				{ key: "mcp", icon: "link-2", label: "MCP 服务器", sub: "给 AI 挂外部工具", cat: "integrations" },
+				{ key: "plugins", icon: "puzzle", label: "插件", cat: "integrations" },
+				...(pluginCats ?? []).map((pl) => ({ key: `plugin:${pl.id}`, icon: "puzzle" as LucideName, label: pl.name, cat: `plugin:${pl.id}` })),
+			],
+		},
+	];
+
+	if (isPhone && phoneCat === null) {
+		return (
+			<div className="settings">
 				<MobileHeader
 					leading={{ icon: "chevron-left", label: "返回编辑", onPress: () => nav?.onNavigate("edit") }}
 					title="设置"
-					subtitle="配置只存在本机,不上传任何服务器"
+					subtitle="本地优先 · 不上传"
+					tone="ok"
+				/>
+				<div className="m-set">
+					{phoneIndex.map((sec) => (
+						<section key={sec.title} className="m-set-sec">
+							<div className="m-set-sec-title">{sec.title}</div>
+							<div className="m-set-card">
+								{sec.rows.map((row) => (
+									<div key={row.key} className="m-set-row">
+										<Lu icon={row.icon} size={17} />
+										<span className="m-set-text">
+											<span className="m-set-name">{row.label}</span>
+											{row.sub && <span className="m-set-sub">{row.sub}</span>}
+										</span>
+										{row.onToggle ? (
+											<ToggleSwitch checked={row.on ?? false} onChange={row.onToggle} ariaLabel={row.label} />
+										) : (
+											<>
+												{row.value && <span className="m-set-val">{row.value}</span>}
+												{row.cat && <Lu icon="chevron-right" size={15} className="m-set-arrow" />}
+											</>
+										)}
+										{/* 整行可点:跳分类或执行动作(开关行除外,开关自己就是控件) */}
+										{!row.onToggle && (
+											<button
+												type="button"
+												className="m-set-hit"
+												aria-label={row.label}
+												onClick={() => {
+													if (row.cat) {
+														setCat(row.cat);
+														setPhoneCat(row.cat);
+													} else row.action?.();
+												}}
+											/>
+										)}
+									</div>
+								))}
+							</div>
+						</section>
+					))}
+					<div className="m-set-foot">
+						{appVersion ? `pi·writer v${appVersion} · ` : ""}数据仅保存在本机
+					</div>
+				</div>
+			</div>
+		);
+	}
+
+	return (
+		<div className="settings">
+			{/* 手机端分类页页头:← 回索引 | 分类名(设计稿「设置」里点开一行就是这类页面)。
+			    桌面端不发这个页头,左栏常驻 */}
+			{isPhone && (
+				<MobileHeader
+					leading={{ icon: "chevron-left", label: "返回设置", onPress: () => setPhoneCat(null) }}
+					title={headOf(phoneCat ?? cat).title}
+					subtitle="本地优先 · 不上传"
 					tone="ok"
 				/>
 			)}
