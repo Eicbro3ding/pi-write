@@ -519,11 +519,11 @@ describe("WriterServer", () => {
 		const res = await fetch(`${base}/api/abort`, { method: "POST" });
 		expect(res.status).toBe(200);
 	});
-	it("GET /api/providers 返回 provider 列表", async () => {
+	it("GET /api/providers 返回 provider 列表(已配置优先 → id 字母序)", async () => {
 		const res = await fetch(`${base}/api/providers`);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as { providers: Array<{ id: string }> };
-		expect(body.providers.map((p) => p.id)).toEqual(["openai", "anthropic", "amazon-bedrock", "fail-provider"]);
+		expect(body.providers.map((p) => p.id)).toEqual(["anthropic", "amazon-bedrock", "fail-provider", "openai"]);
 	});
 	it("POST /api/providers/anthropic/apikey 成功转发 key", async () => {
 		const res = await fetch(`${base}/api/providers/anthropic/apikey`, {
@@ -684,6 +684,103 @@ describe("WriterServer", () => {
 		expect(res.status).toBe(200);
 		const cfg = JSON.parse(readFileSync(customPath, "utf8")) as { providers: Record<string, { models: Array<Record<string, unknown>> }> };
 		expect(cfg.providers.vision.models[0]).toMatchObject({ id: "vision-1", contextWindow: 1000000, maxTokens: 128000, input: ["text", "image"] });
+	});
+	it("POST /api/providers/custom 只建供应商:models 为空数组,不牵进任何模型", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		writeFileSync(customPath, JSON.stringify({ imports: ["claude-code"], providers: {} }));
+		const res = await fetch(`${base}/api/providers/custom`, {
+			method: "POST",
+			headers: json,
+			body: JSON.stringify({ provider: "selfhost", name: "自建", baseUrl: "http://127.0.0.1:9000/v1", apiKey: "sk-self" }),
+		});
+		expect(res.status).toBe(200);
+		const cfg = JSON.parse(readFileSync(customPath, "utf8")) as {
+			imports?: string[];
+			providers: Record<string, { api?: string; baseUrl?: string; apiKey?: string; name?: string; models?: unknown[] }>;
+		};
+		expect(cfg.providers.selfhost).toMatchObject({
+			api: "openai-completions",
+			baseUrl: "http://127.0.0.1:9000/v1",
+			apiKey: "sk-self",
+			name: "自建",
+			models: [],
+		});
+		// 与 provider 无关的字段(imports)原样保留
+		expect(cfg.imports).toEqual(["claude-code"]);
+	});
+	it("POST /api/providers/custom 不带 key → 写占位值(vendor 会跳过无 key 的 provider)", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		writeFileSync(customPath, JSON.stringify({ providers: {} }));
+		const res = await fetch(`${base}/api/providers/custom`, {
+			method: "POST",
+			headers: json,
+			body: JSON.stringify({ provider: "keyless", baseUrl: "http://127.0.0.1:9100/v1" }),
+		});
+		expect(res.status).toBe(200);
+		const cfg = JSON.parse(readFileSync(customPath, "utf8")) as { providers: Record<string, { apiKey?: string }> };
+		expect(cfg.providers.keyless.apiKey).toBe("sk-custom");
+	});
+	it("POST /api/providers/custom 内置 id → 400;坏 id / 非 http URL → 400", async () => {
+		writeFileSync(join(getAgentDir(), "models.json"), JSON.stringify({ providers: {} }));
+		(fake.providers as Array<Record<string, unknown>>).push({ id: "builtin-x", name: "builtin-x", configured: false, authKind: "api_key" });
+		const post = (body: Record<string, unknown>) => fetch(`${base}/api/providers/custom`, { method: "POST", headers: json, body: JSON.stringify(body) });
+		const clash = await post({ provider: "builtin-x", baseUrl: "https://x.test/v1" });
+		expect(clash.status).toBe(400);
+		const badId = await post({ provider: "Bad Id", baseUrl: "https://x.test/v1" });
+		expect(badId.status).toBe(400);
+		const badUrl = await post({ provider: "ok-id", baseUrl: "ftp://x.test" });
+		expect(badUrl.status).toBe(400);
+	});
+	it("先建供应商再加模型:两步落在同一个条目,供应商配置不被模型覆盖", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		writeFileSync(customPath, JSON.stringify({ providers: {} }));
+		const created = await fetch(`${base}/api/providers/custom`, {
+			method: "POST",
+			headers: json,
+			body: JSON.stringify({ provider: "fresh", baseUrl: "https://api.fresh.test/v1", apiKey: "sk-fresh" }),
+		});
+		expect(created.status).toBe(200);
+		const addModel = (model: string) =>
+			fetch(`${base}/api/models/custom`, {
+				method: "POST",
+				headers: json,
+				body: JSON.stringify({ provider: "fresh", model, baseUrl: "https://api.fresh.test/v1" }),
+			});
+		expect((await addModel("fresh-1")).status).toBe(200);
+		expect((await addModel("fresh-2")).status).toBe(200);
+		const cfg = JSON.parse(readFileSync(customPath, "utf8")) as {
+			providers: Record<string, { baseUrl?: string; apiKey?: string; models: Array<{ id: string }> }>;
+		};
+		expect(cfg.providers.fresh.baseUrl).toBe("https://api.fresh.test/v1");
+		expect(cfg.providers.fresh.apiKey).toBe("sk-fresh");
+		expect(cfg.providers.fresh.models.map((m) => m.id)).toEqual(["fresh-1", "fresh-2"]);
+	});
+	it("GET /api/providers 带上「还没加模型」的自定义供应商(清单原本只从模型反推 provider)", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		writeFileSync(
+			customPath,
+			JSON.stringify({ providers: { emptysvc: { api: "openai-completions", baseUrl: "https://api.empty.test/v1", apiKey: "sk-e", models: [] } } }),
+		);
+		const res = await fetch(`${base}/api/providers`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { providers: Array<{ id: string; name: string; configured: boolean; source?: string }> };
+		expect(body.providers.find((p) => p.id === "emptysvc")).toMatchObject({
+			name: "emptysvc",
+			configured: true,
+			source: "models_json_key",
+		});
+	});
+	it("POST /api/models/custom 给已有条目加模型:不覆盖该条目的 api(内置 Anthropic 不能被写成 openai-completions)", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		writeFileSync(customPath, JSON.stringify({ providers: { anthropic: { api: "anthropic-messages", baseUrl: "https://api.anthropic.test", apiKey: "sk-a", models: [] } } }));
+		const res = await fetch(`${base}/api/models/custom`, {
+			method: "POST",
+			headers: json,
+			body: JSON.stringify({ provider: "anthropic", model: "claude-test", baseUrl: "https://api.anthropic.test" }),
+		});
+		expect(res.status).toBe(200);
+		const cfg = JSON.parse(readFileSync(customPath, "utf8")) as { providers: Record<string, { api?: string }> };
+		expect(cfg.providers.anthropic.api).toBe("anthropic-messages");
 	});
 	it("GET /api/plugins 返回插件列表(空目录 = 空数组)", async () => {
 		const res = await fetch(`${base}/api/plugins`);

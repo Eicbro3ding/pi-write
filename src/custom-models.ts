@@ -113,6 +113,42 @@ export function deleteCustomModel(cfg: ModelsConfig, providerId: string, modelId
 	return true;
 }
 
+/**
+ * 写入一个自定义 provider 条目(**只管 provider 级字段**,models 里已有的条目原样保留)。
+ *
+ * 2026-09 拆开「加供应商」与「加模型」:此前只有一个「自定义供应商」表单,它顺手要求
+ * 填第一个模型,于是「加一个供应商」变成了「加一个模型」。现在供应商先独立建出来
+ * (`models: []`),模型再由用户在它的详情里逐条添加。
+ *
+ * @param patch.baseUrl 服务地址(必填)
+ * @param patch.apiKey  凭据;缺省沿用已有值,仍无则用占位值(vendor 会跳过无 key 的 provider)
+ * @param patch.name    显示名;空串 = 清掉,回退到 provider id
+ * @param patch.api     协议;缺省沿用已有值,仍无则 openai-completions
+ */
+export function upsertCustomProvider(
+	cfg: ModelsConfig,
+	providerId: string,
+	patch: { baseUrl: string; apiKey?: string; name?: string; api?: string },
+): void {
+	const existing = cfg.providers?.[providerId];
+	const prev = typeof existing === "object" && existing !== null ? (existing as CustomProviderEntry) : {};
+	const next: CustomProviderEntry = { ...prev };
+	if (patch.name !== undefined) {
+		if (patch.name.trim().length > 0) next.name = patch.name.trim();
+		else delete next.name;
+	}
+	next.baseUrl = patch.baseUrl;
+	next.api = patch.api ?? (typeof prev.api === "string" && prev.api.length > 0 ? prev.api : "openai-completions");
+	next.apiKey = patch.apiKey && patch.apiKey.length > 0 ? patch.apiKey : (prev.apiKey ?? "sk-custom");
+	if (!Array.isArray(next.models)) next.models = [];
+	cfg.providers = { ...(cfg.providers ?? {}), [providerId]: next };
+}
+
+/** models.json 里是否已有这个 provider 条目。 */
+export function hasCustomProvider(cfg: ModelsConfig, providerId: string): boolean {
+	return cfg.providers !== undefined && Object.prototype.hasOwnProperty.call(cfg.providers, providerId);
+}
+
 /** 删除整个 provider 条目(移除自定义供应商 / 其凭据定义)。
  * @returns 是否删除。 */
 export function deleteCustomProvider(cfg: ModelsConfig, providerId: string): boolean {

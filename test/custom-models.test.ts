@@ -8,10 +8,12 @@ import {
 	customModelIds,
 	deleteCustomModel,
 	deleteCustomProvider,
+	hasCustomProvider,
 	hasModel,
 	parseModelsConfig,
 	serializeModelsConfig,
 	updateCustomModel,
+	upsertCustomProvider,
 	type ModelsConfig,
 } from "../src/custom-models.ts";
 
@@ -105,5 +107,47 @@ describe("deleteCustomProvider", () => {
 	it("不存在返回 false", () => {
 		expect(deleteCustomProvider(cfg(), "nope")).toBe(false);
 		expect(deleteCustomProvider({}, "nope")).toBe(false);
+	});
+});
+
+describe("upsertCustomProvider / hasCustomProvider", () => {
+	it("新建:写 provider 级字段,models 落成空数组(不牵进模型)", () => {
+		const c: ModelsConfig = {};
+		upsertCustomProvider(c, "selfhost", { baseUrl: "http://127.0.0.1:9000/v1", apiKey: "sk-x", name: "自建" });
+		expect(c.providers?.selfhost).toEqual({
+			name: "自建",
+			baseUrl: "http://127.0.0.1:9000/v1",
+			api: "openai-completions",
+			apiKey: "sk-x",
+			models: [],
+		});
+	});
+
+	it("不带 key 时写占位值(vendor 会跳过无 key 的 provider)", () => {
+		const c: ModelsConfig = {};
+		upsertCustomProvider(c, "keyless", { baseUrl: "http://127.0.0.1:9100/v1" });
+		expect(c.providers?.keyless.apiKey).toBe("sk-custom");
+	});
+
+	it("已有条目:保留 models 与协议,只改传入的字段", () => {
+		const c = cfg();
+		upsertCustomProvider(c, "mock", { baseUrl: "http://127.0.0.1:9999/v1", name: "改过" });
+		expect(c.providers?.mock.models?.map((m) => m.id)).toEqual(["mock-1", "mock-2"]);
+		expect(c.providers?.mock.api).toBe("openai-completions");
+		expect(c.providers?.mock.apiKey).toBe("sk-custom");
+		expect(c.providers?.mock.baseUrl).toBe("http://127.0.0.1:9999/v1");
+		expect(c.providers?.mock.name).toBe("改过");
+	});
+
+	it("name 传空串 = 清掉显示名(回退到 provider id)", () => {
+		const c: ModelsConfig = { providers: { x: { name: "旧名", baseUrl: "https://x.test", models: [] } } };
+		upsertCustomProvider(c, "x", { baseUrl: "https://x.test", name: "" });
+		expect(c.providers?.x.name).toBeUndefined();
+	});
+
+	it("hasCustomProvider 只看 models.json 里有没有这个条目", () => {
+		const c = cfg();
+		expect(hasCustomProvider(c, "mock")).toBe(true);
+		expect(hasCustomProvider(c, "openai")).toBe(false);
 	});
 });

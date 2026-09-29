@@ -36,10 +36,12 @@ import {
 	customModelIds,
 	deleteCustomModel,
 	deleteCustomProvider,
+	hasCustomProvider,
 	hasModel,
 	parseModelsConfig,
 	serializeModelsConfig,
 	updateCustomModel,
+	upsertCustomProvider,
 	type CustomModelEntry,
 	type CustomModelPatch,
 	type ModelsConfig,
@@ -62,7 +64,7 @@ import type { SessionHost } from "./session-host.ts";
 import { extractMessagesFromManager } from "./session-host.ts";
 import { askUserGate } from "../ask-user.ts";
 import { SessionManager } from "../../vendor/pi-coding-agent/src/index.ts";
-import { ProviderAuthError } from "./provider-auth.ts";
+import { ProviderAuthError, sortProviders, type ProviderListItem } from "./provider-auth.ts";
 import type { McpManager, McpServerStatus } from "../mcp/manager.ts";
 import { getMcpConfigPath, saveRawMcpConfig, type McpServerConfig } from "../mcp/config.ts";
 import { WorldWatcher } from "./file-watcher.ts";
@@ -581,6 +583,7 @@ export class WriterServer {
 			{ method: "POST", segments: ["thinking"], handler: (ctx) => this.handlePostThinking(ctx) },
 			{ method: "POST", segments: ["sampling"], handler: (ctx) => this.handlePostSampling(ctx) },
 			{ method: "GET", segments: ["providers"], handler: (ctx) => this.handleGetProviders(ctx) },
+			{ method: "POST", segments: ["providers", "custom"], handler: (ctx) => this.handlePostProviderCustom(ctx) },
 			{ method: "GET", segments: ["providers", ":id"], handler: (ctx) => this.handleGetProviderDetail(ctx) },
 			{ method: "POST", segments: ["providers", ":id", "apikey"], handler: (ctx) => this.handlePostProviderApiKey(ctx) },
 			{ method: "DELETE", segments: ["providers", ":id"], handler: (ctx) => this.handleDeleteProvider(ctx) },
@@ -1371,6 +1374,44 @@ export class WriterServer {
 	}
 
 	/**
+	 * POST /api/providers/custom {provider, name?, baseUrl, apiKey?}:
+	 * 新建 / 修改一个**自定义供应商**(models.json 的 provider 条目)。
+	 *
+	 * 2026-09 拆开「加供应商」与「加模型」:此前只有「自定义供应商」表单,它要求同时
+	 * 定义第一个模型,于是「加一个供应商」实际变成了「加一个模型」,而用户想先建好
+	 * 供应商、再在它的详情里逐个加模型时没有路径。这里只写 provider 级字段
+	 * (api/baseUrl/apiKey/name),models 留给 POST /api/models/custom。
+	 */
+	private async handlePostProviderCustom(ctx: RouteContext): Promise<void> {
+		const body = (await readJsonBody(ctx.req)) as Record<string, unknown>;
+		const providerId = requireString(body, "provider");
+		const baseUrl = requireString(body, "baseUrl");
+		if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(providerId)) {
+			throw new HttpError(400, "bad_request", "供应商 id 只允许小写字母/数字/连字符(如 mock)");
+		}
+		if (!/^https?:\/\//.test(baseUrl)) {
+			throw new HttpError(400, "bad_request", "baseUrl 必须是 http(s) 地址(如 http://127.0.0.1:8787/v1)");
+		}
+		const cfg = await readModelsConfig();
+		// 内置供应商的 id 归内置清单所有:在它下面写 models.json 整条会改掉它的地址与协议,
+		// 而「添加供应商」的本意是加一个新的。已在 models.json 里的 id 则允许改写(就是编辑)。
+		if (!hasCustomProvider(cfg, providerId)) {
+			const known = await this.options.sessionHost.listProviders();
+			if (known.some((p) => p.id === providerId)) {
+				throw new HttpError(400, "bad_request", `供应商 id「${providerId}」已被内置供应商占用,请换一个 id,或直接在列表里选它`);
+			}
+		}
+		upsertCustomProvider(cfg, providerId, {
+			baseUrl,
+			name: optionalString(body, "name"),
+			apiKey: optionalString(body, "apiKey"),
+		});
+		await writeModelsConfig(cfg);
+		await this.reloadModels();
+		this.send(ctx.res, 200, { ok: true, provider: providerId });
+	}
+
+	/**
 	 * POST /api/models/custom {provider, model, baseUrl, apiKey?, contextWindow?, maxTokens?}:
 	 * 把自定义 provider(openai-completions 协议,如本地 mock LLM)写进 models.json 并热重载。
 	 * models.json 是启动时一次性加载——写盘后重建运行时(切书同款机制)新 provider 才可见。
@@ -1407,7 +1448,10 @@ export class WriterServer {
 		const existingModels: CustomModelEntry[] = (existing as { models?: CustomModelEntry[] } | undefined)?.models ?? [];
 		const provider = {
 			...(typeof existing === "object" && existing !== null ? (existing as Record<string, unknown>) : {}),
-			api: "openai-completions",
+			// api 只在**新建** models.json 条目时写死 openai-completions(自定义供应商走这条)。
+			// 已有条目(含内置供应商)不能覆盖:内置的 Anthropic / Google 等协议不同,强行写成
+			// openai-completions 会让新加的模型用错协议(2026-09)。
+			...(existing === undefined ? { api: "openai-completions" } : {}),
 			baseUrl,
 			// vendor 把无 apiKey 的 provider 视为未配置并跳过列表——本地 mock 等
 			// 无需鉴权的服务也须有占位 key(实测 provider-composer 跳过无 key provider);
@@ -1521,10 +1565,36 @@ export class WriterServer {
 		this.send(ctx.res, 200, { ok: true });
 	}
 
-	/** GET /api/providers:全部 provider + 认证状态(已配置置顶,排序在 SessionHost)。 */
+	/**
+	 * GET /api/providers:全部 provider + 认证状态(已配置置顶,排序在 SessionHost)。
+	 *
+	 * 2026-09:models.json 里刚建好、**还没有加模型**的自定义供应商不会出现在
+	 * `listProviders()` 里 —— 那个清单是从模型目录反推 provider 的
+	 * (`new Set(mr.getModels().map(m => m.provider))`),零模型的供应商没有痕迹。
+	 * 「先建供应商、再在它下面加模型」这条路会断在第一步(建完就找不到它),
+	 * 所以这里把 models.json 的条目补进来。
+	 */
 	private async handleGetProviders(ctx: RouteContext): Promise<void> {
-		const providers = await this.options.sessionHost.listProviders();
+		const providers = await this.listProvidersWithCustom();
 		this.send(ctx.res, 200, { providers });
+	}
+
+	/** 供应商清单:运行时目录 + models.json 里零模型的自定义供应商(合并后按已配置优先排序)。 */
+	private async listProvidersWithCustom(): Promise<ProviderListItem[]> {
+		const providers = await this.options.sessionHost.listProviders();
+		const known = new Set(providers.map((p) => p.id));
+		const cfg = await readModelsConfig();
+		for (const [id, entry] of Object.entries(cfg.providers ?? {})) {
+			if (known.has(id)) continue;
+			providers.push({
+				id,
+				name: typeof entry.name === "string" && entry.name.length > 0 ? entry.name : id,
+				configured: true,
+				authKind: "api_key",
+				source: "models_json_key",
+			});
+		}
+		return sortProviders(providers);
 	}
 
 	/** GET /api/providers/:id:供应商详情(含全量模型列表,不按认证过滤)。 */
@@ -1543,7 +1613,7 @@ export class WriterServer {
 	/** POST /api/providers/:id/apikey {key}:写入 API key(官方 login 路径)。 */
 	private async handlePostProviderApiKey(ctx: RouteContext): Promise<void> {
 		const id = ctx.params.id!;
-		const providers = await this.options.sessionHost.listProviders();
+		const providers = await this.listProvidersWithCustom();
 		const provider = providers.find((p) => p.id === id);
 		if (!provider) throw new HttpError(404, "not_found", `provider 不存在: ${id}`);
 		if (provider.authKind !== "api_key" && provider.authKind !== "both") {
@@ -1570,7 +1640,7 @@ export class WriterServer {
 	 */
 	private async handleDeleteProvider(ctx: RouteContext): Promise<void> {
 		const id = ctx.params.id!;
-		const providers = await this.options.sessionHost.listProviders();
+		const providers = await this.listProvidersWithCustom();
 		const provider = providers.find((p) => p.id === id);
 		if (!provider) {
 			throw new HttpError(404, "not_found", `provider 不存在: ${id}`);

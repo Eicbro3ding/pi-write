@@ -205,6 +205,14 @@ export class ApiClient {
 		await this.request<{ ok: boolean }>("/api/model", { method: "POST", body: JSON.stringify({ model }) });
 	}
 
+	/**
+	 * 添加自定义**供应商**(只写 provider 级配置:地址与凭据,不含任何模型)。
+	 * 模型由 `addCustomModel` 在该供应商下逐条添加。
+	 */
+	async addCustomProvider(opts: { provider: string; name?: string; baseUrl: string; apiKey?: string }): Promise<void> {
+		await this.request<{ ok: boolean }>("/api/providers/custom", { method: "POST", body: JSON.stringify(opts) });
+	}
+
 	/** 添加自定义模型(openai-completions 协议,如本地 mock LLM):写 models.json + 服务端热重载。 */
 	async addCustomModel(opts: {
 		provider: string;
