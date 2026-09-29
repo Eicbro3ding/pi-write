@@ -3,7 +3,7 @@ import { ApiError, type ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
 import { IMAGE_SIZE_PX_TEXT, type ImageProviderDto, type ImageSizeDto, type PluginInfoDto, type ResolvedShellDto, type ShellDialectDto, type ShellKindDto, type UserThemeInfo, type WorldDataDto, type WriterSettingsDto } from "../types.ts";
 import type { EnterBehavior } from "../settings.ts";
-import { NIGHT_THEME, themeLabelFromCss, themeStarterCss, USER_THEME_PREFIX, userThemeFile, type ThemeId } from "../themes.ts";
+import { buildThemeFamilies, NIGHT_THEME, themeFamilyPick, themeLabelFromCss, themeStarterCss, USER_THEME_PREFIX, userThemeFile, type ThemeId } from "../themes.ts";
 import { applyTheme, currentTheme } from "../theme.ts";
 import { ProviderList } from "../components/ProviderList.tsx";
 import { McpServerList } from "../components/McpServerList.tsx";
@@ -75,6 +75,38 @@ const CAT_HEAD: Record<string, { title: string; desc: string }> = {
 	},
 	advanced: { title: "高级", desc: "会改变 AI 在你机器上行为的选项。这类设置的影响范围超出 pi-writer 自己,请在开启前读完说明。" },
 };
+
+/**
+ * 手机端「一屏一件事」的页面表:索引行 → 桌面分类 + 这一页只显示的卡片 + 页头标题。
+ *
+ * 手机端不把桌面的「分类」当页面用:桌面一个分类里有四五张卡(模型 / 采样 / 思考 /
+ * 供应商),手机点一行进去看到一整张桌面页;而且桌面「标签 | 控件」的行在 393px 里
+ * 会把标签挤成一列字。这里改成一行 = 一页 = 一张卡(`cards` 里可以有多张,比如
+ * 「图片生成」带上「允许 AI 调用的时机」)。卡片 key 对应各 section 的 cardClass()。
+ */
+const PHONE_PAGES: Record<string, { cat: string; cards: string[]; title: string }> = {
+	"theme-css": { cat: "ui", cards: ["theme-css"], title: "自定义主题" },
+	model: { cat: "model", cards: ["model"], title: "默认模型" },
+	thinking: { cat: "model", cards: ["thinking"], title: "思考级别" },
+	sampling: { cat: "model", cards: ["sampling"], title: "采样参数" },
+	world: { cat: "world", cards: ["world"], title: "世界书注入" },
+	image: { cat: "experimental", cards: ["image", "image-when"], title: "图片生成" },
+	shell: { cat: "advanced", cards: ["shell"], title: "执行命令" },
+	deps: { cat: "advanced", cards: ["deps", "wizard"], title: "依赖与配置向导" },
+	mcp: { cat: "integrations", cards: ["mcp"], title: "MCP 服务器" },
+	plugins: { cat: "integrations", cards: ["plugins"], title: "插件" },
+};
+
+/** 解析手机端子页 id:插件分类(`plugin:<id>`)动态取插件名,其余查 PHONE_PAGES。 */
+function resolvePhonePage(id: string, plugins: PluginInfoDto[] | null): { cat: string; cards: string[]; title: string } | null {
+	const hit = PHONE_PAGES[id];
+	if (hit) return hit;
+	if (id.startsWith(pluginCatPrefix)) {
+		const p = (plugins ?? []).find((x) => `${pluginCatPrefix}${x.id}` === id);
+		return { cat: id, cards: ["plugin"], title: p?.name ?? "插件设置" };
+	}
+	return null;
+}
 
 /**
  * 图片生成(实验)设置子集(设计稿 ★设置 v2 · 实验)。用 Pick 从完整设置里取,
@@ -803,12 +835,95 @@ export function SettingsPage({
 		return hit ? themeLabelFromCss(hit.css, hit.file) : theme;
 	}, [theme, builtinThemes, userThemes]);
 
+	/** 手机端选主题的弹层(设计稿 ★移动版「设置 · 主题菜单」:主题行下面浮一层选单)。 */
+	const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+
+	/** 手机端主题清单:与桌面主题卡同一套浅深合并(唯一实现在 themes.ts)。 */
+	const phoneFamilies = useMemo(() => buildThemeFamilies(builtinThemes, userThemes), [builtinThemes, userThemes]);
+
 	/**
-	 * 手机端设置索引(设计稿 ★移动版「设置」:一屏分组列表)。
+	 * 手机端当前子页(见 PHONE_PAGES);null = 分组索引页。
 	 *
-	 * 手机端不做「左栏 + 内容」那套:一屏放不下 6 个分类的导航与内容,设计稿给的形态是
-	 * 一页分组索引 —— 小节标题 + 卡片 + 行(图标 | 名称 | 值 | ›),点一行进该分类。
-	 * 行只列真实存在的设置,不为了对齐设计稿造开关;能就地切的用开关,其余跳分类。
+	 * 桌面端恒为 null —— 桌面用的是左栏 + 分类,`phoneCat` 只被「去设置模型 ›」这类
+	 * 跨页入口写一次,不能让它影响桌面的卡片可见性。
+	 */
+	const phonePage = isPhone && phoneCat ? resolvePhonePage(phoneCat, pluginCats) : null;
+
+	/** 手机端子页的卡片样式:这一页之外的卡片直接隐藏(桌面端 phonePage 恒 null,全部照常)。 */
+	const cardClass = (key: string) => (phonePage && !phonePage.cards.includes(key) ? "s-card m-card-off" : "s-card");
+
+	/** 全局提示(加载/操作错误、成功通知):索引页与子页都要看得见,所以抽出来两边共用。 */
+	const notices = (
+		<>
+			{models === null && !loadErr && <div className="notice">设置加载中…</div>}
+			{loadErr && (
+				<div className="notice err">
+					{loadErr}
+					<button
+						type="button"
+						className="btn-ghost"
+						onClick={() => {
+							// 重试:回到加载态;失败时与挂载 effect 相同方式呈现错误
+							setLoadErr(null);
+							setModels(null);
+							void load().catch((e) => {
+								setModels([]);
+								setLoadErr(`设置加载失败: ${friendlyError(e)}`);
+							});
+						}}
+					>
+						重试
+					</button>
+				</div>
+			)}
+			{actErr && <div className="notice err">{actErr}</div>}
+			{notice && <div className="notice">{notice}</div>}
+		</>
+	);
+
+	/**
+	 * 供应商管理整屏层(手机端索引行、桌面分类页入口共用)。
+	 *
+	 * 抽成变量而不是只放在下面那个 return 里:手机端索引页是**提前返回**的,
+	 * 弹层只挂在最后一个 return 上时,索引页点「供应商」不会有任何反应(2026-09 修)。
+	 */
+	const providersDialog = providersOpen && (
+		<div className={isPhone ? "dlg-overlay pvd-overlay" : "dlg-overlay"} role="dialog" aria-modal="true" aria-label="模型提供商">
+			<div className="dlg-panel pvd-panel">
+				{/* 手机端:整屏页 + 返回箭头(设计稿 ★移动版「管理供应商」);桌面端保持弹窗 + 关闭叉 */}
+				<header className="pvd-head">
+					{isPhone && (
+						<button type="button" className="m-icon-btn" aria-label="返回设置" title="返回设置" onClick={() => setProvidersOpen(false)}>
+							<Lu icon="chevron-left" size={18} />
+						</button>
+					)}
+					<div className="pvd-head-text">
+						<span className="pvd-title">{isPhone ? "管理供应商" : "模型提供商"}</span>
+						<span className="pvd-sub">
+							{isPhone ? "API Key 只存在本机,不上传任何服务器。" : "配置 API key 后,其模型会出现在设置页的模型列表里。"}
+						</span>
+					</div>
+					{!isPhone && (
+						<button type="button" className="icon-btn" aria-label="关闭" onClick={() => setProvidersOpen(false)}>
+							<IconX size={16} />
+						</button>
+					)}
+				</header>
+				<div className="pvd-body">
+					<ProviderList client={client} onAuthChanged={handleAuthChanged} />
+				</div>
+			</div>
+		</div>
+	);
+
+	/**
+	 * 手机端设置清单(设计稿 ★移动版「设置」)。
+	 *
+	 * 形态是**一层分组清单**:每行要么就地切(开关)、要么就地选(主题行下面的选单),
+	 * 要么进一个只放这一项的页面。手机端不沿用桌面的「分类」——桌面一个分类里塞着
+	 * 四五张卡,手机点进去看到的是一整张桌面页,而且桌面「标签 | 控件」的行在 393px
+	 * 里会把标签挤成一列字(`.st-row` 的 flex 行,2026-09 用户截图)。每行的去向见
+	 * PHONE_PAGES,页内只显示该页的卡片。
 	 */
 	const phoneIndex: Array<{ title: string; rows: Array<{
 		key: string;
@@ -816,25 +931,53 @@ export function SettingsPage({
 		label: string;
 		sub?: string;
 		value?: string;
-		cat?: string;
+		/** 进单页(见 PHONE_PAGES)。 */
+		page?: string;
+		/** 就地开关(带它就不用热区按钮,开关自己就是控件)。 */
 		on?: boolean;
 		onToggle?: (v: boolean) => void;
+		/** 就地选主题:值这一侧改成 ▾,点开行下选单。 */
+		menu?: boolean;
+		/** 就地动作(不开页、不只是开关)。 */
 		action?: () => void;
 	}> }> = [
 		{
 			title: "外观",
 			rows: [
-				{ key: "theme", icon: "sun", label: "主题", value: themeLabel, cat: "ui" },
-				{ key: "ui-pref", icon: "sliders-horizontal", label: "界面偏好", sub: "回车行为 · 自动展开思考", cat: "ui" },
-				{ key: "theme-css", icon: "pen-line", label: "自定义主题", sub: "写一份 CSS 换掉配色", cat: "ui" },
+				{ key: "theme", icon: "sun", label: "主题", value: themeLabel, menu: true },
+				{
+					key: "auto-expand",
+					icon: "activity",
+					label: "自动展开思考",
+					sub: "思考块默认展开,无需逐条点击",
+					on: autoExpandThinking,
+					onToggle: onAutoExpandThinkingChange,
+				},
+				{
+					key: "enter-send",
+					icon: "message-square",
+					label: "回车直接发送",
+					sub: enterBehavior === "send" ? "回车发送 · Shift+Enter 换行" : "回车换行 · Ctrl+Enter 发送",
+					on: enterBehavior === "send",
+					onToggle: (v) => onEnterBehaviorChange(v ? "send" : "newline"),
+				},
+				{
+					key: "auto-confirm",
+					icon: "check",
+					label: "编辑免确认",
+					sub: classicMode ? "AI 的修改落盘即生效" : "编剧的修改落盘即生效",
+					on: autoConfirmEdits,
+					onToggle: onAutoConfirmEditsChange,
+				},
+				{ key: "theme-css", icon: "pen-line", label: "自定义主题", sub: "写一份 CSS 换掉配色", page: "theme-css" },
 			],
 		},
 		{
 			title: "模型与服务",
 			rows: [
-				{ key: "model", icon: "layers", label: "模型", value: current ?? "未选择", cat: "model" },
-				{ key: "thinking", icon: "activity", label: "思考级别", value: thinking ? (THINKING_LABELS[thinking] ?? thinking) : "默认", cat: "model" },
-				{ key: "sampling", icon: "shuffle", label: "采样参数", sub: "temperature · top_p", cat: "model" },
+				{ key: "model", icon: "layers", label: "默认模型", value: current ?? "未选择", page: "model" },
+				{ key: "thinking", icon: "sparkles", label: "思考级别", value: thinking ? (THINKING_LABELS[thinking] ?? thinking) : "默认", page: "thinking" },
+				{ key: "sampling", icon: "shuffle", label: "采样参数", sub: "temperature · top_p", page: "sampling" },
 				{
 					key: "provider",
 					icon: "key-round",
@@ -849,15 +992,13 @@ export function SettingsPage({
 		{
 			title: "写作",
 			rows: [
-				{ key: "world", icon: "book-open", label: "世界书注入", value: world ? `${world.entries.length} 条目` : "…", cat: "world" },
-				{ key: "auto-confirm", icon: "check", label: "编辑免确认", sub: "编剧改稿直接落盘,不逐条确认", on: autoConfirmEdits, onToggle: onAutoConfirmEditsChange },
+				{ key: "world", icon: "book-open", label: "世界书注入", value: world ? `${world.entries.length} 条目` : "…", page: "world" },
 			],
 		},
 		{
 			title: "实验",
 			rows: [
-				{ key: "image", icon: "image", label: "图片生成", value: image.enableImageGen ? (image.imageModel || "已开启") : "关", cat: "experimental" },
-				{ key: "image-when", icon: "refresh-cw", label: "允许调用的时机", cat: "experimental" },
+				{ key: "image", icon: "image", label: "图片生成", value: image.enableImageGen ? (image.imageModel || "已开启") : "关", page: "image" },
 				...(debugShown
 					? [{ key: "debug", icon: "eye" as LucideName, label: "调试模式", sub: "工具块退回原始参数与结果", on: debugMode, onToggle: onDebugModeChange }]
 					: []),
@@ -866,18 +1007,24 @@ export function SettingsPage({
 		{
 			title: "高级",
 			rows: [
-				{ key: "shell", icon: "wrench", label: "执行命令(shell)", value: shellEnabled ? (resolvedShell?.dialect ?? shellKind) : "关", cat: "advanced" },
-				{ key: "agent", icon: "users", label: "Agent 形态", value: classicMode ? "经典(单 agent)" : "多 agent", cat: "advanced" },
-				{ key: "deps", icon: "info", label: "依赖", sub: "运行环境与版本要求", cat: "advanced" },
-				...(onRerunSetup ? [{ key: "wizard", icon: "wand-sparkles" as LucideName, label: "重新运行配置向导", action: onRerunSetup }] : []),
+				{ key: "shell", icon: "wrench", label: "执行命令(shell)", value: shellEnabled ? (resolvedShell?.dialect ?? shellKind) : "关", page: "shell" },
+				{
+					key: "classic",
+					icon: "users",
+					label: "经典模式",
+					sub: "去掉舞台,单一写作 agent",
+					on: classicMode,
+					onToggle: (v) => void toggleClassicMode(v),
+				},
+				{ key: "deps", icon: "info", label: "依赖与配置向导", sub: "运行环境要求 · 重走一遍向导", page: "deps" },
 			],
 		},
 		{
 			title: "集成",
 			rows: [
-				{ key: "mcp", icon: "link-2", label: "MCP 服务器", sub: "给 AI 挂外部工具", cat: "integrations" },
-				{ key: "plugins", icon: "puzzle", label: "插件", cat: "integrations" },
-				...(pluginCats ?? []).map((pl) => ({ key: `plugin:${pl.id}`, icon: "puzzle" as LucideName, label: pl.name, cat: `plugin:${pl.id}` })),
+				{ key: "mcp", icon: "link-2", label: "MCP 服务器", sub: "给 AI 挂外部工具", page: "mcp" },
+				{ key: "plugins", icon: "puzzle", label: "插件", page: "plugins" },
+				...(pluginCats ?? []).map((pl) => ({ key: `plugin:${pl.id}`, icon: "puzzle" as LucideName, label: pl.name, page: `${pluginCatPrefix}${pl.id}` })),
 			],
 		},
 	];
@@ -892,10 +1039,12 @@ export function SettingsPage({
 					tone="ok"
 				/>
 				<div className="m-set">
+					{notices}
 					{phoneIndex.map((sec) => (
 						<section key={sec.title} className="m-set-sec">
 							<div className="m-set-sec-title">{sec.title}</div>
-							<div className="m-set-card">
+							{/* 主题选单要浮在下面几行之上:卡片默认 overflow:hidden 会把它裁掉 */}
+							<div className={`m-set-card${themeMenuOpen ? " m-menu-open" : ""}`}>
 								{sec.rows.map((row) => (
 									<div key={row.key} className="m-set-row">
 										<Lu icon={row.icon} size={17} />
@@ -908,22 +1057,64 @@ export function SettingsPage({
 										) : (
 											<>
 												{row.value && <span className="m-set-val">{row.value}</span>}
-												{row.cat && <Lu icon="chevron-right" size={15} className="m-set-arrow" />}
+												{(row.page || row.action || row.menu) && (
+													<Lu
+														icon={row.menu ? (themeMenuOpen ? "chevron-up" : "chevron-down") : "chevron-right"}
+														size={15}
+														className="m-set-arrow"
+													/>
+												)}
 											</>
 										)}
-										{/* 整行可点:跳分类或执行动作(开关行除外,开关自己就是控件) */}
+										{/* 整行可点:进单页 / 开主题选单 / 执行动作(开关行除外,开关自己就是控件) */}
 										{!row.onToggle && (
 											<button
 												type="button"
 												className="m-set-hit"
 												aria-label={row.label}
 												onClick={() => {
-													if (row.cat) {
-														setCat(row.cat);
-														setPhoneCat(row.cat);
-													} else row.action?.();
+													if (row.menu) {
+														setThemeMenuOpen((v) => !v);
+														return;
+													}
+													if (row.page) {
+														const p = resolvePhonePage(row.page, pluginCats);
+														setCat(p?.cat ?? row.page);
+														setPhoneCat(row.page);
+														setThemeMenuOpen(false);
+														return;
+													}
+													row.action?.();
 												}}
 											/>
+										)}
+										{row.menu && themeMenuOpen && (
+											<div className="m-set-menu" role="menu" aria-label="选择主题">
+												{phoneFamilies.map((f) => {
+													// 家族里当前选中的那一份(浅/深);没选中 = 这一行还没被用
+													const activeId = theme === f.light.id ? f.light.id : f.dark && theme === f.dark.id ? f.dark.id : null;
+													return (
+														<button
+															key={f.key}
+															type="button"
+															role="menuitemradio"
+															aria-checked={activeId !== null}
+															className={activeId ? "m-set-menu-item on" : "m-set-menu-item"}
+															// 复选行为与桌面主题卡一致:未选中取浅色,已选中再点切浅 ⇄ 深
+															onClick={() => {
+																selectTheme(themeFamilyPick(f, theme));
+																setThemeMenuOpen(false);
+															}}
+														>
+															<span className="m-set-menu-label">{f.label}</span>
+															{activeId && f.dark && (
+																<span className="m-set-menu-mode">{activeId === f.dark.id ? "深色" : "浅色"}</span>
+															)}
+															{activeId && <Lu icon="check" size={15} />}
+														</button>
+													);
+												})}
+											</div>
 										)}
 									</div>
 								))}
@@ -934,18 +1125,19 @@ export function SettingsPage({
 						{appVersion ? `pi·writer v${appVersion} · ` : ""}数据仅保存在本机
 					</div>
 				</div>
+				{providersDialog}
 			</div>
 		);
 	}
 
 	return (
 		<div className="settings">
-			{/* 手机端分类页页头:← 回索引 | 分类名(设计稿「设置」里点开一行就是这类页面)。
+			{/* 手机端子页页头:← 回索引 | 这一页的名字(设计稿「设置」里点开一行就是这类页面)。
 			    桌面端不发这个页头,左栏常驻 */}
 			{isPhone && (
 				<MobileHeader
 					leading={{ icon: "chevron-left", label: "返回设置", onPress: () => setPhoneCat(null) }}
-					title={headOf(phoneCat ?? cat).title}
+					title={phonePage?.title ?? headOf(cat).title}
 					subtitle="本地优先 · 不上传"
 					tone="ok"
 				/>
@@ -965,7 +1157,7 @@ export function SettingsPage({
 					</>
 				)}
 			</aside>
-			<main className="settings-main">
+			<main className={isPhone && phonePage ? "settings-main m-focus" : "settings-main"}>
 				<div className="settings-inner">
 					{/* 页头:标题 + 分类说明(设计稿 11-13;保存状态留在顶栏,这里不重复) */}
 					<header className="st-head">
@@ -974,35 +1166,13 @@ export function SettingsPage({
 					</header>
 
 					{/* 全局提示(加载/操作错误、成功通知):所有分类顶部可见 */}
-					{models === null && !loadErr && <div className="notice">设置加载中…</div>}
-					{loadErr && (
-						<div className="notice err">
-							{loadErr}
-							<button
-								type="button"
-								className="btn-ghost"
-								onClick={() => {
-									// 重试:回到加载态;失败时与挂载 effect 相同方式呈现错误
-									setLoadErr(null);
-									setModels(null);
-									void load().catch((e) => {
-										setModels([]);
-										setLoadErr(`设置加载失败: ${friendlyError(e)}`);
-									});
-								}}
-							>
-								重试
-							</button>
-						</div>
-					)}
-					{actErr && <div className="notice err">{actErr}</div>}
-					{notice && <div className="notice">{notice}</div>}
+					{notices}
 
 					{cat === "model" && (
 						<div className="st-cols">
 							<div className="st-col-main">
 								{/* 模型:当前使用模型 + 切换下拉 + 刷新 */}
-								<section className="s-card">
+								<section className={cardClass("model")}>
 									<div className="st-card-head">
 										<span className="s-card-head">模型</span>
 										<span className="st-card-meta">
@@ -1043,7 +1213,7 @@ export function SettingsPage({
 								</section>
 
 								{/* 采样参数:temperature / top_p + 应用 / 恢复默认 */}
-								<section className="s-card">
+								<section className={cardClass("sampling")}>
 									<div className="s-card-head">采样参数</div>
 									<div className="s-card-desc">留空表示沿用模型默认值。</div>
 									<div className="s-field-grid">
@@ -1092,7 +1262,7 @@ export function SettingsPage({
 
 							<aside className="st-col-side">
 								{/* 思考级别 */}
-								<section className="s-card">
+								<section className={cardClass("thinking")}>
 									<div className="s-card-head">思考级别</div>
 									<div className="st-row st-row-stack">
 										<span className="st-row-label">强度</span>
@@ -1115,7 +1285,7 @@ export function SettingsPage({
 								</section>
 
 								{/* 模型供应商入口 */}
-								<section className="s-card">
+								<section className={cardClass("provider-entry")}>
 									<div className="s-card-head">模型供应商</div>
 									<div className="s-card-desc">管理供应商与 API key。添加 key 后,其模型自动出现在上方的模型列表里。</div>
 									<div className="st-actions">
@@ -1132,7 +1302,7 @@ export function SettingsPage({
 						<div className="st-cols">
 							<div className="st-col-main">
 								{/* 主题(浅深合并的 5 张卡) */}
-								<section className="s-card">
+								<section className={cardClass("theme")}>
 									<div className="st-card-head">
 										<span className="s-card-head">主题</span>
 										<span className="st-card-meta st-meta-dim">深浅已合并 · 点已选中的卡可切换</span>
@@ -1146,7 +1316,7 @@ export function SettingsPage({
 								</section>
 
 								{/* 界面偏好(只留外观与日常偏好) */}
-								<section className="s-card">
+								<section className={cardClass("ui-pref")}>
 									<div className="s-card-head">界面偏好</div>
 									<div className="s-pref-list">
 										<div className="s-pref-item">
@@ -1184,7 +1354,7 @@ export function SettingsPage({
 
 							<aside className="st-col-side">
 								{/* 自定义主题:代码编辑器下沉成折叠区(默认收起) */}
-								<section className="s-card">
+								<section className={cardClass("theme-css")}>
 									<div className="s-card-head">自定义主题</div>
 									<div className="s-card-desc">
 										主题就是一份 CSS 文件。放进 ~/pi/writer/themes/ 会自动出现在左边的列表里;文件名以 <span className="st-mono">-dark</span> 结尾会自动和同名浅色主题配成一对。
@@ -1275,7 +1445,7 @@ export function SettingsPage({
 								    它不是显示偏好,是排障开关——把每个工具块退回原始工具名 + 完整参数 +
 								    完整结果,好看清模型到底怎么调的、错在哪一步。 */}
 								{debugShown && (
-									<section className="s-card">
+									<section className={cardClass("debug")}>
 										<div className="st-card-head">
 											<span className="s-card-head">调试模式</span>
 										</div>
@@ -1296,7 +1466,7 @@ export function SettingsPage({
 									</section>
 								)}
 								{/* 执行命令(shell):高风险胶囊 + 红色警示块 + 关闭时次级态 */}
-								<section className="s-card">
+								<section className={cardClass("shell")}>
 									<div className="st-card-head">
 										<span className="s-card-head">执行命令(shell)</span>
 										<span className="st-chip st-chip-danger">⚠ 高风险</span>
@@ -1384,7 +1554,7 @@ export function SettingsPage({
 								</section>
 
 								{/* Agent 形态:经典模式(单 Agent) */}
-								<section className="s-card">
+								<section className={cardClass("agent")}>
 									<div className="s-card-head">Agent 形态</div>
 									<div className="s-pref-list">
 										<div className="s-pref-item">
@@ -1402,7 +1572,7 @@ export function SettingsPage({
 
 							<aside className="st-col-side">
 								{onRerunSetup && (
-									<section className="s-card">
+									<section className={cardClass("wizard")}>
 										<div className="s-card-head">配置向导</div>
 										<div className="st-actions">
 											<button type="button" className="btn-ghost" onClick={onRerunSetup}>
@@ -1413,7 +1583,7 @@ export function SettingsPage({
 									</section>
 								)}
 
-								<section className="s-card">
+								<section className={cardClass("deps")}>
 									<div className="s-card-head">依赖</div>
 									<div className="s-card-desc">「执行命令」需要本机已装好的 shell;「插件」与「MCP」在「集成」分类里。</div>
 								</section>
@@ -1424,7 +1594,7 @@ export function SettingsPage({
 					{cat === "world" && (
 						<div className="st-cols">
 							<div className="st-col-main">
-								<section className="s-card">
+								<section className={cardClass("world")}>
 									<div className="s-card-head">世界书注入</div>
 									{worldErr ? (
 										<div className="notice err">
@@ -1479,7 +1649,7 @@ export function SettingsPage({
 					{cat === "experimental" && (
 						<div className="st-cols">
 							<div className="st-col-main">
-								<section className="s-card">
+								<section className={cardClass("image")}>
 									<div className="st-card-head">
 										<span className="s-card-head">图片生成模型</span>
 										<span className="st-chip">实验</span>
@@ -1583,7 +1753,7 @@ export function SettingsPage({
 							</div>
 
 							<aside className="st-col-side">
-								<section className="s-card">
+								<section className={cardClass("image-info")}>
 									<div className="s-card-head">实验性功能说明</div>
 									<div className="s-card-desc">
 										实验开关默认关闭。它们会改变 AI 的行为或界面，也可能在后续版本里被替换；关闭后相关工具立即对 AI 不可见。
@@ -1615,7 +1785,7 @@ export function SettingsPage({
 									</div>
 								</section>
 
-								<section className="s-card">
+								<section className={cardClass("image-when")}>
 									<div className="s-card-head">允许 AI 调用的时机</div>
 									<div className="s-card-desc">控制图片工具在哪些环节出现。</div>
 									<div className="s-pref-list">
@@ -1664,14 +1834,14 @@ export function SettingsPage({
 					{cat === "integrations" && (
 						<div className="st-cols">
 							<div className="st-col-main">
-								<section className="s-card">
+								<section className={cardClass("mcp")}>
 									<div className="s-card-head">MCP 服务器</div>
 									<div className="s-card-desc">
 										为 AI 接入外部工具(如文件系统、资料库、计算器)。配置存 ~/.pi/writer/agent/mcp.json。
 									</div>
 									<McpServerList client={client} />
 								</section>
-								<section className="s-card">
+								<section className={cardClass("plugins")}>
 									<div className="s-card-head">插件</div>
 									<div className="s-card-desc">
 										扩展写作能力(工具/事件/命令)。插件目录 ~/.pi/writer/plugins/&lt;id&gt;,内含 plugin.json 与入口 index.mjs;切换启用后会话重建生效。
@@ -1706,35 +1876,8 @@ export function SettingsPage({
 						})()}
 				</div>
 			</main>
-			{/* 模型提供商管理弹窗:双栏卡片悬浮层(关闭即卸载,列表状态在下一次打开时重建) */}
-			{providersOpen && (
-				<div className={isPhone ? "dlg-overlay pvd-overlay" : "dlg-overlay"} role="dialog" aria-modal="true" aria-label="模型提供商">
-					<div className="dlg-panel pvd-panel">
-						{/* 手机端:整屏页 + 返回箭头(设计稿 ★移动版「管理供应商」);桌面端保持弹窗 + 关闭叉 */}
-						<header className="pvd-head">
-							{isPhone && (
-								<button type="button" className="m-icon-btn" aria-label="返回设置" title="返回设置" onClick={() => setProvidersOpen(false)}>
-									<Lu icon="chevron-left" size={18} />
-								</button>
-							)}
-							<div className="pvd-head-text">
-								<span className="pvd-title">{isPhone ? "管理供应商" : "模型提供商"}</span>
-								<span className="pvd-sub">
-									{isPhone ? "API Key 只存在本机,不上传任何服务器。" : "配置 API key 后,其模型会出现在设置页的模型列表里。"}
-								</span>
-							</div>
-							{!isPhone && (
-								<button type="button" className="icon-btn" aria-label="关闭" onClick={() => setProvidersOpen(false)}>
-									<IconX size={16} />
-								</button>
-							)}
-						</header>
-						<div className="pvd-body">
-							<ProviderList client={client} onAuthChanged={handleAuthChanged} />
-						</div>
-					</div>
-				</div>
-			)}
+			{/* 模型提供商管理悬浮层:双栏卡片(关闭即卸载,列表状态在下一次打开时重建) */}
+			{providersDialog}
 		</div>
 	);
 }
