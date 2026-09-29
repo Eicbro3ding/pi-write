@@ -1,9 +1,11 @@
 /**
- * 添加模型/自定义供应商弹窗(ProviderList 双栏卡片的「+ 添加模型」与「+ 自定义供应商」共用)。
+ * 添加 / 编辑自定义模型弹窗(供应商详情里的「＋ 添加模型」与模型行的编辑入口共用)。
  *
- * 两种入口(由 mode 区分):
- * - model:「添加模型」——供应商上下文已知,provider/baseUrl/apiKey 由详情带入;
- * - provider:「自定义供应商」——需要填供应商 id/名称/Base URL/apiKey,同时定义第一个模型。
+ * 2026-09 拆开职责:这个弹窗**只管模型**(模型 ID / 显示名 / 上下文窗口 / 最大输出 /
+ * 输入类型)。Base URL 与 API Key 是供应商级字段,由详情带入、不在这里显示——
+ * 之前它们摆在这个表单里,既让「加模型」看着像在改供应商,又能在不改供应商的情况下
+ * 改掉它所有模型的地址(写 models.json 的 provider 级 baseUrl 会覆盖该供应商全部模型)。
+ * 添加供应商见 AddProviderDialog。
  *
  * 提交走 POST /api/models/custom(openai-completions 协议;输入类型 vendor 只支持
  * text/image,视频/PDF 无对应语义故不提供选项;聊天模型一律文本输出)。
@@ -15,9 +17,8 @@ import { IconX } from "./Icons.tsx";
 
 /** 模型 id 校验(与后端 /api/models/custom 同款正则)。 */
 const MODEL_ID_RE = /^[a-z0-9][a-z0-9-_.]{0,127}$/;
-const PROVIDER_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-export type AddModelMode = "model" | "provider" | "edit";
+export type AddModelMode = "model" | "edit";
 
 /** 编辑模式预填的现有自定义模型。 */
 export interface EditableModel {
@@ -30,11 +31,12 @@ export interface EditableModel {
 
 export function AddModelDialog({
 	client,
-	mode,
-	/** 供应商上下文(添加模型/编辑模型模式必填;自定义供应商模式下作为新供应商的前缀参考)。 */
 	providerId,
+	/** 供应商的接口地址(写盘时随模型一起提交;不在表单里显示)。 */
 	baseUrl,
-	apiKeyRequired,
+	/** 供应商显示名(标题里点明模型加在谁下面)。 */
+	providerLabel,
+	mode,
 	/** 编辑模式:要编辑的现有模型(同时决定打开时的预填值)。 */
 	initialModel,
 	onSaved,
@@ -42,25 +44,19 @@ export function AddModelDialog({
 }: {
 	client: ApiClient;
 	mode: AddModelMode;
-	/** 当前选中的供应商 id(添加模型模式固定使用;自定义供应商模式不预填)。 */
+	/** 供应商 id(添加/编辑都固定使用当前详情里的供应商)。 */
 	providerId: string;
-	/** 当前供应商的 baseUrl(添加模型模式自动带入,可改;自定义供应商模式也可预填)。 */
+	/** 当前供应商的 baseUrl(随提交写回,表单不显示、不可改)。 */
 	baseUrl?: string;
-	/** 供应商是否要求 API key(oauth provider 仍可自定义覆盖,仅提示用)。 */
-	apiKeyRequired?: boolean;
+	/** 供应商显示名(副标题用「添加到 <名称>」)。 */
+	providerLabel?: string;
 	/** 编辑模式:现有模型;缺省时编辑模式不可用。 */
 	initialModel?: EditableModel;
 	/** 保存成功(已关弹窗由本组件负责,onSaved 由父组件刷新列表/详情)。 */
 	onSaved: () => void | Promise<void>;
 	onClose: () => void;
 }) {
-	// 供应商模式独有字段
-	const [newProviderId, setNewProviderId] = useState("");
-	const [newProviderName, setNewProviderName] = useState("");
-	// 通用字段(供应商模式下 baseUrl 必填且为首个模型服务地址)
 	const editing = mode === "edit";
-	const [formBaseUrl, setFormBaseUrl] = useState(baseUrl ?? "");
-	const [formApiKey, setFormApiKey] = useState("");
 	const [formModel, setFormModel] = useState(initialModel?.id ?? "");
 	const [formModelName, setFormModelName] = useState(initialModel?.name ?? "");
 	const [formCtx, setFormCtx] = useState(String(initialModel?.contextWindow ?? 1000000));
@@ -120,28 +116,22 @@ export function AddModelDialog({
 			}
 			return;
 		}
-		const pid = mode === "provider" ? newProviderId.trim() : providerId;
-		const url = formBaseUrl.trim();
-		if (!PROVIDER_ID_RE.test(pid)) {
-			setErr(mode === "provider" ? "供应商 id 只允许小写字母/数字/连字符(如 mock)" : "供应商 id 无效");
-			return;
-		}
+		const url = (baseUrl ?? "").trim();
 		if (!/^https?:\/\//.test(url)) {
-			setErr("Base URL 必须是 http(s) 地址(如 http://127.0.0.1:8787/v1)");
+			setErr(`该供应商没有可用的接口地址,无法添加模型。请先到「设置 › 供应商」里补上它的 Base URL。`);
 			return;
 		}
 		setBusy(true);
 		setErr(null);
 		try {
 			await client.addCustomModel({
-				provider: pid,
+				provider: providerId,
 				model,
 				baseUrl: url,
-				apiKey: formApiKey.trim().length > 0 ? formApiKey.trim() : undefined,
 				contextWindow: limits.ctx,
 				maxTokens: limits.maxTokens,
 				input: formInput,
-				name: mode === "provider" && newProviderName.trim().length > 0 ? newProviderName.trim() : undefined,
+				name: formModelName.trim().length > 0 ? formModelName.trim() : undefined,
 			});
 			await onSaved();
 			onClose();
@@ -151,94 +141,42 @@ export function AddModelDialog({
 		}
 	}
 
-	const title = mode === "provider" ? "自定义供应商" : editing ? "编辑模型" : "添加模型";
+	const title = editing ? "编辑模型" : "添加模型";
 
 	return (
-		<div className="dlg-overlay" role="dialog" aria-modal="true" aria-label={title}>
+		<div className="dlg-overlay amd-overlay" role="dialog" aria-modal="true" aria-label={title}>
 			<div className="dlg-panel amd-panel">
 				<header className="amd-head">
-					<span className="amd-title">{title}</span>
+					<span className="amd-head-text">
+						<span className="amd-title">{title}</span>
+						<span className="amd-sub">{`供应商 ${providerLabel ?? providerId}`}</span>
+					</span>
 					<button type="button" className="icon-btn" aria-label="关闭" onClick={onClose}>
 						<IconX size={16} />
 					</button>
 				</header>
 				<div className="amd-body">
-					{mode === "provider" && (
-						<div className="s-field-grid">
-							<div className="s-field">
-								<label className="s-field-label">供应商 ID</label>
-								<input
-									className="s-input"
-									placeholder="如 mock"
-									value={newProviderId}
-									disabled={busy}
-									autoFocus
-									onChange={(e) => setNewProviderId(e.target.value)}
-								/>
-							</div>
-							<div className="s-field">
-								<label className="s-field-label">名称(可选)</label>
-								<input
-									className="s-input"
-									placeholder="如 本地 Mock"
-									value={newProviderName}
-									disabled={busy}
-									onChange={(e) => setNewProviderName(e.target.value)}
-								/>
-							</div>
-						</div>
-					)}
 					<div className="s-field">
 						<label className="s-field-label">模型 ID</label>
 						<input
-							className="s-input"
-							placeholder="模型 ID"
+							className="s-input mono"
+							placeholder="如 gpt-4o-mini"
 							value={formModel}
 							disabled={busy}
-							autoFocus={mode === "model" || editing}
+							autoFocus
 							onChange={(e) => setFormModel(e.target.value)}
 						/>
 					</div>
-					{editing && (
-						<div className="s-field">
-							<label className="s-field-label">显示名(可选)</label>
-							<input
-								className="s-input"
-								placeholder="留空则用模型 ID"
-								value={formModelName}
-								disabled={busy}
-								onChange={(e) => setFormModelName(e.target.value)}
-							/>
-						</div>
-					)}
-					{/* Base URL / API Key 是 provider 级字段:编辑单个模型时不展示(避免误改) */}
-					{!editing && (
-						<div className="s-field">
-							<label className="s-field-label">Base URL</label>
-							<input
-								className="s-input mono"
-								placeholder="http://127.0.0.1:8787/v1"
-								value={formBaseUrl}
-								disabled={busy}
-								onChange={(e) => setFormBaseUrl(e.target.value)}
-							/>
-						</div>
-					)}
-					{!editing && (
-						<div className="s-field">
-							<label className="s-field-label">
-								API Key
-								{apiKeyRequired && mode === "provider" && <span className="amd-label-hint">必填</span>}
-							</label>
-							<input
-								className="s-input mono"
-								placeholder={apiKeyRequired && mode === "provider" ? "必填(占位 sk-custom 亦可)" : "可选"}
-								value={formApiKey}
-								disabled={busy}
-								onChange={(e) => setFormApiKey(e.target.value)}
-							/>
-						</div>
-					)}
+					<div className="s-field">
+						<label className="s-field-label">显示名(可选)</label>
+						<input
+							className="s-input"
+							placeholder="留空则用模型 ID"
+							value={formModelName}
+							disabled={busy}
+							onChange={(e) => setFormModelName(e.target.value)}
+						/>
+					</div>
 					<div className="s-field-grid">
 						<div className="s-field">
 							<label className="s-field-label">上下文窗口</label>
@@ -270,6 +208,9 @@ export function AddModelDialog({
 							</button>
 							<span className="amd-hint">输出固定为文本</span>
 						</div>
+					</div>
+					<div className="amd-note">
+						接口地址与 API Key 属于供应商配置,在供应商详情里改;这里只定义这个模型。
 					</div>
 					{err && <div className="notice err">{err}</div>}
 				</div>

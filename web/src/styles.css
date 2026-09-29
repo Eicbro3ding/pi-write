@@ -2563,12 +2563,17 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .pvc-add-model:hover { color: var(--ink); border-color: var(--muted); }
 
 /* 添加模型/自定义供应商弹窗(amd-*) */
-.amd-panel { width: min(460px, 92vw); }
+/* 宽度要带上 .dlg-panel 一起选:`.dlg-panel` 在之后加载的 dialog.css 里,只写 .amd-panel
+   会被它压过,表单摊成 680 宽(2026-09) */
+.dlg-panel.amd-panel { width: min(480px, 92vw); }
 .amd-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 16px 18px 0;
 }
+.amd-head-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .amd-title { font-size: 14px; font-weight: 500; color: var(--ink); }
+.amd-sub { font-size: 11px; color: var(--muted); }
+.amd-note { font-size: 11px; color: var(--faint); line-height: 1.6; }
 .amd-body {
   padding: 12px 18px 16px; display: flex; flex-direction: column; gap: 12px;
   overflow-y: auto;

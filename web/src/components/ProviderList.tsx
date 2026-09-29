@@ -3,28 +3,29 @@ import type { ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
 import { currentModelOf, filterProviders, providerCanHoldApiKey, providerCountLabel, providerCounts, providerRowSub, unconfiguredHint } from "../provider-list-logic.ts";
 import type { ModelDto, ProviderDetailDto, ProviderInfo } from "../types.ts";
-import { AddModelDialog, type AddModelMode } from "./AddModelDialog.tsx";
+import { AddModelDialog } from "./AddModelDialog.tsx";
+import { AddProviderDialog } from "./AddProviderDialog.tsx";
 import { IconPlus } from "./Icons.tsx";
 import { Lu } from "./Lu.tsx";
 import { useIsPhone } from "../useMediaQuery.ts";
 
 /**
- * 模型供应商配置(双栏卡片:左列表 + 右详情),设置页「模型」分类与首次启动
- * 向导第 2 步共用(props 签名不变,调用方零改动)。
+ * 模型供应商配置,两种形态共用一套数据:
  *
- * 设计稿 v1(14-管理供应商)重做:
- * - 左栏只留「已配置」列表(未配置的靠底部「添加供应商」进入),每行是
- *   名称 + 当前模型小字;底部「＋ 添加供应商」+「共 N 个可选」计数;
- * - 右栏:provider 名 + 已配置胶囊 + 右上「测试连接」「移除凭据」;
- *   Base URL / API 格式是**只读信息行**(没有输入框外观);API Key 一行带眼睛
- *   (显示 / 隐藏,编辑态可直接看明文,不再强制 password 掩码);
- *   模型列表按族聚合(同前缀的版本收成一条,展开显示子版本);
- * - 数据与写操作完全沿用:GET /api/providers、GET /api/providers/:id、
- *   POST /api/providers/:id/apikey、DELETE /api/providers/:id、
- *   POST /api/models/custom(经 AddModelDialog)。
+ * - 桌面(>700px):双栏卡片 —— 左栏列全部供应商 + 搜索,右栏是选中项的详情;
+ * - 手机(≤700px):一屏一层 —— 「已连接的供应商」卡片列表 + 「添加供应商」入口,
+ *   点卡片进详情,详情里「添加模型」。设计稿 ★移动版「管理供应商」。
+ *
+ * 数据与写操作完全沿用:GET /api/providers、GET /api/providers/:id、
+ * POST /api/providers/:id/apikey、DELETE /api/providers/:id、
+ * POST /api/providers/custom(自定义供应商)、POST /api/models/custom(添加模型)。
+ *
+ * 2026-09 拆开「加供应商」与「加模型」:加供应商只写 provider 级配置(models 空数组),
+ * 模型在供应商详情里逐个添加 —— 之前两者挤在同一个表单里,「加一个供应商」实际
+ * 变成了「加一个模型」。
  */
 export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onAuthChanged: () => void | Promise<void> }) {
-	/** 手机端(≤700px):主从两栏改「列表 → 详情」两级(设计稿 ★移动版「管理供应商」)。 */
+	/** 手机端(≤700px):列表 → 详情两级,外加一个「选择供应商」层。 */
 	const isPhone = useIsPhone();
 	/** null = 加载中;[] = 已加载但为空(或加载失败)。 */
 	const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
@@ -32,6 +33,8 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 	const [query, setQuery] = useState("");
 	/** 当前选中供应商 id(null = 未选中)。 */
 	const [selectedId, setSelectedId] = useState<string | null>(null);
+	/** 手机端列表层状态:列表(已连接卡片)/ 选择供应商(全部列表 + 搜索)。 */
+	const [phoneLayer, setPhoneLayer] = useState<"list" | "picker">("list");
 	/** 详情状态:null = 未加载;404 未知等错误置空并提示。 */
 	const [detail, setDetail] = useState<ProviderDetailDto | null>(null);
 	const [detailErr, setDetailErr] = useState<string | null>(null);
@@ -56,15 +59,17 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 	const [grouped, setGrouped] = useState(true);
 	/** 展开的族 key 集合(聚合视图下显示子版本)。 */
 	const [openFamilies, setOpenFamilies] = useState<Record<string, boolean>>({});
-	/** 添加模型/自定义供应商弹窗(null = 关闭)。 */
-	const [addDialog, setAddDialog] = useState<AddModelMode | null>(null);
+	/** 添加模型弹窗(非空 = 打开;值为编辑时的现有模型,null 表示"关闭",用 editingModel 区分)。 */
+	const [modelDialog, setModelDialog] = useState<"add" | "edit" | null>(null);
+	/** 添加供应商弹窗(只写 provider 级配置)。 */
+	const [providerDialog, setProviderDialog] = useState(false);
 	/** 正在编辑的自定义模型(非空时打开编辑弹窗;只对 models.json 里的模型开放)。 */
 	const [editingModel, setEditingModel] = useState<ModelDto | null>(null);
 	/** 待确认删除的自定义模型 id(非空时该行显示确认按钮)。 */
 	const [confirmModel, setConfirmModel] = useState<string | null>(null);
 	const [modelBusy, setModelBusy] = useState(false);
 	const [modelErr, setModelErr] = useState<string | null>(null);
-	/** 当前使用的模型引用 "provider/id"(只读,仅用于左栏每行的「当前模型」小字)。 */
+	/** 当前使用的模型引用 "provider/id"(列表行的「默认」胶囊与行内小字)。 */
 	const [currentModel, setCurrentModel] = useState<string | null>(null);
 
 	const load = useCallback(async () => {
@@ -84,7 +89,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 		};
 	}, [load]);
 
-	/** 当前使用的模型("provider/id"):左栏行内小字显示用;读不到就不显示(静默)。 */
+	/** 当前使用的模型("provider/id"):列表行内小字与「默认」胶囊用;读不到就不显示(静默)。 */
 	useEffect(() => {
 		let cancelled = false;
 		void client
@@ -93,7 +98,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 				if (!cancelled) setCurrentModel(modelRefOf(r.current));
 			})
 			.catch(() => {
-				/* 读不到当前模型:左栏小字留空 */
+				/* 读不到当前模型:小字留空 */
 			});
 		return () => {
 			cancelled = true;
@@ -109,6 +114,12 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 	useEffect(() => {
 		if (providers === null) return;
 		if (isPhone && selectedId === null) return;
+		// 手机端:选中的供应商没了(移除自定义供应商的凭据会连条目一起删)→ 退回列表,
+		// 而不是替用户跳到另一个供应商的详情里
+		if (isPhone && selectedId !== null && !providers.some((p) => p.id === selectedId)) {
+			setSelectedId(null);
+			return;
+		}
 		const current = selectedId && providers.some((p) => p.id === selectedId) ? selectedId : providers.find((p) => p.configured)?.id ?? providers[0]?.id ?? null;
 		if (current !== selectedId) setSelectedId(current);
 	}, [providers, selectedId, isPhone]);
@@ -141,6 +152,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 		setTestOk(null);
 		setOpenFamilies({});
 		setConfirmRemove(false);
+		setConfirmModel(null);
 		resetKeyEdit();
 		// resetKeyEdit 只动本地 state,无需进依赖
 		// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -321,7 +333,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 	const showKeyInput = apiKeyHint === null && (editingKey || !isConfigured);
 
 	/**
-	 * 左栏:列**全部**供应商(已配置的排前面 + 带「已配置」胶囊)。
+	 * 全量供应商列表(已配置的排前面 + 带「已配置」胶囊)。
 	 *
 	 * 2026-09-23 改:此前只列 `configured`,而页脚写着「共 17 个可选,点上方浏览全部」
 	 * —— 那颗「添加供应商」通向的是**自定义供应商表单**,不是服务商目录,于是那 17 个
@@ -330,6 +342,14 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 	 */
 	const counts = providerCounts(providers ?? []);
 	const searching = query.trim().length > 0;
+	const configuredProviders = useMemo(() => (providers ?? []).filter((p) => p.configured), [providers]);
+	const unconfiguredCount = counts.total - counts.configured;
+
+	/** 选中一个供应商(手机端顺带离开「选择供应商」层)。 */
+	function pickProvider(id: string) {
+		setSelectedId(id);
+		setPhoneLayer("list");
+	}
 
 	function renderProviderItem(p: ProviderInfo, selected: boolean) {
 		return (
@@ -337,7 +357,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 				type="button"
 				key={p.id}
 				className={`pvc-item${selected ? " sel" : ""}${p.configured ? " on" : ""}`}
-				onClick={() => setSelectedId(p.id)}
+				onClick={() => pickProvider(p.id)}
 			>
 				{/* 圆点:已配置绿、未配置灰(基类是绿的,所以未配置加 .off) */}
 				<span className={`pvc-dot${p.configured ? "" : " off"}`} />
@@ -346,6 +366,25 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 					<span className="pvc-item-sub">{providerRowSub(p, currentModel)}</span>
 				</span>
 				{p.configured && <span className="pvc-item-pill">已配置</span>}
+			</button>
+		);
+	}
+
+	/**
+	 * 手机端「已连接的供应商」卡片(设计稿 ★移动版:一服务一卡)。
+	 * 当前模型所在的供应商多一枚「默认」胶囊 —— 卡片列表里最该先看到的那条信息。
+	 */
+	function renderConfiguredCard(p: ProviderInfo) {
+		const used = currentModelOf(currentModel, p.id);
+		return (
+			<button type="button" key={p.id} className="m-pv-card" onClick={() => pickProvider(p.id)}>
+				<span className="m-pv-card-top">
+					<span className="pvc-dot" />
+					<span className="m-pv-card-name">{p.name}</span>
+					{used && <span className="m-pv-card-default">默认</span>}
+					<Lu icon="chevron-right" size={16} className="m-pv-card-arrow" />
+				</span>
+				<span className="m-pv-card-sub">{providerRowSub(p, currentModel)}</span>
 			</button>
 		);
 	}
@@ -375,7 +414,10 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 								className="pvc-mini-icon"
 								aria-label={`编辑模型 ${m.id}`}
 								title="编辑模型"
-								onClick={() => setEditingModel(m)}
+								onClick={() => {
+									setEditingModel(m);
+									setModelDialog("edit");
+								}}
 							>
 								<Lu icon="pencil" size={14} strokeWidth={1.4} />
 							</button>
@@ -395,41 +437,88 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 		);
 	}
 
+	/** 左栏上半:搜索 + 全量列表(桌面左栏 / 手机「选择供应商」层共用)。 */
+	const searchAndList = (
+		<>
+			<input
+				className="s-search pvc-search"
+				type="search"
+				placeholder="搜索供应商…"
+				value={query}
+				onChange={(e) => setQuery(e.target.value)}
+			/>
+			<div className="pvc-list">
+				{providers === null ? (
+					<div className="s-empty-row">
+						<span className="s-val muted">加载中…</span>
+					</div>
+				) : filtered.length === 0 ? (
+					<div className="s-empty-row">
+						<span className="s-val muted">{searching ? `没有匹配「${query.trim()}」的供应商` : "服务端没有返回任何供应商"}</span>
+					</div>
+				) : (
+					// key 用 id:未搜索时列表是后端顺序(已配置优先),搜索时顺序不变
+					filtered.map((p) => renderProviderItem(p, selectedId === p.id))
+				)}
+			</div>
+		</>
+	);
+
 	return (
 		<>
 			{loadErr && <div className="notice err">{loadErr}</div>}
 			<div className={`pvc-card${isPhone && selectedId ? " pvc-phone-detail" : ""}`}>
-				{/* 左栏:全部供应商(已配置优先)+ 搜索 + 自定义供应商入口 */}
+				{/* 左栏:桌面 = 全部供应商 + 搜索 + 自定义供应商入口;
+				    手机 = 「已连接的供应商」卡片 + 添加供应商(设计稿首屏) */}
 				<div className="pvc-side">
-					<div className="pvc-side-title">{providerCountLabel(counts)}</div>
-					<input
-						className="s-search pvc-search"
-						type="search"
-						placeholder="搜索供应商…"
-						value={query}
-						onChange={(e) => setQuery(e.target.value)}
-					/>
-					<div className="pvc-list">
-						{providers === null ? (
-							<div className="s-empty-row">
-								<span className="s-val muted">加载中…</span>
-							</div>
-						) : filtered.length === 0 ? (
-							<div className="s-empty-row">
-								<span className="s-val muted">{searching ? `没有匹配「${query.trim()}」的供应商` : "服务端没有返回任何供应商"}</span>
-							</div>
+					{isPhone ? (
+						phoneLayer === "picker" ? (
+							<>
+								<button type="button" className="pvc-back" onClick={() => setPhoneLayer("list")}>
+									<Lu icon="chevron-left" size={16} />
+									<span>返回</span>
+								</button>
+								<div className="pvc-side-title">全部供应商 {counts.total} 个</div>
+								{searchAndList}
+								<button type="button" className="pvc-add-provider" onClick={() => setProviderDialog(true)}>
+									<IconPlus size={14} />
+									自定义供应商
+								</button>
+							</>
 						) : (
-							// key 用 id:未搜索时列表是后端顺序(已配置优先),搜索时顺序不变
-							filtered.map((p) => renderProviderItem(p, selectedId === p.id))
-						)}
-					</div>
-					<button type="button" className="pvc-add-provider" onClick={() => setAddDialog("provider")}>
-						<IconPlus size={14} />
-						添加自定义供应商
-					</button>
-					{/* 页脚不再写「点上方浏览全部」:那颗按钮通向自定义表单,不提供"全部"。
-					    上面列的就是全部,这里只交代"为什么有的没配"。 */}
-					{counts.configured < counts.total && <div className="pvc-side-foot">未配置的也能点开看;填好 key 后即可用。</div>}
+							<>
+								{configuredProviders.length > 0 ? (
+									<>
+										<div className="pvc-side-title">已连接的供应商 {configuredProviders.length} 个</div>
+										<div className="pvc-list">{configuredProviders.map(renderConfiguredCard)}</div>
+									</>
+								) : (
+									<div className="pvc-empty">
+										<span className="s-val muted">还没有配置任何供应商。添加一个,填上它的 API Key 就能用了。</span>
+									</div>
+								)}
+								<button type="button" className="pvc-add-provider m-pv-add" onClick={() => setPhoneLayer("picker")}>
+									<IconPlus size={14} />
+									<span className="m-pv-add-text">
+										<span>添加供应商</span>
+										{unconfiguredCount > 0 && <span className="m-pv-add-sub">从 {unconfiguredCount} 个内置供应商中选择</span>}
+									</span>
+								</button>
+							</>
+						)
+					) : (
+						<>
+							<div className="pvc-side-title">{providerCountLabel(counts)}</div>
+							{searchAndList}
+							<button type="button" className="pvc-add-provider" onClick={() => setProviderDialog(true)}>
+								<IconPlus size={14} />
+								自定义供应商
+							</button>
+							{/* 页脚不再写「点上方浏览全部」:那颗按钮通向自定义表单,不提供"全部"。
+							    上面列的就是全部,这里只交代"为什么有的没配"。 */}
+							{counts.configured < counts.total && <div className="pvc-side-foot">未配置的也能点开看;填好 key 后即可用。</div>}
+						</>
+					)}
 				</div>
 
 				{/* 右栏:详情 */}
@@ -442,7 +531,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 					)}
 					{!selectedId ? (
 						<div className="pvc-empty">
-							<span className="s-val muted">从左侧选择一个供应商查看配置,或添加自定义供应商。</span>
+							<span className="s-val muted">{isPhone ? "从列表里选一个供应商,或添加新的。" : "从左侧选择一个供应商查看配置,或添加自定义供应商。"}</span>
 						</div>
 					) : !detail && !detailErr ? (
 						<div className="pvc-empty">
@@ -641,7 +730,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 										</div>
 									)
 								) : (
-									customModels.length === 0 ? <div className="pvc-value faint">该供应商暂无模型(配置 key 后自动出现)</div> : null
+									customModels.length === 0 ? <div className="pvc-value faint">该供应商暂无模型(配置 key 后自动出现,也可以在下面手动添加)</div> : null
 								)}
 							</div>
 
@@ -659,7 +748,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 								</div>
 							)}
 
-							<button type="button" className="pvc-add-model" onClick={() => setAddDialog("model")}>
+							<button type="button" className="pvc-add-model" onClick={() => setModelDialog("add")}>
 								<IconPlus size={14} />
 								添加模型
 							</button>
@@ -667,23 +756,25 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 					)}
 				</div>
 			</div>
-			{/* 弹窗:添加模型(供应商上下文) / 自定义供应商 */}
-			{addDialog && (
+			{/* 弹窗:添加模型(只填模型字段,接口地址与 key 由供应商带入) */}
+			{modelDialog === "add" && selectedId && (
 				<AddModelDialog
 					client={client}
-					mode={addDialog}
-					providerId={addDialog === "model" ? selectedId ?? "" : ""}
-					baseUrl={addDialog === "model" ? detail?.provider?.baseUrl ?? "" : undefined}
+					mode="model"
+					providerId={selectedId}
+					providerLabel={detailProvider?.name ?? selectedId}
+					baseUrl={detailProvider?.baseUrl ?? ""}
 					onSaved={reloadAfterModelsChanged}
-					onClose={() => setAddDialog(null)}
+					onClose={() => setModelDialog(null)}
 				/>
 			)}
 			{/* 弹窗:编辑自定义模型 */}
-			{editingModel && (
+			{modelDialog === "edit" && selectedId && editingModel && (
 				<AddModelDialog
 					client={client}
 					mode="edit"
-					providerId={selectedId ?? ""}
+					providerId={selectedId}
+					providerLabel={detailProvider?.name ?? selectedId}
 					initialModel={{
 						id: editingModel.id,
 						name: editingModel.name,
@@ -692,7 +783,21 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 						input: editingModel.input,
 					}}
 					onSaved={reloadAfterModelsChanged}
-					onClose={() => setEditingModel(null)}
+					onClose={() => {
+						setModelDialog(null);
+						setEditingModel(null);
+					}}
+				/>
+			)}
+			{/* 弹窗:添加自定义供应商(只写供应商级配置,不带模型) */}
+			{providerDialog && (
+				<AddProviderDialog
+					client={client}
+					onSaved={async (id) => {
+						await load();
+						pickProvider(id);
+					}}
+					onClose={() => setProviderDialog(false)}
 				/>
 			)}
 		</>
