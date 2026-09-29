@@ -1685,8 +1685,19 @@ export function WritePage({
 					)}
 				</motion.aside>
 			</>
-			{/* 手机端底部常驻输入条(设计稿 ★输入区):编辑页与伙伴页共用,内容与桌面同一个实例 */}
-			{isPhone && <div className="m-composer">{writerInputBar}</div>}
+			{/* 手机端底部常驻输入条(设计稿 ★输入区):编辑页与伙伴页共用,内容与桌面同一个实例。
+			    点/聚焦它就等于「要和 AI 说话」→ 自动滑出 AI 对话抽屉并保持(抽屉只在遮罩、
+			    返回、关闭按钮时收起,不因输入或发送自动关)。输入条是抽屉的兄弟节点而非子节点,
+			    所以抽屉滑出不会把它卸载,焦点与已输入的文字都留着。 */}
+			{isPhone && (
+				<div
+					className="m-composer"
+					onPointerDown={() => setMobileDrawer("companion")}
+					onFocusCapture={() => setMobileDrawer("companion")}
+				>
+					{writerInputBar}
+				</div>
+			)}
 			{/* 手机端整屏导出(设计稿 ★移动版「导出」):受控的 ExportPanel,自带触发按钮不渲染 */}
 			{isPhone && phoneExport && (
 				<div className="m-sheet" role="dialog" aria-label="导出">
