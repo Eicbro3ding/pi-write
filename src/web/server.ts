@@ -33,6 +33,18 @@ import { getPluginFrontendPath, listPlugins, loadPlugins, readPluginSettings, re
 import { getAgentDir, getBookDir, getThemesDir, getWriterDir, VERSION } from "../config.ts";
 import { atomicWriteFile } from "../atomic-write.ts";
 import {
+	customModelIds,
+	deleteCustomModel,
+	deleteCustomProvider,
+	hasModel,
+	parseModelsConfig,
+	serializeModelsConfig,
+	updateCustomModel,
+	type CustomModelEntry,
+	type CustomModelPatch,
+	type ModelsConfig,
+} from "../custom-models.ts";
+import {
 	SETUP_VERSION,
 	defaultSetupState,
 	isSetupStepId,
@@ -321,6 +333,49 @@ function optionalNumberOrNull(body: unknown, key: string): number | null | undef
 	return value;
 }
 
+/** 自定义模型 id 规则(与 AddModelDialog 前端校验同款;唯一真相源)。 */
+const CUSTOM_MODEL_ID_RE = /^[a-z0-9][a-z0-9-_.]{0,127}$/;
+
+/** models.json 路径(自定义 provider/模型配置;与 vendor ModelRuntime 读的是同一个)。 */
+function modelsConfigPath(): string {
+	return join(getAgentDir(), "models.json");
+}
+
+/** 读 models.json(不存在/损坏 → 空配置)。 */
+async function readModelsConfig(): Promise<ModelsConfig> {
+	try {
+		return parseModelsConfig(await readFile(modelsConfigPath(), "utf8"));
+	} catch {
+		return {};
+	}
+}
+
+/** 写 models.json(原子写)。 */
+async function writeModelsConfig(cfg: ModelsConfig): Promise<void> {
+	await atomicWriteFile(modelsConfigPath(), serializeModelsConfig(cfg));
+}
+
+/** 取可选正整数(上下文窗口 / 最大输出 Token);缺省 undefined,非法 400。 */
+function optionalPositiveInt(body: unknown, key: string): number | undefined {
+	const value = (body as Record<string, unknown> | null)?.[key];
+	if (value === undefined || value === null) return undefined;
+	const n = typeof value === "number" ? value : Number(value);
+	if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
+		throw new HttpError(400, "bad_request", `字段 ${key} 必须是正整数`);
+	}
+	return n;
+}
+
+/** 规整模型输入类型(只接受 text/image);缺省 undefined,非法 400。 */
+function normalizeModelInput(body: unknown, key = "input"): Array<"text" | "image"> | undefined {
+	const value = (body as Record<string, unknown> | null)?.[key];
+	if (value === undefined) return undefined;
+	if (!Array.isArray(value)) throw new HttpError(400, "bad_request", `字段 ${key} 必须是数组`);
+	const out = [...new Set(value.filter((v): v is "text" | "image" => v === "text" || v === "image"))];
+	if (out.length === 0) throw new HttpError(400, "bad_request", `${key} 至少包含 text 或 image`);
+	return out;
+}
+
 /**
  * 从 Cookie 头解析 pi_writer_token 值:按 ";" 分段、trim 后找
  * "pi_writer_token=" 前缀,取前缀之后的部分;不存在返回 undefined。
@@ -520,6 +575,8 @@ export class WriterServer {
 			{ method: "GET", segments: ["models"], handler: (ctx) => this.handleGetModels(ctx) },
 			{ method: "POST", segments: ["models", "refresh"], handler: (ctx) => this.handlePostModelsRefresh(ctx) },
 			{ method: "POST", segments: ["models", "custom"], handler: (ctx) => this.handlePostModelCustom(ctx) },
+			{ method: "PUT", segments: ["models", "custom"], handler: (ctx) => this.handlePutModelCustom(ctx) },
+			{ method: "DELETE", segments: ["models", "custom"], handler: (ctx) => this.handleDeleteModelCustom(ctx) },
 			{ method: "POST", segments: ["model"], handler: (ctx) => this.handlePostModel(ctx) },
 			{ method: "POST", segments: ["thinking"], handler: (ctx) => this.handlePostThinking(ctx) },
 			{ method: "POST", segments: ["sampling"], handler: (ctx) => this.handlePostSampling(ctx) },
@@ -1326,19 +1383,13 @@ export class WriterServer {
 		if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(providerId)) {
 			throw new HttpError(400, "bad_request", "provider id 只允许小写字母/数字/连字符(如 mock)");
 		}
-		if (!/^[a-z0-9][a-z0-9-_.]{0,127}$/.test(modelId)) {
+		if (!CUSTOM_MODEL_ID_RE.test(modelId)) {
 			throw new HttpError(400, "bad_request", "模型 id 只允许字母/数字/连字符/点/下划线(如 mock-1)");
 		}
 		if (!/^https?:\/\//.test(baseUrl)) {
 			throw new HttpError(400, "bad_request", "baseUrl 必须是 http(s) 地址(如 http://127.0.0.1:8787/v1)");
 		}
-		const modelsPath = join(getAgentDir(), "models.json");
-		let cfg: { providers?: Record<string, unknown> } = {};
-		try {
-			cfg = JSON.parse(await readFile(modelsPath, "utf8")) as { providers?: Record<string, unknown> };
-		} catch {
-			/* 不存在/损坏:从空开始 */
-		}
+		const cfg = await readModelsConfig();
 		// input 只接受 text/image(vendor models.json schema 合法值,无视频/PDF 语义)
 		const rawInput = Array.isArray(body.input) ? body.input : [];
 		const input = rawInput.filter((v): v is "text" | "image" => v === "text" || v === "image");
@@ -1353,7 +1404,7 @@ export class WriterServer {
 		// 同 provider 已有自定义条目(models.json 里)时合并 models 数组——否则
 		// 第二次添加会整体覆盖 provider,丢掉之前添加的模型(保留原 apiKey/baseUrl)
 		const existing = cfg.providers?.[providerId];
-		const existingModels = (existing as { models?: unknown[] } | undefined)?.models ?? [];
+		const existingModels: CustomModelEntry[] = (existing as { models?: CustomModelEntry[] } | undefined)?.models ?? [];
 		const provider = {
 			...(typeof existing === "object" && existing !== null ? (existing as Record<string, unknown>) : {}),
 			api: "openai-completions",
@@ -1368,12 +1419,70 @@ export class WriterServer {
 			models: [...existingModels, modelEntry],
 		};
 		cfg.providers = { ...(cfg.providers ?? {}), [providerId]: provider };
-		await atomicWriteFile(modelsPath, `${JSON.stringify(cfg, null, 2)}\n`);
-		// 热重载:ModelRuntime.refresh 重读 models.json 并重建 provider(本地配置,
-		// 不触发网络目录刷新;比 reloadRuntime 轻量,不重建整个会话运行时)
+		await writeModelsConfig(cfg);
+		await this.reloadModels();
+		this.send(ctx.res, 200, { ok: true, provider: providerId, model: `${providerId}/${modelId}` });
+	}
+
+	/**
+	 * PUT /api/models/custom {provider, model, newModel?, name?, contextWindow?, maxTokens?, input?}:
+	 * 编辑 models.json 里已有的自定义模型(按原 id 定位;newModel 非空且不同时改 id)。
+	 * 只动模型条目,不改 provider 级的 api/baseUrl/apiKey。
+	 */
+	private async handlePutModelCustom(ctx: RouteContext): Promise<void> {
+		const body = (await readJsonBody(ctx.req)) as Record<string, unknown>;
+		const providerId = requireString(body, "provider");
+		const modelId = requireString(body, "model");
+		const newModel = optionalString(body, "newModel");
+		if (newModel !== undefined && !CUSTOM_MODEL_ID_RE.test(newModel)) {
+			throw new HttpError(400, "bad_request", "模型 id 只允许字母/数字/连字符/点/下划线(如 mock-1)");
+		}
+		const cfg = await readModelsConfig();
+		if (!hasModel(cfg, providerId, modelId)) {
+			throw new HttpError(404, "not_found", `models.json 里没有模型 ${providerId}/${modelId}`);
+		}
+		if (newModel !== undefined && newModel !== modelId && hasModel(cfg, providerId, newModel)) {
+			throw new HttpError(400, "bad_request", `模型 id ${newModel} 已存在`);
+		}
+		const patch: CustomModelPatch = {};
+		const name = optionalString(body, "name");
+		if (name !== undefined) patch.name = name;
+		const contextWindow = optionalPositiveInt(body, "contextWindow");
+		if (contextWindow !== undefined) patch.contextWindow = contextWindow;
+		const maxTokens = optionalPositiveInt(body, "maxTokens");
+		if (maxTokens !== undefined) patch.maxTokens = maxTokens;
+		const input = normalizeModelInput(body);
+		if (input !== undefined) patch.input = input;
+		if (newModel !== undefined) patch.newId = newModel;
+		updateCustomModel(cfg, providerId, modelId, patch);
+		await writeModelsConfig(cfg);
+		await this.reloadModels();
+		this.send(ctx.res, 200, { ok: true, provider: providerId, model: newModel ?? modelId });
+	}
+
+	/** DELETE /api/models/custom?provider=&model=:删除 models.json 里的自定义模型。 */
+	private async handleDeleteModelCustom(ctx: RouteContext): Promise<void> {
+		const providerId = ctx.url.searchParams.get("provider") ?? "";
+		const modelId = ctx.url.searchParams.get("model") ?? "";
+		if (providerId.length === 0 || modelId.length === 0) {
+			throw new HttpError(400, "bad_request", "缺少 provider 或 model 查询参数");
+		}
+		const cfg = await readModelsConfig();
+		if (!deleteCustomModel(cfg, providerId, modelId)) {
+			throw new HttpError(404, "not_found", `models.json 里没有模型 ${providerId}/${modelId}`);
+		}
+		await writeModelsConfig(cfg);
+		await this.reloadModels();
+		this.send(ctx.res, 200, { ok: true });
+	}
+
+	/**
+	 * 热重载模型目录:ModelRuntime.refresh 重读 models.json 并重建 provider
+	 * (本地配置,不触发网络目录刷新;比 reloadRuntime 轻量,不重建整个会话运行时)。
+	 */
+	private async reloadModels(): Promise<void> {
 		const runtime = this.options.sessionHost.getRuntime();
 		await runtime.session.modelRuntime.refresh({ allowNetwork: false });
-		this.send(ctx.res, 200, { ok: true, provider: providerId, model: `${providerId}/${modelId}` });
 	}
 
 	/** POST /api/model {model}:切换模型。 */
@@ -1423,6 +1532,11 @@ export class WriterServer {
 		const id = ctx.params.id!;
 		const detail = await this.options.sessionHost.getProviderDetail(id);
 		if (!detail) throw new HttpError(404, "not_found", `provider 不存在: ${id}`);
+		// 标出 models.json 里自定义的模型:前端只对这些给编辑/删除入口
+		const customIds = customModelIds(await readModelsConfig(), id);
+		if (customIds.size > 0) {
+			detail.models = detail.models.map((m) => (customIds.has(m.id) ? { ...m, custom: true } : m));
+		}
 		this.send(ctx.res, 200, detail);
 	}
 
@@ -1447,14 +1561,28 @@ export class WriterServer {
 		this.send(ctx.res, 200, { ok: true });
 	}
 
-	/** DELETE /api/providers/:id:移除凭据。 */
+	/**
+	 * DELETE /api/providers/:id:移除凭据。
+	 *
+	 * 凭据可能在两处:凭据库(auth.json,走 vendor logout)或 models.json 的
+	 * apiKey(自定义供应商)。只 logout 后者不动,前端重载后仍是「已配置」——
+	 * 点了移除凭据等于没反应(2026-09 修)。所以 models_json_* 来源的整条删掉。
+	 */
 	private async handleDeleteProvider(ctx: RouteContext): Promise<void> {
 		const id = ctx.params.id!;
 		const providers = await this.options.sessionHost.listProviders();
-		if (!providers.some((p) => p.id === id)) {
+		const provider = providers.find((p) => p.id === id);
+		if (!provider) {
 			throw new HttpError(404, "not_found", `provider 不存在: ${id}`);
 		}
 		await this.options.sessionHost.removeProvider(id);
+		if (provider.source === "models_json_key" || provider.source === "models_json_command") {
+			const cfg = await readModelsConfig();
+			if (deleteCustomProvider(cfg, id)) {
+				await writeModelsConfig(cfg);
+				await this.reloadModels();
+			}
+		}
 		this.send(ctx.res, 200, { ok: true });
 	}
 

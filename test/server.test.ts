@@ -279,6 +279,9 @@ describe("WriterServer", () => {
 
 	beforeAll(async () => {
 		fake = fakeHost();
+		// models.json 相关用例直接写盘,需要 agent 目录先存在(server 的原子写会自建,
+		// 但直接在测试里 writeFileSync 前不会)
+		mkdirSync(getAgentDir(), { recursive: true });
 		// 显式注入不存在的 webDistDir:本组用例不测自动探测,避免命中磁盘残留的 web/dist
 		server = new WriterServer({ host: "127.0.0.1", port: 0, sessionHost: fake.host, webDistDir: join(tmp, "no-such-dist") });
 		const { port } = await server.start();
@@ -594,6 +597,60 @@ describe("WriterServer", () => {
 		expect(res.status).toBe(404);
 		const body = (await res.json()) as { error: { code: string } };
 		expect(body.error.code).toBe("not_found");
+	});
+	it("GET /api/providers/:id 标出 models.json 自定义模型(custom: true)", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		writeFileSync(
+			customPath,
+			JSON.stringify({ providers: { openai: { api: "openai-completions", baseUrl: "http://127.0.0.1:1/v1", apiKey: "sk-x", models: [{ id: "sonnet", contextWindow: 1 }] } } }),
+		);
+		const res = await fetch(`${base}/api/providers/openai`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { models: Array<{ id: string; custom?: boolean }> };
+		expect(body.models.find((m) => m.id === "sonnet")?.custom).toBe(true);
+		expect(body.models.find((m) => m.id === "sonnet-v2")?.custom).toBeUndefined();
+	});
+	it("PUT /api/models/custom 编辑字段与 id", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		writeFileSync(
+			customPath,
+			JSON.stringify({ providers: { mockz: { api: "openai-completions", baseUrl: "http://127.0.0.1:1/v1", apiKey: "sk-x", models: [{ id: "mockz-1", name: "Mock Z 1", contextWindow: 1000, maxTokens: 100, input: ["text"] }] } } }),
+		);
+		const res = await fetch(`${base}/api/models/custom`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ provider: "mockz", model: "mockz-1", newModel: "mockz-2", name: "改过", contextWindow: 2000, maxTokens: 200, input: ["text", "image"] }),
+		});
+		expect(res.status).toBe(200);
+		const cfg = JSON.parse(readFileSync(customPath, "utf8")) as { providers: Record<string, { models: Array<Record<string, unknown>> }> };
+		expect(cfg.providers.mockz.models[0]).toMatchObject({ id: "mockz-2", name: "改过", contextWindow: 2000, maxTokens: 200, input: ["text", "image"] });
+	});
+	it("PUT /api/models/custom 未知模型 → 404;改 id 撞名 → 400", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		writeFileSync(customPath, JSON.stringify({ providers: { mockz: { api: "openai-completions", baseUrl: "http://127.0.0.1:1/v1", apiKey: "sk-x", models: [{ id: "a" }, { id: "b" }] } } }));
+		const notFound = await fetch(`${base}/api/models/custom`, { method: "PUT", headers: json, body: JSON.stringify({ provider: "mockz", model: "nope", name: "x" }) });
+		expect(notFound.status).toBe(404);
+		const clash = await fetch(`${base}/api/models/custom`, { method: "PUT", headers: json, body: JSON.stringify({ provider: "mockz", model: "a", newModel: "b" }) });
+		expect(clash.status).toBe(400);
+	});
+	it("DELETE /api/models/custom 删除自定义模型;再删 → 404", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		writeFileSync(customPath, JSON.stringify({ providers: { mockz: { api: "openai-completions", baseUrl: "http://127.0.0.1:1/v1", apiKey: "sk-x", models: [{ id: "a" }, { id: "b" }] } } }));
+		const res = await fetch(`${base}/api/models/custom?provider=mockz&model=a`, { method: "DELETE" });
+		expect(res.status).toBe(200);
+		const cfg = JSON.parse(readFileSync(customPath, "utf8")) as { providers: Record<string, { models: Array<{ id: string }> }> };
+		expect(cfg.providers.mockz.models.map((m) => m.id)).toEqual(["b"]);
+		const again = await fetch(`${base}/api/models/custom?provider=mockz&model=a`, { method: "DELETE" });
+		expect(again.status).toBe(404);
+	});
+	it("DELETE /api/providers/:id(models.json 凭据)→ 同时删除 models.json 条目", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		writeFileSync(customPath, JSON.stringify({ providers: { mocky: { api: "openai-completions", baseUrl: "http://127.0.0.1:1/v1", apiKey: "sk-x", models: [{ id: "mocky-1" }] } } }));
+		(fake.providers as Array<Record<string, unknown>>).push({ id: "mocky", name: "mocky", configured: true, authKind: "api_key", source: "models_json_key" });
+		const res = await fetch(`${base}/api/providers/mocky`, { method: "DELETE" });
+		expect(res.status).toBe(200);
+		const cfg = JSON.parse(readFileSync(customPath, "utf8")) as { providers: Record<string, unknown> };
+		expect(cfg.providers.mocky).toBeUndefined();
 	});
 	it("POST /api/models/custom 同 provider 加两个模型:models.json 两者都保留", async () => {
 		const customPath = join(getAgentDir(), "models.json");

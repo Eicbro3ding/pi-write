@@ -224,6 +224,33 @@ export class ApiClient {
 		});
 	}
 
+	/**
+	 * 编辑 models.json 里的自定义模型。`model` 是原 id,`newModel` 非空且不同时
+	 * 改 id(重命名);其余字段缺省 = 不改。
+	 */
+	async editCustomModel(opts: {
+		provider: string;
+		model: string;
+		newModel?: string;
+		name?: string;
+		contextWindow?: number;
+		maxTokens?: number;
+		input?: ("text" | "image")[];
+	}): Promise<{ ok: boolean; provider: string; model: string }> {
+		return this.request<{ ok: boolean; provider: string; model: string }>("/api/models/custom", {
+			method: "PUT",
+			body: JSON.stringify(opts),
+		});
+	}
+
+	/** 删除 models.json 里的自定义模型(provider + model 定位)。 */
+	async deleteCustomModel(provider: string, model: string): Promise<void> {
+		await this.request<{ ok: boolean }>(
+			`/api/models/custom?provider=${encodeURIComponent(provider)}&model=${encodeURIComponent(model)}`,
+			{ method: "DELETE" },
+		);
+	}
+
 	/** 设置思考等级。 */
 	async setThinking(level: string): Promise<void> {
 		await this.request<{ ok: boolean }>("/api/thinking", { method: "POST", body: JSON.stringify({ level }) });

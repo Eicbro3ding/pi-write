@@ -58,6 +58,12 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 	const [openFamilies, setOpenFamilies] = useState<Record<string, boolean>>({});
 	/** 添加模型/自定义供应商弹窗(null = 关闭)。 */
 	const [addDialog, setAddDialog] = useState<AddModelMode | null>(null);
+	/** 正在编辑的自定义模型(非空时打开编辑弹窗;只对 models.json 里的模型开放)。 */
+	const [editingModel, setEditingModel] = useState<ModelDto | null>(null);
+	/** 待确认删除的自定义模型 id(非空时该行显示确认按钮)。 */
+	const [confirmModel, setConfirmModel] = useState<string | null>(null);
+	const [modelBusy, setModelBusy] = useState(false);
+	const [modelErr, setModelErr] = useState<string | null>(null);
 	/** 当前使用的模型引用 "provider/id"(只读,仅用于左栏每行的「当前模型」小字)。 */
 	const [currentModel, setCurrentModel] = useState<string | null>(null);
 
@@ -205,9 +211,11 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 			return;
 		}
 		setConfirmRemove(false);
+		setKeyErr(null);
+		let fresh: ProviderDetailDto | null = null;
 		try {
 			await load();
-			await reloadDetail();
+			fresh = await reloadDetail();
 		} catch {
 			setKeyErr("供应商列表刷新失败");
 		}
@@ -216,7 +224,44 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 		} catch (e) {
 			setKeyErr(`认证状态刷新失败: ${friendlyError(e)}`);
 		}
+		// 仍有凭据说明 key 来自环境变量 / 本机凭据,不在这里删:得说清"为什么没变",
+		// 否则用户看到的就是"点了移除凭据没反应"(2026-09)。
+		if (fresh?.provider.configured) {
+			setKeyErr("凭据仍然生效:它可能来自环境变量或本机凭据,无法在界面里移除。");
+		}
 		setRemoveBusy(false);
+	}
+
+	/** 自定义模型增/删/改后:重拉列表 + 详情,并通知外层重新同步当前模型(删掉的可能正在用)。 */
+	async function reloadAfterModelsChanged(): Promise<void> {
+		setModelErr(null);
+		try {
+			await load();
+			await reloadDetail();
+		} catch {
+			setModelErr("供应商列表刷新失败");
+		}
+		try {
+			await onAuthChanged();
+		} catch {
+			/* 当前模型失效的回退由外层负责 */
+		}
+	}
+
+	/** 删除一个自定义模型(仅 models.json 里的;调用前应已确认)。 */
+	async function removeModel(modelId: string): Promise<void> {
+		if (!selectedId || modelBusy) return;
+		setModelBusy(true);
+		setModelErr(null);
+		try {
+			await client.deleteCustomModel(selectedId, modelId);
+			setConfirmModel(null);
+			await reloadAfterModelsChanged();
+		} catch (e) {
+			setModelErr(`删除模型失败: ${friendlyError(e)}`);
+		} finally {
+			setModelBusy(false);
+		}
 	}
 
 	/**
@@ -264,7 +309,12 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 	// —— 渲染 ——
 	const detailProvider = detail?.provider;
 	const isConfigured = detailProvider?.configured ?? false;
-	const modelFamilies = useMemo(() => groupModelFamilies(detail?.models ?? []), [detail]);
+	/** 凭据定义在 models.json 里的自定义供应商(移除时会连配置一起删)。 */
+	const modelsJsonSourced = detailProvider?.source === "models_json_key" || detailProvider?.source === "models_json_command";
+	/** models.json 里自定义的模型:单独一段列出(带编辑/删除);目录模型照旧聚合。 */
+	const customModels = useMemo(() => (detail?.models ?? []).filter((m) => m.custom === true), [detail]);
+	const catalogModels = useMemo(() => (detail?.models ?? []).filter((m) => m.custom !== true), [detail]);
+	const modelFamilies = useMemo(() => groupModelFamilies(catalogModels), [catalogModels]);
 	/** 不能填 key 的供应商(纯 oauth / 本机凭据)该给的那行说明;null = 可以填 key。 */
 	const apiKeyHint = detailProvider ? unconfiguredHint(detailProvider) : null;
 	/** 未配置时直接摆出输入框 —— 藏在一支铅笔后面等于没有入口(2026-09-23)。 */
@@ -297,6 +347,51 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 				</span>
 				{p.configured && <span className="pvc-item-pill">已配置</span>}
 			</button>
+		);
+	}
+
+	/** 一条自定义模型行:名称 + 徽章 + 编辑/删除(删除走行内确认)。 */
+	function renderCustomModel(m: ModelDto) {
+		const confirming = confirmModel === m.id;
+		return (
+			<div className="pvc-m-item pvc-m-custom" key={m.id}>
+				<span className="pvc-m-name mono">{m.id}</span>
+				{m.name && m.name !== m.id && <span className="pvc-m-alias">{m.name}</span>}
+				{modelBadges(m)}
+				<span className="pvc-m-actions">
+					{confirming ? (
+						<>
+							<button type="button" className="btn-ghost danger pvc-mini-btn" disabled={modelBusy} onClick={() => void removeModel(m.id)}>
+								{modelBusy ? "删除中…" : "确认删除"}
+							</button>
+							<button type="button" className="btn-ghost pvc-mini-btn" disabled={modelBusy} onClick={() => setConfirmModel(null)}>
+								取消
+							</button>
+						</>
+					) : (
+						<>
+							<button
+								type="button"
+								className="pvc-mini-icon"
+								aria-label={`编辑模型 ${m.id}`}
+								title="编辑模型"
+								onClick={() => setEditingModel(m)}
+							>
+								<Lu icon="pencil" size={14} strokeWidth={1.4} />
+							</button>
+							<button
+								type="button"
+								className="pvc-mini-icon danger"
+								aria-label={`删除模型 ${m.id}`}
+								title="删除模型"
+								onClick={() => setConfirmModel(m.id)}
+							>
+								<Lu icon="trash-2" size={14} strokeWidth={1.4} />
+							</button>
+						</>
+					)}
+				</span>
+			</div>
 		);
 	}
 
@@ -372,7 +467,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 								)}
 								{confirmRemove ? (
 									<span className="pvc-remove-confirm">
-										<span>移除凭据后该供应商将不可用,确认?</span>
+										<span>{modelsJsonSourced ? "移除后会删除该自定义供应商及其模型配置,确认?" : "移除凭据后该供应商将不可用,确认?"}</span>
 										<button type="button" className="btn-ghost danger" disabled={removeBusy} onClick={() => void removeKey()}>
 											{removeBusy ? "移除中…" : "确认移除"}
 										</button>
@@ -470,12 +565,12 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 							<div className="pvc-field">
 								<div className="pvc-field-head">
 									<label className="pvc-label">
-										模型列表 <span className="pvc-count">{detail?.models?.length ?? 0} 个</span>
+										模型列表 <span className="pvc-count">{catalogModels.length} 个</span>
 										{grouped && modelFamilies.length > 0 && (
 											<span className="pvc-count"> · 聚合 {modelFamilies.length} 族</span>
 										)}
 									</label>
-									{(detail?.models?.length ?? 0) > 0 && (
+									{catalogModels.length > 0 && (
 										<div className="pvc-seg" role="tablist" aria-label="模型列表视图">
 											<button
 												type="button"
@@ -498,7 +593,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 										</div>
 									)}
 								</div>
-								{detail?.models && detail.models.length > 0 ? (
+								{catalogModels.length > 0 ? (
 									grouped ? (
 										<div className="pvc-m-list">
 											{modelFamilies.map((f) => {
@@ -537,7 +632,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 										</div>
 									) : (
 										<div className="pvc-m-list">
-											{detail.models.map((m) => (
+											{catalogModels.map((m) => (
 												<div className="pvc-m-item" key={m.id}>
 													<span className="pvc-m-name mono">{m.id}</span>
 													{modelBadges(m)}
@@ -546,9 +641,23 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 										</div>
 									)
 								) : (
-									<div className="pvc-value faint">该供应商暂无模型(配置 key 后自动出现)</div>
+									customModels.length === 0 ? <div className="pvc-value faint">该供应商暂无模型(配置 key 后自动出现)</div> : null
 								)}
 							</div>
+
+							{/* 自定义模型(models.json 里添加的):单独一段,带编辑/删除。不像目录模型那样按族聚合 ——
+							    它们是用户逐条加的,能改能删才说得清是谁加的。 */}
+							{customModels.length > 0 && (
+								<div className="pvc-field">
+									<div className="pvc-field-head">
+										<label className="pvc-label">
+											自定义模型 <span className="pvc-count">{customModels.length} 个</span>
+										</label>
+									</div>
+									<div className="pvc-m-list">{customModels.map(renderCustomModel)}</div>
+									{modelErr && <div className="pvc-err">{modelErr}</div>}
+								</div>
+							)}
 
 							<button type="button" className="pvc-add-model" onClick={() => setAddDialog("model")}>
 								<IconPlus size={14} />
@@ -565,18 +674,25 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 					mode={addDialog}
 					providerId={addDialog === "model" ? selectedId ?? "" : ""}
 					baseUrl={addDialog === "model" ? detail?.provider?.baseUrl ?? "" : undefined}
-					onSaved={async () => {
-						// 刷新列表(自定义供应商新条目出现)+ 详情(模型/徽章变化)
-						await load();
-						if (selectedId) {
-							try {
-								setDetail(await client.getProviderDetail(selectedId));
-							} catch {
-								/* 详情刷新失败不阻塞(下次选中会再拉) */
-							}
-						}
-					}}
+					onSaved={reloadAfterModelsChanged}
 					onClose={() => setAddDialog(null)}
+				/>
+			)}
+			{/* 弹窗:编辑自定义模型 */}
+			{editingModel && (
+				<AddModelDialog
+					client={client}
+					mode="edit"
+					providerId={selectedId ?? ""}
+					initialModel={{
+						id: editingModel.id,
+						name: editingModel.name,
+						contextWindow: editingModel.contextWindow,
+						maxTokens: editingModel.maxTokens,
+						input: editingModel.input,
+					}}
+					onSaved={reloadAfterModelsChanged}
+					onClose={() => setEditingModel(null)}
 				/>
 			)}
 		</>

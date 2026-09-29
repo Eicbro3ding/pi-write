@@ -17,15 +17,26 @@ import { IconX } from "./Icons.tsx";
 const MODEL_ID_RE = /^[a-z0-9][a-z0-9-_.]{0,127}$/;
 const PROVIDER_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-export type AddModelMode = "model" | "provider";
+export type AddModelMode = "model" | "provider" | "edit";
+
+/** 编辑模式预填的现有自定义模型。 */
+export interface EditableModel {
+	id: string;
+	name: string;
+	contextWindow: number;
+	maxTokens: number;
+	input: ("text" | "image")[];
+}
 
 export function AddModelDialog({
 	client,
 	mode,
-	/** 供应商上下文(添加模型模式必填;自定义供应商模式下作为新供应商的前缀参考)。 */
+	/** 供应商上下文(添加模型/编辑模型模式必填;自定义供应商模式下作为新供应商的前缀参考)。 */
 	providerId,
 	baseUrl,
 	apiKeyRequired,
+	/** 编辑模式:要编辑的现有模型(同时决定打开时的预填值)。 */
+	initialModel,
 	onSaved,
 	onClose,
 }: {
@@ -37,6 +48,8 @@ export function AddModelDialog({
 	baseUrl?: string;
 	/** 供应商是否要求 API key(oauth provider 仍可自定义覆盖,仅提示用)。 */
 	apiKeyRequired?: boolean;
+	/** 编辑模式:现有模型;缺省时编辑模式不可用。 */
+	initialModel?: EditableModel;
 	/** 保存成功(已关弹窗由本组件负责,onSaved 由父组件刷新列表/详情)。 */
 	onSaved: () => void | Promise<void>;
 	onClose: () => void;
@@ -45,12 +58,14 @@ export function AddModelDialog({
 	const [newProviderId, setNewProviderId] = useState("");
 	const [newProviderName, setNewProviderName] = useState("");
 	// 通用字段(供应商模式下 baseUrl 必填且为首个模型服务地址)
+	const editing = mode === "edit";
 	const [formBaseUrl, setFormBaseUrl] = useState(baseUrl ?? "");
 	const [formApiKey, setFormApiKey] = useState("");
-	const [formModel, setFormModel] = useState("");
-	const [formCtx, setFormCtx] = useState("1000000");
-	const [formMaxTokens, setFormMaxTokens] = useState("128000");
-	const [formInput, setFormInput] = useState<("text" | "image")[]>(["text"]);
+	const [formModel, setFormModel] = useState(initialModel?.id ?? "");
+	const [formModelName, setFormModelName] = useState(initialModel?.name ?? "");
+	const [formCtx, setFormCtx] = useState(String(initialModel?.contextWindow ?? 1000000));
+	const [formMaxTokens, setFormMaxTokens] = useState(String(initialModel?.maxTokens ?? 128000));
+	const [formInput, setFormInput] = useState<("text" | "image")[]>(initialModel?.input ?? ["text"]);
 	const [busy, setBusy] = useState(false);
 	const [err, setErr] = useState<string | null>(null);
 
@@ -58,28 +73,61 @@ export function AddModelDialog({
 		setFormInput((prev) => (prev.includes(flag) ? prev.filter((f) => f !== flag) : [...prev, flag]));
 	}
 
-	/** 提交:校验 + 调 addCustomModel + onSaved。失败留在弹窗显示错误。 */
+	/** 校验上下文窗口/最大输出;非法时 setErr 并返回 null。 */
+	function parseLimits(): { ctx: number; maxTokens: number } | null {
+		const ctx = Number(formCtx);
+		const maxTokens = Number(formMaxTokens);
+		if (!Number.isFinite(ctx) || ctx <= 0 || !Number.isFinite(maxTokens) || maxTokens <= 0) {
+			setErr("上下文窗口与最大输出 Token 必须是正整数");
+			return null;
+		}
+		return { ctx, maxTokens };
+	}
+
+	/** 提交:校验 + 调 API + onSaved。失败留在弹窗显示错误。 */
 	async function submit() {
 		if (busy) return;
-		const pid = mode === "provider" ? newProviderId.trim() : providerId;
 		const model = formModel.trim();
+		if (!MODEL_ID_RE.test(model)) {
+			setErr("模型 id 只允许小写字母/数字/连字符/点/下划线(如 mock-1)");
+			return;
+		}
+		const limits = parseLimits();
+		if (!limits) return;
+		// 编辑模式:只改模型条目(id 可重命名),不动 provider 级字段
+		if (editing) {
+			if (!initialModel) {
+				setErr("缺少要编辑的模型");
+				return;
+			}
+			setBusy(true);
+			setErr(null);
+			try {
+				await client.editCustomModel({
+					provider: providerId,
+					model: initialModel.id,
+					newModel: model !== initialModel.id ? model : undefined,
+					name: formModelName.trim(), // 空串 = 清掉显示名,回退到模型 id
+					contextWindow: limits.ctx,
+					maxTokens: limits.maxTokens,
+					input: formInput,
+				});
+				await onSaved();
+				onClose();
+			} catch (e) {
+				setErr(`保存失败: ${friendlyError(e)}`);
+				setBusy(false);
+			}
+			return;
+		}
+		const pid = mode === "provider" ? newProviderId.trim() : providerId;
 		const url = formBaseUrl.trim();
 		if (!PROVIDER_ID_RE.test(pid)) {
 			setErr(mode === "provider" ? "供应商 id 只允许小写字母/数字/连字符(如 mock)" : "供应商 id 无效");
 			return;
 		}
-		if (!MODEL_ID_RE.test(model)) {
-			setErr("模型 id 只允许小写字母/数字/连字符/点/下划线(如 mock-1)");
-			return;
-		}
 		if (!/^https?:\/\//.test(url)) {
 			setErr("Base URL 必须是 http(s) 地址(如 http://127.0.0.1:8787/v1)");
-			return;
-		}
-		const ctx = Number(formCtx);
-		const maxTokens = Number(formMaxTokens);
-		if (!Number.isFinite(ctx) || ctx <= 0 || !Number.isFinite(maxTokens) || maxTokens <= 0) {
-			setErr("上下文窗口与最大输出 Token 必须是正整数");
 			return;
 		}
 		setBusy(true);
@@ -90,8 +138,8 @@ export function AddModelDialog({
 				model,
 				baseUrl: url,
 				apiKey: formApiKey.trim().length > 0 ? formApiKey.trim() : undefined,
-				contextWindow: ctx,
-				maxTokens,
+				contextWindow: limits.ctx,
+				maxTokens: limits.maxTokens,
 				input: formInput,
 				name: mode === "provider" && newProviderName.trim().length > 0 ? newProviderName.trim() : undefined,
 			});
@@ -103,7 +151,7 @@ export function AddModelDialog({
 		}
 	}
 
-	const title = mode === "provider" ? "自定义供应商" : "添加模型";
+	const title = mode === "provider" ? "自定义供应商" : editing ? "编辑模型" : "添加模型";
 
 	return (
 		<div className="dlg-overlay" role="dialog" aria-modal="true" aria-label={title}>
@@ -147,33 +195,50 @@ export function AddModelDialog({
 							placeholder="模型 ID"
 							value={formModel}
 							disabled={busy}
-							autoFocus={mode === "model"}
+							autoFocus={mode === "model" || editing}
 							onChange={(e) => setFormModel(e.target.value)}
 						/>
 					</div>
-					<div className="s-field">
-						<label className="s-field-label">Base URL</label>
-						<input
-							className="s-input mono"
-							placeholder="http://127.0.0.1:8787/v1"
-							value={formBaseUrl}
-							disabled={busy}
-							onChange={(e) => setFormBaseUrl(e.target.value)}
-						/>
-					</div>
-					<div className="s-field">
-						<label className="s-field-label">
-							API Key
-							{apiKeyRequired && mode === "provider" && <span className="amd-label-hint">必填</span>}
-						</label>
-						<input
-							className="s-input mono"
-							placeholder={apiKeyRequired && mode === "provider" ? "必填(占位 sk-custom 亦可)" : "可选"}
-							value={formApiKey}
-							disabled={busy}
-							onChange={(e) => setFormApiKey(e.target.value)}
-						/>
-					</div>
+					{editing && (
+						<div className="s-field">
+							<label className="s-field-label">显示名(可选)</label>
+							<input
+								className="s-input"
+								placeholder="留空则用模型 ID"
+								value={formModelName}
+								disabled={busy}
+								onChange={(e) => setFormModelName(e.target.value)}
+							/>
+						</div>
+					)}
+					{/* Base URL / API Key 是 provider 级字段:编辑单个模型时不展示(避免误改) */}
+					{!editing && (
+						<div className="s-field">
+							<label className="s-field-label">Base URL</label>
+							<input
+								className="s-input mono"
+								placeholder="http://127.0.0.1:8787/v1"
+								value={formBaseUrl}
+								disabled={busy}
+								onChange={(e) => setFormBaseUrl(e.target.value)}
+							/>
+						</div>
+					)}
+					{!editing && (
+						<div className="s-field">
+							<label className="s-field-label">
+								API Key
+								{apiKeyRequired && mode === "provider" && <span className="amd-label-hint">必填</span>}
+							</label>
+							<input
+								className="s-input mono"
+								placeholder={apiKeyRequired && mode === "provider" ? "必填(占位 sk-custom 亦可)" : "可选"}
+								value={formApiKey}
+								disabled={busy}
+								onChange={(e) => setFormApiKey(e.target.value)}
+							/>
+						</div>
+					)}
 					<div className="s-field-grid">
 						<div className="s-field">
 							<label className="s-field-label">上下文窗口</label>

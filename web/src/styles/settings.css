@@ -151,6 +151,20 @@
 .pvc-key-mask { letter-spacing: 2px; flex: 1; min-width: 0; }
 .pvc-label { font-size: var(--fs-12); color: var(--muted); }
 
+/* 自定义模型行(models.json 里添加的):名称 + 别名 + 徽章 + 编辑/删除 */
+.pvc-m-custom { gap: 8px; }
+.pvc-m-alias { font-size: var(--fs-11); color: var(--faint); }
+.pvc-m-actions { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 2px; }
+.pvc-mini-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; min-height: 26px; border-radius: var(--r-sm); color: var(--muted);
+  transition: color var(--dur-fast), background var(--dur-fast);
+}
+.pvc-mini-icon:hover { color: var(--ink); background: var(--hover-tint); }
+.pvc-mini-icon.danger { color: var(--red); }
+.pvc-mini-icon.danger:hover { background: var(--red-tint-strong); }
+.pvc-mini-btn { padding: 3px 10px; font-size: var(--fs-12); }
+
 /* 模型列表:表头 + 视图切换 + 族行 + 子版本 */
 .pvc-field-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
 .pvc-count { color: var(--faint); font-weight: 400; }

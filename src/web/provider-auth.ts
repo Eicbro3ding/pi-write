@@ -23,6 +23,8 @@ export interface ProviderDetail {
 		input: ("text" | "image")[];
 		contextWindow: number;
 		maxTokens: number;
+		/** 该模型在 models.json 里(自定义添加的);只有这些能编辑/删除。 */
+		custom?: boolean;
 	}>;
 }
 

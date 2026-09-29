@@ -724,6 +724,8 @@ export interface ModelDto {
 	input: ("text" | "image")[];
 	contextWindow: number;
 	maxTokens: number;
+	/** 该模型在 models.json 里(自定义添加的);只有这些能编辑/删除。 */
+	custom?: boolean;
 }
 
 /** /api/providers/:id 详情:基本信息 + 该 provider 全量模型列表。 */
