@@ -306,8 +306,10 @@ export class StageOrchestrator {
 	script: SceneScript | null = null;
 
 	private readonly agentDir: string;
-	private readonly model?: string;
-	private readonly thinkingLevel?: string;
+	/** 全局模型/思考档位(--model / --thinking 模式串);**可变** —— 换模型时既要给
+	 *  之后新建的会话用,也要即时应用到已建会话(见 setModel / setThinkingLevel)。 */
+	private model?: string;
+	private thinkingLevel?: string;
 	private temperature?: number;
 	private topP?: number;
 	/** 归属章节(舞台按章节隔离;null = 书级兜底,导演会话文件用 stage-director.jsonl)。 */
@@ -451,16 +453,31 @@ export class StageOrchestrator {
 	}
 
 	private roleFactory(spec: RoleSpec): CreateAgentSessionRuntimeFactory {
-		const { agentDir, model, thinkingLevel, temperature, topP } = this;
+		const { agentDir, temperature, topP } = this;
+		// 角色级覆盖(cast.json)固定;全局模型/思考档位走 getter —— createSessionRuntimeFactory
+		// 在**每次**装配(含 reloadRuntime)时才读 opts.model,传值会把当时的全局值
+		// 固定进闭包,换模型后重建角色会话又退回旧模型(2026-10-01)。
+		const self = this;
+		const specModel = spec.model;
+		const specThinking = spec.thinkingLevel;
 		return createSessionRuntimeFactory({
 			agentDir,
+			// 自带 skills/ 不并入舞台角色:角色提示词是固定的多 agent 分工文本,剧本写作
+			// 方法以绝对路径注入(见 stage-extension 的 {SKILLS_PATH} 与下面的
+			// buildScriptMethodBlock),把 critique/outline/revise 列进演员/导演提示词只会
+			// 诱导它们去改正文。全局技能目录仍由 session-factory 并入(2026-09-22 放开)。
+			packagedSkills: false,
 			// skills 目录只读放行(与 web.ts 同款):模型经 read 工具加载 skill
 			// 文件(绝对路径)时不能被守卫误拦(2026-08-09 修复)
 			readOnlyDirs: resolveSkillReadOnlyDirs(),
 			systemPromptOverride: () => spec.systemPrompt,
 			extensionFactories: spec.extensions,
-			model: spec.model ?? model,
-			thinkingLevel: (spec.thinkingLevel ?? thinkingLevel) as ThinkingLevel | undefined,
+			get model() {
+				return specModel ?? self.model;
+			},
+			get thinkingLevel() {
+				return (specThinking ?? self.thinkingLevel) as ThinkingLevel | undefined;
+			},
 			temperature: spec.temperature ?? temperature,
 			topP: spec.topP ?? topP,
 			excludeTools: spec.excludeTools,
@@ -523,6 +540,38 @@ export class StageOrchestrator {
 			const actorTopP = topP === null ? undefined : (spec?.topP ?? topP);
 			host.setSamplingParameters(actorTemp, actorTopP, false);
 		}
+	}
+
+	/**
+	 * 换全局模型：更新之后新建会话的装配值，并即时应用到已创建的导演/演员/收幕编剧会话。
+	 * 演员在 cast.json 里单独指定了 model 的保留覆盖(与 setSamplingParameters 同款：
+	 * 角色级设置优先于全局)。2026-10-01 修 —— 此前换模型只打主会话宿主,舞台会话
+	 * 用的是创建时绑定的模型,换完还是旧模型。
+	 */
+	async setModel(model: string): Promise<void> {
+		this.model = model;
+		const cast = this.cast ?? (await loadCast(this.bookDir));
+		const apply = async (host: SessionHost | null): Promise<void> => {
+			if (host) await host.setModel(model);
+		};
+		await apply(this.director);
+		await apply(this.writer);
+		for (const [actorId, host] of this.actorHosts) {
+			const spec = cast.actors.find((a) => a.id === actorId);
+			if (spec?.model !== undefined) continue; // 演员级覆盖优先
+			await host.setModel(model);
+		}
+	}
+
+	/**
+	 * 换全局思考档位：同上,但**不动演员** —— 演员的思考档位是角色设计的一部分
+	 * (第一人称思考默认 low 控成本,§10.6;叙述者跟随全局),要改某个演员走
+	 * updateActorSpec 的 thinking 覆盖。
+	 */
+	async setThinkingLevel(level: string): Promise<void> {
+		this.thinkingLevel = level;
+		this.director?.setThinkingLevel(level);
+		this.writer?.setThinkingLevel(level);
 	}
 
 	/**

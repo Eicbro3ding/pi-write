@@ -2045,3 +2045,95 @@ describe("WriterServer · /api/books/:slug/file(工作区文件预览)", () => {
 		expect(res.status).toBe(404);
 	});
 });
+
+/**
+ * 2026-10-01 修「同一个对话窗口里换模型不生效」:POST /api/model 与 /api/thinking
+ * 此前只打主会话宿主,而聊天走编剧会话(`/api/writer/:slug/chat`)与舞台编排器会话 ——
+ * 那些会话的模型在创建时就绑死了(vendor sdk.ts 的 defaultModelId),于是换模型要等
+ * 换章或重启才生效,而设置页读的「当前模型」来自主会话,看起来还切成功了。
+ */
+describe("WriterServer · 换模型/思考等级广播到编剧与舞台会话", () => {
+	let server: WriterServer;
+	let base = "";
+	/** 三处宿主的调用顺序记录(主会话 → 编剧 → 舞台)。 */
+	const modelCalls: string[] = [];
+	const thinkingCalls: string[] = [];
+
+	beforeAll(async () => {
+		const fake = fakeHost();
+		// 主会话:fakeHost 的方法不带参数,这里换成记录版
+		const main = fake.host as unknown as {
+			setModel: (model: string) => Promise<void>;
+			setThinkingLevel: (level: string) => void;
+		};
+		main.setModel = async (model: string) => {
+			if (model === "broken/x") throw new Error("主会话炸了");
+			modelCalls.push(`main:${model}`);
+		};
+		main.setThinkingLevel = (level: string) => {
+			thinkingCalls.push(`main:${level}`);
+		};
+		const writer = {
+			setEventSink: () => {},
+			disposeAll: async () => {},
+			setModel: async (model: string) => {
+				modelCalls.push(`writer:${model}`);
+			},
+			setThinkingLevel: async (level: string) => {
+				thinkingCalls.push(`writer:${level}`);
+			},
+		};
+		const stage = {
+			setEventSink: () => {},
+			disposeAll: async () => {},
+			setModel: async (model: string) => {
+				if (model === "broken/x") throw new Error("舞台炸了");
+				modelCalls.push(`stage:${model}`);
+			},
+			setThinkingLevel: async (level: string) => {
+				thinkingCalls.push(`stage:${level}`);
+			},
+		};
+		server = new WriterServer({
+			host: "127.0.0.1",
+			port: 0,
+			sessionHost: fake.host as never,
+			webDistDir: join(tmp, "no-such-dist"),
+			writerHost: writer as never,
+			stageHost: stage as never,
+		});
+		const { port } = await server.start();
+		base = `http://127.0.0.1:${port}`;
+	});
+
+	afterAll(async () => {
+		await server.stop();
+	});
+
+	it("POST /api/model:主会话 / 编剧 / 舞台都换(同一个对话窗口即时生效)", async () => {
+		modelCalls.length = 0;
+		const res = await fetch(`${base}/api/model`, { method: "POST", headers: json, body: JSON.stringify({ model: "openai/gpt-5" }) });
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ ok: true });
+		expect(modelCalls).toEqual(["main:openai/gpt-5", "writer:openai/gpt-5", "stage:openai/gpt-5"]);
+	});
+
+	it("POST /api/thinking:主会话 / 编剧 / 舞台都换", async () => {
+		thinkingCalls.length = 0;
+		const res = await fetch(`${base}/api/thinking`, { method: "POST", headers: json, body: JSON.stringify({ level: "high" }) });
+		expect(res.status).toBe(200);
+		expect(thinkingCalls).toEqual(["main:high", "writer:high", "stage:high"]);
+	});
+
+	it("某个宿主失败:其余照样换,响应 400 并点名是哪个没换", async () => {
+		modelCalls.length = 0;
+		const res = await fetch(`${base}/api/model`, { method: "POST", headers: json, body: JSON.stringify({ model: "broken/x" }) });
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error: { code: string; message: string } };
+		expect(body.error.code).toBe("bad_request");
+		expect(body.error.message).toContain("主会话炸了");
+		expect(body.error.message).toContain("舞台炸了");
+		// 主会话先失败、舞台后失败,夹在中间的编剧仍然被换(逐个尝试而非一炸就停)
+		expect(modelCalls).toEqual(["writer:broken/x"]);
+	});
+});

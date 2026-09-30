@@ -69,7 +69,7 @@ describe("parseAtQuery", () => {
 	it("行首 `@灯` → term 与替换区间", () => {
 		expect(parseAtQuery("@灯", 2)).toEqual({ term: "灯", start: 0, end: 2 });
 	});
-	it("文本中间也触发(设计稿:在文本任何位置可用)", () => {
+	it("文本中间也触发", () => {
 		const text = "把@灯";
 		expect(parseAtQuery(text, text.length)).toEqual({ term: "灯", start: 1, end: text.length });
 	});

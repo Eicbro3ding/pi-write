@@ -21,7 +21,7 @@ function stubStorage(init: Record<string, string> = {}) {
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe("舞台对话形态偏好(设计稿 04/05)", () => {
+describe("舞台对话形态偏好", () => {
 	it("缺省为文档流(未存储任何值时)", () => {
 		stubStorage();
 		expect(conversationStyle()).toBe("doc");

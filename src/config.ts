@@ -146,11 +146,14 @@ export function resolveExtraSkillsDirs(env: Record<string, string | undefined> =
 }
 
 /**
- * 技能目录的**完整只读放行清单**:自带 skills/ + 全局技能目录。
+ * 技能目录的只读放行**基线**:自带 skills/ + 全局技能目录。
  *
- * 路径守卫有两层——session-factory 里 installToolPathGuard 的兜底值,与 SessionHost
- * 每次 sendMessage 写进 ALS 的会话上下文(**后者优先**)。两处都要给全,否则模型按
- * 绝路径读全局技能文件时会被「工具路径越界」拦下(2026-08-09 曾有同款误拦)。
+ * 只是基线,不是完整清单——vendor 还会从 agentDir/skills、`<cwd>/.pi/skills`、
+ * 插件与 package 发现技能(`noSkills:false`),那些目录只有「实际加载结果」知道。
+ * 因此真正的放行清单 = 本函数 + `skillDirsOf(已加载技能)`:
+ * session-factory 在装配完成后按加载结果重装守卫(兜底值),SessionHost 每轮 sendMessage
+ * 把同源清单写进 ALS(**后者优先**)。两处都不能只给基线,否则模型按提示词里的绝对路径
+ * 读技能会被「工具路径越界」拦下(2026-08-09 误拦;2026-10-01 在 agentDir/skills 上复现)。
  */
 export function resolveSkillReadOnlyDirs(env: Record<string, string | undefined> = process.env): string[] {
 	return [resolveSkillsDir(env), ...resolveExtraSkillsDirs(env)];

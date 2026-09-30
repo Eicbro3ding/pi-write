@@ -119,7 +119,7 @@ agent 会话事件(pi vendor AgentSessionEvent)
 
 ### 7.1.1 界面改版 v1(2026-09-19)
 
-设计稿在 `~/pi-writer-redesign`(24 张图 + README)。这一版先把尺度与控件收敛,再重排页面——设计原则见 `docs/design.md §11`,这里只记结构落点:
+改版图在 `~/pi-writer-redesign`(24 张图 + README)。这一版先把尺度与控件收敛,再重排页面——设计原则见 `docs/design.md §11`,这里只记结构落点:
 
 - **样式文件按页拆分**:`web/src/styles.css`(token / 应用壳 / 编辑页 / 消息流与卡片)+ `web/src/styles/{world,stage,settings,wizard,dialog}.css`,由 `main.tsx` 按 world → stage → settings → wizard → dialog 顺序 import(后者同名选择器覆盖前者)。**归属规则**:改哪一页就改哪个文件;共用的(token / 基础类 / 消息流)才动 `styles.css`。
 - **左栏(书库)**宽 168 → 240(默认值在 `web/src/library.ts`,`ChapterSidebar` 的拖拽区间 200–340 不变);书行只显示书名,章节数挪到行右端,slug 进 title 提示。

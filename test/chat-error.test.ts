@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { chatErrorIcon, describeChatError, providerModelLine, statusCodeOf } from "../web/src/chat-error.ts";
 
-/** 设计稿 ★组件规范·回复渲染 v2 右列第一张卡的原文(逐字)。 */
+/** 字)。 */
 const BALANCE_RAW = [
 	"401 Insufficient balance: your account balance is insufficient. Please top up.",
 	"request id: req_9f2c1a48",
 	"provider: openai-compatible · model: gpt-4o-mini",
 ].join("\n");
 
-/** 设计稿第二张卡的原文(逐字)。 */
+/** 第二张卡的原文(逐字)。 */
 const KEY_RAW = "401 Invalid API key: the API key provided is invalid or has been revoked.";
 
 describe("statusCodeOf(从原文提状态码,**不猜**)", () => {
@@ -43,7 +43,7 @@ describe("describeChatError(原文 → 标题/码/类别;原文永远照实)", (
 		expect(info.title).toBe("API key 无效");
 		expect(info.kind).toBe("key");
 		expect(info.code).toBe(401);
-		// 重试救不了这一类,所以给处置提示行(设计稿第二张卡底下的那句话)
+		// 重试救不了这一类,所以给处置提示行
 		expect(info.hint).not.toBeNull();
 		expect(info.hint).toContain("设置");
 	});
@@ -101,7 +101,7 @@ describe("describeChatError(原文 → 标题/码/类别;原文永远照实)", (
 });
 
 describe("providerModelLine(原文框里那行 provider/model)", () => {
-	it("两个字段都写(设计稿第三行的形状)", () => {
+	it("两个字段都写", () => {
 		expect(providerModelLine({ provider: "deepseek", model: "deepseek-v4-pro" })).toBe("provider: deepseek · model: deepseek-v4-pro");
 	});
 	it("只有一个字段就只写一个,两个都没有返回 null(不编)", () => {
@@ -126,7 +126,7 @@ describe("providerModelLine(原文框里那行 provider/model)", () => {
 	});
 });
 
-describe("chatErrorIcon(设计稿的图标选择)", () => {
+describe("chatErrorIcon", () => {
 	it("key 类用钥匙,其余用圆形叹号", () => {
 		expect(chatErrorIcon("key")).toBe("key-round");
 		expect(chatErrorIcon("balance")).toBe("circle-alert");

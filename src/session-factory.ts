@@ -19,8 +19,8 @@ import {
 	type ResolveCliModelResult,
 } from "../vendor/pi-coding-agent/src/index.ts";
 import type { ThinkingLevel } from "../vendor/pi-agent-core/src/index.ts";
-import { resolveExtraSkillsDirs } from "./config.ts";
-import { installToolPathGuard } from "./tool-guard.ts";
+import { resolveExtraSkillsDirs, resolveSkillsDir } from "./config.ts";
+import { dedupePaths, installToolPathGuard, skillDirsOf } from "./tool-guard.ts";
 import { setWordCountCwd, setWorldUpdateBookDir } from "./tools.ts";
 
 type CliModel = ResolveCliModelResult["model"];
@@ -37,7 +37,12 @@ export interface SessionFactoryOptions {
 	extensionFactories: InlineExtension[];
 	/** 外部插件工厂(plugin-loader 加载的 ExtensionFactory;追加到 extensionFactories 之后)。 */
 	pluginFactories?: ExtensionFactory[];
-	/** 附加 skill 路径(TUI/web 加载打包 skills;stage 不加载)。 */
+	/** 是否加载打包自带的 skills/(critique / outline / revise / stage-scripting)。
+	 *  缺省 true —— 只要会话有 read 工具,vendor 就会把 `<available_skills>` 追加进
+	 *  系统提示词(见 sessionSkillDirs)。stage 角色提示词自带技能绝对路径(见
+	 *  stage-extension 的 {SKILLS_PATH}),显式传 false 保持 2026-08-11 的收窄。 */
+	packagedSkills?: boolean;
+	/** 额外的 skill 目录(自带 skills/ 与全局技能目录之外;缺省无需传)。 */
 	additionalSkillPaths?: string[];
 	/** 正文文件白名单(如 "ch01.md"):启用 draft/ 目录 write 强制,只允许写当前章节文件。
 	 *  防 agent 自由发挥文件名(正文写到 draft/第一章.md,前端按约定路径读到空)。 */
@@ -69,6 +74,34 @@ export interface SessionFactoryOptions {
 }
 
 /**
+ * 一次会话要加载的技能目录清单 —— **唯一真相源**。
+ *
+ * 组成(前者优先,同名冲突由 vendor loadSkills 记 collision 诊断):
+ * 1. 打包自带 `skills/`(resolveSkillsDir;packagedSkills:false 时跳过)
+ * 2. 调用方附加目录(additionalSkillPaths)
+ * 3. 全局技能目录 `~/.agents/skills`(resolveExtraSkillsDirs)
+ *
+ * 为什么收在这里:自带 skills/ 原先由各调用方自己经 additionalSkillPaths 传入,
+ * writer-host(web 主对话「AI 伙伴」背后的常驻编剧会话)漏传 → 模型能读到
+ * skills/&lt;name&gt;/SKILL.md(工具守卫只读放行),系统提示词里却没有 `<available_skills>`,
+ * 表现为「模型说它目录里有 skill,但没加载进提示词」(2026-10-01 根因)。
+ *
+ * readOnlyDirs 与 skillPaths 同源:技能文件必须可读而不可写,否则路径守卫会把
+ * 技能目录挡在书目录之外(2026-08-09 曾有同款误拦)。
+ */
+export function sessionSkillDirs(
+	opts: Pick<SessionFactoryOptions, "additionalSkillPaths" | "readOnlyDirs" | "packagedSkills"> = {},
+	env: Record<string, string | undefined> = process.env,
+): { skillPaths: string[]; readOnlyDirs: string[] } {
+	const packaged = opts.packagedSkills === false ? [] : [resolveSkillsDir(env)];
+	const extra = resolveExtraSkillsDirs(env);
+	return {
+		skillPaths: dedupePaths(packaged, opts.additionalSkillPaths, extra),
+		readOnlyDirs: dedupePaths(packaged, opts.readOnlyDirs, extra),
+	};
+}
+
+/**
  * 生成会话 runtime 工厂;每次会话创建时调用(切书 cwd 变化,路径基准与
  * 工具路径守卫随工厂重建更新)。
  */
@@ -80,12 +113,10 @@ export function createSessionRuntimeFactory(opts: SessionFactoryOptions): Create
 		// 文件工具路径守卫:书目录内可读写;readOnlyDirs(skills 等)只读放行;
 		// draftFile 启用正文目录白名单(write 只允许写当前章节文件)
 		//
-		// 额外技能目录(2026-09-22「完全放开 skill」):全局技能目录在这里统一并入
-		// **三处装配点**(cli / web / stage),调用方不必各自记得——否则舞台演员读不到
-		// 全局技能文件。只读放行也要给,不然路径守卫会把技能目录挡在书目录之外。
-		const extraSkillDirs = resolveExtraSkillsDirs();
-		const skillPaths = [...(opts.additionalSkillPaths ?? []), ...extraSkillDirs];
-		const readOnlyDirs = [...(opts.readOnlyDirs ?? []), ...extraSkillDirs];
+		// 技能目录统一在这里并入 **全部装配点**(cli / web / writer-host / stage),
+		// 调用方不必各自记得传 additionalSkillPaths——漏传就是「技能不在提示词里」
+		// 的静默故障(2026-10-01 writer-host 根因,见 sessionSkillDirs)。
+		const { skillPaths, readOnlyDirs } = sessionSkillDirs(opts);
 		installToolPathGuard(cwd, readOnlyDirs, opts.draftFile);
 		const services = await createAgentSessionServices({
 			cwd,
@@ -95,7 +126,9 @@ export function createSessionRuntimeFactory(opts: SessionFactoryOptions): Create
 				appendSystemPromptOverride: () => [],
 				// skill 加载:noSkills:false 让 vendor 把 packageManager 解析到的技能一并
 				// 装上(2026-08-11 曾为「独立身份」收窄为 true,2026-09-22 按需求放开);
-				// additionalSkillPaths 再显式挂上自带 skills/ 与全局技能目录。
+				// additionalSkillPaths 给 sessionSkillDirs 算出的完整清单(自带 skills/ +
+				// 调用方附加 + 全局技能目录),vendor 把它们追加进系统提示词的
+				// <available_skills>(前提:会话活跃工具里有 read)。
 				// noContextFiles 保持 true —— 那是祖先目录 AGENTS.md **项目上下文**,
 				// 与技能无关,放开会把主目录的说明文件混进写作会话(2026-08-11 实测根因)。
 				noSkills: false,
@@ -106,6 +139,16 @@ export function createSessionRuntimeFactory(opts: SessionFactoryOptions): Create
 					: opts.extensionFactories,
 			},
 		});
+		// 技能放行的**权威来源是实际加载到的技能**:vendor 除 sessionSkillDirs 给的目录
+		// 外,还会发现 agentDir/skills、<cwd>/.pi/skills、插件与 package 声明的技能,
+		// 手工基线盖不全就会出现「技能列进了提示词、模型 read 却被判工具路径越界」
+		// (2026-10-01 实测)。这里用加载结果重装守卫(TUI 无 ALS per-message 上下文,
+		// 走的就是这份 fallback;web 由 SessionHost 每轮写入同源清单,见 session-host)。
+		installToolPathGuard(
+			cwd,
+			dedupePaths(readOnlyDirs, skillDirsOf(services.resourceLoader.getSkills().skills)),
+			opts.draftFile,
+		);
 		// skill 命令(2026-09-22):恢复注册,会话的 / 菜单重新列出 /skill:xxx。
 		// 此前被隐性关闭——技能只能靠模型自己 read 文件,用户无从主动调用。
 		// 只在值不对时写:该 setter 会落盘 agent/settings.json,每次会话都写是噪音。

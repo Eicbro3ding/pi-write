@@ -22,7 +22,7 @@ import type { AuthInteraction } from "../../vendor/pi-ai/src/index.ts";
 import { getUsageCostBreakdown } from "../../vendor/pi-coding-agent/src/core/usage-totals.ts";
 import { settleDanglingAsks } from "../ask-user.ts";
 import { getBooksDir } from "../config.ts";
-import { toolGuardContext } from "../tool-guard.ts";
+import { dedupePaths, skillDirsOf, toolGuardContext } from "../tool-guard.ts";
 import {
 	chatContentOfMessage,
 	chatTextOfMessage,
@@ -250,7 +250,13 @@ export class SessionHost {
 		return toolGuardContext.run(
 			{
 				bookDir: cwd,
-				readOnlyDirs: this.options.toolGuard?.readOnlyDirs ?? [],
+				// 只读放行 = 调用方基线 + **本 runtime 实际加载到的技能目录**。
+				// 后者才是权威:agentDir/skills、<cwd>/.pi/skills、插件与 package 的技能
+				// 都会被 vendor 加载进系统提示词,基线清单里没有它们(2026-10-01)。
+				readOnlyDirs: dedupePaths(
+					this.options.toolGuard?.readOnlyDirs,
+					skillDirsOf(rt.services.resourceLoader.getSkills().skills),
+				),
 				draftFile: this.options.toolGuard?.draftFile,
 			},
 			fn,

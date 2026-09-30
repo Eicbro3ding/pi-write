@@ -91,14 +91,14 @@ export interface WriterSettings {
 /** 图片接口形态。目前只有一种;留成联合类型是为了加第二种时不必改调用方。 */
 export type ImageProvider = "openai-images";
 
-/** 出图尺寸档位(设计稿 ★设置 v2 · 实验)。 */
+/** 出图尺寸档位。 */
 export type ImageSize = "1:1" | "3:2" | "16:9";
 
 /**
  * 尺寸档位 → 像素。取的是图片接口**真认的值**:
  * gpt-image-1 支持 1024x1024 / 1536x1024 / 1024x1536,dall-e-3 支持 1024x1024 /
  * 1792x1024 / 1024x1792。这里都取横向那一档(写作配图基本是场景图)。
- * 设计稿画的「1024 × 683」不是任何一家接口的合法值,所以按实际值来,
+ * 「1024 × 683」不是任何一家接口的合法值,所以按实际值来,
  * 界面上显示的也是这里的像素。
  */
 export const IMAGE_SIZE_PX: Record<ImageSize, string> = {
@@ -115,7 +115,7 @@ export function defaultWriterSettings(): WriterSettings {
 		enableShell: false,
 		shellKind: "auto",
 		shellPath: "",
-		// 图片生成:能力默认**关**(设计稿页头自己也写着「实验开关默认关闭」;
+		// 图片生成:能力默认**关**(页头自己也写着「实验开关默认关闭」;
 		// 画板里开关是开的,那是演示态)。三个「允许时机」默认开 —— 一旦启用就按
 		// 完整设计意图工作,而不是启用后还要再拨三个开关
 		enableImageGen: false,

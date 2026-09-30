@@ -16,6 +16,8 @@ import { IconBook, IconDoc, IconGear, IconGlobe, IconStage, IconX } from "../com
 import { Lu, type LucideName } from "../components/Lu.tsx";
 import { MobileHeader } from "../components/MobileHeader.tsx";
 import { useIsPhone } from "../useMediaQuery.ts";
+import { useExitPresence } from "../use-exit-presence.ts";
+import { DUR } from "../motion.ts";
 
 /** 思考级别选项(与后端 session-host 的 ThinkingLevel 对齐)。 */
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -37,7 +39,7 @@ interface ModelInfo {
 	provider: string;
 }
 
-/** 设置侧栏分类图标(名字取自设计稿 pi-writer · 设置 v1 的 lucide icon 节点)。 */
+/** 设置侧栏分类图标。 */
 const LuSliders = ({ size = 15 }: { size?: number }) => <Lu icon="sliders-horizontal" size={size} />;
 const LuLayout = ({ size = 15 }: { size?: number }) => <Lu icon="layout-dashboard" size={size} />;
 const LuBookOpen = ({ size = 15 }: { size?: number }) => <Lu icon="book-open" size={size} />;
@@ -47,9 +49,9 @@ const LuWand = ({ size = 15 }: { size?: number }) => <Lu icon="wand-sparkles" si
 
 /**
  * 设置分类(左侧导航):模型 / 界面 / 世界书 / 集成 / 实验 / 高级。
- * 设计稿 v1 把「危险设置」(外部命令 / Shell)从「界面」移出,单独成组;
+ *  v1 把「危险设置」(外部命令 / Shell)从「界面」移出,单独成组;
  * 0.1.0 又在「集成」之后加了「实验」——图片生成这类尚未稳定的能力(2026-09-22,
- * 设计稿 ★设置 v2 · 实验:分类紧跟在「集成」下面)。
+ * 分类紧跟在「集成」下面)。
  */
 const SETTING_CATS = [
 	{ id: "model", label: "模型", icon: LuSliders },
@@ -63,7 +65,7 @@ type SettingCat = (typeof SETTING_CATS)[number]["id"];
 /** 插件动态分类 id(plugin:<id>);类型上并入 SettingCat 判断分支。 */
 const pluginCatPrefix = "plugin:";
 
-/** 各分类页面头(标题 + 一句话说明;设计稿 11-13 的页头文案)。 */
+/** 各分类页面头。 */
 const CAT_HEAD: Record<string, { title: string; desc: string }> = {
 	model: { title: "模型", desc: "选择写作与演出使用的模型、思考强度与采样参数。修改都即时生效,无需保存。" },
 	ui: { title: "界面", desc: "主题与日常偏好。会改变 AI 在你机器上行为的选项,已移到「高级」。" },
@@ -109,7 +111,7 @@ function resolvePhonePage(id: string, plugins: PluginInfoDto[] | null): { cat: s
 }
 
 /**
- * 图片生成(实验)设置子集(设计稿 ★设置 v2 · 实验)。用 Pick 从完整设置里取,
+ * 图片生成(实验)设置子集。用 Pick 从完整设置里取,
  * 避免两处各写一份字段清单 —— 服务端加字段时这边会跟着报类型错。
  */
 export type ImageSettingsSlice = Pick<
@@ -144,7 +146,7 @@ const SHELL_DIALECT_TEXT: Record<ShellDialectDto, string> = {
 	powershell: "Windows PowerShell 5.1",
 };
 
-/** shell 方言下拉项(设计稿 13:bash / PowerShell,标签精简)。 */
+/** shell 方言下拉项。 */
 const SHELL_KIND_OPTIONS = [
 	{ value: "auto", label: "自动(按平台识别)" },
 	{ value: "bash", label: "bash" },
@@ -284,7 +286,7 @@ export function SettingsPage({
 	/** 手机端(≤700px):桌面分类栏与页头由手机端布局接管。 */
 	const isPhone = useIsPhone();
 	/**
-	 * 手机端当前分类:null = 索引页(设计稿「设置」:一屏分组列表),非空 = 进了某个分类。
+	 * 手机端当前分类:null = 索引页,非空 = 进了某个分类。
 	 * 桌面端不用它(左栏常驻,切分类不换页)。
 	 */
 	const [phoneCat, setPhoneCat] = useState<string | null>(null);
@@ -334,6 +336,8 @@ export function SettingsPage({
 	const [modelRefreshBusy, setModelRefreshBusy] = useState(false);
 	/** 模型提供商管理弹窗(新增/管理供应商与自定义模型已并入其中)。 */
 	const [providersOpen, setProvidersOpen] = useState(false);
+	/** 供应商整屏层/弹窗的退场:关掉后仍挂 200ms,让遮罩淡出 + 面板缩回(见 presence.css)。 */
+	const providersPresence = useExitPresence(providersOpen);
 	const [theme, setTheme] = useState<ThemeId>(() => currentTheme());
 	/** 内置主题列表(资产文件自动发现,零 ts 注册;night 无文件,单独用 NIGHT_THEME)。 */
 	const [builtinThemes, setBuiltinThemes] = useState<UserThemeInfo[]>([]);
@@ -349,7 +353,7 @@ export function SettingsPage({
 	const [themeBusy, setThemeBusy] = useState(false);
 	/** 主题操作错误文案。 */
 	const [themeErr, setThemeErr] = useState<string | null>(null);
-	/** 「编辑主题 CSS」折叠区(设计稿 12:默认收起,展开后才是自定义主题界面)。 */
+	/** 「编辑主题 CSS」折叠区。 */
 	const [themeEditorOpen, setThemeEditorOpen] = useState(false);
 	const [notice, setNotice] = useState<string | null>(null);
 	/** 世界书注入分组:null = 未加载成功(加载中/失败);worldErr 为分组加载错误;noBook = 无打开书(404)。 */
@@ -496,7 +500,7 @@ export function SettingsPage({
 	/** shell 方言切换中(避免连点;下拉先乐观置位,失败回滚)。 */
 	const [shellBusy, setShellBusy] = useState(false);
 
-	// —— 图片生成(实验,0.1.0 / 设计稿 ★设置 v2 · 实验)——
+	// —— 图片生成——
 	/** 图片设置提交中(避免连点)。 */
 	const [imageBusy, setImageBusy] = useState(false);
 	/**
@@ -835,8 +839,10 @@ export function SettingsPage({
 		return hit ? themeLabelFromCss(hit.css, hit.file) : theme;
 	}, [theme, builtinThemes, userThemes]);
 
-	/** 手机端选主题的弹层(设计稿 ★移动版「设置 · 主题菜单」:主题行下面浮一层选单)。 */
+	/** 手机端选主题的弹层。 */
 	const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+	/** 主题选单的退场:关掉后仍挂 140ms,让浮层播完下沉动画。 */
+	const themeMenuPresence = useExitPresence(themeMenuOpen, DUR.fast * 1000);
 
 	/** 手机端主题清单:与桌面主题卡同一套浅深合并(唯一实现在 themes.ts)。 */
 	const phoneFamilies = useMemo(() => buildThemeFamilies(builtinThemes, userThemes), [builtinThemes, userThemes]);
@@ -887,10 +893,15 @@ export function SettingsPage({
 	 * 抽成变量而不是只放在下面那个 return 里:手机端索引页是**提前返回**的,
 	 * 弹层只挂在最后一个 return 上时,索引页点「供应商」不会有任何反应(2026-09 修)。
 	 */
-	const providersDialog = providersOpen && (
-		<div className={isPhone ? "dlg-overlay pvd-overlay" : "dlg-overlay"} role="dialog" aria-modal="true" aria-label="模型提供商">
+	const providersDialog = providersPresence.mounted && (
+		<div
+			className={`dlg-overlay${isPhone ? " pvd-overlay" : ""}${providersPresence.closing ? " is-closing" : ""}`}
+			role="dialog"
+			aria-modal="true"
+			aria-label="模型提供商"
+		>
 			<div className="dlg-panel pvd-panel">
-				{/* 手机端:整屏页 + 返回箭头(设计稿 ★移动版「管理供应商」);桌面端保持弹窗 + 关闭叉 */}
+				{/* 手机端:整屏页 + 返回箭头;桌面端保持弹窗 + 关闭叉 */}
 				<header className="pvd-head">
 					{isPhone && (
 						<button type="button" className="m-icon-btn" aria-label="返回设置" title="返回设置" onClick={() => setProvidersOpen(false)}>
@@ -917,7 +928,7 @@ export function SettingsPage({
 	);
 
 	/**
-	 * 手机端设置清单(设计稿 ★移动版「设置」)。
+	 * 手机端设置清单。
 	 *
 	 * 形态是**一层分组清单**:每行要么就地切(开关)、要么就地选(主题行下面的选单),
 	 * 要么进一个只放这一项的页面。手机端不沿用桌面的「分类」——桌面一个分类里塞着
@@ -1000,7 +1011,7 @@ export function SettingsPage({
 			rows: [
 				{ key: "image", icon: "image", label: "图片生成", value: image.enableImageGen ? (image.imageModel || "已开启") : "关", page: "image" },
 				...(debugShown
-					? [{ key: "debug", icon: "eye" as LucideName, label: "调试模式", sub: "工具块退回原始参数与结果", on: debugMode, onToggle: onDebugModeChange }]
+					? [{ key: "debug", icon: "eye" as LucideName, label: "调试模式", sub: "工具块退回原始参数与结果,并解锁「UI 房」组件陈列室", on: debugMode, onToggle: onDebugModeChange }]
 					: []),
 			],
 		},
@@ -1058,10 +1069,12 @@ export function SettingsPage({
 											<>
 												{row.value && <span className="m-set-val">{row.value}</span>}
 												{(row.page || row.action || row.menu) && (
+													/* 单枚 chevron + rotate 过渡:菜单行未展开 = 向下(rotate 90),
+													   展开 = 向上(rotate -90);普通行进页行指向右(不旋转) */
 													<Lu
-														icon={row.menu ? (themeMenuOpen ? "chevron-up" : "chevron-down") : "chevron-right"}
+														icon="chevron-right"
 														size={15}
-														className="m-set-arrow"
+														className={`m-set-arrow${row.menu ? (themeMenuOpen ? " open" : " menu") : ""}`}
 													/>
 												)}
 											</>
@@ -1088,8 +1101,12 @@ export function SettingsPage({
 												}}
 											/>
 										)}
-										{row.menu && themeMenuOpen && (
-											<div className="m-set-menu" role="menu" aria-label="选择主题">
+										{row.menu && themeMenuPresence.mounted && (
+											<div
+												className={`m-set-menu${themeMenuPresence.closing ? " is-closing" : ""}`}
+												role="menu"
+												aria-label="选择主题"
+											>
 												{phoneFamilies.map((f) => {
 													// 家族里当前选中的那一份(浅/深);没选中 = 这一行还没被用
 													const activeId = theme === f.light.id ? f.light.id : f.dark && theme === f.dark.id ? f.dark.id : null;
@@ -1132,7 +1149,7 @@ export function SettingsPage({
 
 	return (
 		<div className="settings">
-			{/* 手机端子页页头:← 回索引 | 这一页的名字(设计稿「设置」里点开一行就是这类页面)。
+			{/* 手机端子页页头:← 回索引 | 这一页的名字。
 			    桌面端不发这个页头,左栏常驻 */}
 			{isPhone && (
 				<MobileHeader
@@ -1142,7 +1159,7 @@ export function SettingsPage({
 					tone="ok"
 				/>
 			)}
-			{/* 左侧分类导航(约 180;设计稿 11:模型 / 界面 / 世界书 / 集成 / 高级 + 插件组) */}
+			{/* 左侧分类导航 */}
 			<aside className="settings-side">
 				<div className="settings-side-title">设置</div>
 				<nav className="settings-nav" role="tablist" aria-label="设置分类">
@@ -1159,7 +1176,7 @@ export function SettingsPage({
 			</aside>
 			<main className={isPhone && phonePage ? "settings-main m-focus" : "settings-main"}>
 				<div className="settings-inner">
-					{/* 页头:标题 + 分类说明(设计稿 11-13;保存状态留在顶栏,这里不重复) */}
+					{/* 页头:标题 + 分类说明 */}
 					<header className="st-head">
 						<h1 className="st-head-title">{headOf(cat).title}</h1>
 						<p className="st-head-desc">{headOf(cat).desc}</p>
@@ -1179,7 +1196,7 @@ export function SettingsPage({
 											{current && <span className="st-chip">{currentProviderId}</span>}
 										</span>
 									</div>
-									<div className="s-card-desc">当前使用的模型。切换后对下一次对话生效。</div>
+									<div className="s-card-desc">当前使用的模型。切换后立即生效，包括已经开着的对话（编剧与舞台会话一并更换）。</div>
 									<div className="st-row">
 										<span className="st-row-label">模型</span>
 										<div className="st-row-ctl">
@@ -1280,7 +1297,7 @@ export function SettingsPage({
 										/>
 									</div>
 									<div className="s-card-desc st-desc-tight">
-										off = 关闭思考；max = 最强思考深度。{busy && " 设置中…"}
+										off = 关闭思考；max = 最强思考深度。切换后立即生效（舞台演员的思考档位属于角色设定，不受影响）。{busy && " 设置中…"}
 									</div>
 								</section>
 
@@ -1450,7 +1467,8 @@ export function SettingsPage({
 											<span className="s-card-head">调试模式</span>
 										</div>
 										<div className="s-card-desc">
-											每个工具调用退回完整卡:原始工具名 + 完整参数 + 完整结果,不再压缩成动作行。排查「模型到底怎么调的工具、错在哪一步」时用。
+											每个工具调用退回完整卡:原始工具名 + 完整参数 + 完整结果,不再压缩成动作行。排查「模型到底怎么调的工具、错在哪一步」时用。开启后顶栏(手机端是抽屉导航)会多出
+											「UI 房」——全部 UI 组件的陈列室,每个组件 2-4 个状态档。
 										</div>
 										<div className="s-pref-list">
 											<div className="s-pref-item">
@@ -1643,7 +1661,7 @@ export function SettingsPage({
 						</div>
 					)}
 
-					{/* 实验(0.1.0):图片生成模型。设计稿 ★设置 v2 · 实验 ——
+					{/* 实验(0.1.0):图片生成模型。
 					    「测试连接 / 测试生成一张」两种按钮需要服务端的图片探测端点，
 					    这一版没有，所以**不做**（宁缺勿假）。 */}
 					{cat === "experimental" && (

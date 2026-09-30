@@ -1,5 +1,44 @@
 # Changelog
 
+## [Unreleased]
+
+技能目录清单收敛到唯一真相源：编辑页对话（常驻编剧会话）也拿到打包自带的技能。
+
+- [fix] 「模型说它目录里有 skill，但没加载进系统提示词」：打包自带 `skills/`（outline / critique / revise / stage-scripting）此前靠各装配点自己经 `additionalSkillPaths` 传入，`src/web/writer-host.ts`（编辑页「AI 伙伴」对话与经典模式背后的常驻编剧会话）漏传——它的系统提示词里只剩全局 `~/.agents/skills`，而模型能经 `read` 读到 `skills/<name>/SKILL.md`（工具守卫只读放行），于是自报「目录里有、提示词里没有」。现在清单收敛到 `src/session-factory.ts` 的 `sessionSkillDirs()`（自带 `skills/` 恒加载 + 调用方附加目录 + 全局技能目录，且 `skillPaths` 与守卫的 `readOnlyDirs` 同源），cli / web 不再各自传；舞台角色显式 `packagedSkills: false` 保留原有收窄（剧本方法以绝对路径注入）。回归护栏 `test/skills-dir.test.ts`。
+
+会话级设置真正换得动：`POST /api/model` 与 `POST /api/thinking` 此前只打**主会话宿主**，而聊天根本不走它。
+
+- [fix] 「在同一个对话窗口里换模型」不生效：编辑页的对话走编剧会话（`/api/writer/:slug/chat`）、舞台页走编排器会话，模型在会话创建时就绑死（vendor `sdk.ts` 的 `defaultModelId: settingsManager.getDefaultModel()`，之后只有 `session.setModel()` 能改），于是换完模型要等换章或重启才生效；而设置页读到的「当前模型」来自主会话——看起来还切成功了。现在 `applyToAllSessions` 把主会话 / 编剧 / 舞台三处一起换（与 `POST /api/sampling` 早就在做的转发对齐），逐个宿主尝试后再报错：某个宿主临时不可用不该让其余的也跟着不动（失败 → 400，消息里点名是哪个没换）。
+- [feat] `WriterHost.setModel` / `setThinkingLevel`（已建编剧会话即时生效，之后新建的会话按新值装配）、`StageHost` 与 `StageOrchestrator` 的同名方法（导演 / 收幕编剧即时生效；演员在 `cast.json` 里单独指定 `model` 的保留覆盖，思考档位属于角色设计、不动演员）。
+- [fix] 会话装配工厂里的模型与思考档位改成 getter：`createSessionRuntimeFactory` 在**每次**装配（含 `reloadRuntime`）时才读它们，此前把构造时的 `--model` 固定进闭包——带 `--model` 启动时换完模型、会话一重建又退回旧值。
+- [fix] 设置页文案「切换后对下一次对话生效」改成「切换后立即生效，包括已经开着的对话（编剧与舞台会话一并更换）」；思考级别补一句「舞台演员的思考档位属于角色设定，不受影响」。
+
+状态切换动画覆盖度：把「进场有动画、退场硬切」的整片缺口补齐，并把散落的时长/技术收敛到同一套 token。
+
+- [feat] 新增退场机制 `web/src/use-exit-presence.ts`（`useExitPresence`）+ `web/src/styles/presence.css`：条件挂载的弹层在卸载前多驻留一个动画时长并加 `.is-closing`，播放与入场对应的反向动画（居中弹窗缩回、底部表单页/整屏导出下滑、下拉与 ⋯ 菜单下沉、整屏层淡出）。系统开启「减少动态效果」时直接卸载，不做无意义等待。
+- [feat] 退场补齐的清单：设置页供应商整屏层、添加供应商 / 添加（编辑）模型、修订剧本模态、ask_user 提问浮层、全屏编辑器、工作区文件预览、导出面板、手机端整屏导出、会话用量卡、统一 Select 下拉、手机端页头 ⋯ 菜单、手机端主题选单、重运行配置向导。
+- [fix] 桌面右栏（AI 伙伴）与舞台右面板的收起/展开不再是硬切：宽度落到子项自身、grid 轨改成 `auto`（`grid-template-columns` 本身不可动画），走 `--dur-slow` 宽度过渡；拖拽调宽期间自动关掉过渡保持跟手。
+- [fix] 手机端舞台右面板打不开：CSS 里的 `.stage-grid.phone-panel-open` 从未被 StagePage 应用（≤900px 时 `.stage-panel` 还是 `display:none`），点「剧本与设定」只挂出一层遮罩。现在类名真的挂上、抽屉从下缘滑入滑出。
+- [fix] 右栏标签 chat ⇄ memo 两个方向都有动画（此前只有 memo → chat 一条单向滑入），方向与舞台右栏同一套约定。
+- [fix] 反馈类状态不再是瞬时跳变：`.notice` 提示条（含上下文占用 ≥80% 警告）入场淡入、草稿错误框、备忘录新增与完成态、工具块出现与 run→ok/err 变色、压缩指示器、思考指示器、空态 ↔ 消息列表、分支栏、书库列表新增条目、世界树子节点。
+- [fix] 顶栏保存状态文案改成「重挂载 + `fade-in`」（原来的 `key` + 内联 `transition` 没有过渡起点，等于空转）；手机端页头状态圆点的绿/琥珀/红也走过渡。
+- [fix] 长内容折叠块（FoldablePre）改用与思考块 / 预览卡同一套 framer 交叉淡入（此前是换文本硬切）。
+- [feat] 骨架屏：新增 `.skeleton` / `.sk-lines` / `.sk-rows`（书库栏章节区、纸张区、世界书三处替换「加载中…」纯文字），首屏拉书不再先闪一帧「还没有书」。
+- [feat] 手机端层级导航有方向：世界书条目详情自右推入、返回时详情向右退出（延迟清空选中，等退场播完）；供应商列表 / 选择 / 详情三态与设置子页同样。
+- [fix] 26 个「有 hover 反馈但没有 transition」的选择器（拖拽手柄、错误链接、导出次按钮、用量关闭、确认卡按钮、工作区文件行、世界书信息按钮、关键词 chip 等）与手机端 7 处 `:active`、全局按压 `scale(0.96)` 补上 token；3 处裸时长 `0.15s` 改成 `var(--dur-fast)`。
+- [feat] 预览卡「智能折叠」：卡片级开合此前只有手动入口且默认全开，一回合改了几百行 diff / 多条词条时，一张卡就把消息流撑爆。现在默认开/收由内容体量决定（`fold.ts` 的 `previewWeight`/`shouldAutoFold`：草稿按 diff 行数、词条按条数、世界树按变更处数、剧本按节拍数），体量超过 `PREVIEW_AUTO_FOLD_WEIGHT`(60) 才默认收起；**体内有动作按钮、或 `forceOpen` 时一律展开**（否则按钮会被藏进折叠体）；收起时补一行「共 N 行 diff / N 个词条」摘要，让"收了多少"可见；收起的卡片**不渲染 body**，大 diff 的行不再进 DOM。内容在流式中"先小后大"时会跟着自动收起，但**用户一旦手动开合就不再自动干预**。
+- [fix] 弹出层时长漂移收敛：`.slash-menu` / `.at-menu` / `.export-panel` / `.usage-pop` 原先用 `card-in-bottom 120ms`（120ms 不在 token 三档里，且与卡片档共用 60px 位移）。新增 `@keyframes pop-in`（6px 淡入上移）承担浮层小位移档，时长改 `var(--dur-fast)`；`card-in-bottom` 的 60px 只留给卡片级容器。
+- [fix] 退场时长与卸载超时对齐：`presence.css` 的退场规则原先混用 `--dur-slow`(320ms) 与 hook 的 200ms 默认值，导致宽屏弹窗/手机抽屉在动画播到一半时被卸载（表现为「卡一下再消失」）；现在统一 `--dur-base`，并让每处退场方向对偶其入场。同时补齐 `.rsm-mask` / `.wz-overlay` / `.m-sheet` / `.stage-panel` 的选择器（原先泛型 `.is-closing` 覆盖不到，退场动画实际没播）。
+- [feat] 调试模式新增「UI 房」（`web/src/pages/UIRoom.tsx`）：全部 UI 组件的陈列室——调试模式打开时顶栏（手机端是抽屉导航）多一个入口，页内按六个分组铺开每个组件，每格可切 2-4 个状态档（空态 / 满态 / 极端长内容 / 失败态 / 禁用态 / 折叠态），另有搜索、分组筛选与「带框格子」宽度档。固定定位的弹层用一层 `transform` 容器当包含块关进格子里，不再一展开就盖住整页。
+- [feat] 展项表本身是契约：`web/src/uiroom-types.ts`（分组 / 展项 / 状态档类型 + 覆盖计算）+ 六个展项文件 `web/src/uiroom/{atoms,chat,world,settings,stage,tokens}.tsx`。`test/uiroom.test.ts` 扫 `web/src/components/` 的真实文件清单逐一对照——**漏陈列的组件、登记了却没渲染的展项、状态档文案与顺序不一致、渲染期抛错，测试全红**（node 下用 `react-dom/server` 把每个状态档渲染一遍）。以后新增组件忘了进 UI 房，契约测试会直接拦下。
+- [feat] UI 房默认走「隔离演示」：有一批组件（供应商列表 / MCP / 插件 / 导出 / 工作区 / 全屏编辑器 / 配置向导）是**直接拿 client 干活**的，格子里点一下就会真的删凭据、改配置、导出整本书或写文件。UI 房用 `stubClient()`（所有请求 reject）渲染它们并在格子上打标，所以误点不会动真实数据；顺带把「请求失败」这一档平时构造不出来的状态也陈列了。要看真实内容就在工具条切「数据:真实服务」（标记转红警示）。
+- [fix] `graph-styles.ts` 的 `themeVar()` 在没有 DOM 时回退默认色(此前直接读 `getComputedStyle(document.documentElement)`,node 下抛 ReferenceError)。它在**渲染期**被 `PreviewEntryCard` 的首字头像调用,所以这是个只在浏览器里不炸的取值口;现在与 `useMediaQuery` / `useExitPresence` 的「SSR 安全」写法一致,该组件也因此重新进了 UI 房的 SSR 冒烟(不再挂免测牌)。
+- [refactor] 页面导航条目收敛到唯一真相源 `web/src/nav.ts`（页面集合 + 经典模式去掉舞台 + 调试模式追加 UI 房）：`ChapterSidebar` 的手机抽屉与 UI 房自带的手机导航共用一份；设置页「调试模式」卡里加了「打开 UI 房 ›」。
+- [fix] 关掉调试模式时若正停在 UI 房，视图拉回编辑页——UI 房与调试模式同生命周期（关掉即卸载），否则会停在一张不存在的页面上。
+
+- [fix] 动效审查的剩余机械收敛（收尾）：① 全仓 **174 处**「给了时长但没写缓动曲线」的 `transition` 子声明补上 `var(--ease-out)`（浏览器默认的 `ease` 不是 token 曲线，同一交互不同属性会各踩一条）；② 4 处循环呼吸动画的裸 `ease-in-out` 换 `var(--ease-inout)`；③ 重复关键帧收敛到各留一份：`wz-fade`/`rsm-fade` → `fade-in`、`ws-pv-in` → `fade-up`、`rsm-pop` → `wz-pop`、`.compact-spin` 并入 `.act-spin`、`.m-live` 复用 `.companion-live`；④ 「减少动态效果」下章节目录的折叠退场不再收缩 margin/padding（framer 的 `reducedMotion` 只覆盖位移类属性），关系图联动居中改直接 `cy.center`；⑤ reduced-motion 熔断块补 `animation-delay: 0s / transition-delay: 0s`（只清时长不够——关闭态靠 `visibility 0s var(--dur-slow)` 的兜底延迟仍会真等 320ms）；⑥ 删死代码 `motion.ts` 的 `T` 与 `EDGE_IN.left`（无消费点），关系图内联表单的遮罩补淡入、正在滑出的视图交还点击、折叠箭头时长与其余 5 处对齐;⑦ 抽屉遮罩(mask)退场的一帧就 `pointer-events: none`(200ms 淡出期间遮罩仍铺满全屏,会吞掉抽屉关闭后紧接着的那一下点击——headless chromium 实测过穿透)。
+- [docs] 新增动效契约 `test/motion.test.ts`：扫全部 CSS 校验 —— ① `DUR`/`EASE` 与 `--dur-*`/`--ease-*` 逐值相等；② `EDGE_SLIDE` 与 `slide-*` 关键帧位移一致；③ 每个被引用的 animation 名都有 `@keyframes`；④ reduced-motion 块同时熔断 animation/transition 时长；⑤ **裸时长白名单只放无限环境循环与 spinner**（`sk-flow 1.4s` 属前者）。一次性时长一律必须走 token，否则测试直接红。
+
 ## [0.1.1] - 2026-09-27
 
 手机端：编辑、伙伴对话、世界书、舞台、设置全部按手机重排 + 一批窄屏缺陷修复。
@@ -161,7 +200,7 @@ AI 可以在岔路口弹出一张卡片让你选,而不是替你决定或者写�
 - 字号收敛为 8 档:`11 / 12 / 13 / 14 / 15 / 18 / 22 / 34`,全站字号声明按语义归位。窄屏输入控件保留 16px。
 - 圆角(8 / 12 / 16 / 999)、间距(4 / 8 / 12 / 16 / 20 / 24)、CSS token,页面样式只引用 token。
 - 词条类型色独立成层:人物 / 世界 / 时间线 / 大纲各有专色,6 套内置主题各配一套,不再与表示成功、失败的绿红撞色。
-- 图标全部换成设计稿同源图标:导航、侧栏、页签、思考胶囊箭头、工具、设置分类、世界书、首启向导共 58 枚,零新依赖。仅动作流的「进行中」转圈为自绘。
+- 图标全部换成同源图标:导航、侧栏、页签、思考胶囊箭头、工具、设置分类、世界书、首启向导共 58 枚,零新依赖。仅动作流的「进行中」转圈为自绘。
 - 右栏收起态改为图标栏:舞台面板收起后为四个「图标 + 小标签」按钮,当前项带琥珀圆角底;编辑页伙伴栏收起态同款(两个标签)。收起态点其他页签只换选中、点当前页签才展开。
 - 新增统一下拉组件:触发器 + 浮层 + 分组标题 + 搜索(选项多于 12 个时出现)+ 完整键盘导航;12 处原生下拉已迁移。条目表单的「关联章节」保留原生复选清单。
 - 主题卡浅深合并:`<家族>` 与 `<家族>-dark` 合成一张卡,7 张收敛为 5 张;点未选中的卡取浅色,再点已选中的卡浅 ⇄ 深。设置页与首启向导共用同一实现。

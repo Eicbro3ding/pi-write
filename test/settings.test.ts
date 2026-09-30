@@ -124,7 +124,7 @@ describe("回车行为设置", () => {
 });
 
 describe("自动展开思考设置", () => {
-	it("缺省关闭(未存储任何值时思考块默认收起——设计稿 04/06)", () => {
+	it("缺省关闭", () => {
 		stubStorage();
 		expect(autoExpandThinkingEnabled()).toBe(false);
 	});

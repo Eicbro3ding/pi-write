@@ -542,3 +542,76 @@ describe("上限条数：到了强制收幕；导演改上限后按新上限推�
 		expect(actor.sendMessage).toHaveBeenCalledTimes(3);
 	});
 });
+
+/**
+ * 2026-10-01:换模型/思考档位要打到已建角色会话上(此前只改全局默认值,
+ * 已建会话一路用旧模型 —— vendor 的模型只在会话创建时绑一次)。
+ */
+describe("StageOrchestrator · 换模型与思考档位", () => {
+	let tmp: string;
+	beforeEach(() => {
+		tmp = mkdtempSync(join(tmpdir(), "piw-orch-model-"));
+		mkdirSync(tmp, { recursive: true });
+	});
+	afterEach(() => {
+		rmSync(tmp, { recursive: true, force: true });
+	});
+
+	/** 假角色会话(只关心换模型/换档位这两个动作)。 */
+	const fakeHost = () => ({
+		setModel: vi.fn(async () => {}),
+		setThinkingLevel: vi.fn(() => {}),
+	});
+
+	/** 造一个未 start 的编排器,并把导演/收幕编剧/演员会话换成假宿主。 */
+	function orchWithHosts() {
+		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
+		const inner = orch as unknown as {
+			director: unknown;
+			writer: unknown;
+			actorHosts: Map<string, unknown>;
+			cast: unknown;
+		};
+		const director = fakeHost();
+		const writer = fakeHost();
+		const plain = fakeHost();
+		const pinned = fakeHost();
+		inner.director = director;
+		inner.writer = writer;
+		inner.actorHosts.set("actor-1", plain);
+		inner.actorHosts.set("actor-2", pinned);
+		// actor-2 在 cast.json 里单独指定了模型:全局换模型不该覆盖它
+		inner.cast = {
+			version: 1,
+			actors: [
+				{ id: "actor-1", type: "pool" },
+				{ id: "actor-2", type: "pool", model: "anthropic/opus" },
+			],
+		};
+		return { orch, director, writer, plain, pinned };
+	}
+
+	it("换模型:导演/收幕编剧/无覆盖的演员都换,cast.json 指定 model 的演员保留覆盖", async () => {
+		const { orch, director, writer, plain, pinned } = orchWithHosts();
+		await orch.setModel("openai/gpt-5");
+		expect(director.setModel).toHaveBeenCalledWith("openai/gpt-5");
+		expect(writer.setModel).toHaveBeenCalledWith("openai/gpt-5");
+		expect(plain.setModel).toHaveBeenCalledWith("openai/gpt-5");
+		expect(pinned.setModel).not.toHaveBeenCalled();
+	});
+
+	it("换思考档位:只动导演与收幕编剧(演员档位属于角色设计)", async () => {
+		const { orch, director, writer, plain, pinned } = orchWithHosts();
+		await orch.setThinkingLevel("high");
+		expect(director.setThinkingLevel).toHaveBeenCalledWith("high");
+		expect(writer.setThinkingLevel).toHaveBeenCalledWith("high");
+		expect(plain.setThinkingLevel).not.toHaveBeenCalled();
+		expect(pinned.setThinkingLevel).not.toHaveBeenCalled();
+	});
+
+	it("未创建的会话跳过(不抛错);无 cast.json 时也不抛", async () => {
+		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
+		await expect(orch.setModel("openai/gpt-5")).resolves.toBeUndefined();
+		await expect(orch.setThinkingLevel("high")).resolves.toBeUndefined();
+	});
+});

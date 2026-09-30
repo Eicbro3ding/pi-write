@@ -12,7 +12,7 @@ import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import type { ThinkingLevel } from "../vendor/pi-agent-core/src/index.ts";
 import { SessionManager } from "../vendor/pi-coding-agent/src/index.ts";
-import { applyCacheRetention, getAgentDir, getBookDir, getBooksDir, resolveSkillReadOnlyDirs, resolveSkillsDir } from "./config.ts";
+import { applyCacheRetention, getAgentDir, getBookDir, getBooksDir, resolveSkillReadOnlyDirs } from "./config.ts";
 import { createAskUserTool } from "./ask-user.ts";
 import {
 	addChapter,
@@ -222,7 +222,6 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 	await setCurrentChapter(slug, chapterFile);
 
 	const agentDir = getAgentDir();
-	const skillsDir = resolveSkillsDir();
 	// 服务端全局设置(经典模式 / 外部命令 / shell 方言):必须在装配 createRuntime
 	// 之前读——工具集与系统提示(有没有 shell、哪种方言)都在这里定下来,
 	// 晚读会让开关"下次重启才生效"
@@ -249,8 +248,7 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 	// 命令;工具集为 web 子集;--model/--thinking 解析),只声明 web 差异项。
 	const createRuntime = createSessionRuntimeFactory({
 		agentDir,
-		readOnlyDirs: [skillsDir],
-		additionalSkillPaths: [skillsDir],
+		// 技能目录(自带 skills/ + 全局技能目录)由 session-factory 统一并入,调用方不必再传
 		// 系统提示必须动态生成:静态字符串会覆盖 pi 的动态工具段,
 		// MCP 外部工具对 agent 不可见(2026-08-08 根因)
 		systemPromptOverride: () =>

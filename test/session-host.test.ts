@@ -45,6 +45,9 @@ function makeFakeRuntime(modelRuntime: Record<string, unknown> = {}) {
 						logout: vi.fn(async () => {}),
 						...modelRuntime,
 					},
+					// 工具守卫按「实际加载到的技能目录」放行(readOnlyDirs 的权威那一半),
+					// 假 runtime 也得给这个成员,否则 runInToolGuardContext 直接抛
+					resourceLoader: { getSkills: () => ({ skills: [] }) },
 				},
 			diagnostics: [],
 		},

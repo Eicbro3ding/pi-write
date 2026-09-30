@@ -34,9 +34,9 @@ import type { AgentSessionEvent } from "../../vendor/pi-coding-agent/src/index.t
  */
 
 export interface StageHostOptions {
-	/** --model 模式串（传给 orchestrator 的 roleFactory 解析）。 */
+	/** --model 模式串（传给 orchestrator 的 roleFactory 解析;初始值,换模型走 setModel）。 */
 	model?: string;
-	/** --thinking 档位。 */
+	/** --thinking 档位（初始值,换档位走 setThinkingLevel）。 */
 	thinkingLevel?: string;
 	/** 全局采样温度（演员可被 cast.json 覆盖）。 */
 	temperature?: number;
@@ -202,6 +202,10 @@ export class StageHost {
 	private readonly options: StageHostOptions;
 	private temperature?: number;
 	private topP?: number;
+	/** 全局模型/思考档位;可变 —— 换模型时既给之后新建的编排器用,也即时应用到已建编排器
+	 *  (见 setModel / setThinkingLevel,2026-10-01)。 */
+	private model?: string;
+	private thinkingLevel?: string;
 	private readonly orchestrators = new Map<string, StageOrchestrator>();
 	/** 事件转发（server 构造时注入 → broadcast 到 SSE）；注入前静默丢弃。 */
 	private eventSink: (slug: string, event: StageHostEvent) => void = () => {};
@@ -210,6 +214,8 @@ export class StageHost {
 		this.options = options;
 		this.temperature = options.temperature;
 		this.topP = options.topP;
+		this.model = options.model;
+		this.thinkingLevel = options.thinkingLevel;
 	}
 
 	/** server 构造时注入事件转发（StageHost 在 web.ts 先于 server 创建）。 */
@@ -222,6 +228,24 @@ export class StageHost {
 		if (temperature !== undefined) this.temperature = temperature ?? undefined;
 		if (topP !== undefined) this.topP = topP ?? undefined;
 		await Promise.all([...this.orchestrators.values()].map((orch) => orch.setSamplingParameters(temperature, topP)));
+	}
+
+	/**
+	 * 换模型：更新之后新建编排器的默认值,并即时应用到已创建的导演/演员/收幕编剧会话
+	 * (演员在 cast.json 里单独指定 model 的保留覆盖,见 orchestrator.setModel)。
+	 *
+	 * 2026-10-01 修:此前 POST /api/model 只打主会话宿主,舞台会话一直用创建时绑定的
+	 * 模型 —— 在同一个舞台对话窗口里换模型不生效,要等重启才换。
+	 */
+	async setModel(model: string): Promise<void> {
+		this.model = model;
+		await Promise.all([...this.orchestrators.values()].map((orch) => orch.setModel(model)));
+	}
+
+	/** 换思考档位:同上(编排器里只动导演与收幕编剧,演员的档位属于角色设计)。 */
+	async setThinkingLevel(level: string): Promise<void> {
+		this.thinkingLevel = level;
+		await Promise.all([...this.orchestrators.values()].map((orch) => orch.setThinkingLevel(level)));
 	}
 
 	/** 编排器键:书 + 章节(舞台按章节隔离——每章一幕独立对话/演出,切章不串,2026-08-10)。 */
@@ -241,8 +265,8 @@ export class StageHost {
 						bookDir,
 						agentDir: getAgentDir(),
 						chapterFile: chapterFile ?? null,
-						model: this.options.model,
-						thinkingLevel: this.options.thinkingLevel,
+						model: this.model,
+						thinkingLevel: this.thinkingLevel,
 						temperature: this.temperature,
 						topP: this.topP,
 						writerHost: this.options.writerHost,

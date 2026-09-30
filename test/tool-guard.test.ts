@@ -11,8 +11,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveToCwd } from "../vendor/pi-coding-agent/src/core/tools/path-utils.ts";
 import {
 	assertPathWithinRoot,
+	dedupePaths,
 	installToolPathGuard,
 	pathWithinRoot,
+	skillDirsOf,
 	uninstallToolPathGuard,
 } from "../src/tool-guard.ts";
 
@@ -111,6 +113,40 @@ describe("installToolPathGuard 只读目录(skills)", () => {
 		const mixedCase = join(skillsDir, "outline", "SKILL.md").toLowerCase();
 		expect(() => resolveToCwd(mixedCase, bookDir)).not.toThrow();
 		expect(() => resolveToCwd(mixedCase, bookDir, "write")).toThrow("工具路径越界");
+	});
+});
+
+describe("只读放行清单以「实际加载到的技能」为准（2026-10-01）", () => {
+	it("skillDirsOf 取每个技能的 baseDir 并去重/滤空", () => {
+		expect(
+			skillDirsOf([
+				{ baseDir: "/a/skills/outline" },
+				{ baseDir: "/a/skills/outline" },
+				{ baseDir: "/global/skills/find-skills" },
+				{ baseDir: undefined },
+				{},
+			]),
+		).toEqual(["/a/skills/outline", "/global/skills/find-skills"]);
+		expect(skillDirsOf(undefined)).toEqual([]);
+	});
+
+	it("dedupePaths 保持首次出现顺序并合并多份清单", () => {
+		expect(dedupePaths(["/x", "/y"], undefined, ["/y", "/z"])).toEqual(["/x", "/y", "/z"]);
+		expect(dedupePaths(undefined)).toEqual([]);
+	});
+
+	it("加载到的技能目录可读、不可写;基线清单之外的目录正是原先漏放行的那类", () => {
+		// 模拟 vendor 从 agentDir/skills 发现的技能(baseDir 来自加载结果,不在手工基线里)
+		const agentSkills = join(tmp, "agent", "skills");
+		const loaded = skillDirsOf([{ baseDir: join(agentSkills, "probe-skill") }]);
+		installToolPathGuard(bookDir, dedupePaths([join(tmp, "skills")], loaded));
+		const skillFile = join(agentSkills, "probe-skill", "SKILL.md");
+		// 读放行(修前只给手工基线 → 这里会抛「工具路径越界」= 列得出来读不到)
+		expect(() => resolveToCwd(skillFile, bookDir)).not.toThrow();
+		// 可读 ≠ 可写:技能文件依旧禁止 write/edit(模型不得改写自己的指令)
+		expect(() => resolveToCwd(skillFile, bookDir, "write")).toThrow("工具路径越界");
+		// 未加载的目录仍然一律拒绝
+		expect(() => resolveToCwd(join(tmp, "agent", "auth.json"), bookDir)).toThrow("工具路径越界");
 	});
 });
 

@@ -18,6 +18,8 @@ interface FakeHostLike {
 	sendMessage: ReturnType<typeof vi.fn>;
 	injectContext: ReturnType<typeof vi.fn>;
 	abort: ReturnType<typeof vi.fn>;
+	setModel: ReturnType<typeof vi.fn>;
+	setThinkingLevel: ReturnType<typeof vi.fn>;
 	getState(): { isStreaming: boolean; messages: Array<{ role: string; text: string }> };
 	getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | null;
 	compact: ReturnType<typeof vi.fn>;
@@ -35,6 +37,8 @@ function makeFakeHost(): FakeHostLike & { listeners: Set<(e: unknown) => void> }
 		sendMessage: vi.fn(async () => {}),
 		injectContext: vi.fn(async () => {}),
 		abort: vi.fn(async () => {}),
+		setModel: vi.fn(async () => {}),
+		setThinkingLevel: vi.fn(() => {}),
 		getState: () => ({ isStreaming: false, messages: [{ role: "assistant", text: "嗨" }] }),
 		getContextUsage: () => ({ tokens: 800, contextWindow: 4000, percent: 20 }),
 		compact: vi.fn(async () => ({ summary: "已压缩", tokensBefore: 800, estimatedTokensAfter: 300 })),
@@ -124,6 +128,43 @@ describe("WriterHost", () => {
 		expect(fake.dispose).toHaveBeenCalledTimes(2);
 		const st = await host.state("fog-harbor");
 		expect(st.exists).toBe(false);
+	});
+	/**
+	 * 2026-10-01 修「同一个对话窗口里换模型不生效」:模型在会话创建时绑死
+	 * (vendor sdk.ts 的 defaultModelId),换模型必须打到**已建**会话上;
+	 * 此前 POST /api/model 只打主会话宿主,编剧会话一路用旧模型。
+	 */
+	it("setModel / setThinkingLevel 即时打到已建的编剧会话", async () => {
+		const fake = makeFakeHost();
+		const host = new WriterHost({ createHost: async () => fake as never });
+		await host.chat("fog-harbor", "hi", "ch01.jsonl"); // 先建出会话
+		await host.setModel("openai/gpt-5");
+		await host.setThinkingLevel("high");
+		expect(fake.setModel).toHaveBeenCalledWith("openai/gpt-5");
+		expect(fake.setThinkingLevel).toHaveBeenCalledWith("high");
+	});
+	it("setModel 无会话时只记账(不建会话,不报错)", async () => {
+		const createHost = vi.fn(async () => makeFakeHost() as never);
+		const host = new WriterHost({ createHost: createHost as never });
+		await host.setModel("openai/gpt-5");
+		expect(createHost).not.toHaveBeenCalled();
+	});
+	it("setModel 逐个会话尝试:一个失败不挡其余,错误最后抛出", async () => {
+		const bad = makeFakeHost();
+		bad.setModel.mockRejectedValue(new Error("没有对应鉴权"));
+		const good = makeFakeHost();
+		const made: FakeHostLike[] = [];
+		const host = new WriterHost({
+			createHost: async () => {
+				const fake = made.length === 0 ? bad : good;
+				made.push(fake);
+				return fake as never;
+			},
+		});
+		await host.chat("fog-harbor", "a", "ch01.jsonl");
+		await host.chat("fog-harbor", "b", "ch02.jsonl");
+		await expect(host.setModel("openai/gpt-5")).rejects.toThrow("没有对应鉴权");
+		expect(good.setModel).toHaveBeenCalledWith("openai/gpt-5");
 	});
 });
 

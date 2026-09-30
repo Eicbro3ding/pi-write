@@ -81,6 +81,13 @@ class FakeOrchestrator {
 	getDirectorUsage(): null {
 		return null;
 	}
+	/** 换模型/思考档位(2026-10-01:换模型要打到**已建**编排器上,不能只记在宿主里)。 */
+	async setModel(model: string): Promise<void> {
+		this.calls.push(`setModel:${model}`);
+	}
+	async setThinkingLevel(level: string): Promise<void> {
+		this.calls.push(`setThinking:${level}`);
+	}
 	async directorCompact(): Promise<string> {
 		this.calls.push("compact");
 		return "上下文已压缩";
@@ -283,6 +290,21 @@ describe("StageHost 快照", () => {
 		expect(snap.directorChat).toHaveLength(2);
 		expect(snap.directorChat[0]).toEqual({ role: "user", text: "想写一个雾港的故事" });
 		expect(snap.directorChat[1]).toEqual({ role: "assistant", text: "导演最后回复" });
+	});
+
+	/**
+	 * 2026-10-01 修「同一个对话窗口里换模型不生效」:舞台会话的模型在编排器创建时
+	 * 绑死,换模型必须打到已建编排器上(setModel/setThinkingLevel 转发)。
+	 */
+	it("setModel / setThinkingLevel 转发到已建编排器(惰性创建的也要换)", async () => {
+		const { host, orchs } = makeHost([]);
+		await host.setModel("openai/gpt-5"); // 还没有编排器:只记账
+		expect(orchs).toHaveLength(0);
+		await host.command("b1", "mode", {}); // 触发惰性创建
+		await host.setModel("openai/gpt-5");
+		await host.setThinkingLevel("high");
+		expect(orchs[0].calls).toContain("setModel:openai/gpt-5");
+		expect(orchs[0].calls).toContain("setThinking:high");
 	});
 });
 

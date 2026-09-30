@@ -10,7 +10,7 @@ describe("RelationGraph 上下文菜单结构", () => {
 		expect(source).toMatch(/<div className="graph-canvas">\s*<div className="graph-cytoscape" ref=\{containerRef\} \/>/);
 	});
 
-	it("节点为「类型色环 + 圆内首字 + 名字/关系数」样式(设计稿 10)", () => {
+	it("节点为「类型色环 + 圆内首字 + 名字/关系数」样式", () => {
 		// 52px 圆 + 2px 类型色描边 + 首字背景图;不再用 88px 圆 + 黑底白字标签
 		expect(styles).toMatch(/shape: "ellipse"/);
 		expect(styles).toMatch(/width: 52/);

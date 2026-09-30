@@ -135,6 +135,14 @@ export class WriterHost {
 	private readonly options: WriterHostOptions;
 	private temperature?: number;
 	private topP?: number;
+	/**
+	 * 当前模型(--model 模式串,形如 "provider/id")与思考档位。
+	 * **可变**:换模型后既在这里更新(新会话按新值装配),也即时应用到已建会话
+	 * (见 setModel)。此前直接读 `options.model`,而 options 是构造时快照,
+	 * 于是换模型只对「下一个会话」生效(2026-10-01 修)。
+	 */
+	private model?: string;
+	private thinkingLevel?: string;
 	/** 会话键 = `${slug}:${chapterFile}`(编剧对话按章节隔离——切章后各章独立
 	 *  对话/历史/上下文,不再整本书共用,2026-08-10)。 */
 	private readonly hosts = new Map<string, SessionHost>();
@@ -161,6 +169,8 @@ export class WriterHost {
 		this.options = options;
 		this.temperature = options.temperature;
 		this.topP = options.topP;
+		this.model = options.model;
+		this.thinkingLevel = options.thinkingLevel;
 		this.classicMode = options.classicMode ?? false;
 		this.shellEnabled = options.enableShell ?? false;
 		this.shellDialect = options.shellDialect ?? "none";
@@ -180,7 +190,7 @@ export class WriterHost {
 
 	/**
 	 * 开关图片生成(实验,0.1.0)。变化时释放全部会话 —— 这个开关决定 `image_generate`
-	 * 工具**存不存在**,而工具集在会话创建时装配。不释放的话,设计稿那句「关闭时图片
+	 * 工具**存不存在**,而工具集在会话创建时装配。不释放的话,那句「关闭时图片
 	 * 相关工具对 AI 不可见」就不成立(旧会话还揣着那个工具)。
 	 */
 	async setImageGen(enabled: boolean): Promise<void> {
@@ -221,6 +231,44 @@ export class WriterHost {
 		}
 	}
 
+	/**
+	 * 换模型(--model 模式串,形如 "provider/id")：更新未来会话的装配值,并即时应用到
+	 * **已经开着的**编剧会话。
+	 *
+	 * 2026-10-01 修:此前 POST /api/model 只打主会话宿主,而编辑页的对话走的是编剧会话
+	 * (WritePage → client.writerChat)——模型在会话创建时就绑死了(vendor sdk.ts 的
+	 * `defaultModelId: settingsManager.getDefaultModel()`),于是「同一个对话窗口里换
+	 * 模型」要等换章或重启才生效;设置页读到的「当前模型」来自主会话,看起来还切成功了。
+	 *
+	 * 逐个会话尝试后再报错:某个会话临时没有 runtime 不该让其余的也跟着不动。
+	 */
+	async setModel(model: string): Promise<void> {
+		this.model = model;
+		await this.forEachResidentHost("模型", (host) => host.setModel(model));
+	}
+
+	/** 换思考档位：同上(未来会话按新值装配 + 已建会话即时生效)。 */
+	async setThinkingLevel(level: string): Promise<void> {
+		this.thinkingLevel = level;
+		await this.forEachResidentHost("思考档位", (host) => host.setThinkingLevel(level));
+	}
+
+	/** 把一次会话级设置应用到全部已建编剧会话(逐个尝试,收集首个错误后重抛)。 */
+	private async forEachResidentHost(
+		action: string,
+		apply: (host: SessionHost) => Promise<void> | void,
+	): Promise<void> {
+		const failed: string[] = [];
+		for (const host of this.hosts.values()) {
+			try {
+				await apply(host);
+			} catch (err) {
+				failed.push(err instanceof Error ? err.message : String(err));
+			}
+		}
+		if (failed.length > 0) throw new Error(`${action}未在所有会话生效: ${failed.join("; ")}`);
+	}
+
 	/** 会话键:书 + 章节(chat 未声明章节时用 currentChapter 兜底,再无则 "default")。 */
 	private static key(slug: string, chapterFile: string | null | undefined): string {
 		return `${slug}:${chapterFile ?? "default"}`;
@@ -244,7 +292,6 @@ export class WriterHost {
 	 *  经典模式(单 agent)同款宿主,但工具集与提示词由 roleFactory 换成写作 agent。 */
 	private async createHost(slug: string, chapterFile: string | null): Promise<SessionHost> {
 		const agentDir = getAgentDir();
-		const { model, thinkingLevel } = this.options;
 		const bookDir = getBookDir(slug);
 		const sessionsDir = getBookSessionsDir(slug);
 		await mkdir(sessionsDir, { recursive: true });
@@ -281,8 +328,11 @@ export class WriterHost {
 	 *  经典模式走「写作 agent」装配(全量工具 + writer-main 提示,见类注释)。 */
 	private roleFactory(slug: string, chapterFile: string | null): CreateAgentSessionRuntimeFactory {
 		const agentDir = getAgentDir();
-		const { model, thinkingLevel } = this.options;
 		const { temperature, topP } = this;
+		// 模型/思考档位用 getter 而不是值:createSessionRuntimeFactory 在**每次**
+		// 装配(含 reloadRuntime)时读 opts.model —— 传值会把构造时的 --model
+		// 固定进闭包,换模型后重建会话又退回旧值(2026-10-01)。
+		const self = this;
 		const inject = (messages: AgentMessage[]): Promise<AgentMessage[] | undefined> => this.editorContext(slug, chapterFile, messages);
 		// 正文文件白名单:write 只允许写当前章节文件(agent 自创文件名会把正文写到
 		// 前端读不到的路径——2026-08-11 编剧乱写 draft/第一章.md 的根因)。
@@ -313,8 +363,13 @@ export class WriterHost {
 					},
 				},
 			],
-			model,
-			thinkingLevel: thinkingLevel as ThinkingLevel | undefined,
+			// getter 见上方注释:换模型后重建的会话也按最新值装配
+			get model() {
+				return self.model;
+			},
+			get thinkingLevel() {
+				return self.thinkingLevel as ThinkingLevel | undefined;
+			},
 			temperature,
 			topP,
 			// bash:web 默认禁用(web 子集语义,见 web.ts webExcludeTools);设置里

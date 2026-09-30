@@ -47,7 +47,7 @@ describe("工具动作流(03-组件规范/05:带宾语、完成的行留在流�
     expect(toolObject("git log --oneline -5")).toBe("git log --oneline -5");
   });
 
-  it("失败行给失败动词(设计稿 V1 示例:✕ 写入失败 notes/city.md)", () => {
+  it("失败行给失败动词", () => {
     expect(TOOL_FAIL.write).toBe("写入失败");
     expect(TOOL_FAIL.read).toBe("读取失败");
     const failed = toolActionRow({ name: "write", args: '{"path":"notes/city.md"}', result: "", isError: true });

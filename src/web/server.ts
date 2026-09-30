@@ -1529,19 +1529,57 @@ export class WriterServer {
 		await runtime.session.modelRuntime.refresh({ allowNetwork: false });
 	}
 
-	/** POST /api/model {model}:切换模型。 */
+	/**
+	 * 会话级设置广播:主会话 + 编剧 + 舞台三处宿主全部转发。
+	 *
+	 * 2026-10-01 修「同一个对话窗口里换模型不生效」:模型与思考等级此前只打
+	 * `sessionHost`(主会话),而**聊天根本不走它** —— 编辑页走编剧会话
+	 * (`/api/writer/:slug/chat`)、舞台页走编排器会话,两边的模型都在会话创建时
+	 * 就绑死了(vendor sdk.ts 的 `defaultModelId: settingsManager.getDefaultModel()`,
+	 * 只有 `session.setModel()` 能改)。于是换模型要等换章或重启才生效,而设置页
+	 * 读的「当前模型」来自主会话 —— 看起来还切成功了。
+	 *
+	 * 逐个宿主尝试后再报错:某个宿主临时不可用(旧 runtime 已释放等)不该让其余的
+	 * 也跟着不动。
+	 */
+	private async applyToAllSessions(
+		action: string,
+		entries: Array<[label: string, run: () => Promise<void> | void]>,
+	): Promise<void> {
+		const failed: string[] = [];
+		for (const [label, run] of entries) {
+			try {
+				await run();
+			} catch (err) {
+				failed.push(`${label}: ${err instanceof Error ? err.message : String(err)}`);
+			}
+		}
+		if (failed.length > 0) {
+			throw new HttpError(400, "bad_request", `${action}未在所有会话生效（${failed.join("; ")}）`);
+		}
+	}
+
+	/** POST /api/model {model}:切换模型(主会话 + 编剧 + 舞台都换,见 applyToAllSessions)。 */
 	private async handlePostModel(ctx: RouteContext): Promise<void> {
 		const body = await readJsonBody(ctx.req);
 		const model = requireString(body, "model");
-		await this.options.sessionHost.setModel(model);
+		await this.applyToAllSessions("切换模型", [
+			["主会话", () => this.options.sessionHost.setModel(model)],
+			["编剧会话", () => this.options.writerHost?.setModel(model)],
+			["舞台会话", () => this.options.stageHost?.setModel(model)],
+		]);
 		this.send(ctx.res, 200, { ok: true });
 	}
 
-	/** POST /api/thinking {level}:切换思考等级。 */
+	/** POST /api/thinking {level}:切换思考等级(同 applyToAllSessions)。 */
 	private async handlePostThinking(ctx: RouteContext): Promise<void> {
 		const body = await readJsonBody(ctx.req);
 		const level = requireString(body, "level");
-		await this.options.sessionHost.setThinkingLevel(level);
+		await this.applyToAllSessions("切换思考等级", [
+			["主会话", () => this.options.sessionHost.setThinkingLevel(level)],
+			["编剧会话", () => this.options.writerHost?.setThinkingLevel(level)],
+			["舞台会话", () => this.options.stageHost?.setThinkingLevel(level)],
+		]);
 		this.send(ctx.res, 200, { ok: true });
 	}
 

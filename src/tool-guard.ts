@@ -53,6 +53,8 @@ export function assertPathWithinRoot(absPath: string, root: string): void {
  * 安装工具路径守卫:书目录外的路径(绝对路径、~ 展开、../ 上溯)一律拒绝;
  * readOnlyDirs 中的目录仅放行读操作(read/grep/find/ls),写操作(write/edit)
  * 依旧拒绝——内置技能文件(skills/)因此可读但不可被 AI 篡改。
+ * readOnlyDirs 里的技能目录应取「实际加载到的技能 baseDir」(见 skillDirsOf),
+ * 而不是另维护一份手工清单,否则会出现「列得出来、读不到」。
  * 会话工厂每次创建运行时调用(切书时 cwd 变化,守卫随新书目录重建)。
  * draftFile(如 "ch01.md")启用正文目录白名单:write/edit 只允许写该文件,
  * 防止 agent 自由发挥文件名导致正文写到 draft/第一章.md,前端按约定路径
@@ -92,4 +94,31 @@ export function installToolPathGuard(bookDir: string, readOnlyDirs: string[] = [
 /** 卸载守卫(vendor 行为恢复原样);测试或复用进程时清理用。 */
 export function uninstallToolPathGuard(): void {
 	clearToolPathGuard();
+}
+
+/**
+ * 路径清单去重(保持首次出现顺序)。
+ * 技能目录可能同时来自 env、调用方与「实际加载到的技能」,重复项会让守卫重复比较。
+ */
+export function dedupePaths(...lists: Array<readonly string[] | undefined>): string[] {
+	const all = lists.flatMap((list) => (list ? Array.from(list) : []));
+	return all.filter((d, i) => all.indexOf(d) === i);
+}
+
+/**
+ * 从**实际加载到的技能**反推只读放行目录(SKILL.md 所在目录 = baseDir)。
+ *
+ * 为什么以加载结果为准:vendor 的技能来源不止我们显式传的那几个目录 ——
+ * `noSkills:false` 时它还会发现 `agentDir/skills`、`<cwd>/.pi/skills`、插件与
+ * package 声明的技能。手工维护的放行基线(`resolveSkillReadOnlyDirs`)盖不全,
+ * 于是出现「技能列进了系统提示词、模型按绝对路径去 read 却被判工具路径越界」
+ * (2026-10-01 实测:`~/.pi/writer/agent/skills` 下的技能正好落在这个缝里)。
+ * 技能放行必须与加载同源:凡是被加载(因而会出现在提示词里)的技能,其目录一律可读;
+ * **可读不等于可写** —— 写操作仍然一律拒绝(见 installToolPathGuard)。
+ */
+export function skillDirsOf(skills: ReadonlyArray<{ baseDir?: string }> | undefined): string[] {
+	const dirs = (skills ?? [])
+		.map((s) => s?.baseDir)
+		.filter((d): d is string => typeof d === "string" && d.length > 0);
+	return dedupePaths(dirs);
 }

@@ -20,7 +20,7 @@ import {
 	runPrintMode,
 	SessionManager,
 } from "../vendor/pi-coding-agent/src/index.ts";
-import { getAgentDir, getBookDir, getBooksDir, resolveSkillsDir, VERSION } from "./config.ts";
+import { getAgentDir, getBookDir, getBooksDir, VERSION } from "./config.ts";
 import { createSessionRuntimeFactory } from "./session-factory.ts";
 
 import {
@@ -375,7 +375,6 @@ async function main(): Promise<void> {
 	await setCurrentChapter(book.slug, chapterFile);
 
 	const agentDir = getAgentDir();
-	const skillsDir = resolveSkillsDir();
 	// shell 方言(设置里的 shellKind/shellPath):TUI 的 shell 恒开(enableShell 是 web 侧的
 	// 风险开关),但方言跟随设置——选了 pwsh 就按 pwsh 叙述并交给 vendor 执行;
 	// 解析不到(如选了 pwsh 但本机没装)→ 按"无 shell"装配,提示词不会宣称有 shell。
@@ -394,8 +393,7 @@ async function main(): Promise<void> {
 
 	const createRuntime = createSessionRuntimeFactory({
 		agentDir,
-		readOnlyDirs: [skillsDir],
-		additionalSkillPaths: [skillsDir],
+		// 技能目录(自带 skills/ + 全局技能目录)由 session-factory 统一并入,调用方不必再传
 		// 系统提示动态生成:MCP 外部工具清单追加在文末,shell 行按方言注入
 		systemPromptOverride: () =>
 			buildWriterSystemPrompt(
