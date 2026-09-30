@@ -23,11 +23,14 @@ export function FilePreview({
 	slug,
 	entry,
 	onClose,
+	closing = false,
 }: {
 	client: ApiClient;
 	slug: string;
 	entry: BookFileEntryDto;
 	onClose: () => void;
+	/** 退场中(父级 useExitPresence):加 .is-closing 播反向动画。 */
+	closing?: boolean;
 }) {
 	/** 文本内容(kind=text 时异步取)。 */
 	const [text, setText] = useState<string | null>(null);
@@ -77,7 +80,7 @@ export function FilePreview({
 	}
 
 	return (
-		<div className="ws-preview" role="dialog" aria-label={`文件预览 ${entry.path}`}>
+		<div className={`ws-preview${closing ? " is-closing" : ""}`} role="dialog" aria-label={`文件预览 ${entry.path}`}>
 			<div className="ws-pv-head">
 				<div className="ws-pv-title">
 					<div className="ws-pv-name">{entry.title}</div>

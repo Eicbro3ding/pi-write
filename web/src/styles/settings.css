@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════════
-   pi-writer · 设置页样式(设计稿 v1 重做)
+   pi-writer · 设置页样式
    本文件在 styles.css 之后加载:同名选择器在此处的声明覆盖 styles.css 里的旧值。
    只用 :root 的设计 token(颜色 / 字号 8 档 / 圆角 8·12·16·999 / 间距 sp-1..6),
    不写死颜色与字号。作用域集中在 .settings 内,避免影响舞台 / 编辑 / 世界书。
@@ -20,7 +20,7 @@
 .st-head-title { font-size: var(--fs-22); font-weight: 600; color: var(--ink); letter-spacing: 0.01em; margin: 0; }
 .st-head-desc { font-size: var(--fs-13); color: var(--muted); line-height: 1.7; margin: var(--sp-2) 0 0; max-width: 720px; }
 
-/* —— 两栏卡片:左主列 + 右窄列(设计稿 11-13) —— */
+/* —— 两栏卡片:左主列 + 右窄列 —— */
 .st-cols { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: var(--sp-4); align-items: start; }
 .st-col-main, .st-col-side { min-width: 0; display: flex; flex-direction: column; gap: var(--sp-4); }
 .st-col-main > .s-card, .st-col-side > .s-card { margin-bottom: 0; }
@@ -88,7 +88,7 @@
 .st-edit-file { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 
 /* ════════════════════════════════════════════════════════════════
-   模型提供商弹窗(pvc-*)—— 设计稿 14:左栏只留「已配置」,
+   模型提供商弹窗(pvc-*)—— :左栏只留「已配置」,
    只读信息去掉输入框外观,模型按族聚合
    ════════════════════════════════════════════════════════════════ */
 
@@ -158,7 +158,7 @@
 .pvc-mini-icon {
   display: inline-flex; align-items: center; justify-content: center;
   width: 26px; height: 26px; min-height: 26px; border-radius: var(--r-sm); color: var(--muted);
-  transition: color var(--dur-fast), background var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .pvc-mini-icon:hover { color: var(--ink); background: var(--hover-tint); }
 .pvc-mini-icon.danger { color: var(--red); }
@@ -219,3 +219,11 @@
 .pvd-panel .icon-btn:hover:not(:disabled) { color: var(--ink); background: var(--hover-tint); border-color: var(--line); }
 .settings .icon-btn:disabled,
 .pvd-panel .icon-btn:disabled { opacity: 0.4; cursor: default; }
+
+/* ════════════════════════════════════════════════════════════════
+   交互反馈补齐(2026-09-30 动效覆盖度审计)
+   ════════════════════════════════════════════════════════════════ */
+.pvc-info {
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}

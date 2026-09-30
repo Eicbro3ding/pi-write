@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════════
-   pi-writer · 舞台页专属样式(设计稿 01-主流程/04·05 + 02-模态与面板/01·02)
+   pi-writer · 舞台页专属样式
 
    本文件在 styles.css 之后加载(main.tsx):同名选择器在此处的声明覆盖旧值。
    全部尺寸/颜色走 styles.css 的 :root token,不写死颜色与字号;字号只用
@@ -8,8 +8,7 @@
 
 /* ── 按钮基线 ──────────────────────────────────────────────────────
    .btn / .btn.primary 在本仓库只有 .stage-done-bar / .preview-actions 作用域版,
-   裸 .btn 无全局定义;舞台控制条、修订模态、反馈行都用裸 .btn,故在此补基线
-   (设计稿:主要按钮 = 琥珀实心)。
+   裸 .btn 无全局定义;舞台控制条、修订模态、反馈行都用裸 .btn,故在此补基线。
 
    **作用域限定**:只作用于舞台页自己的按钮宿主(.stage-controls / .stage-scroll /
    .rsm-*)——不能写成全局 .btn 覆盖,否则 .stage-done-bar .btn.primary(收幕完成条的
@@ -21,7 +20,7 @@
 	padding: 6px 14px; font-size: var(--fs-13); line-height: 1.5; white-space: nowrap;
 	color: var(--ink); background: var(--bg); border: 1px solid var(--line-strong);
 	border-radius: var(--r-sm); cursor: pointer;
-	transition: color var(--dur-fast), background var(--dur-fast), border-color var(--dur-fast);
+	transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 .stage-controls .btn:hover:not(:disabled),
 .stage-scroll .btn:hover:not(:disabled),
@@ -37,7 +36,7 @@
 .stage-controls .btn.primary:hover:not(:disabled),
 .stage-scroll .btn.primary:hover:not(:disabled),
 .rsm-panel .btn.primary:hover:not(:disabled) { background: var(--amber-tint-strong); color: var(--ink); }
-/* 收幕条按钮保持原有绿系配色(设计稿:绿 = 完成态;不参与上面的琥珀基线) */
+/* 收幕条按钮保持原有绿系配色 */
 .stage-done-bar .btn { background: transparent; }
 .stage-done-bar .btn.primary { color: var(--bg); background: var(--green); border-color: var(--green); }
 .stage-done-bar .btn.primary:hover:not(:disabled) { background: var(--green-tint-strong); color: var(--bg); }
@@ -49,7 +48,7 @@
 .stage-controls .btn.danger { color: var(--red); border-color: var(--red-tint-strong); background: var(--bg); }
 .stage-controls .btn.danger:hover:not(:disabled) { color: var(--red); background: var(--red-tint-strong); }
 
-/* ── 场景头(设计稿 04:一行;导演最近一句收进下方可折叠次要行) ─────── */
+/* ── 场景头 ─────── */
 .stage-head {
 	flex: none; display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
 	padding: 10px var(--sp-4); border-bottom: 1px solid var(--line);
@@ -66,7 +65,7 @@
 	display: inline-flex; align-items: center; gap: 6px;
 	font-size: var(--fs-12); color: var(--muted);
 	padding: 4px 10px; border: 1px solid var(--line); border-radius: var(--r-sm);
-	background: var(--bg-elev); transition: color var(--dur-fast), background var(--dur-fast);
+	background: var(--bg-elev); transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .sh-mode:hover { color: var(--ink); background: var(--hover-tint); }
 .sh-mode-caret { font-size: var(--fs-11); color: var(--faint); }
@@ -76,7 +75,7 @@
 .stage-dir-last { flex: none; padding: 6px var(--sp-4); border-bottom: 1px solid var(--line); }
 .stage-dir-last > summary {
 	cursor: pointer; list-style: none; font-size: var(--fs-11); letter-spacing: 0.08em;
-	color: var(--faint); transition: color var(--dur-fast);
+	color: var(--faint); transition: color var(--dur-fast) var(--ease-out);
 }
 .stage-dir-last > summary::-webkit-details-marker { display: none; }
 .stage-dir-last > summary::before { content: "▸ "; }
@@ -91,10 +90,11 @@
 .stage-controls { padding: 8px var(--sp-4); }
 .st-force { flex: none; width: 148px; }
 
-/* ── 右栏:宽度与收起(48px 竖条,设计稿 04) ─────────────────────── */
-.stage-grid.panel-shut { grid-template-columns: auto minmax(0, 1fr) 48px; }
-.stage-grid.panel-shut .stage-panel { align-items: stretch; }
-/* 收起态 = 图标栏(设计稿 04 右缘):每项「图标 + 小标签」竖排,当前项带琥珀圆角底 */
+/* ── 右栏:宽度与收起 ───────────────────────
+   宽度落在 .stage-panel 自己身上(轨 3 = auto),收起/展开才是可过渡的 width;
+   grid-template-columns 本身不可动画,写轨宽只会硬切 */
+.stage-grid.panel-shut .stage-panel { width: 48px; align-items: stretch; }
+/* 收起态 = 图标栏:每项「图标 + 小标签」竖排,当前项带琥珀圆角底 */
 .stp-rail {
 	flex: 1; display: flex; flex-direction: column; align-items: center; gap: var(--sp-2);
 	padding: var(--sp-3) 0; background: var(--bg-elev);
@@ -186,7 +186,7 @@
 	grid-column: 2; grid-row: 1 / span 2; align-self: center; justify-self: end;
 	display: inline-flex; align-items: center; justify-content: center;
 	width: 22px; height: 22px; border-radius: var(--r-sm); color: var(--faint);
-	transition: color var(--dur-fast), background var(--dur-fast);
+	transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .sf-pen svg { width: 15px; height: 15px; }
 .sf-pen:hover { color: var(--amber); background: var(--amber-tint); }
@@ -199,7 +199,7 @@
 
 /* ── 备忘录页签(NoticeBoard minimal) ────────────────────────────
    条目与添加行都沿用 NoticeBoard 自己的样式(方形勾选框 + $bg-elev-2 卡片 +
-   「＋ 记一条待办…」输入行,设计稿 02-模态与面板/02);舞台侧只去掉外框内边距
+   「＋ 记一条待办…」输入行);舞台侧只去掉外框内边距
    ——面板已经给了左右留白,再套一层会缩进两次 */
 .notice-board.minimal { padding: 0; gap: var(--sp-2); overflow: visible; }
 .notice-board.minimal .notice-add { margin-top: var(--sp-3); }
@@ -218,7 +218,7 @@
 	content: "Enter 发送 · Shift+Enter 换行 · / 打开命令面板";
 }
 
-/* ── 气泡差分(设计稿 05;默认文档流,在设置里切换) ─────────────────
+/* ── 气泡差分 ─────────────────
    用户:右对齐气泡(bg-elev-2)+ 右侧 28px 圆头像;
    AI:左侧 28px 圆头像 + 名字行,气泡底 bg-elev,圆角 12,最大宽度约 78%。 */
 .stage-scroll.chat-bubble .record {
@@ -248,21 +248,20 @@
 .stage-scroll.chat-bubble .record.assistant .record-who::after { content: " · 导演"; }
 .stage-scroll.chat-bubble .record-meta { letter-spacing: 0.04em; }
 
-/* ── 修订剧本模态(设计稿 02-模态与面板/01):860px 独立窗口 ───────── */
+/* ── 修订剧本模态:860px 独立窗口 ───────── */
 .rsm-mask {
 	position: fixed; inset: 0; z-index: 300; display: flex; align-items: center; justify-content: center;
 	padding: var(--sp-6); background: var(--mask);
 	backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
-	animation: rsm-fade var(--dur-base) var(--ease-out);
+	animation: fade-in var(--dur-base) var(--ease-out);
 }
-@keyframes rsm-fade { from { opacity: 0; } }
 .rsm-panel {
 	width: min(860px, 96vw); max-height: 88vh; display: flex; flex-direction: column; overflow: hidden;
 	background: var(--bg-elev); border: 1px solid var(--line-strong);
 	border-radius: var(--r-lg); box-shadow: var(--shadow-3);
-	animation: rsm-pop var(--dur-slow) var(--ease-out);
+	animation: wz-pop var(--dur-slow) var(--ease-out);
 }
-@keyframes rsm-pop { from { opacity: 0; transform: translateY(14px) scale(0.985); } }
+/* 弹出曲线与 .wz-panel(设置页居中弹窗)共用 styles.css 的 wz-pop:同一类弹窗不写两条 */
 .rsm-head {
 	flex: none; display: flex; align-items: baseline; gap: var(--sp-2);
 	padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--line);
@@ -272,7 +271,7 @@
 .rsm-desc { flex: 1; min-width: 0; font-size: var(--fs-12); color: var(--muted); }
 .rsm-close {
 	flex: none; align-self: flex-start; width: 24px; height: 24px; border-radius: var(--r-sm);
-	font-size: var(--fs-13); color: var(--faint); transition: color var(--dur-fast), background var(--dur-fast);
+	font-size: var(--fs-13); color: var(--faint); transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .rsm-close:hover { color: var(--ink); background: var(--hover-tint); }
 .rsm-body {
@@ -289,7 +288,7 @@
 .rsm-field input, .rsm-field textarea {
 	width: 100%; background: var(--bg-elev-2); border: 1px solid var(--line);
 	border-radius: var(--r-sm); color: var(--ink); font-size: var(--fs-13);
-	padding: 7px 10px; outline: none; transition: border-color var(--dur-fast);
+	padding: 7px 10px; outline: none; transition: border-color var(--dur-fast) var(--ease-out);
 }
 .rsm-field input:focus, .rsm-field textarea:focus { border-color: var(--amber); }
 .rsm-field textarea { min-height: 76px; resize: vertical; line-height: 1.7; }
@@ -313,7 +312,6 @@
 
 /* ── 窄屏(≤900px):面板整体隐藏,收起钮随之不参与(面板不挂载) ────── */
 @media (max-width: 900px) {
-	.stage-grid.panel-shut { grid-template-columns: minmax(0, 1fr); }
 	.stage-head { padding: 8px 10px; gap: var(--sp-2); }
 	.sh-title { font-size: var(--fs-15); }
 	.sh-right .st-counts { display: none; }

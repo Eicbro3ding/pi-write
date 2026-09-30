@@ -1,14 +1,16 @@
 /**
  * 统一下拉(Select)——替代原生 <select>。
  * 原生 <select> 的展开层不可样式化(圆角/阴影/hover 高亮由系统画,macOS 上整行
- * CSS 无效),闭合态又在各面板各写一份;这里收敛成唯一实现,规范见设计稿
- * 03-组件规范/01。判定逻辑全在 select-logic.ts(有单测),本文件只管渲染与事件。
+ * CSS 无效),闭合态又在各面板各写一份;这里收敛成唯一实现。
+ * 判定逻辑全在 select-logic.ts(有单测),本文件只管渲染与事件。
  *
  * 弹层挂在 body 下的 fixed 定位层:不受祖先 overflow/transform 裁剪,
  * 也不会被面板的 z-index 上下文吃掉;滚动/缩放时跟随重算。
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { DUR } from "../motion.ts";
+import { useExitPresence } from "../use-exit-presence.ts";
 import { Lu } from "./Lu.tsx";
 import {
 	filterSelectRows,
@@ -57,6 +59,8 @@ export function Select({
 }) {
 	const rows = useMemo(() => flattenSelectRows(options ?? [], groups ?? []), [options, groups]);
 	const [open, setOpen] = useState(false);
+	/** 退场:关掉后仍挂 140ms,让弹层播完下沉动画(见 styles/presence.css)。 */
+	const menuPresence = useExitPresence(open, DUR.fast * 1000);
 	const [query, setQuery] = useState("");
 	const [active, setActive] = useState(-1);
 	const [place, setPlace] = useState({ top: 0, left: 0, width: 0, flip: false });
@@ -113,8 +117,9 @@ export function Select({
 	}, [disabled, rows, value]);
 
 	const close = useCallback(() => {
+		// 只关不清理:退场动画期间弹层仍挂 140ms,这里清 query 会让它在退场途中闪成
+		// 未过滤的整列表(下一次 openMenu 会重置 query/active)
 		setOpen(false);
-		setQuery("");
 	}, []);
 
 	const commit = useCallback(
@@ -192,11 +197,11 @@ export function Select({
 				<span className={`sel-value${selected ? "" : " empty"}`}>{selected ? selected.label : placeholder}</span>
 				<Lu icon="chevron-down" size={14} className="sel-arrow" />
 			</button>
-			{open &&
+			{menuPresence.mounted &&
 				createPortal(
 					<div
 						ref={popupRef}
-						className={`sel-menu${place.flip ? " flip" : ""}`}
+						className={`sel-menu${place.flip ? " flip" : ""}${menuPresence.closing ? " is-closing" : ""}`}
 						style={{ top: place.top, left: place.left, width: place.width }}
 						role="listbox"
 						onKeyDown={onKeyDown}

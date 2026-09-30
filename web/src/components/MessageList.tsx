@@ -55,15 +55,15 @@ function ThinkingIndicator() {
 }
 
 /**
- * 上下文压缩中提示(手动 /compact 或阈值/溢出自动压缩;设计稿 ★对话 · 上下文压缩动画)。
+ * 上下文压缩中提示。
  *
  * **只做「进行中」这一态,而且只做真实信息**:`compaction_start/end` 事件里只有
  * `reason`(manual / threshold / overflow),**没有条数、字数、步骤数、预计耗时** ——
- * 设计稿画的「第 2 / 3 步」「生成摘要 · 12 条消息 → 1 个摘要块」「约 8 秒」全都无从得来,
+ * 「第 2 / 3 步」「生成摘要 · 12 条消息 → 1 个摘要块」「约 8 秒」全都无从得来,
  * 所以一律不写(编出来的进度比没有进度更坏)。
  * 进度条走**不确定进度**的流光扫过 —— 这是"还在动"的诚实表达,不是假装知道百分比。
  * (完成态 / 失败态同样缺数据:压缩结束后 compacting 直接落回 false,没有留下条数;
- *  要做设计稿的「已压缩 N 条消息 · 摘要 M 字」得先让服务端把摘要条目数带出来。)
+ *  要做「已压缩 N 条消息 · 摘要 M 字」得先让服务端把摘要条目数带出来。)
  */
 function CompactingIndicator() {
 	return (
@@ -84,9 +84,9 @@ function CompactingIndicator() {
 }
 
 /**
- * 模型报错卡(设计稿 ★组件规范·回复渲染 v2 右列;需求 1「原文照实显示」)。
+ * 模型报错卡。
  *
- * 结构照设计稿:红图标 + 标题 + 右侧状态码徽标 → **原文框**(等宽、逐字、不折叠)
+ * 结构:红图标 + 标题 + 右侧状态码徽标 → **原文框**(等宽、逐字、不折叠)
  * → 动作行(重试 / 复制原文 / 去设置模型 ›)→ 可选的处置提示行。
  *
  * 三条纪律:
@@ -182,7 +182,7 @@ function ChatErrorCard({
 }
 
 /**
- * 工具状态标签文案(设计稿 ★组件规范·回复渲染 v2):状态不再靠整行变色表达,
+ * 工具状态标签文案:状态不再靠整行变色表达,
  * 收进行尾一颗方括号标签——成功绿、失败红、运行中琥珀。
  */
 const STATE_LABEL: Record<"run" | "ok" | "err", string> = {
@@ -198,7 +198,7 @@ const STATE_LABEL: Record<"run" | "ok" | "err", string> = {
  * 边界的工具,运行中的 stdout/stderr 经 tool_execution_update 实时流进来(见 store
  * 的归约),结束后把最终输出留在卡片上供回看。运行中自动滚到底(输出是快照替换)。
  *
- * 设计稿 03-组件规范/03:四张卡统一外壳;状态改胶囊;**工具卡正文不再是绿色**
+ * 四张卡统一外壳;状态改胶囊;**工具卡正文不再是绿色**
  * (绿色是状态色,不是装饰色)。
  */
 function ToolCard({ t }: { t: ToolCallInfo }) {
@@ -235,7 +235,7 @@ function ToolCard({ t }: { t: ToolCallInfo }) {
 	);
 }
 
-/** 完成/失败/进行中的状态小图标(动作行用;不用 emoji,见设计稿 03-组件规范/05)。 */
+/** 完成/失败/进行中的状态小图标。 */
 function ActionStateIcon({ state }: { state: "run" | "ok" | "err" }) {
 	if (state === "run") {
 		return (
@@ -258,7 +258,7 @@ function errorDetailLine(result: string | null): string | null {
 }
 
 /**
- * 读取型工具的**一行**(设计稿 03-组件规范/05 + ★组件规范·回复渲染 v2):不是
+ * 读取型工具的**一行**:不是
  * 「什么都不显示」,而是把工具调用压成一行可读的动作——**带宾语**(在改哪个文件)、
  * **不用 emoji**。
  *
@@ -386,9 +386,8 @@ function useThinkingTimer(text: string, done: boolean): number {
 }
 
 /**
- * 思考胶囊(设计稿 03-组件规范/04):**元信息行内**的一颗药丸——`› 思考 · 1,606 字`,
- * 展开时箭头翻转。字数带千分位、与「思考」之间用 `·` 分隔;秒数只在流式中出现
- * (结束后字数才是有效信息,设计稿收起来的也是这一种)。
+ * 思考胶囊:**元信息行内**的一颗药丸——`› 思考 · 1,606 字`,
+ * 展开时箭头翻转。字数带千分位、与「思考」之间用 `·` 分隔;秒数只在流式中出现。
  *
  * 改造后每个思考块各有一颗(不再把整轮思考拼成一颗)——顺序交错得以成立。
  */
@@ -406,8 +405,10 @@ export function ThinkingToggle({
 	const elapsed = useThinkingTimer(text, done);
 	return (
 		<button type="button" className="think-toggle" aria-expanded={open} onClick={onToggle}>
-			<span className="think-arrow" aria-hidden="true">
-				<Lu icon={open ? "chevron-down" : "chevron-right"} size={12} strokeWidth={1.8} />
+			<span className={`think-arrow${open ? " open" : ""}`} aria-hidden="true">
+				{/* 单枚 chevron + rotate 过渡(与 .sel-arrow/.pvc-arrow/.w-node-caret 同一套;
+				    此前按状态直换图标 = 硬切,同类展开控件三种做法,2026-09-30 审计) */}
+				<Lu icon="chevron-right" size={12} strokeWidth={1.8} />
 			</span>
 			<span className="think-label">{done ? "思考" : "思考中"}</span>
 			{!done && elapsed > 0 && <span className="think-time">· {elapsed} 秒</span>}
@@ -439,7 +440,7 @@ export function ThinkingBody({ text, open }: { text: string; open: boolean }) {
 /**
  * 思考块 = 胶囊 + 展开体(自管开合;消息流按块逐个挂)。
  *
- * **开合时机(2026-09-22,设计稿 ★组件规范·回复渲染 v2)**:思考链**只在 output
+ * **开合时机**:思考链**只在 output
  * 期间自动展开,结束立刻折叠**——思考是过程,过程进行中值得看见,过程结束就该让位给
  * 正文结论。交错思考里的短思考同理(output 中展开、结束折叠),所以这里按块各自成立,
  * 不依赖「整轮思考」的汇总状态。
@@ -535,7 +536,6 @@ function Message({
 	// 编辑需要服务端 entry id 定位:历史水合与 message_end 后都有,乐观气泡(发送瞬间)没有
 	const canAct = m.role === "user" && !streaming && m.entryId !== undefined;
 	// 报错消息:没有发言人、没有过程、没有编辑/复制正文 —— 它整条就是一张卡
-	// (设计稿右列的卡自带标题与动作,再套一层『你/PI』元信息行只是噪音)
 	if (m.role === "error") {
 		if (!m.error) return null;
 		return (
@@ -551,7 +551,7 @@ function Message({
 	// data-who:气泡差分(舞台)用它给头像渲染首字,不必让消息流认识舞台/角色
 	return (
 		<div className={m.role === "user" ? "record user" : "record assistant"} data-who={m.role === "user" ? "你" : "PI"}>
-			{/* 元信息行:发言人 + 回合折叠胶囊 + 操作(设计稿 03-组件规范/04——
+			{/* 元信息行:发言人 + 回合折叠胶囊 + 操作(
 			    胶囊就在这一行里,不再自占一行) */}
 			<div className="record-meta">
 				<span className="record-who">{m.role === "user" ? "你" : "PI"}</span>
@@ -563,13 +563,13 @@ function Message({
 						title={procShown ? "收起这一轮的过程" : "展开这一轮的过程"}
 						onClick={() => setProcOpen((v) => !v)}
 					>
-						<span className="think-arrow" aria-hidden="true">
-							<Lu icon={procShown ? "chevron-down" : "chevron-right"} size={12} strokeWidth={1.8} />
+						<span className={`think-arrow${procShown ? " open" : ""}`} aria-hidden="true">
+							<Lu icon="chevron-right" size={12} strokeWidth={1.8} />
 						</span>
 						<span className="think-label">已工作 {formatDuration(duration)}</span>
 					</button>
 				)}
-				{/* 操作行:常驻可见(设计稿 03-组件规范/04——原来 hover-only,触屏不可达)。
+				{/* 操作行:常驻可见。
 				    user:编辑(撤回并重发)+ 复制;assistant:复制。AI 流式中隐藏 */}
 				{(canAct || (m.role === "assistant" && !streaming && text.length > 0)) && !editing && (
 					<span className="record-actions">
@@ -906,7 +906,7 @@ export function MessageList({
 							<CompactingIndicator />
 						) : streaming ? (
 							/* 简化输出下不再另起一条「🔧 正在编辑…」状态行:进行中的那一行就在
-							   动作流里(带宾语、不用 emoji,见设计稿 03-组件规范/05) */
+							   动作流里 */
 							<ThinkingIndicator />
 						) : null}
 					</div>

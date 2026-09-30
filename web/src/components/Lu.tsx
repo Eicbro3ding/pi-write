@@ -2,10 +2,10 @@
  * 图标:lucide 子集(vendored,不引依赖)。
  *
  * 这些路径数据来自 lucide-react v1.16.0(ISC License,Copyright (c) Lucide Icons
- * and Contributors),只保留绘图属性、去掉内部 key。**为什么不手绘**:设计稿(Pen 文档
+ * and Contributors),只保留绘图属性、去掉内部 key。**为什么不手绘**:(Pen 文档
  * `~/pi-writer-redesign`)里的图标都是 Pen 的 icon 节点,标的是 `library: "lucide"`
  * 加图标名(clapperboard / square-pen / eye-off …);照名字取真实路径,才能保证线条走向、
- * 端点、开口方向和设计稿一致。新增图标:按设计稿里的 icon 节点名补进 NODES。
+ * 端点、开口方向一致。新增图标:按 icon 节点名补进 NODES。
  *
  * 用法:`<Lu icon="book" size={14} />`(stroke 走 currentColor,尺寸默认 16)。
  */
@@ -84,7 +84,7 @@ const NODES: Record<string, Array<[string, Record<string, string | number>]>> = 
 
 export type LucideName = keyof typeof NODES;
 
-/** 设计稿用到的全部图标名(便于核对:Pen 文档里的 icon 节点名都在这里)。 */
+/** 全部图标名(便于核对:Pen 文档里的 icon 节点名都在这里)。 */
 export const LUCIDE_NAMES = Object.keys(NODES) as LucideName[];
 
 export function Lu({

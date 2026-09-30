@@ -7,13 +7,14 @@ import { Lu } from "./Lu.tsx";
 import { StageAvatar } from "./StageAvatar.tsx";
 import { ScriptView } from "./ScriptView.tsx";
 import { ReviseScriptModal } from "./ReviseScriptModal.tsx";
+import { useExitPresence } from "../use-exit-presence.ts";
 
 /**
- * 舞台右侧面板(设计稿 01-主流程/04 右栏 + 02-模态与面板/02):
+ * 舞台右侧面板:
  * 剧本(内层胶囊 概要/节拍/演员指令)| 选角(演员池)| 修订(提交式入口 + 最近一次修订)|
  * 备忘录(待办清单)。
  *
- * 层级(2026 设计稿 02 的核心改动):现状是「外层胶囊 + 内层胶囊」两层同款 tab 控件,
+ * 层级:现状是「外层胶囊 + 内层胶囊」两层同款 tab 控件,
  * 视觉分不清层级。现在**外层改为图标 + 下划线式**(琥珀色 + 2px 下划线,右上角收起钮),
  * **内层保留胶囊**(ScriptView 的 概要/节拍/演员指令)。
  *
@@ -29,7 +30,7 @@ const TAB_INDEX: Record<StagePanelTab, number> = { script: 0, cast: 1, revise: 2
 
 /** 页签图标(15px 线性;当前项随文字一起变琥珀色——currentColor)。 */
 const TAB_ICONS: Record<StagePanelTab, ReactNode> = {
-	// 剧本:文稿  选角:人物  修订:铅笔  备忘录:便签(设计稿里的 lucide 图标名)
+	// 剧本:文稿  选角:人物  修订:铅笔  备忘录:便签
 	script: <Lu icon="file-text" size={15} className="stp-ico" />,
 	cast: <Lu icon="users" size={15} className="stp-ico" />,
 	revise: <Lu icon="pencil" size={15} className="stp-ico" />,
@@ -72,11 +73,13 @@ export function StagePanel({
 	const [form, setForm] = useState<ReviseFormState>(emptyReviseForm);
 	/** 修订模态开关(表单仍在,只有该模态打开时才渲染 860px 窗口)。 */
 	const [reviseOpen, setReviseOpen] = useState(false);
+	/** 修订模态的退场:关掉后仍挂 200ms,让 860px 窗口播完缩回动画。 */
+	const revisePresence = useExitPresence(reviseOpen);
 	/** 备忘录条数(NoticeBoard 上报「添加/删除」后的条目数,头部说明行用)。 */
 	const [memoCount, setMemoCount] = useState<number | null>(null);
 
 	function selectTab(t: StagePanelTab) {
-		// 交互约定(设计稿「再点一次已选中的项 = 执行它的第二动作」):
+		// 交互约定:
 		// 当前页签再点一次 = 收起面板;切到别的页签才换内容。省掉面板上的收起钮依赖
 		if (t === tab) {
 			onToggleCollapse();
@@ -97,10 +100,10 @@ export function StagePanel({
 	}
 
 	/**
-	 * 收起态:整栏收成 48px 的**图标栏**(设计稿 04 右缘):四个页签变成
+	 * 收起态:整栏收成 48px 的**图标栏**:四个页签变成
 	 * 「图标 + 小标签」的竖排按钮,当前项带琥珀圆角底。
 	 *
-	 * 交互沿用设计稿的「再点一次已选中的项 = 第二动作」:点别的页签只换选中
+	 * 交互沿用「再点一次已选中的项 = 第二动作」:点别的页签只换选中
 	 * (栏仍是收起的,不打断阅读),点当前页签才展开。
 	 */
 	if (collapsed) {
@@ -176,7 +179,7 @@ export function StagePanel({
 											<StageAvatar slug={slug} name={name} narrator={a.type === "narrator"} />
 											<div className="st-cast-main">
 												<span className="st-cast-name">{name}</span>
-												{/* 槽位 id + 模型(mono 小字)——设计稿:两行式,模型下沉到名字下面 */}
+												{/* 槽位 id + 模型(mono 小字)——:两行式,模型下沉到名字下面 */}
 												<span className="st-cast-meta">
 													{a.id}
 													{a.model ? ` · ${a.model}` : ""}
@@ -238,13 +241,15 @@ export function StagePanel({
 				</div>
 			</div>
 
-			{/* 修订模态:860px 独立窗口(设计稿 02-模态与面板/01) */}
-			{reviseOpen && script && (
+			{/* 修订模态:860px 独立窗口。
+			    presence:关掉后仍挂 200ms 播退场(表单 state 在父组件,不丢) */}
+			{revisePresence.mounted && script && (
 				<ReviseScriptModal
 					script={script}
 					castNames={castNames}
 					form={form}
 					busy={busy}
+					closing={revisePresence.closing}
 					onField={(patch) => setForm((f) => ({ ...f, ...patch }))}
 					onSubmit={submit}
 					onClose={() => setReviseOpen(false)}

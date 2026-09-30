@@ -78,10 +78,13 @@ export function AskUserOverlay({
 	questions,
 	onSubmit,
 	onCancel,
+	closing = false,
 }: {
 	questions: AskQuestionView[];
 	onSubmit(answers: string[]): void;
 	onCancel(): void;
+	/** 退场中(父级 useExitPresence):遮罩与卡片一起播反向动画。 */
+	closing?: boolean;
 }) {
 	const [index, setIndex] = useState(0);
 	const [answers, setAnswers] = useState<Ans[]>(() => questions.map(() => EMPTY));
@@ -215,7 +218,7 @@ export function AskUserOverlay({
 	const answeredCount = questions.filter((qq, i) => isFilled(qq, answers[i])).length;
 
 	return (
-		<div className="ask-layer" aria-hidden={false}>
+		<div className={`ask-layer${closing ? " is-closing" : ""}`} aria-hidden={false}>
 			{/* 薄遮罩:工具阻塞着等回答,背后不该还能点。点击不关闭(避免误触丢作答) */}
 			<div className="ask-scrim" />
 			<motion.div

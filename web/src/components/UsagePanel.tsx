@@ -27,14 +27,17 @@ export function UsagePanel({
 	loading,
 	err,
 	onClose,
+	closing = false,
 }: {
 	stats: SessionUsageStatsDto | null;
 	loading: boolean;
 	err: string | null;
 	onClose: () => void;
+	/** 退场中(父级 useExitPresence):加 .is-closing 播反向动画。 */
+	closing?: boolean;
 }) {
 	return (
-		<div className="usage-pop" role="dialog" aria-label="本会话用量">
+		<div className={`usage-pop${closing ? " is-closing" : ""}`} role="dialog" aria-label="本会话用量">
 			<div className="usage-head">
 				<span className="usage-title">本会话用量</span>
 				<span className="usage-note">累计 · 含已压缩的历史</span>

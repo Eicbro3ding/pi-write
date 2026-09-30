@@ -14,7 +14,7 @@ interface WorldTreeProps {
 	onSelect: (id: string) => void;
 	/** 全部关系(条目行右侧显示关系条数)。 */
 	relations: WorldRelationDto[];
-	/** 新建条目:入口在树底(设计稿 08),点击展开内联创建行。 */
+	/** 新建条目:入口在树底,点击展开内联创建行。 */
 	creating: boolean;
 	onCreatingChange: (v: boolean) => void;
 	createType: WorldEntryDto["type"];
@@ -35,7 +35,7 @@ function IconInbox() {
 }
 
 /**
- * 世界书分类树(设计稿 08):按 type 分组(人物/世界/时间线/大纲),组标题右侧显示
+ * 世界书分类树:按 type 分组(人物/世界/时间线/大纲),组标题右侧显示
  * 条数;组内用 parent 字段建层级(跨类型 parent 亦可),子条目收进带竖向导线的
  * 子块;条目行显示名称 + 右侧关系条数(未激活再加一个眼睛关闭图标)。
  * 选中行:琥珀左竖条 + --amber-tint 底。树底部为新建条目入口(琥珀实心按钮,

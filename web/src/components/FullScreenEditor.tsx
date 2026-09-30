@@ -33,6 +33,8 @@ export interface FullScreenEditorProps {
 	/** 标题(如《书》· 章节)。 */
 	title: string;
 	onClose: (result: { saved: boolean; file: string }) => void;
+	/** 退场中(父级 useExitPresence):加 .is-closing 播反向动画。 */
+	closing?: boolean;
 }
 
 function countWriting(text: string): number {
@@ -41,7 +43,7 @@ function countWriting(text: string): number {
 	return cjk + latin;
 }
 
-export function FullScreenEditor({ client, slug, initialFile, title, onClose }: FullScreenEditorProps) {
+export function FullScreenEditor({ client, slug, initialFile, title, onClose, closing = false }: FullScreenEditorProps) {
 	const [file, setFile] = useState(initialFile);
 	const [text, setText] = useState("");
 	const [dirty, setDirty] = useState(false);
@@ -156,7 +158,7 @@ export function FullScreenEditor({ client, slug, initialFile, title, onClose }: 
 	}, []);
 
 	return (
-		<div className="fs-editor">
+		<div className={`fs-editor${closing ? " is-closing" : ""}`}>
 			<div className="fs-bar">
 				<span className="fs-title" title={title}>
 					{title}

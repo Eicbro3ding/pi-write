@@ -6,10 +6,10 @@ import { renderMarkdown } from "../markdown.ts";
 import { Lu } from "./Lu.tsx";
 
 /**
- * 词条详情卡(设计稿 10 关系图右侧栏):圆形类型色环头像(有图用图,无图用首字)
+ * 词条详情卡:圆形类型色环头像(有图用图,无图用首字)
  * + 名字 + 类型胶囊 + 状态行(在世 · 活跃)、关键词 chips、关系列表(方向图标 +
  * 关系类型胶囊 + 对方名字 + ›)、简介 markdown,底部「在「条目」中编辑 →」+
- * 删除。本体只读——编辑统一在条目视图的表单里(inline 编辑已按设计稿撤掉)。
+ * 删除。本体只读——编辑统一在条目视图的表单里。
  */
 interface EntryCardProps {
 	entry: WorldEntryDto;

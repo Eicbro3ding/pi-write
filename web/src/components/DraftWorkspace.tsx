@@ -313,6 +313,19 @@ export function DraftWorkspace({
 					onChange={handleChange}
 					onSelectionChange={handleSelectionChange}
 				/>
+				{/* 切章/首次加载:正文还是上一章内容,盖一层骨架说明「正在取新的」
+				    (审计 2026-09-30:此前只是状态胶囊变「加载中」,正文无声硬切) */}
+				{status === "loading" && (
+					<div className="d-loading" aria-hidden="true">
+						<div className="sk-lines">
+							<div className="skeleton sk-line title" />
+							<div className="skeleton sk-line w90" />
+							<div className="skeleton sk-line w80" />
+							<div className="skeleton sk-line w90" />
+							<div className="skeleton sk-line w50" />
+						</div>
+					</div>
+				)}
 			</div>
 		</aside>
 	);

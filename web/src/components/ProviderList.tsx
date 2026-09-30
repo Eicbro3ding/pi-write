@@ -1,20 +1,21 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
 import { currentModelOf, filterProviders, providerCanHoldApiKey, providerCountLabel, providerCounts, providerRowSub, unconfiguredHint } from "../provider-list-logic.ts";
 import type { ModelDto, ProviderDetailDto, ProviderInfo } from "../types.ts";
-import { AddModelDialog } from "./AddModelDialog.tsx";
+import { AddModelDialog, type AddModelMode, type EditableModel } from "./AddModelDialog.tsx";
 import { AddProviderDialog } from "./AddProviderDialog.tsx";
 import { IconPlus } from "./Icons.tsx";
 import { Lu } from "./Lu.tsx";
 import { useIsPhone } from "../useMediaQuery.ts";
+import { useExitPresence } from "../use-exit-presence.ts";
 
 /**
  * 模型供应商配置,两种形态共用一套数据:
  *
  * - 桌面(>700px):双栏卡片 —— 左栏列全部供应商 + 搜索,右栏是选中项的详情;
  * - 手机(≤700px):一屏一层 —— 「已连接的供应商」卡片列表 + 「添加供应商」入口,
- *   点卡片进详情,详情里「添加模型」。设计稿 ★移动版「管理供应商」。
+ *   点卡片进详情,详情里「添加模型」。
  *
  * 数据与写操作完全沿用:GET /api/providers、GET /api/providers/:id、
  * POST /api/providers/:id/apikey、DELETE /api/providers/:id、
@@ -65,6 +66,40 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 	const [providerDialog, setProviderDialog] = useState(false);
 	/** 正在编辑的自定义模型(非空时打开编辑弹窗;只对 models.json 里的模型开放)。 */
 	const [editingModel, setEditingModel] = useState<ModelDto | null>(null);
+	/**
+	 * 退场:modelDialog 归 null 后弹窗还要多挂 200ms 播反向动画。模式与预填值
+	 * 必须自己留住 —— 关窗时 mode/editingModel 都会被清掉,退场途中不能读到 null。
+	 * (渲染期写 ref 是本仓库既有模式,见 WorldPage 的 worldRef。)
+	 */
+	const modelDialogPresence = useExitPresence(modelDialog !== null);
+	const providerDialogPresence = useExitPresence(providerDialog);
+	const lastModelDialogRef = useRef<{ mode: AddModelMode; model: EditableModel | null }>({ mode: "model", model: null });
+	if (modelDialog === "add") lastModelDialogRef.current = { mode: "model", model: null };
+	if (modelDialog === "edit" && editingModel) {
+		lastModelDialogRef.current = {
+			mode: "edit",
+			model: {
+				id: editingModel.id,
+				name: editingModel.name,
+				contextWindow: editingModel.contextWindow,
+				maxTokens: editingModel.maxTokens,
+				input: editingModel.input,
+			},
+		};
+	}
+	/**
+	 * 每次「重新挂载」换一个 key:presence 让弹窗在关窗后再驻留 200ms,若不换 key,
+	 * 关掉后立刻再打开会复用上一次的表单 state(预填值/校验错误残留)。
+	 * key 在挂载沿递增,退场期间保持不变,所以不会打断退场动画。
+	 */
+	const modelSeqRef = useRef(0);
+	const modelWasMountedRef = useRef(false);
+	if (modelDialogPresence.mounted && !modelWasMountedRef.current) modelSeqRef.current += 1;
+	modelWasMountedRef.current = modelDialogPresence.mounted;
+	const providerSeqRef = useRef(0);
+	const providerWasMountedRef = useRef(false);
+	if (providerDialogPresence.mounted && !providerWasMountedRef.current) providerSeqRef.current += 1;
+	providerWasMountedRef.current = providerDialogPresence.mounted;
 	/** 待确认删除的自定义模型 id(非空时该行显示确认按钮)。 */
 	const [confirmModel, setConfirmModel] = useState<string | null>(null);
 	const [modelBusy, setModelBusy] = useState(false);
@@ -109,7 +144,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 	 * 选中供应商变化/供应商列表刷新后:拉取详情。
 	 *
 	 * 手机端不自动选中:那里是「列表 → 详情」两级,一进来就替用户挑一个供应商等于
-	 * 把列表页吞掉(设计稿「管理供应商」首屏就是列表)。桌面双栏才需要自动选中。
+	 * 把列表页吞掉。桌面双栏才需要自动选中。
 	 */
 	useEffect(() => {
 		if (providers === null) return;
@@ -371,7 +406,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 	}
 
 	/**
-	 * 手机端「已连接的供应商」卡片(设计稿 ★移动版:一服务一卡)。
+	 * 手机端「已连接的供应商」卡片。
 	 * 当前模型所在的供应商多一枚「默认」胶囊 —— 卡片列表里最该先看到的那条信息。
 	 */
 	function renderConfiguredCard(p: ProviderInfo) {
@@ -469,7 +504,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 			{loadErr && <div className="notice err">{loadErr}</div>}
 			<div className={`pvc-card${isPhone && selectedId ? " pvc-phone-detail" : ""}`}>
 				{/* 左栏:桌面 = 全部供应商 + 搜索 + 自定义供应商入口;
-				    手机 = 「已连接的供应商」卡片 + 添加供应商(设计稿首屏) */}
+				    手机 = 「已连接的供应商」卡片 + 添加供应商 */}
 				<div className="pvc-side">
 					{isPhone ? (
 						phoneLayer === "picker" ? (
@@ -578,7 +613,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 							</header>
 							{testMsg && <div className={`pvc-test-msg${testOk === false ? " err" : testOk === true ? " ok" : ""}`}>{testMsg}</div>}
 
-							{/* 只读信息行(设计稿 14:去掉输入框外观) */}
+							{/* 只读信息行 */}
 							<div className="pvc-field">
 								<label className="pvc-label">Base URL</label>
 								<div className="pvc-info mono">{detailProvider?.baseUrl ?? "—"}</div>
@@ -756,32 +791,18 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 					)}
 				</div>
 			</div>
-			{/* 弹窗:添加模型(只填模型字段,接口地址与 key 由供应商带入) */}
-			{modelDialog === "add" && selectedId && (
+			{/* 弹窗:添加 / 编辑模型(只填模型字段,接口地址与 key 由供应商带入)。
+			    用 presence 挂载:关窗后多留 200ms 播退场动画 */}
+			{modelDialogPresence.mounted && selectedId && (
 				<AddModelDialog
+					key={modelSeqRef.current}
 					client={client}
-					mode="model"
+					mode={lastModelDialogRef.current.mode}
 					providerId={selectedId}
 					providerLabel={detailProvider?.name ?? selectedId}
 					baseUrl={detailProvider?.baseUrl ?? ""}
-					onSaved={reloadAfterModelsChanged}
-					onClose={() => setModelDialog(null)}
-				/>
-			)}
-			{/* 弹窗:编辑自定义模型 */}
-			{modelDialog === "edit" && selectedId && editingModel && (
-				<AddModelDialog
-					client={client}
-					mode="edit"
-					providerId={selectedId}
-					providerLabel={detailProvider?.name ?? selectedId}
-					initialModel={{
-						id: editingModel.id,
-						name: editingModel.name,
-						contextWindow: editingModel.contextWindow,
-						maxTokens: editingModel.maxTokens,
-						input: editingModel.input,
-					}}
+					initialModel={lastModelDialogRef.current.model ?? undefined}
+					closing={modelDialogPresence.closing}
 					onSaved={reloadAfterModelsChanged}
 					onClose={() => {
 						setModelDialog(null);
@@ -790,9 +811,11 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 				/>
 			)}
 			{/* 弹窗:添加自定义供应商(只写供应商级配置,不带模型) */}
-			{providerDialog && (
+			{providerDialogPresence.mounted && (
 				<AddProviderDialog
+					key={providerSeqRef.current}
 					client={client}
+					closing={providerDialogPresence.closing}
 					onSaved={async (id) => {
 						await load();
 						pickProvider(id);
@@ -868,7 +891,7 @@ export function apiFormatLabel(api: string | undefined): string {
 	return (api && map[api]) || api || "—";
 }
 
-/** 模型徽章:上下文窗口(如 1M / 200K)+ 思考 + 视觉(设计稿 14 的胶囊顺序)。 */
+/** 模型徽章:上下文窗口(如 1M / 200K)+ 思考 + 视觉。 */
 function modelBadges(m: ModelDto) {
 	return (
 		<span className="pvc-m-tags">

@@ -1,5 +1,5 @@
 /**
- * 修订剧本模态(设计稿 02-模态与面板/01)。
+ * 修订剧本模态。
  *
  * 原形态是 320px 侧栏里的一条纵列表单(11 个字段挤在两三屏),改成 860px 独立窗口:
  * 左栏「本幕文本」(场景意象 / 本幕任务 / 基调 / 节拍),右栏「规则与约束」
@@ -24,6 +24,7 @@ export function ReviseScriptModal({
 	onSubmit,
 	onClose,
 	busy = false,
+	closing = false,
 }: {
 	/** 当前在演/待确认的剧本(版本号与演员 id 映射来源)。 */
 	script: StageScriptDto;
@@ -36,10 +37,12 @@ export function ReviseScriptModal({
 	onClose(): void;
 	/** 长命令进行中:提交按钮禁用(避免重复提交)。 */
 	busy?: boolean;
+	/** 退场中(父级 useExitPresence):给遮罩加 .is-closing 播反向动画。 */
+	closing?: boolean;
 }) {
 	return (
 		<div
-			className="rsm-mask"
+			className={`rsm-mask${closing ? " is-closing" : ""}`}
 			role="dialog"
 			aria-modal="true"
 			aria-label="修订剧本"

@@ -47,6 +47,7 @@ import { createEditCapture } from "../edit-capture.ts";
 import { isLegacyConfirmCard, parseToolArgs, pathFromArgs } from "../preview.ts";
 import type { Library } from "../library.ts";
 import { DUR, EASE } from "../motion.ts";
+import { useExitPresence } from "../use-exit-presence.ts";
 import { useMediaQuery, useIsPhone } from "../useMediaQuery.ts";
 import { useDragResize } from "../use-drag-resize.ts";
 import { Lu } from "../components/Lu.tsx";
@@ -65,6 +66,9 @@ export interface HeaderInfo {
 	/** 服务是否可连(仅初始化阶段拉书/开书失败时置 false,顶栏显示连接失败;发送等瞬时错误不影响)。 */
 	connected: boolean;
 }
+
+/** 右栏标签顺序(切换方向按它比较;与舞台右栏 StagePanel 的 TAB_INDEX 同一套做法)。 */
+const MEMO_TAB_INDEX: Record<"chat" | "memo", number> = { chat: 0, memo: 1 };
 
 /** 保存状态 → 顶栏文案(DraftStatus 联合穷举,tsc 校验缺项)。 */
 const SAVE_LABELS: Record<DraftStatus, string> = {
@@ -144,6 +148,7 @@ export function WritePage({
 	// 既有调用点(setBooks/setBookDetail/...)零改动,状态实际存于共享 hook
 	const {
 		books,
+		booksLoaded,
 		bookDetail,
 		currentChapter,
 		busySlug,
@@ -170,6 +175,8 @@ export function WritePage({
 	const [error, setError] = useState<string | null>(null);
 	/** AI 伙伴栏宽度(px,默认 340),左缘拖拽手柄调整(300–520)。 */
 	const [companionWidth, setCompanionWidth] = useState(340);
+	/** 伙伴栏拖拽调宽中:关掉宽度过渡,保持跟手(与书库栏 .resizing 同款)。 */
+	const [companionResizing, setCompanionResizing] = useState(false);
 	/** AI 伙伴栏收起态(48px 竖条):localStorage 持久化,与左栏折叠同一套语言。 */
 	const [companionCollapsed, setCompanionCollapsed] = useState<boolean>(() => {
 		try {
@@ -230,11 +237,11 @@ export function WritePage({
 	const [mobileDrawer, setMobileDrawer] = useState<"chapters" | "companion" | null>(null);
 	/** 窄屏(<900px)判定:书库/伙伴栏变抽屉。 */
 	const isNarrow = useMediaQuery("(max-width: 900px)");
-	/** 手机端(≤700px)判定:换 52px 页头 + 底部常驻输入条(设计稿 ★移动版)。 */
+	/** 手机端(≤700px)判定:换 52px 页头 + 底部常驻输入条。 */
 	const isPhone = useIsPhone();
 	/** 手机端页头 ⋯ 菜单是否展开。 */
 	const [phoneMenu, setPhoneMenu] = useState(false);
-	/** 手机端整屏导出页(设计稿 ★移动版「导出」)是否打开。 */
+	/** 手机端整屏导出页是否打开。 */
 	const [phoneExport, setPhoneExport] = useState(false);
 	/** 整屏导出页的容器:受控模式下 ExportPanel 靠它判断「点面板外关闭」。 */
 	const phoneExportRef = useRef<HTMLDivElement>(null);
@@ -824,7 +831,7 @@ export function WritePage({
 	}
 
 	/**
-	 * 导出面板的取数(2026-09-22,设计稿 ★导出 · 选项卡)。
+	 * 导出面板的取数。
 	 *
 	 * 章节正文走 client.getDraft —— 与 `@` 菜单的章节引用**同一条路径**,导出看到的
 	 * 正文和引用进来的是同一份;世界书附录复用 loadWorldForSlash 的按书缓存。
@@ -1166,6 +1173,8 @@ export function WritePage({
 		dir: -1,
 		getValue: () => companionWidth,
 		onChange: setCompanionWidth,
+		onStart: () => setCompanionResizing(true),
+		onEnd: () => setCompanionResizing(false),
 	});
 
 	/** 打开全屏编辑器(默认当前章节草稿)。 */
@@ -1264,9 +1273,46 @@ export function WritePage({
 		const ask = findPendingAsk(writerSession.messages);
 		return ask && !settledAskIds.has(ask.toolCallId) ? ask : null;
 	}, [writerSession.messages, settledAskIds]);
+	/**
+	 * 右栏标签切换方向(与舞台右栏同一套约定:切到更靠后的标签 = 内容自右滑入,
+	 * 往回切 = 自左滑入)。原先 chat→memo 是硬切、memo→chat 才有一条单向动画 ——
+	 * 现在两个方向都走 .companion-body[data-memo-dir] 的滑入。
+	 */
+	const [memoDir, setMemoDir] = useState<"left" | "right">("right");
+	const switchMemoTab = useCallback(
+		(t: "chat" | "memo") => {
+			if (t === memoTab) return;
+			setMemoDir(MEMO_TAB_INDEX[t] > MEMO_TAB_INDEX[memoTab] ? "right" : "left");
+			changeMemoTab(t);
+		},
+		[memoTab, changeMemoTab],
+	);
+	/**
+	 * 浮层退场(本轮动效审计):这五处原先都是 `{x && <Y/>}` 条件挂载——进场有动画、
+	 * 关闭瞬间消失。presence 让它们多驻留到反向动画播完(见 web/src/use-exit-presence.ts)。
+	 */
+	const askPresence = useExitPresence(pendingAsk !== null);
+	const usagePresence = useExitPresence(usageOpen);
+	const previewPresence = useExitPresence(filePreview !== null);
+	const editorPresence = useExitPresence(fsEditor !== null);
+	const sheetPresence = useExitPresence(phoneExport);
+	/**
+	 * 退场期间源 state 已经清空(ask 靠 settledAskIds、fsEditor 置 null),而浮层还要
+	 * 多渲染 200ms —— 内容取「最后一次非空」的留底,否则会读到 null 崩掉。
+	 * (渲染期写 ref 是本仓库既有模式,见本文件 worldRef / WorldPage 的 worldRef。)
+	 */
+	const lastAskRef = useRef<typeof pendingAsk>(null);
+	if (pendingAsk) lastAskRef.current = pendingAsk;
+	const askShown = pendingAsk ?? lastAskRef.current;
+	const lastEditorRef = useRef<typeof fsEditor>(null);
+	if (fsEditor) lastEditorRef.current = fsEditor;
+	const editorShown = fsEditor ?? lastEditorRef.current;
+	const lastPreviewRef = useRef<typeof filePreview>(null);
+	if (filePreview) lastPreviewRef.current = filePreview;
+	const previewShown = filePreview ?? lastPreviewRef.current;
 
 	/**
-	 * 编剧输入条(设计稿 ★输入区):桌面端挂在伙伴栏底部,手机端提到壳层底部
+	 * 编剧输入条:桌面端挂在伙伴栏底部,手机端提到壳层底部
 	 * (.m-composer)——手机端编辑页与伙伴页共用同一条输入区,所以实例只有这一个,
 	 * 按 isPhone 决定挂在哪;两处不同时渲染,不会出现两份草稿文本。
 	 */
@@ -1281,7 +1327,7 @@ export function WritePage({
 				const s = bookDetailRef.current?.slug;
 				if (s) void client.writerAbort(s);
 			}}
-			/* 占位符只留短句(设计稿 06);键位与 / 命令的说明不再塞进输入框 */
+			/* 占位符只留短句;键位与 / 命令的说明不再塞进输入框 */
 			placeholder={classicMode ? "向 AI 说话…" : "向编剧说话…"}
 			ariaLabel={classicMode ? "向 AI 说话" : "向编剧说话"}
 			commands={writerSlashCommands}
@@ -1291,8 +1337,14 @@ export function WritePage({
 			usage={writerUsage}
 			onUsageClick={() => void toggleUsage()}
 			usagePanel={
-				usageOpen ? (
-					<UsagePanel stats={usageStats} loading={usageBusy} err={usageErr} onClose={() => setUsageOpen(false)} />
+				usagePresence.mounted ? (
+					<UsagePanel
+						stats={usageStats}
+						loading={usageBusy}
+						err={usageErr}
+						closing={usagePresence.closing}
+						onClose={() => setUsageOpen(false)}
+					/>
 				) : null
 			}
 		/>
@@ -1307,6 +1359,7 @@ export function WritePage({
 		>
 			<ChapterSidebar
 				books={books}
+				loading={!booksLoaded && books.length === 0}
 				slug={bookDetail?.slug ?? null}
 				chapters={bookDetail?.chapters ?? []}
 				currentFile={currentChapter?.file ?? null}
@@ -1330,6 +1383,7 @@ export function WritePage({
 				railMode={railMode}
 				onRailModeChange={setRailMode}
 				nav={nav}
+				debugMode={debug}
 				classicMode={classicMode}
 				words={words}
 				workspace={
@@ -1344,7 +1398,7 @@ export function WritePage({
 				}
 			/>
 			<section className="paper-zone">
-				{/* 手机端页头(设计稿 ★移动版「编辑」):☰ 文件抽屉 | 章节名 + 保存/字数 | 伙伴 · ⋯。
+				{/* 手机端页头:☰ 文件抽屉 | 章节名 + 保存/字数 | 伙伴 · ⋯。
 				    桌面页头(.paper-head)在 ≤700px 由 CSS 隐藏,两套不并存 */}
 				{isPhone && (
 					<MobileHeader
@@ -1384,7 +1438,7 @@ export function WritePage({
 									<span>全屏编辑</span>
 								</button>
 							)}
-							{/* 导出:手机端是整屏页(设计稿 ★移动版「导出」),从页头 ⋯ 进入 */}
+							{/* 导出:手机端是整屏页,从页头 ⋯ 进入 */}
 							<button
 								type="button"
 								role="menuitem"
@@ -1446,12 +1500,23 @@ export function WritePage({
 						<span>{error}</span>
 					</div>
 				)}
-				{books.length === 0 && !currentChapter ? (
+				{/* 首屏拉书还没回来:先给骨架,别闪一帧「还没有书」再换成正文(审计 2026-09-30) */}
+				{!booksLoaded && books.length === 0 ? (
+					<div className="d-body">
+						<div className="sk-lines" aria-hidden="true">
+							<div className="skeleton sk-line title" />
+							<div className="skeleton sk-line w90" />
+							<div className="skeleton sk-line w80" />
+							<div className="skeleton sk-line w90" />
+							<div className="skeleton sk-line w70" />
+							<div className="skeleton sk-line w50" />
+						</div>
+					</div>
+				) : books.length === 0 && !currentChapter ? (
 					<EmptyBooks onCreate={(title) => void newBook(title)} />
 				) : (
 					<>
-						{/* 纸张头部:章节名 + 状态胶囊 | 草稿路径 + 字数 + 全屏编辑
-						    (设计稿 06-编辑-v1:路径与字数从标题下方挪到右端一行,标题只留章节名) */}
+						{/* 纸张头部:章节名 + 状态胶囊 | 草稿路径 + 字数 + 全屏编辑 */}
 						<div className="paper-head">
 							<button
 								type="button"
@@ -1468,7 +1533,7 @@ export function WritePage({
 							<div className="paper-status">
 								<span className="paper-file">{draftFile}</span>
 								<span className="paper-words">{words.toLocaleString("zh-CN")} 字</span>
-								{/* 导出(设计稿 ★导出 · 选项卡):按钮点开是一排格式页签,浮在纸张头下方 */}
+								{/* 导出:按钮点开是一排格式页签,浮在纸张头下方 */}
 								<ExportPanel
 									bookTitle={bookDetail?.title ?? ""}
 									chapters={exportChapters}
@@ -1511,11 +1576,12 @@ export function WritePage({
 				)}
 				{/* 工作区文件预览:只读覆盖层压住纸张区(正文编辑器不卸载,
 				    关掉即回到原样;Esc 也可关)。图片/文本/二进制在 FilePreview 内分派 */}
-				{filePreview && bookDetail && (
+				{previewPresence.mounted && bookDetail && previewShown && (
 					<FilePreview
 						client={client}
 						slug={bookDetail.slug}
-						entry={filePreview}
+						entry={previewShown}
+						closing={previewPresence.closing}
 						onClose={() => setFilePreview(null)}
 					/>
 				)}
@@ -1523,7 +1589,7 @@ export function WritePage({
 			{/* AI 伙伴:编剧对话单栏(批注 2026-08-10 退役并入编剧);宽屏常驻右栏,窄屏右侧抽屉 */}
 			<>
 				<AnimatePresence>
-					{/* 手机端(≤700px)伙伴页是整屏(设计稿「伙伴对话」),没有「点外面关闭」这回事;
+					{/* 手机端(≤700px)伙伴页是整屏,没有「点外面关闭」这回事;
 					    此时遮罩必须不渲染:它 z-index 48 压过伙伴栏(z-index 40),会把整页盖住,
 					    导致抽屉里的对话既不能滚动也不能点(2026-09 修)。窄屏(701–900)抽屉才需要遮罩。 */}
 					{isNarrow && !isPhone && mobileDrawer === "companion" && (
@@ -1532,15 +1598,17 @@ export function WritePage({
 							className="drawer-mask"
 							aria-hidden="true"
 							initial={{ opacity: 0 }}
-							animate={{ opacity: 1 }}
-							exit={{ opacity: 0 }}
+							animate={{ opacity: 1, pointerEvents: "auto" }}
+							/* 退场的一帧就交还点击(不可插值属性立即生效),否则 200ms 淡出期间遮罩会吞掉
+							   抽屉关闭后紧接着的那一下点击 */
+							exit={{ opacity: 0, pointerEvents: "none" }}
 							transition={{ duration: DUR.base, ease: EASE.out }}
 							onClick={() => setMobileDrawer(null)}
 						/>
 					)}
 				</AnimatePresence>
 				<motion.aside
-					className={mobileDrawer === "companion" ? "companion drawer-open" : "companion"}
+					className={`companion${mobileDrawer === "companion" ? " drawer-open" : ""}${companionResizing ? " resizing" : ""}`}
 					aria-label="AI 伙伴"
 					initial={false}
 					animate={!isNarrow || mobileDrawer === "companion" ? "open" : "closed"}
@@ -1552,7 +1620,7 @@ export function WritePage({
 				>
 					{/* 左缘拖拽调宽手柄(窄屏抽屉模式隐藏;收起态无宽度可调) */}
 					{!isNarrow && !companionCollapsed && <div className="comp-resize" onMouseDown={onCompanionResizeStart} title="拖拽调整宽度" />}
-					{/* 手机端伙伴页头(设计稿 ★移动版「伙伴对话」):← 回编辑 | 编剧 + 上下文占用 | 备忘录/⋯ */}
+					{/* 手机端伙伴页头:← 回编辑 | 编剧 + 上下文占用 | 备忘录/⋯ */}
 					{isPhone && (
 						<MobileHeader
 							leading={{ icon: "chevron-left", label: "回到编辑", onPress: () => setMobileDrawer(null) }}
@@ -1569,7 +1637,7 @@ export function WritePage({
 									icon: "sticky-note",
 									label: "备忘录",
 									accent: memoTab === "memo",
-									onPress: () => changeMemoTab(memoTab === "memo" ? "chat" : "memo"),
+									onPress: () => switchMemoTab(memoTab === "memo" ? "chat" : "memo"),
 								},
 								{
 									key: "usage",
@@ -1582,7 +1650,7 @@ export function WritePage({
 					)}
 					{companionCollapsed ? (
 						/* 收起态 = 与舞台右栏同一套图标/标签栏:点别的标签只换选中,
-						   点当前标签才展开(设计稿的「再点一次已选中的项 = 第二动作」) */
+						   点当前标签才展开 */
 						<div className="companion-rail" role="tablist" aria-label="AI 伙伴(已收起)">
 							{([["chat", classicMode ? "AI" : "编剧"], ["memo", "备忘录"]] as const).map(([id, label]) => (
 								<button
@@ -1595,7 +1663,7 @@ export function WritePage({
 									aria-label={memoTab === id ? `展开${label}` : label}
 									onClick={() => {
 										if (memoTab === id) toggleCompanionCollapsed();
-										else changeMemoTab(id);
+										else switchMemoTab(id);
 									}}
 								>
 									{label}
@@ -1606,14 +1674,14 @@ export function WritePage({
 					<>
 					<div className="companion-head">
 						{/* 标签:编剧对话 | 备忘录(全局 Notice 待办板,2026-08-12 从书库栏移来);
-						    设计稿 06:外层改下划线式(与舞台右栏面板同一套语言),
+						    :外层改下划线式(与舞台右栏面板同一套语言),
 						    外层与内层不再都是胶囊控件。data-active 是旧的滑动指示器协议,
 						    下划线式不需要,已去掉 */}
 						<div className="c-tabs" role="tablist">
-							<button type="button" className={memoTab === "chat" ? "c-tab active" : "c-tab"} onClick={() => changeMemoTab("chat")}>
+							<button type="button" className={memoTab === "chat" ? "c-tab active" : "c-tab"} onClick={() => switchMemoTab("chat")}>
 								{classicMode ? "AI" : "编剧"}
 							</button>
-							<button type="button" className={memoTab === "memo" ? "c-tab active" : "c-tab"} onClick={() => changeMemoTab("memo")}>
+							<button type="button" className={memoTab === "memo" ? "c-tab active" : "c-tab"} onClick={() => switchMemoTab("memo")}>
 								备忘录
 							</button>
 						</div>
@@ -1632,7 +1700,9 @@ export function WritePage({
 							<Lu icon="chevrons-right" size={14} />
 						</button>
 					</div>
-					<div className="companion-body">
+					{/* data-memo-dir:标签切换方向 → 内容滑入方向(styles.css 的
+					    .companion-body[data-memo-dir] 规则;两个方向都有动画) */}
+					<div className="companion-body" data-memo-dir={memoDir}>
 							{memoTab === "memo" ? (
 								<NoticeBoard client={client} slug={bookDetail?.slug ?? null} />
 							) : (
@@ -1671,12 +1741,13 @@ export function WritePage({
 								</div>
 							)}
 							{writerUsageHint && (
-								<div className={`notice ${writerUsageHint.tone}`} role="status">
+								/* key 带 tone:80%→90% 从 warn 变 err 时重挂载 → 重播 .notice 的入场淡入 */
+								<div key={writerUsageHint.tone} className={`notice ${writerUsageHint.tone}`} role="status">
 									{writerUsageHint.text}
 								</div>
 							)}
 							{/* 桌面:输入条留在伙伴栏底部;手机端它被提到壳层底部(.m-composer),
-							    所以这里按 isPhone 二者取一(设计稿:编辑页与伙伴页共用同一条输入区) */}
+							    所以这里按 isPhone 二者取一 */}
 							{!isPhone && writerInputBar}
 						</div>
 						)}
@@ -1685,7 +1756,7 @@ export function WritePage({
 					)}
 				</motion.aside>
 			</>
-			{/* 手机端底部常驻输入条(设计稿 ★输入区):编辑页与伙伴页共用,内容与桌面同一个实例。
+			{/* 手机端底部常驻输入条:编辑页与伙伴页共用,内容与桌面同一个实例。
 			    点/聚焦它就等于「要和 AI 说话」→ 自动滑出 AI 对话抽屉并保持(抽屉只在遮罩、
 			    返回、关闭按钮时收起,不因输入或发送自动关)。输入条是抽屉的兄弟节点而非子节点,
 			    所以抽屉滑出不会把它卸载,焦点与已输入的文字都留着。 */}
@@ -1698,9 +1769,9 @@ export function WritePage({
 					{writerInputBar}
 				</div>
 			)}
-			{/* 手机端整屏导出(设计稿 ★移动版「导出」):受控的 ExportPanel,自带触发按钮不渲染 */}
-			{isPhone && phoneExport && (
-				<div className="m-sheet" role="dialog" aria-label="导出">
+			{/* 手机端整屏导出:受控的 ExportPanel,自带触发按钮不渲染 */}
+			{isPhone && sheetPresence.mounted && (
+				<div className={`m-sheet${sheetPresence.closing ? " is-closing" : ""}`} role="dialog" aria-label="导出">
 					<div className="m-sheet-head">
 						<button type="button" className="m-icon-btn" aria-label="返回" title="返回" onClick={() => setPhoneExport(false)}>
 							<Lu icon="chevron-left" size={18} />
@@ -1724,15 +1795,17 @@ export function WritePage({
 				</div>
 			)}
 			{/* 提问卡片(ask_user):工具阻塞着等这个回答,所以是模态浮层。
-			    挂载条件从消息流推出来(未答的 ask_user 块),不另存一份 pending 状态 */}
-			{pendingAsk && (
+			    挂载条件从消息流推出来(未答的 ask_user 块),不另存一份 pending 状态。
+			    退场期间 pendingAsk 已经变 null,所以内容取「最后一次非空」的留底 */}
+			{askPresence.mounted && askShown && (
 				<AskUserOverlay
-					questions={pendingAsk.questions}
+					questions={askShown.questions}
+					closing={askPresence.closing}
 					/* 提交/取消失败要说出来(2026-09-23):此前 `void` 掉 promise,
 					   请求失败时浮层原地不动、无提示,用户会反复点提交。
 					   ok:false = 这张提问在服务端已经结束(闸门没了),本地关掉别卡住 */
 					onSubmit={(answers) => {
-						const id = pendingAsk.toolCallId;
+						const id = askShown.toolCallId;
 						void client
 							.answerAskUser(id, answers)
 							.then((ok) => {
@@ -1741,7 +1814,7 @@ export function WritePage({
 							.catch((e) => setError(`提交回答失败: ${friendlyError(e)}`));
 					}}
 					onCancel={() => {
-						const id = pendingAsk.toolCallId;
+						const id = askShown.toolCallId;
 						void client
 							.cancelAskUser(id)
 							.then((ok) => {
@@ -1751,13 +1824,14 @@ export function WritePage({
 					}}
 				/>
 			)}
-			{/* 全屏编辑器覆盖层(设计 §5.4) */}
-			{fsEditor && (
+			{/* 全屏编辑器覆盖层(设计 §5.4);退场期间 fsEditor 已 null,内容取留底 */}
+			{editorPresence.mounted && editorShown && (
 				<FullScreenEditor
 					client={client}
 					slug={bookDetail?.slug ?? null}
-					initialFile={fsEditor.file}
-					title={fsEditor.title}
+					initialFile={editorShown.file}
+					title={editorShown.title}
+					closing={editorPresence.closing}
 					onClose={() => setFsEditor(null)}
 				/>
 			)}

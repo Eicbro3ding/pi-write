@@ -19,11 +19,14 @@ export function AddProviderDialog({
 	client,
 	onSaved,
 	onClose,
+	closing = false,
 }: {
 	client: ApiClient;
 	/** 保存成功(已关弹窗由本组件负责;onSaved 由父组件刷新列表)。 */
 	onSaved: (providerId: string) => void | Promise<void>;
 	onClose: () => void;
+	/** 退场中(父级 useExitPresence):给根壳加 .is-closing 播反向动画。 */
+	closing?: boolean;
 }) {
 	const [formId, setFormId] = useState("");
 	const [formName, setFormName] = useState("");
@@ -62,7 +65,7 @@ export function AddProviderDialog({
 	}
 
 	return (
-		<div className="dlg-overlay amd-overlay" role="dialog" aria-modal="true" aria-label="添加供应商">
+		<div className={`dlg-overlay amd-overlay${closing ? " is-closing" : ""}`} role="dialog" aria-modal="true" aria-label="添加供应商">
 			<div className="dlg-panel amd-panel">
 				<header className="amd-head">
 					<span className="amd-head-text">

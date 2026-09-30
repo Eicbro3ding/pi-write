@@ -1,12 +1,20 @@
 /**
  * 关系图样式表与主题 token —— 从 RelationGraph.tsx 抽出的纯逻辑,
  * PreviewGraph / PreviewEntryCard / RelationGraph 三处共用。
- * themeVar 依赖 DOM(getComputedStyle),仅在渲染路径调用。
+ * themeVar 依赖 DOM(getComputedStyle),**没有 DOM 时回退默认色**(见下)。
  */
 import type { WorldEntryDto } from "./types.ts";
 
-/** 读取当前主题 CSS 变量(图初始化时固定,三主题配色均可用)。 */
+/**
+ * 读取当前主题 CSS 变量(图初始化时固定,三主题配色均可用)。
+ *
+ * 没有 DOM 时直接给 fallback,而不是让调用方崩:它在**渲染期**被
+ * PreviewEntryCard(首字头像取类型色)调用,node 下(契约测试 / 未来的 SSR)
+ * 没有 `document` 与 `getComputedStyle`。与 useMediaQuery、useExitPresence 的
+ * 「SSR 安全」约定一致:取不到主题色不该让整棵组件树挂掉。
+ */
 export function themeVar(name: string, fallback: string): string {
+	if (typeof document === "undefined" || typeof getComputedStyle !== "function") return fallback;
 	const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 	return v.length > 0 ? v : fallback;
 }
@@ -34,7 +42,7 @@ function escapeXml(s: string): string {
 }
 
 /**
- * 节点圆内首字 SVG data URL(设计稿 10:类型色环 + 圆内首字)。
+ * 节点圆内首字 SVG data URL。
  * 无底色(透明)——节点底色由 background-color 提供;字号按 64 视窗折算,
  * 缩到 52px 节点直径时约 18px。
  */
@@ -49,7 +57,7 @@ export function genInitialDataUrl(title: string, color: string): string {
  * 主题切换(data-theme 变化)后由 MutationObserver 重建样式,图随之换肤;
  * 不重建则 night 下初始化的图在浅色主题下保持黑底标签。
  *
- * 节点外观(设计稿 10):52px 圆形 + 2px 类型色描边 + 圆内首字(背景图)+
+ * 节点外观:52px 圆形 + 2px 类型色描边 + 圆内首字(背景图)+
  * 下方名字与关系数标签;不再用 88px 圆 + 黑底白字胶囊。
  */
 export function buildGraphStyles(): cytoscape.StylesheetJson {

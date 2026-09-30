@@ -5,6 +5,8 @@ import cytoscape, { type Core, type ElementDefinition } from "cytoscape";
 import cola from "cytoscape-cola";
 import type { RelationArrowDto, WorldEntryDto, WorldRelationDto } from "../types.ts";
 import { ENTRY_TYPES, ENTRY_TYPE_LABELS } from "./WorldTree.tsx";
+import { DUR } from "../motion.ts";
+import { useMediaQuery } from "../useMediaQuery.ts";
 import { newId } from "./id.ts";
 import { disconnectEntry } from "../graph-logic.ts";
 import { buildGraphStyles, genInitialDataUrl, themeVar, TYPE_FALLBACKS, TYPE_TOKENS } from "../graph-styles.ts";
@@ -25,7 +27,7 @@ cytoscape.use(cola);
  */
 
 /**
- * 节点展示标题(设计稿 10):第一行名字(超长截断防巨节点),第二行关系条数。
+ * 节点展示标题:第一行名字(超长截断防巨节点),第二行关系条数。
  * cytoscape 单个 label 只能有一种字号/字色,两行同款样式。
  */
 /**
@@ -240,6 +242,8 @@ export function RelationGraph({
 }: RelationGraphProps) {
 	const containerRef = useRef<HTMLDivElement | null>(null);
 	const cyRef = useRef<Core | null>(null);
+	/** 系统「减少动态效果」:联动居中直接跳,不播 cytoscape 的平移动画。 */
+	const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
 	/** 缩放百分比(工具栏横条显示;zoom 事件同步)。 */
 	const [zoomPct, setZoomPct] = useState(100);
 	/** 图重建计数:驱动 focus 联动在重建后重新选中。 */
@@ -312,7 +316,7 @@ export function RelationGraph({
 					type: e.type,
 					active: e.active,
 					typeColor,
-					// 设计稿 10:圆内首字(类型色),不再用条目主图/白底文字头像
+					// 圆内首字(类型色),不再用条目主图/白底文字头像
 					backgroundImage: genInitialDataUrl(e.title, typeColor),
 				},
 				// preset 读取元素定义的顶层 position;放在 data 内会被 Cytoscape 忽略
@@ -615,8 +619,11 @@ export function RelationGraph({
 		const el = cy.getElementById(focusId);
 		if (el.length === 0 || el.selected()) return;
 		el.select();
-		cy.animate({ center: { eles: el }, duration: 180 });
-	}, [focusId, epoch]);
+		// 时长走 token(原来写死 180ms,不在 DUR 三档里);系统开了「减少动态效果」就直接
+		// 居中,不做这段平移动画(cytoscape 的 animate 不读 framer 的 MotionConfig)
+		if (reduceMotion) cy.center(el);
+		else cy.animate({ center: { eles: el }, duration: DUR.base * 1000 });
+	}, [focusId, epoch, reduceMotion]);
 
 	// Escape:收起右键菜单、退出连线模式
 	useEffect(() => {
@@ -631,7 +638,7 @@ export function RelationGraph({
 	}, []);
 
 	const visibleCount = entries.filter((e) => typesOn[e.type]).length;
-	/** 手机端(≤700px):画布全屏 + 悬浮控件,桌面那条工具条退场(设计稿 ★移动版「关系图」)。 */
+	/** 手机端(≤700px):画布全屏 + 悬浮控件,桌面那条工具条退场。 */
 	const isPhone = useIsPhone();
 
 	/** 连线开关(桌面工具条与手机端悬浮按钮共用一份实现)。 */
@@ -722,7 +729,7 @@ export function RelationGraph({
 
 	return (
 		<div className={isPhone ? "graph-wrap m-graph" : "graph-wrap"}>
-			{/* 手机端:类型芯片一行(设计稿「关系图」),桌面那条工具条整条退场 */}
+			{/* 手机端:类型芯片一行,桌面那条工具条整条退场 */}
 			{isPhone && (
 				<div className="m-graph-filters">
 					<button
@@ -788,7 +795,7 @@ export function RelationGraph({
 			{/* 画布恒挂载(过滤走 show()/hide() 不重建实例,P7);无可见条目时覆盖空态提示 */}
 			<div className="graph-canvas">
 				<div className="graph-cytoscape" ref={containerRef} />
-				{/* 手机端悬浮控件(设计稿右上「连线」胶囊):连线中的提示就近显示 */}
+				{/* 手机端悬浮控件:连线中的提示就近显示 */}
 				{isPhone && (
 					<div className="m-graph-tools" onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
 						{linking && <span className="graph-hint">{linkFrom ? "点目标节点建立关系" : "点起始节点"}</span>}
@@ -802,7 +809,7 @@ export function RelationGraph({
 						<div className="graph-zoom-bar" onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
 							{isPhone ? (
 								<>
-									{/* 手机端:图标按钮(设计稿缩放条 = 排列 | − | 比例 | + | 适应) */}
+									{/* 手机端:图标按钮 */}
 									<button type="button" className="graph-zoom-btn" onClick={runAutoLayout} title="一键排列(cola 力导向)" aria-label="一键排列">
 										<Lu icon="layout-grid" size={14} />
 									</button>

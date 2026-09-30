@@ -54,7 +54,7 @@ export function ConfirmCard({
 			animate={{ opacity: 1, x: 0 }}
 			transition={{ duration: DUR.base, ease: EASE.out }}
 		>
-			{/* 状态改胶囊(设计稿 03-组件规范/03):待确认 / 已应用(免确认模式) */}
+			{/* 状态改胶囊:待确认 / 已应用(免确认模式) */}
 			<div className="cc-head">
 				<span className="cc-title">编剧 · {title}</span>
 				{firstPath && <span className="cc-file">{firstPath}</span>}

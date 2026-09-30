@@ -8,7 +8,7 @@ import { Select } from "./Select.tsx";
 import { ToggleSwitch } from "./ToggleSwitch.tsx";
 import { Lu } from "./Lu.tsx";
 
-/** 条目状态选项(值与后端 world-data ENTRY_STATUSES 对齐;设计稿 05 下拉只列中文名)。 */
+/** 条目状态选项(值与后端 world-data ENTRY_STATUSES 对齐)。 */
 export const ENTRY_STATUS_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
 	{ value: "alive", label: "在世" },
 	{ value: "dead", label: "已故" },
@@ -68,7 +68,7 @@ interface EntryFormProps {
 }
 
 /**
- * 条目表单(设计稿 08 中栏):头部 = 类型图标 + 标题 + 类型胶囊 + 状态胶囊 + 删除;
+ * 条目表单:头部 = 类型图标 + 标题 + 类型胶囊 + 状态胶囊 + 删除;
  * 正文区 = 标题(大输入)/ 关键词 chips / 正文 textarea(右下字数)。
  * 右侧信息栏(主图 / ID / 类型 / 状态 / 激活 / 关联章节 / 父条目)见 EntryInfoPanel。
  * 修改直接回调 onChange,由页面统一置脏并整体保存。
@@ -196,7 +196,7 @@ interface EntryInfoPanelProps {
 }
 
 /**
- * 条目信息栏(设计稿 08 右栏,300px 卡片):主图(+ 更换/图库)、条目 ID(mono +
+ * 条目信息栏:主图(+ 更换/图库)、条目 ID(mono +
  * 复制)、类型(只读胶囊)、状态(Select)、是否激活(ToggleSwitch)、关联章节
  * (复选清单)、父条目(Select),底部「修改会自动保存」小字。
  * ids/章节多选的数组语义与提交逻辑与旧版完全一致(entry.chapters: string[])。
@@ -252,7 +252,6 @@ export function EntryInfoPanel({ entry, entries, chapters, chaptersOk, slug, cli
 	/**
 	 * 多选上传:逐张上传,单张失败跳过并提示,成功引用追加;无主图时第一张自动设为主图。
 	 * 按剩余槽位截断:累加器达到图库上限后停止上传余下文件,并提示跳过的张数。
-	 * (逻辑与旧词条卡一致,2026-08 设计稿把主图管理移到条目信息栏)
 	 */
 	async function onFiles(list: FileList | File[] | null) {
 		if (!list) return;

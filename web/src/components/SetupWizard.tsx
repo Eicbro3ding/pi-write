@@ -10,7 +10,7 @@
  * - 设置页「重新运行配置向导」:作为覆盖层叠加在已挂载页面上(`.app > .wz-overlay`),
  *   不打断流式状态 → 加一层 $mask 遮罩;此时建的书经 onBooksChanged 通知 App 刷新书库列表。
  *
- * 版式(设计稿 v1:整屏引导,取代旧的 680px 弹窗):顶栏(品牌 + 跳过向导)→ 五步进度条
+ * 版式:顶栏(品牌 + 跳过向导)→ 五步进度条
  * (等宽 900,当前 $amber / 已过 $green / 未到 $line)→ 内容列(720,步骤号 + 34 号标题 +
  * 说明 + 卡片)→ 页脚(左侧提示 + 右侧主按钮,与内容列同宽对齐)。
  *
@@ -44,7 +44,7 @@ const WIZARD_STEPS = [
 
 type WizardStepId = (typeof WIZARD_STEPS)[number]["id"];
 
-/** 各步骤的大标题(34 号英雄标题;文案取自设计稿)。 */
+/** 各步骤的大标题。 */
 const STEP_TITLE: Record<WizardStepId, string> = {
 	intro: "欢迎使用 pi-writer",
 	provider: "接入模型服务",
@@ -101,6 +101,7 @@ export function SetupWizard({
 	onClassicModeChange,
 	onBooksChanged,
 	onFinished,
+	closing = false,
 }: {
 	client: ApiClient;
 	/** 自动展开思考开关(思考块默认展开;缺省开启)。 */
@@ -117,6 +118,8 @@ export function SetupWizard({
 	onBooksChanged?: () => void | Promise<void>;
 	/** 向导完成(含跳过)后回调;完成标记已写到服务端。 */
 	onFinished: () => void;
+	/** 退场中(重运行形态由 App 的 useExitPresence 传入):给整屏壳加 .is-closing。 */
+	closing?: boolean;
 }) {
 	/** 当前步骤下标(0..4)。 */
 	const [step, setStep] = useState(0);
@@ -129,7 +132,7 @@ export function SetupWizard({
 	const [finishing, setFinishing] = useState(false);
 	const [finishErr, setFinishErr] = useState<string | null>(null);
 
-	// —— 服务商步状态(设计稿:一列单选 + 一行 key,不再内嵌「管理供应商」双栏组件) ——
+	// —— 服务商步状态 ——
 	/** null = 未加载(进入该步时拉取)。 */
 	const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
 	/** 列表展开了全部服务商(默认只列前几个)。 */
@@ -209,7 +212,7 @@ export function SetupWizard({
 		};
 	}, [step, providers, loadProviders]);
 
-	/** 列表默认只列前 5 个(与设计稿一致),展开后列全部;已选中项一定可见。 */
+	/** 列表默认只列前 5 个,展开后列全部;已选中项一定可见。 */
 	const providerRows = useMemo(() => {
 		const list = providers ?? [];
 		if (showAllProviders) return list;
@@ -482,7 +485,7 @@ export function SetupWizard({
 				: "下一步 →";
 
 	return (
-		<div className="wz-overlay" role="dialog" aria-modal="true" aria-label="首次启动配置向导">
+		<div className={`wz-overlay${closing ? " is-closing" : ""}`} role="dialog" aria-modal="true" aria-label="首次启动配置向导">
 			{/* 顶栏:与主界面同语言(品牌 + 右侧次要动作);整屏引导下无边框 */}
 			<header className="wz-top">
 				<div className="brand">

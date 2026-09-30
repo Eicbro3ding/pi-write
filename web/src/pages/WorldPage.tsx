@@ -22,7 +22,7 @@ import { TimelinePanel } from "../components/TimelinePanel.tsx";
 import { ConstraintsPanel, StyleSamplePanel } from "../components/ConstraintsPanel.tsx";
 import { deleteEntryWithRelations } from "../graph-logic.ts";
 
-/** 世界书三个视图(设计稿 08/09/10 右上角分段胶囊)。 */
+/** 世界书三个视图。 */
 type WorldView = "entries" | "graph" | "settings";
 
 /**
@@ -60,22 +60,22 @@ export function WorldPage({
 	const [creating, setCreating] = useState(false);
 	const [createType, setCreateType] = useState<WorldEntryDto["type"]>("character");
 	const [createTitle, setCreateTitle] = useState("");
-	/** 删除二次确认模态(设计稿 04)的目标条目;ref 供 keydown(Escape)读取最新值。 */
+	/** 删除二次确认模态的目标条目;ref 供 keydown(Escape)读取最新值。 */
 	const [confirmDelete, setConfirmDelete] = useState<WorldEntryDto | null>(null);
 	const confirmDeleteRef = useRef<WorldEntryDto | null>(confirmDelete);
 	confirmDeleteRef.current = confirmDelete;
 	/** 视图:条目 / 关系图 / 设定。 */
 	const [view, setView] = useState<WorldView>("entries");
-	/** 手机端(≤700px):换 52px 页头 + 卡片列表(设计稿 ★移动版「世界书」)。 */
+	/** 手机端(≤700px):换 52px 页头 + 卡片列表。 */
 	const isPhone = useIsPhone();
 	/** 手机端列表的搜索词与类型筛选。 */
 	const [wQuery, setWQuery] = useState("");
 	const [wType, setWType] = useState<WorldEntryDto["type"] | "all">("all");
 	/** 手机端页头「搜索」按钮聚焦的输入框。 */
 	const phoneSearchRef = useRef<HTMLInputElement>(null);
-	/** 手机端条目页:只读详情 / 编辑表单(设计稿「条目详情」→「编辑条目」两级)。 */
+	/** 手机端条目页:只读详情 / 编辑表单。 */
 	const [phoneEdit, setPhoneEdit] = useState(false);
-	/** 手机端关系图底部详情卡是否展开(设计稿「关系图」:⌄ 收起后只剩一行)。 */
+	/** 手机端关系图底部详情卡是否展开。 */
 	const [phoneSheetOpen, setPhoneSheetOpen] = useState(true);
 	/** 手机端「更换配图」:借用表单里的隐藏文件输入(避免复制一份上传逻辑)。 */
 	const phoneAvatarRef = useRef<HTMLButtonElement>(null);
@@ -350,8 +350,37 @@ export function WorldPage({
 	}
 
 	/** 手机端「＋」:直接建一个待命名条目并打开详情(桌面端由分类树的内联输入命名)。 */
+	/**
+	 * 手机端「条目详情 → 列表」:先给详情挂 .m-layer-leaving 播完右滑退场
+	 * (--dur-base),再清空 selId 让列表淡入。原先这一步是整片硬切。
+	 */
+	const [phoneLeaving, setPhoneLeaving] = useState(false);
+	const phoneLeaveTimer = useRef<number | null>(null);
+	useEffect(
+		() => () => {
+			if (phoneLeaveTimer.current !== null) window.clearTimeout(phoneLeaveTimer.current);
+		},
+		[],
+	);
+	function phoneBackToList() {
+		if (phoneLeaving) return;
+		setPhoneLeaving(true);
+		phoneLeaveTimer.current = window.setTimeout(() => {
+			phoneLeaveTimer.current = null;
+			setSelId(null);
+			setPhoneEdit(false);
+			setPhoneLeaving(false);
+		}, DUR.base * 1000);
+	}
+
 	/** 选中条目(手机端列表卡片):进详情,不直接进表单。 */
 	function selectEntry(id: string | null) {
+		// 退场计时器还挂着时又点了别的条目:先取消,否则 200ms 后会被拉回列表
+		if (phoneLeaveTimer.current !== null) {
+			window.clearTimeout(phoneLeaveTimer.current);
+			phoneLeaveTimer.current = null;
+			setPhoneLeaving(false);
+		}
 		setSelId(id);
 		setPhoneEdit(false);
 	}
@@ -411,7 +440,7 @@ export function WorldPage({
 
 	const selEntry = world ? (world.entries.find((e) => e.id === selId) ?? null) : null;
 
-	/** 手机端筛选后的条目列表(设计稿「世界书」:类型 chips + 卡片列表)。 */
+	/** 手机端筛选后的条目列表。 */
 	const phoneEntries = world
 		? world.entries.filter((e) => {
 				if (wType !== "all" && e.type !== wType) return false;
@@ -458,8 +487,8 @@ export function WorldPage({
 
 	return (
 		<div className="world-page">
-			{/* 手机端页头(设计稿 ★移动版「世界书」/「条目详情」):详情态显示条目名 + 返回列表 */}
-			{/* 手机端关系图页头(设计稿 ★移动版「关系图」):← 回列表 | 标题 | 列表 / 关系图 / 设定 切换 */}
+			{/* 手机端页头:详情态显示条目名 + 返回列表 */}
+			{/* 手机端关系图页头:← 回列表 | 标题 | 列表 / 关系图 / 设定 切换 */}
 			{isPhone && world !== null && view !== "entries" && (
 				<MobileHeader
 					leading={{
@@ -503,7 +532,7 @@ export function WorldPage({
 							} else if (phoneEdit) {
 								setPhoneEdit(false);
 							} else {
-								setSelId(null);
+								phoneBackToList();
 							}
 						},
 					}}
@@ -533,7 +562,13 @@ export function WorldPage({
 							</button>
 						</div>
 					) : (
-						"世界书加载中…"
+						/* 加载中:给骨架行,而不是一行纯文字(审计 2026-09-30) */
+						<div className="sk-lines" aria-hidden="true">
+							<div className="skeleton sk-line title" />
+							<div className="skeleton sk-line w90" />
+							<div className="skeleton sk-line w80" />
+							<div className="skeleton sk-line w70" />
+						</div>
 					)}
 				</div>
 			) : (
@@ -601,7 +636,13 @@ export function WorldPage({
 				{saveErr && <div className="notice err">{saveErr}</div>}
 				{world === null ? (
 					<div className="world-scroll">
-						<div className="w-empty">世界书加载中…</div>
+						<div className="sk-lines" aria-hidden="true">
+							<div className="skeleton sk-line title" />
+							<div className="skeleton sk-line w90" />
+							<div className="skeleton sk-line w80" />
+							<div className="skeleton sk-line w90" />
+							<div className="skeleton sk-line w50" />
+						</div>
 					</div>
 				) : (
 					/* 视图舞台:三视图叠加常驻(切换保留表单输入与滚动位置,关系图
@@ -609,9 +650,9 @@ export function WorldPage({
 					<div className="world-stage">
 						<div className={`${viewCls("entries", "world-scroll")} w-view-entries`}>
 							{isPhone && selEntry && !phoneEdit ? (
-								/* 手机端条目详情(设计稿 ★移动版「世界书 · 条目详情」):只读一屏,
+								/* 手机端条目详情:只读一屏,
 								    底部「编辑条目」进表单;页头 ← 回列表 */
-								<div className="m-wdetail m-only">
+								<div className={`m-wdetail m-only${phoneLeaving ? " m-layer-leaving" : ""}`}>
 									<WorldEntryDetail
 										entry={selEntry}
 										slug={slug}
@@ -624,7 +665,7 @@ export function WorldPage({
 								</div>
 							) : isPhone && selEntry ? (
 								/* 手机端条目编辑:表单 + 信息栏(配图在信息栏里上传) */
-								<div className="m-wdetail m-only">
+								<div className={`m-wdetail m-only${phoneLeaving ? " m-layer-leaving" : ""}`}>
 									<EntryForm
 										key={selEntry.id}
 										entry={selEntry}
@@ -761,7 +802,7 @@ export function WorldPage({
 									onRedo={redo}
 								/>
 								{isPhone ? (
-									/* 手机端详情卡(设计稿「关系图」底部面板):抓手 + 头像/名称/元信息 +
+									/* 手机端详情卡:抓手 + 头像/名称/元信息 +
 									   关系清单 + 「查看词条 / 在舞台使用」;⌄ 收起后只剩标题行 */
 									selEntry && (
 										<div className={phoneSheetOpen ? "m-graph-sheet" : "m-graph-sheet collapsed"}>
@@ -882,7 +923,7 @@ export function WorldPage({
 				)}
 			</section>
 
-			{/* 删除确认(设计稿 04):独立定位层的模态,fixed 不受祖先 overflow 裁剪 */}
+			{/* 删除确认:独立定位层的模态,fixed 不受祖先 overflow 裁剪 */}
 			{confirmDelete && (
 				<div className="w-modal-mask" onMouseDown={(e) => e.target === e.currentTarget && setConfirmDelete(null)}>
 					<div className="w-modal" role="dialog" aria-modal="true" aria-labelledby="w-del-title">

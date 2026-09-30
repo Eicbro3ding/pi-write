@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { DUR } from "../motion.ts";
+import { useExitPresence } from "../use-exit-presence.ts";
 import { Lu } from "./Lu.tsx";
 
-/** 导出格式(设计稿 ★导出 · 选项卡)。 */
+/** 导出格式。 */
 export type ExportFormat = "txt" | "md" | "epub" | "docx" | "copy";
 
 /** 导出范围。 */
@@ -11,8 +13,8 @@ export type ExportScope = "book" | "chapter";
 const LAST_FORMAT_KEY = "pi-writer:export-format";
 
 /**
- * 页签顺序与说明(设计稿右列的「格式」小节)。
- * `ready: false` 的页签**照设计稿显示但禁用**,并给出不可用的真实原因 ——
+ * 页签顺序与说明。
+ * `ready: false` 的页签**显示但禁用**,并给出不可用的真实原因 ——
  * 不做点了没反应的假按钮。
  */
 export const EXPORT_FORMATS: ReadonlyArray<{ id: ExportFormat; label: string; desc: string; ready: boolean; why?: string }> = [
@@ -112,7 +114,7 @@ function downloadBlob(blob: Blob, filename: string, alsoOpen: boolean): void {
 }
 
 /**
- * 导出面板(设计稿 ★导出 · 选项卡)。
+ * 导出面板。
  *
  * 导出按钮点开是一排页签 —— TXT / Markdown / EPUB / DOCX / 复制,每个格式各自带
  * 范围、选项与动作,而不是"一个格式走天下"。
@@ -122,7 +124,7 @@ function downloadBlob(blob: Blob, filename: string, alsoOpen: boolean): void {
  * - TXT / Markdown / 复制在**渲染进程**拼装(拉草稿 → 拼接 → blob 下载 / 写剪贴板),
  *   不需要后端配合;
  * - **EPUB / DOCX 暂不可用**:生成它们要 zip + OOXML 序列化,依赖(`yazl`)在主进程侧,
- *   渲染进程没有。页签照设计稿显示,但禁用并写明原因 —— 不做点了没反应的假按钮;
+ *   渲染进程没有。页签显示,但禁用并写明原因 —— 不做点了没反应的假按钮;
  * - 「选中」范围同样禁用:它要对编辑器的选区取数,而选区在 CodeMirror 里,这一版没接。
  */
 export function ExportPanel({
@@ -140,6 +142,8 @@ export function ExportPanel({
 	const [openState, setOpenState] = useState(false);
 	/** 受控时以外层状态为准(手机端整屏导出);否则用内部状态(桌面端页头按钮)。 */
 	const open = control ? control.open : openState;
+	/** 退场:关掉后仍挂 140ms,让面板播完下沉动画(见 styles/presence.css)。 */
+	const panelPresence = useExitPresence(open, DUR.fast * 1000);
 	const setOpen = (v: boolean | ((prev: boolean) => boolean)) => {
 		if (control) {
 			const next = typeof v === "function" ? v(control.open) : v;
@@ -190,7 +194,7 @@ export function ExportPanel({
 		return parts.filter((p) => p.length > 0).join("\n\n\n");
 	}, [format, targets, loadChapterText, withTitle, withAppendix, loadWorldAppendix]);
 
-	/** 预取统计(设计稿的「12 章 · 48,000 字 · 含 8 条附录」)。 */
+	/** 预取统计。 */
 	const refreshStat = useCallback(async () => {
 		const seq = ++statSeqRef.current;
 		setStat(null);
@@ -323,8 +327,8 @@ export function ExportPanel({
 				</button>
 			)}
 
-			{open && (
-				<div className="export-panel" role="dialog" aria-label="导出">
+			{panelPresence.mounted && (
+				<div className={`export-panel${panelPresence.closing ? " is-closing" : ""}`} role="dialog" aria-label="导出">
 					<div className="export-tabs" role="tablist">
 						{EXPORT_FORMATS.map((f) => (
 							<button
@@ -362,7 +366,7 @@ export function ExportPanel({
 								>
 									本章
 								</button>
-								{/* 选中范围要对 CodeMirror 的选区取数,这一版没接 —— 照设计稿显示但禁用 */}
+								{/* 选中范围要对 CodeMirror 的选区取数,这一版没接 —— 显示但禁用 */}
 								<button type="button" className="export-seg-item" disabled title="需在编辑器中选中文本(暂未接入)">
 									选中
 								</button>
@@ -377,7 +381,7 @@ export function ExportPanel({
 							<input type="checkbox" checked={withAppendix} onChange={(e) => setWithAppendix(e.target.checked)} />
 							<span>附带世界书附录</span>
 						</label>
-						{/* AI 批注目前没有落到正文里的独立数据源,照设计稿显示为未勾选且禁用 */}
+						{/* AI 批注目前没有落到正文里的独立数据源,显示为未勾选且禁用 */}
 						<label className="export-check disabled" title="批注数据暂未接入">
 							<input type="checkbox" checked={withNotes} disabled onChange={(e) => setWithNotes(e.target.checked)} />
 							<span>保留 AI 批注</span>

@@ -10,7 +10,7 @@
   background: var(--mask);
   backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
   display: flex; align-items: center; justify-content: center; padding: var(--sp-6);
-  animation: wz-fade var(--dur-base) var(--ease-out);
+  animation: fade-in var(--dur-base) var(--ease-out);
 }
 .dlg-panel {
   width: min(680px, 94vw); max-height: 88vh;
@@ -33,6 +33,6 @@
 .dlg-x {
   margin-left: auto; flex: none; display: inline-flex; align-items: center; justify-content: center;
   width: 26px; height: 26px; border-radius: var(--r-sm); color: var(--faint);
-  transition: color var(--dur-fast), background var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .dlg-x:hover { color: var(--ink); background: var(--hover-tint); }

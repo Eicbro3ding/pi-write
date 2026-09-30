@@ -6,6 +6,7 @@ import { useDragResize } from "../use-drag-resize.ts";
 import type { BookMeta, ChapterRef } from "../types.ts";
 import { IconBook } from "./Icons.tsx";
 import { Lu } from "./Lu.tsx";
+import { navItems } from "../nav.ts";
 
 interface ChapterSidebarProps {
 	books: BookMeta[];
@@ -31,6 +32,8 @@ interface ChapterSidebarProps {
 	onRenameChapter?: (ch: ChapterRef, title: string) => void;
 	/** 导入进行中:底部「＋ 导入书」按钮禁用并显示「导入中…」。 */
 	importing?: boolean;
+	/** 首次拉书还没回来:章节区显示骨架行,而不是闪一帧「还没有章节」。 */
+	loading?: boolean;
 	/** 进行中的书 slug:其导出/删除按钮禁用。 */
 	busySlug?: string | null;
 	/** 侧栏宽度(px);拖拽右边缘手柄可调。 */
@@ -47,13 +50,18 @@ interface ChapterSidebarProps {
 	onRailModeChange?: (mode: "chapters" | "workspace") => void;
 	/** 「工作区」模式的内容(由页面注入;未传则该模式显示占位提示)。 */
 	workspace?: ReactNode;
-	/** 手机端抽屉主导航:当前页 + 切页回调(设计稿「文件抽屉」的舞台/编辑/世界书/设置)。 */
+	/** 手机端抽屉主导航:当前页 + 切页回调。 */
 	nav?: { view: string; onNavigate: (view: string) => void };
 	/**
 	 * 经典模式(单 agent):抽屉主导航去掉「舞台」入口,与顶栏(桌面)一致。
 	 * 缺省 false(多 agent:舞台/编辑/世界书/设置四个入口)。
 	 */
 	classicMode?: boolean;
+	/**
+	 * 调试模式:抽屉主导航追加「UI 房」(组件陈列室,仅开发者可见)。
+	 * 与顶栏(App.tsx)用同一条规则 —— 见 nav.ts 的 navItems()。
+	 */
+	debugMode?: boolean;
 	/** 当前章节字数(手机端抽屉页脚的「本地草稿 · 不上传 | N 字」)。 */
 	words?: number | null;
 }
@@ -63,17 +71,11 @@ const MIN_WIDTH = 200;
 const MAX_WIDTH = 340;
 
 /**
- * 手机端抽屉主导航条目(设计稿「文件抽屉」)。
+ * 手机端抽屉主导航条目:**来自 `web/src/nav.ts`**(唯一真相源)。
  *
- * 经典模式(单 agent)下舞台页整个不挂载(见 App),这里也必须去掉「舞台」——
- * 否则点进去只会切到一个不存在的页(view="stage" 但 StagePage 未渲染),停白屏。
+ * 这里曾经有一份本地拷贝;UI 房(调试模式专属页)也要手机端导航,再抄一份必然
+ * 漂移 —— 现在「经典模式去掉舞台」「调试模式追加 UI 房」两条规则都写在 nav.ts。
  */
-const MOBILE_NAV_ITEMS = [
-	{ id: "stage", icon: "clapperboard", label: "舞台" },
-	{ id: "edit", icon: "square-pen", label: "编辑" },
-	{ id: "world", icon: "globe", label: "世界书" },
-	{ id: "settings", icon: "settings", label: "设置" },
-] as const;
 
 /**
  * 书库栏:书列表 + 当前书的章节列表(章节带序号),底部新建章节/新建书/导入书。
@@ -95,6 +97,7 @@ export function ChapterSidebar({
 	onImportBook,
 	onRenameChapter,
 	importing = false,
+	loading = false,
 	busySlug = null,
 	width,
 	onResize,
@@ -107,6 +110,7 @@ export function ChapterSidebar({
 	workspace,
 	nav,
 	classicMode = false,
+	debugMode = false,
 	words,
 }: ChapterSidebarProps) {
 	/** 新建书内联输入框是否展开。 */
@@ -130,6 +134,20 @@ export function ChapterSidebar({
 	const isNarrow = useMediaQuery("(max-width: 900px)");
 	/** 手机端(≤700px):抽屉整屏内容改成「品牌头 + 主导航 + 章节/工作区」。 */
 	const isPhone = useMediaQuery(PHONE_QUERY);
+	/**
+	 * 系统开启「减少动态效果」:退场只留 高度 + 透明度。
+	 *
+	 * framer 的 `MotionConfig reducedMotion="user"` 只降级**位移类**属性
+	 * (width/height/top/left/right/bottom 与 transform),margin/padding 不在名单里 ——
+	 * 折叠项退场时若继续收缩 margin/padding,降级下仍会看到一段挤动(2026-09-30 审计)。
+	 */
+	const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+	const exitCollapsed = reduceMotion
+		? { opacity: 0, height: 0, overflow: "hidden" as const }
+		: { opacity: 0, height: 0, marginTop: 0, marginBottom: 0, overflow: "hidden" as const };
+	const exitCollapsedPadded = reduceMotion
+		? { opacity: 0, height: 0, overflow: "hidden" as const }
+		: { opacity: 0, height: 0, paddingTop: 0, paddingBottom: 0, marginTop: 0, marginBottom: 0, overflow: "hidden" as const };
 	/** 手机端忽略折叠态:折叠是桌面语言(56px 图标条),手机端抽屉恒为全宽。 */
 	const collapsedNow = collapsed && !isPhone;
 	/** 隐藏的文件选择框(底部「＋ 导入书」按钮触发)。 */
@@ -204,8 +222,10 @@ export function ChapterSidebar({
 						className="drawer-mask"
 						aria-hidden="true"
 						initial={{ opacity: 0 }}
-						animate={{ opacity: 1 }}
-						exit={{ opacity: 0 }}
+						animate={{ opacity: 1, pointerEvents: "auto" }}
+						/* 退场的一帧就交还点击(不可插值属性立即生效):200ms 的淡出期间
+						   遮罩仍铺满全屏,否则会吞掉抽屉关闭后紧接着的那一下点击 */
+						exit={{ opacity: 0, pointerEvents: "none" }}
 						transition={{ duration: DUR.base, ease: EASE.out }}
 						onClick={onClose}
 					/>
@@ -242,7 +262,7 @@ export function ChapterSidebar({
 					)
 					) : (
 						<>
-						{/* 手机端:品牌头 + 主导航(设计稿「文件抽屉」)——手机端顶栏下线,
+						{/* 手机端:品牌头 + 主导航——手机端顶栏下线,
 						    四个页面的入口收到这里;点条目先切页再关抽屉 */}
 						{isPhone && (
 							<>
@@ -258,10 +278,7 @@ export function ChapterSidebar({
 								</div>
 								{nav && (
 									<div className="m-nav" role="navigation" aria-label="主导航">
-										{(classicMode
-											? MOBILE_NAV_ITEMS.filter((item) => item.id !== "stage")
-											: MOBILE_NAV_ITEMS
-										).map(({ id, icon, label }) => (
+										{navItems({ classicMode, debugMode }).map(({ id, icon, label }) => (
 											<button
 												key={id}
 												type="button"
@@ -324,12 +341,17 @@ export function ChapterSidebar({
 									<div className="c-books">
 										<AnimatePresence initial={false}>
 											{shownBooks.map((b) => (
-												// 无 layout/入场动画:顶层标签页切换时 display 重挂会触发 framer
-												// layout 重放(scale+位移),与容器滑入叠加成双重动画;条目移除保留 exit
+												// 入场 = 淡入 + 4px 下移,退场 = 高度收拢;不做 layout 动画
+												// (顶层标签页切换时 display 重挂会触发 framer layout 重放,
+												// 与容器滑入叠加成双重动画)。外层 AnimatePresence 的
+												// initial={false} 保证首次挂载/切页重挂时不重播,只有
+												// 「真的新增了一条」才播 —— 与删除的退场对称
 												<motion.div
 													key={b.slug}
 													className="c-book-wrap"
-													exit={{ opacity: 0, height: 0, marginTop: 0, marginBottom: 0, overflow: "hidden" }}
+													initial={{ opacity: 0, y: -4 }}
+													animate={{ opacity: 1, y: 0 }}
+													exit={exitCollapsed}
 													transition={T_LIST}
 												>
 												{/* 书项行:切书按钮与 ⋯ 操作菜单按钮平级(嵌套 button 是非法 HTML,
@@ -340,7 +362,7 @@ export function ChapterSidebar({
 														title={`${b.title} · ${b.slug} · ${b.chapters} 章`}
 														onClick={() => onSelectBook(b.slug)}
 													>
-														{/* 设计稿 06:书行 = 书本图标 + 书名 + ⋯。
+														{/* :书行 = 书本图标 + 书名 + ⋯。
 														    章节数挪到「章节」标题右端(它在那边才是有用的上下文),
 														    slug 保留在 title 提示里 */}
 														<span className="c-book-icon"><IconBook size={14} /></span>
@@ -453,14 +475,25 @@ export function ChapterSidebar({
 							)}
 						</div>
 						<nav className="c-list">
-							{chapters.length === 0 && <div className="c-empty">还没有章节</div>}
+							{chapters.length === 0 &&
+								(loading ? (
+									<div className="sk-rows" aria-hidden="true">
+										<div className="skeleton sk-row" />
+										<div className="skeleton sk-row" />
+										<div className="skeleton sk-row" />
+									</div>
+								) : (
+									<div className="c-empty">还没有章节</div>
+								))}
 							<AnimatePresence initial={false}>
 								{shownChapters.map((ch, i) =>
 									renamingChapterId === ch.id ? (
 										<motion.div
 											key={ch.id}
 											className="chapter chapter-renaming"
-											exit={{ opacity: 0, height: 0, paddingTop: 0, paddingBottom: 0, marginTop: 0, marginBottom: 0, overflow: "hidden" }}
+											initial={{ opacity: 0, y: -4 }}
+											animate={{ opacity: 1, y: 0 }}
+											exit={exitCollapsedPadded}
 											transition={T_LIST}
 										>
 											<input
@@ -486,7 +519,9 @@ export function ChapterSidebar({
 										<motion.div
 											key={ch.id}
 											className="chapter-row"
-											exit={{ opacity: 0, height: 0, paddingTop: 0, paddingBottom: 0, marginTop: 0, marginBottom: 0, overflow: "hidden" }}
+											initial={{ opacity: 0, y: -4 }}
+											animate={{ opacity: 1, y: 0 }}
+											exit={exitCollapsedPadded}
 											transition={T_LIST}
 										>
 											{/* 切章按钮与操作按钮平级(嵌套 button 非法,拆开) */}
@@ -537,7 +572,7 @@ export function ChapterSidebar({
 								)}
 							</AnimatePresence>
 						</nav>
-						{/* 主行动作:琥珀实心按钮(设计稿 06/07 左下角),次级动作收成一行小字 */}
+						{/* 主行动作:琥珀实心按钮,次级动作收成一行小字 */}
 						<button className="c-new primary" onClick={onNewChapter}>
 							<Lu icon="plus" size={15} /> 新建章节
 						</button>

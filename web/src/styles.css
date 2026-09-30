@@ -141,8 +141,9 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   display: grid;
   /* 轨 1 用 auto:书库栏 width(折叠 56px / 展开 200–340px 拖拽)直接决定轨宽,
      CSS transition 同步动画折叠/展开,纸张随动平滑;
-     轨 3 经 --companion-w(WritePage 注入)跟随 AI 伙伴栏左缘拖拽调宽 */
-  grid-template-columns: auto minmax(0, 1fr) var(--companion-w, 380px);
+     轨 3 也用 auto:伙伴栏 width 自己过渡(与左栏同款)。grid-template-columns 是
+     不可动画属性(discrete),只有让轨宽跟随子项宽度,收起/展开才动得起来 */
+  grid-template-columns: auto minmax(0, 1fr) auto;
   /* 行高固定为容器高度(minmax(0,1fr) 允许收缩):内容超高在子项内部滚动,
      不被 auto 行撑出——对话消息/草稿变多时页面整体被拉长的根因 */
   grid-template-rows: minmax(0, 1fr);
@@ -175,7 +176,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .c-book {
   position: relative; display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;
   padding: 7px 10px; font-size: 13px; color: var(--muted); text-align: left;
-  border-radius: var(--r-md); transition: color var(--dur-fast), background var(--dur-fast);
+  border-radius: var(--r-md); transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .c-book:hover { color: var(--ink); background: var(--hover-tint); }
 .c-book.active { color: var(--amber); background: var(--amber-tint); }
@@ -189,7 +190,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .chapter {
   position: relative; display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;
   padding: 7px 10px; font-size: 13px; color: var(--muted); text-align: left;
-  border-radius: var(--r-md); transition: color var(--dur-fast), background var(--dur-fast);
+  border-radius: var(--r-md); transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .chapter:hover { color: var(--ink); background: var(--hover-tint); }
 .chapter.active { color: var(--amber); background: var(--amber-tint); }
@@ -198,13 +199,13 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .chapter.active .c-index { color: var(--amber); }
 .chapter .c-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chapter .c-label { margin-left: auto; font-size: 11px; color: var(--faint); flex: none; }
-/* 注:这里原有「选中项左侧暖金竖条」,设计稿 06 的选中态是「圆角卡 + 字色」,
+/* 注:这里原有「选中项左侧暖金竖条」,选中态是「圆角卡 + 字色」,
    没有竖条 —— 已去掉(整列与右侧面板/顶栏的选中语言统一成底色 + 字色)。 */
 .c-empty { padding: 8px 10px; font-size: 12px; color: var(--faint); }
-/* 新建/导入:主动作琥珀实心,次级动作一行小字(设计稿 06/07 左下角) */
+/* 新建/导入:主动作琥珀实心,次级动作一行小字 */
 .c-new {
   padding: 7px 10px; font-size: 13px; color: var(--muted); text-align: left;
-  border-radius: var(--r-sm); transition: color var(--dur-fast), background var(--dur-fast);
+  border-radius: var(--r-sm); transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
   display: flex; align-items: center; gap: 6px;
 }
 .c-new:hover:not(:disabled) { color: var(--amber); background: var(--hover-tint); }
@@ -222,7 +223,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .c-new-input {
   display: block; width: 100%; margin-top: 6px; padding: 7px 10px; font-size: 13px;
   background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-sm);
-  outline: none; color: var(--ink); transition: border-color var(--dur-fast);
+  outline: none; color: var(--ink); transition: border-color var(--dur-fast) var(--ease-out);
 }
 .c-new-input:focus { border-color: var(--amber); }
 .c-book-rename-input {
@@ -234,6 +235,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .chapter-rename-input {
   width: 100%; padding: 5px 10px; font-size: 13px; background: var(--bg-elev);
   border: 1px solid var(--line); border-radius: var(--r-sm); outline: none; color: var(--ink);
+  animation: fade-in var(--dur-fast) var(--ease-out);
 }
 /* 章节操作按钮:hover 显示 */
 .c-chapter-actions { position: relative; display: inline-flex; gap: 4px; margin-right: 4px; flex: none; }
@@ -242,7 +244,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .c-more-btn {
   width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
   font-size: 14px; line-height: 1; color: var(--muted); border-radius: var(--r-sm);
-  transition: color var(--dur-fast), background var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .c-more-btn:hover:not(:disabled) { color: var(--amber); background: var(--hover-tint); }
 .c-more-btn:disabled { color: var(--faint); cursor: default; }
@@ -251,10 +253,11 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   padding: 4px; display: flex; flex-direction: column; gap: 1px;
   background: var(--bg-elev-2); border: 1px solid var(--line-strong); border-radius: var(--r-md);
   box-shadow: var(--shadow-2);
+  animation: fade-up var(--dur-fast) var(--ease-out);
 }
 .c-menu button {
   text-align: left; padding: 6px 10px; font-size: 13px; color: var(--ink-2);
-  border-radius: var(--r-sm); transition: color var(--dur-fast), background var(--dur-fast);
+  border-radius: var(--r-sm); transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .c-menu button:hover:not(:disabled) { background: var(--hover-tint); color: var(--ink); }
 .c-menu button.danger { color: var(--red); }
@@ -275,11 +278,11 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   flex: none; display: flex; align-items: center; justify-content: center; gap: 6px;
   margin-top: 8px; padding: 7px; font-size: 12px; color: var(--faint);
   border: 1px solid var(--line); border-radius: var(--r-md);
-  transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .c-collapse:hover { color: var(--amber); border-color: var(--line-strong); background: var(--hover-tint); }
 .c-collapse span:first-child {
-  display: inline-block; transition: transform var(--dur-slow) var(--ease-out);
+  display: inline-block; transition: transform var(--dur-fast) var(--ease-out);
 }
 .chapters.collapsed .c-collapse span:first-child { transform: rotate(180deg); }
 /* 折叠态:56px 图标条,只留当前书首字按钮 + 展开钮 */
@@ -292,13 +295,13 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   border-radius: var(--r-md); background: var(--amber-tint); color: var(--amber);
   font-size: 15px; font-weight: 500; align-items: center; justify-content: center;
   animation: fade-in var(--dur-base) var(--ease-out);
-  transition: background var(--dur-fast);
+  transition: background var(--dur-fast) var(--ease-out);
 }
 .c-collapsed-book:hover { background: var(--amber-tint-strong); }
 .chapters.collapsed .c-collapsed-book { display: flex; }
 
 /* —— 纸张(中):正文常驻 ——
-   设计稿 06-编辑-v1:纸张固定 728 宽居中(不再是「铺满 + 内部限宽 800」),
+   纸张固定 728 宽居中(不再是「铺满 + 内部限宽 800」),
    页头一行放完「章节名 + 状态胶囊 | 草稿路径 + 字数 + 全屏编辑」 */
 .paper-zone { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); position: relative; }
 .paper-head {
@@ -320,7 +323,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   flex: none; display: inline-flex; align-items: center; justify-content: center;
   width: 26px; height: 26px; color: var(--muted);
   border: 1px solid var(--line); border-radius: var(--r-sm);
-  transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .paper-fs:hover { color: var(--amber); border-color: var(--line-strong); background: var(--hover-tint); }
 /* 纸面:浮起卡片,固定阅读宽度 */
@@ -334,7 +337,9 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .draft.hidden { visibility: hidden; position: absolute; pointer-events: none; }
 .d-title { padding: 14px 14px 2px; font-size: 12px; letter-spacing: 0.08em; color: var(--muted); }
 .d-sub { padding: 2px 14px 10px; font-family: var(--mono); font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.d-body { flex: 1; min-height: 0; padding: 0 10px; overflow: hidden; }
+.d-body { flex: 1; min-height: 0; padding: 0 10px; overflow: hidden; position: relative; }
+/* 切章骨架覆盖层:盖住上一章的正文,直到新内容到手 */
+.d-loading { position: absolute; inset: 0; z-index: 2; background: var(--bg); animation: fade-in var(--dur-fast) var(--ease-out); }
 /* 正文阅读宽度:纸张卡片本身已固定 728,编辑器铺满卡内(窄屏自动收窄) */
 .d-body .cm-editor { max-width: 100%; margin: 0 auto; }
 /* 底部状态条:mono 细条 */
@@ -342,22 +347,28 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .d-error {
   flex: none; margin: 0 10px 8px; padding: 8px 12px; font-size: 12px;
   border-radius: var(--r-sm); border: 1px solid var(--line);
+  animation: fade-up var(--dur-base) var(--ease-out);
 }
 .d-error.err { color: var(--red); border-color: var(--red-tint-strong); background: var(--red-tint); }
 .d-error.warn { color: var(--amber); border-color: var(--amber-tint-strong); background: var(--amber-tint); }
 .d-retry {
   margin-top: 6px; font-size: 11px; color: var(--amber);
   border: 1px solid var(--line); border-radius: var(--r-sm); padding: 3px 10px; cursor: pointer;
-  transition: border-color var(--dur-fast);
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 .d-retry:hover { border-color: var(--amber); }
 
 /* —— AI 伙伴(右):对话 | 批注 标签 —— */
 .companion {
+  /* 宽度由自己承担(--companion-w 由 WritePage 注入),轨 3 用 auto 跟随它 →
+     收起/展开是 width 过渡;拖拽中加 .resizing 关掉过渡,保持跟手 */
+  width: var(--companion-w, 380px);
   min-width: 0; display: flex; flex-direction: column;
   border-left: 1px solid var(--line); background: var(--bg);
-  position: relative;
+  position: relative; overflow: hidden;
+  transition: width var(--dur-slow) var(--ease-out);
 }
+.companion.resizing { transition: none; }
 /* 左缘拖拽调宽手柄:贴左边缘外侧,常驻细线,悬停琥珀(与书库手柄同语言) */
 .comp-resize {
   position: absolute; top: 0; left: -4px; width: 8px; height: 100%;
@@ -370,13 +381,20 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 }
 .companion-label { font-size: 11px; letter-spacing: 0.12em; color: var(--faint); font-weight: 500; margin-right: 4px; flex: none; }
 .companion-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-/* 伙伴内容:编剧对话常驻(选中正文自动预填输入框,无需标签切换) */
+/* 伙伴内容:编剧对话 / 备忘录两个标签的容器。
+   **两个方向都要有动画**(2026-09-30 审计:此前 chat→memo 硬切、memo→chat 才滑入):
+   方向由 WritePage 写在 data-memo-dir 上,数值/节奏与舞台右栏 .st-panel-anim 同一套。 */
 .companion-body > .chat {
   display: flex; flex: 1; min-height: 0; flex-direction: column;
-  animation: slide-in-right var(--dur-base) var(--ease-out);
+  animation: fade-in var(--dur-base) var(--ease-out);
 }
+.companion-body > .notice-board { animation: fade-in var(--dur-base) var(--ease-out); }
+.companion-body[data-memo-dir="right"] > .chat,
+.companion-body[data-memo-dir="right"] > .notice-board { animation: slide-in-right var(--dur-base) var(--ease-out); }
+.companion-body[data-memo-dir="left"] > .chat,
+.companion-body[data-memo-dir="left"] > .notice-board { animation: slide-in-left var(--dur-base) var(--ease-out); }
 .companion-title { font-size: 13px; color: var(--ink-2); font-weight: 500; }
-/* AI 伙伴栏标签条(编剧 | 备忘录)——设计稿 06 改成下划线式:
+/* AI 伙伴栏标签条(编剧 | 备忘录)—— 改成下划线式:
    外层下划线、舞台面板内层才用胶囊,两层不再都是胶囊控件,层级看得出区别 */
 .companion-head .c-tabs {
   position: relative; flex: 1; min-width: 0; display: flex; align-items: stretch; gap: 2px;
@@ -391,15 +409,15 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 }
 .companion-head .c-tabs .c-tab:hover { color: var(--ink); }
 .companion-head .c-tabs .c-tab.active { color: var(--amber); border-bottom-color: var(--amber); }
-/* 收起钮(设计稿 06 右栏右上角的 »):与左栏折叠同一套语言 */
+/* 收起钮:与左栏折叠同一套语言 */
 .companion-collapse {
   flex: none; display: inline-flex; align-items: center; justify-content: center;
   width: 24px; height: 24px; border-radius: var(--r-sm); color: var(--faint); font-size: 14px; line-height: 1;
-  transition: color var(--dur-fast), background var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .companion-collapse:hover { color: var(--ink); background: var(--hover-tint); }
-/* 收起态:右栏收成 48px 竖条(AI 伙伴 竖排 + » 展开) */
-.writing-workspace-shell.companion-collapsed { grid-template-columns: auto minmax(0, 1fr) 48px; }
+/* 收起态:右栏收成 48px 竖条(宽度落在子项上,轨 3 用 auto 跟随并过渡) */
+.writing-workspace-shell.companion-collapsed .companion { width: 48px; }
 /* 收起态 = 标签栏(与舞台右栏的图标栏同一套):点别的标签换选中,点当前标签展开 */
 .companion-rail {
   flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8px;
@@ -418,13 +436,15 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   font-family: var(--mono); font-size: 11px; color: var(--bg);
   background: var(--amber); border-radius: var(--r-full); padding: 0 6px; line-height: 15px;
 }
-.companion-live { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); animation: tab-live-pulse 1.6s ease-in-out infinite; }
+/* 生成中的小圆点:伙伴栏页签(.companion-live)与手机端页头(.m-live)同一个实现,
+   手机那份只在 mobile.css 里补定位(见 styles/mobile.css) */
+.companion-live, .m-live { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); animation: tab-live-pulse 1.6s var(--ease-inout) infinite; }
 @keyframes tab-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
 /* 伙伴栏顶部的移动端抽屉开关(窄屏) */
 .ws-drawer-toggle {
   display: none; font-size: 12px; color: var(--muted); padding: 5px 8px;
-  border-radius: var(--r-sm); transition: color var(--dur-fast), background var(--dur-fast);
+  border-radius: var(--r-sm); transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .ws-drawer-toggle:hover { color: var(--amber); background: var(--hover-tint); }
 
@@ -440,23 +460,25 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .thinking {
   display: flex; align-items: center; gap: 8px; padding: 12px 2px 2px;
   color: var(--muted); font-size: 13px; letter-spacing: 0.04em;
+  animation: fade-in var(--dur-fast) var(--ease-out);
 }
 .thinking-spin { color: var(--amber); font-size: 14px; line-height: 1; }
 .thinking-face { display: inline-block; animation: think-float 1.6s var(--ease-inout) infinite; }
 .thinking-label { color: var(--muted); }
 .thinking-dots { min-width: 1.4em; text-align: left; color: var(--faint); }
-/* —— 上下文压缩提示(设计稿 ★对话 · 上下文压缩动画)——
+/* —— 上下文压缩提示——
    只做「进行中」一态:标题 + 不确定进度的流光条 + 一句说明。
-   设计稿的「第 2 / 3 步」「约 8 秒」「12 条消息」都需要 compaction 事件带进度,
+   「第 2 / 3 步」「约 8 秒」「12 条消息」都需要 compaction 事件带进度,
    而现有事件只有 reason(manual / threshold / overflow),所以**一个数字都不写**;
    流光表达"还在动",不假装知道百分比。 */
 .compact-card {
   display: flex; flex-direction: column; gap: 10px;
   padding: 13px 14px; margin-top: 4px;
   background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-md);
+  animation: fade-up var(--dur-base) var(--ease-out);
 }
 .compact-head { display: flex; align-items: center; gap: 9px; }
-.compact-spin { display: inline-flex; color: var(--amber); animation: act-rotate 900ms linear infinite; }
+.compact-spin { display: inline-flex; color: var(--amber); }
 .compact-title { font-size: 13px; font-weight: 600; color: var(--ink); }
 .compact-bar {
   position: relative; height: 5px; border-radius: 3px;
@@ -474,8 +496,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .compact-note { font-size: 11px; color: var(--faint); }
 @keyframes think-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
 
-/* ── 模型报错卡(需求 1「错误原文照实显示,不吞成一句『出错了』」;
-      设计稿 ★组件规范·回复渲染 v2 右列) ──
+/* ── 模型报错卡(需求 1「错误原文照实显示,不吞成一句『出错了』」) ──
    卡片自己就是一件「证物」:红图标 + 标题 + 状态码徽标 + 原文框 + 动作行。
    视觉分工很明确——**原文框是主角**:面板底 + 更暗的框底 + 等宽字,把
    「供应商的原话」与「我们加的标题/提示」在排版上分开;标题区不抢眼。 */
@@ -504,7 +525,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   max-height: 260px; overflow: auto;
 }
 /* provider/model 那行:同在原文框里(照实信息的一部分,一起被复制),但用弱一档的
-   颜色区分「这是 provider 侧字段,不是错误正文」(设计稿原文框的第三行) */
+   颜色区分「这是 provider 侧字段,不是错误正文」 */
 .err-raw-meta { color: var(--faint); }
 .err-actions { display: flex; align-items: center; gap: 8px; }
 .err-act {
@@ -515,7 +536,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 .err-act:hover { background: var(--hover-tint); color: var(--ink); }
-/* 「重试」是主路径(暖金);复制原文是辅助(中性边框)——设计稿同此轻重 */
+/* 「重试」是主路径(暖金);复制原文是辅助(中性边框)——同此轻重 */
 .err-act.primary { border-color: var(--amber-tint-strong); color: var(--amber); }
 .err-act.primary:hover { background: var(--amber-tint); }
 .err-link {
@@ -537,12 +558,12 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   background: var(--bg-elev); border-left: 2px solid var(--amber);
   padding: 8px 14px 10px; border-radius: 0 var(--r-md) var(--r-md) 0;
 }
-/* 操作行:常驻可见(设计稿 03-组件规范/04——原来 hover-only,触屏不可达),
+/* 操作行:常驻可见,
    尺寸放大到可点击:padding 5/9、圆角 8、行高约 25 */
 .record-actions { display: inline-flex; gap: 4px; margin-left: auto; flex: none; }
 .record-act {
   font-size: 11px; color: var(--muted); padding: 5px 9px; border-radius: var(--r-sm);
-  transition: color var(--dur-fast), background var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .record-act:hover { color: var(--amber); background: var(--hover-tint); }
 .record-edit { display: flex; flex-direction: column; gap: 8px; }
@@ -589,8 +610,8 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   background: var(--bg-elev-2); color: var(--muted); font-size: 12px;
 }
 
-/* 思考:元信息行内的胶囊(设计稿 03-组件规范/04:`› 思考 · 1,606 字`)
-   —— 原先是一整块带左竖线的折叠块、自占一行,且没有底色,和设计稿对不上 */
+/* 思考:元信息行内的胶囊
+   —— 原先是一整块带左竖线的折叠块、自占一行,且没有底色,和对不上 */
 .think { margin-bottom: 10px; }
 .think-toggle {
   display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 10px;
@@ -599,7 +620,13 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .think-toggle:hover { color: var(--ink-2); background: var(--hover-tint-strong); }
-.think-arrow { font-size: 12px; line-height: 1; }
+.think-arrow {
+  /* 展开箭头:单枚 chevron 旋转(与 .sel-arrow / .pvc-arrow / .w-node-caret 同一套) */
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; line-height: 1;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.think-arrow.open { transform: rotate(90deg); }
 .think-label { letter-spacing: 0.06em; }
 .think-time { color: var(--amber); font-variant-numeric: tabular-nums; }
 .think-len { font-variant-numeric: tabular-nums; }
@@ -618,7 +645,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   animation: fade-up var(--dur-base) var(--ease-out);
 }
 
-/* 工具卡:统一外壳(设计稿 03-组件规范/03)
+/* 工具卡:统一外壳
    圆角 12 · $bg-elev 底 · 1px $line 描边 · 内边距 10/12 · 卡内间距 8;
    文字 工具名/参数 12 · 状态 11;正文不再是绿色(绿色只表示成功状态) */
 .tools { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
@@ -627,12 +654,15 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   font-family: var(--mono); font-size: 12px;
   color: var(--ink-2); background: var(--bg-elev); border: 1px solid var(--line);
   border-radius: var(--r-md); padding: 10px 12px; box-shadow: var(--shadow-1);
+  /* 工具块在流式中出现时有入场;运行→完成的边框变色也要过渡(原先是瞬间跳) */
+  animation: fade-up var(--dur-base) var(--ease-out);
+  transition: border-color var(--dur-base) var(--ease-out);
 }
 .tool-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .tool-head svg { flex: none; color: var(--muted); }
 .tool-name { font-weight: 500; flex: none; color: var(--ink); }
 .tool-args { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%; }
-/* 状态标签(设计稿 ★组件规范·回复渲染 v2):行尾一颗方括号标签,推到最右。
+/* 状态标签:行尾一颗方括号标签,推到最右。
    状态不再靠整行/整块变色表达——工具卡与动作行共用这一颗 */
 .act-state {
   margin-left: auto; flex: none; font-size: 11px; font-weight: 600; line-height: 1;
@@ -653,7 +683,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .tool[data-live="1"] .act-state { color: var(--amber); }
 .tool[data-live="1"] .tool-stream { border-color: var(--amber-tint-strong); }
 
-/* —— 简化输出的工具动作流(设计稿 03-组件规范/05 + ★组件规范·回复渲染 v2) ——
+/* —— 简化输出的工具动作流 ——
    行高 26 · 行间距 2 · 无卡片外框(比工具卡轻一档);
    图标 13 随状态着色(✓ $green / spinner $amber / ✕ $red),动词与宾语保持中性;
    状态收进行尾方括号标签(见 .act-state),失败另起一行缩进给原因(见 .act-error)。 */
@@ -662,9 +692,10 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .act-icon { flex: none; display: inline-flex; align-items: center; color: var(--green); }
 .act-row[data-state="run"] .act-icon { color: var(--amber); }
 .act-row[data-state="err"] .act-icon { color: var(--red); }
-.act-spin { animation: act-rotate 900ms linear infinite; }
+/* spinner:同一个 act-rotate —— 圆环与骨架条的旋转只有一份实现(名称在裸时长白名单里) */
+.act-spin, .compact-spin { animation: act-rotate 900ms linear infinite; }
 @keyframes act-rotate { to { transform: rotate(360deg); } }
-/* 动词与宾语**不随状态变色**(设计稿 ★组件规范·回复渲染 v2:整行不再变色)——
+/* 动词与宾语**不随状态变色**——
    状态全部交给行尾的 .act-state;进行中只把动词微提亮,当「这事还没完」的弱提示 */
 .act-verb { flex: none; font-size: 12px; font-weight: 500; color: var(--muted); }
 .act-row[data-state="run"] .act-verb { color: var(--ink-2); }
@@ -790,7 +821,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .ask-recap-a { font-size: 13px; color: var(--ink); }
 .ask-recap-a.empty { color: var(--faint); }
 
-/* —— 长内容折叠分档(设计稿 03-组件规范/04) ——
+/* —— 长内容折叠分档 ——
    短内容不折叠(组件侧直接铺开);中/长内容收到 12 行 + 底部渐隐 + 展开入口,
    展开后最高 480px、块内滚动 */
 .fold { position: relative; }
@@ -803,7 +834,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   display: block; width: 100%; padding: 5px 0 2px; margin-top: 2px;
   font-size: 11px; color: var(--muted); text-align: center;
   border-top: 1px solid var(--line);
-  transition: color var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out);
 }
 .fold-more:hover { color: var(--amber); }
 
@@ -821,7 +852,8 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   max-height: 264px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;
   padding: 6px; background: var(--bg-elev-2); border: 1px solid var(--line-strong);
   border-radius: var(--r-lg); box-shadow: var(--shadow-3);
-  animation: card-in-bottom 120ms var(--ease-out);
+  /* 弹出层小位移档:6px 淡入上移(fast),与 card-in-bottom 的 60px 卡片档区分 */
+  animation: pop-in var(--dur-fast) var(--ease-out);
 }
 .slash-menu-head {
   display: flex; align-items: baseline; gap: 8px; padding: 4px 8px 6px;
@@ -841,7 +873,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .slash-item-meta { flex: none; color: var(--faint); font-size: 11px; font-family: var(--mono); }
 .slash-menu-note { padding: 6px 8px; color: var(--amber); font-size: 12px; border-top: 1px solid var(--line); }
 
-/* —— `@` 引用菜单(设计稿 ★输入区 · @ 菜单)——
+/* —— `@` 引用菜单——
    定位与 `/` 命令面板同款(浮在输入框上方),差别在内容:那是"先选命令再搜候选",
    这里是**一次搜全部、按命令分区**并列出来(世界书 / 章节 / …),用户不必先判断
    "我要找的东西属于哪条命令"。条目样式复用 .slash-item。 */
@@ -850,7 +882,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   max-height: 300px; overflow-y: auto;
   background: var(--bg-elev-2); border: 1px solid var(--line-strong);
   border-radius: var(--r-lg); box-shadow: var(--shadow-3);
-  animation: card-in-bottom 120ms var(--ease-out);
+  animation: pop-in var(--dur-fast) var(--ease-out);
 }
 .at-menu-head {
   display: flex; align-items: center; gap: 8px; padding: 10px 12px;
@@ -861,7 +893,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   flex: 1; min-width: 0; font-size: 13px; color: var(--ink);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-/* 搜索范围徽标(设计稿里的「全部」);当前只有全量搜索一种范围,留给后续按类型收窄 */
+/* 搜索范围徽标;当前只有全量搜索一种范围,留给后续按类型收窄 */
 .at-menu-scope {
   flex: none; font-size: 11px; line-height: 1; padding: 4px 8px; border-radius: 999px;
   color: var(--amber); background: var(--amber-tint);
@@ -872,16 +904,16 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   color: var(--faint);
 }
 
-/* —— 导出面板(设计稿 ★导出 · 选项卡)——
+/* —— 导出面板——
    导出按钮点开是一排页签(TXT / Markdown / EPUB / DOCX / 复制),浮在按钮下方;
-   宽度照设计稿 440。禁用页签照常显示但不响应 —— 用 title 说明为什么不可用。 */
+   宽度 440。禁用页签照常显示但不响应 —— 用 title 说明为什么不可用。 */
 .export-anchor { position: relative; display: inline-flex; }
 .export-btn {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 5px 11px; border-radius: var(--r-sm);
   background: var(--amber); color: #0f0e0c; border: 0;
   font-size: 12px; font-weight: 600; cursor: pointer;
-  transition: background var(--dur-fast);
+  transition: background var(--dur-fast) var(--ease-out);
 }
 .export-btn:hover { background: #e6b45a; }
 .export-panel {
@@ -889,7 +921,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   width: 440px; max-height: min(70vh, 620px); overflow-y: auto;
   background: var(--bg-elev); border: 1px solid var(--line-strong);
   border-radius: var(--r-lg); box-shadow: var(--shadow-3);
-  animation: card-in-bottom 120ms var(--ease-out);
+  animation: pop-in var(--dur-fast) var(--ease-out);
 }
 .export-tabs { display: flex; padding: 0 6px; border-bottom: 1px solid var(--line); }
 .export-tab {
@@ -935,7 +967,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .export-secondary:hover:not(:disabled) { border-color: var(--muted); }
 .export-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* —— 分段控件(设计稿 ★设置 v2 · 实验的「默认尺寸」1:1 / 3:2 / 16:9)——
+/* —— 分段控件——
    与导出面板的 .export-seg 同形,但那是局部的;这里升为通用分段控件,
    右侧可跟一段 mono 说明(尺寸对应的像素) */
 .st-seg {
@@ -952,7 +984,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .inputbar-inner {
   display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px;
   background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-lg);
-  padding: 8px 8px 8px 14px; transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+  padding: 8px 8px 8px 14px; transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 /* 引用芯片行:/node、/chapter 选中后挂载,发送时才展开注入文本(zcode/GPT 式引用);
    占满整行把 textarea 挤到下一行,芯片本身可换行排列 */
@@ -971,7 +1003,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   font-size: 13px; line-height: 1; padding: 1px 5px; border-radius: var(--r-full);
 }
 .input-chip-x:hover { color: var(--ink); background: var(--line); }
-/* 上下文占用圆环(设计稿 ★输入区 · 上下文圆环):输入框内的比例环 + 百分比。
+/* 上下文占用圆环:输入框内的比例环 + 百分比。
    三档配色 —— 充足绿 / 正常琥珀 / 接近上限(≥80%)红;阈值与 context-usage.ts 的
    COMPACT_HINT_PERCENT 对齐:环变红的那一刻,正好是「建议 /compact」该出现的那一刻 */
 .ctx-ring {
@@ -998,7 +1030,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   display: flex; flex-direction: column; gap: 8px;
   padding: 10px 12px 12px; background: var(--bg-elev-2); border: 1px solid var(--line-strong);
   border-radius: var(--r-lg); box-shadow: var(--shadow-3);
-  animation: card-in-bottom 120ms var(--ease-out);
+  animation: pop-in var(--dur-fast) var(--ease-out);
 }
 .usage-head { display: flex; align-items: center; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
 .usage-title { font-size: 13px; font-weight: 500; color: var(--ink); }
@@ -1046,7 +1078,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .btn-primary:hover:not(:disabled) { background: var(--amber-tint-strong); color: var(--ink); border-color: var(--amber-tint-strong); }
 .btn-primary:disabled { background: var(--line-strong); border-color: var(--line-strong); color: var(--faint); cursor: default; }
 
-/* 输入条发送钮:琥珀圆形 ↑(设计稿 04/06 两处输入条同款),只属于输入条 */
+/* 输入条发送钮:琥珀圆形 ↑,只属于输入条 */
 .inputbar .btn-send {
   flex: none; width: 28px; height: 28px; padding: 0; border-radius: var(--r-full);
   display: inline-flex; align-items: center; justify-content: center; align-self: flex-end;
@@ -1058,7 +1090,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .btn-abort {
   flex: none; font-size: 13px; color: var(--red); padding: 8px 14px;
   border: 1px solid var(--red-tint-strong); border-radius: var(--r-md); background: var(--red-tint);
-  transition: color var(--dur-fast), background var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .btn-abort:hover { color: var(--err-soft); background: var(--red-tint-strong); }
 /* 幽灵按钮(面板通用操作):此前只有局部变体、无基础样式,按钮呈浏览器裸态;
@@ -1069,7 +1101,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   flex: none; white-space: nowrap;
   padding: 5px 12px; font-size: 13px; color: var(--ink-2);
   background: transparent; border: 1px solid var(--line); border-radius: var(--r-sm);
-  cursor: pointer; transition: color var(--dur-fast), background var(--dur-fast), border-color var(--dur-fast);
+  cursor: pointer; transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 .btn-ghost:hover:not(:disabled) { color: var(--amber); background: var(--hover-tint); border-color: var(--line-strong); }
 .btn-ghost.danger { color: var(--red); }
@@ -1096,7 +1128,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .branch-select:disabled { color: var(--faint); }
 
 /* 提示条 */
-.notice { font-size: 12px; padding: 8px 12px; border-radius: var(--r-md); line-height: 1.6; display: flex; align-items: center; gap: 10px; }
+.notice { font-size: 12px; padding: 8px 12px; border-radius: var(--r-md); line-height: 1.6; display: flex; align-items: center; gap: 10px; animation: fade-up var(--dur-base) var(--ease-out); }
 .notice.err { color: var(--red); border: 1px solid var(--red-tint-strong); background: var(--red-tint); }
 .notice.warn { color: var(--amber); border: 1px solid var(--amber-tint-strong); background: var(--amber-tint); }
 /* 中性信息(缓存命中徽标):只用既有 token,不新增主题键(themes 测试强约束) */
@@ -1114,7 +1146,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .empty-books-input {
   width: 260px; background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-md);
   outline: none; color: var(--ink); font-family: var(--prose); font-size: 15px; padding: 10px 14px; text-align: center;
-  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
 }
 .empty-books-input:focus { border-color: var(--amber); box-shadow: 0 0 0 3px var(--amber-tint); }
 
@@ -1124,7 +1156,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   position: sticky; top: 8px; z-index: 3; align-self: flex-end; flex: none;
   width: 26px; height: 26px; margin: 0 0 4px; display: flex; align-items: center; justify-content: center;
   border-radius: var(--r-sm); font-size: 18px; line-height: 1; color: var(--muted);
-  transition: color var(--dur-fast), background var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .panel-close:hover { color: var(--ink); background: var(--hover-tint); }
 
@@ -1142,7 +1174,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .fs-path:focus { border-bottom-color: var(--amber); }
 .fs-quick { background: transparent; border: none; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; padding: 4px 2px; outline: none; }
 .fs-stats { font-size: 11px; color: var(--faint); font-family: var(--mono); white-space: nowrap; }
-.fs-btn { font-size: 12px; color: var(--muted); padding: 5px 10px; border-radius: var(--r-sm); transition: color var(--dur-fast); }
+.fs-btn { font-size: 12px; color: var(--muted); padding: 5px 10px; border-radius: var(--r-sm); transition: color var(--dur-fast) var(--ease-out); }
 .fs-btn:hover { color: var(--ink); background: var(--hover-tint); }
 .fs-btn.active { color: var(--amber); }
 .fs-notice { margin: 8px 20px 0; }
@@ -1167,7 +1199,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .w-node {
   display: block; width: 100%; text-align: left; font-size: 13px; color: var(--muted);
   padding: 6px 10px; border-radius: var(--r-md); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  transition: color var(--dur-fast), background var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .w-node:hover { color: var(--ink); background: var(--hover-tint); }
 .w-node.active { color: var(--amber); background: var(--amber-tint); }
@@ -1182,7 +1214,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .w-summary textarea {
 	width: 100%; box-sizing: border-box; background: var(--bg-elev); border: 1px solid var(--line);
 	border-radius: var(--r-sm); color: var(--ink); font-size: 13px; padding: 6px 10px; outline: none;
-	resize: vertical; min-height: 40px; transition: border-color var(--dur-fast);
+	resize: vertical; min-height: 40px; transition: border-color var(--dur-fast) var(--ease-out);
 }
 .w-summary textarea:focus { border-color: var(--amber); }
 .w-summary .w-count { font-family: var(--mono); font-size: 11px; color: var(--faint); padding-top: 4px; }
@@ -1191,7 +1223,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .w-summary-toggle {
 	flex: none; font-size: 12px; color: var(--muted); padding: 4px 10px;
 	border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg-elev);
-	cursor: pointer; transition: color var(--dur-fast), border-color var(--dur-fast);
+	cursor: pointer; transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 .w-summary-toggle:hover { color: var(--ink); border-color: var(--amber); }
 .w-summary-toggle.on { color: var(--amber); border-color: var(--amber); }
@@ -1199,11 +1231,11 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .w-file { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .w-dirty { margin-left: auto; font-size: 12px; color: var(--faint); }
 .w-dirty.on { color: var(--amber); }
-.w-save { flex: none; font-size: 13px; color: var(--amber); padding: 6px 14px; border: 1px solid var(--amber); border-radius: var(--r-md); transition: color var(--dur-fast), background var(--dur-fast); }
+.w-save { flex: none; font-size: 13px; color: var(--amber); padding: 6px 14px; border: 1px solid var(--amber); border-radius: var(--r-md); transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
 .w-save:hover:not(:disabled) { color: var(--bg); background: var(--amber); }
 .w-save:disabled { color: var(--faint); border-color: var(--line); cursor: default; }
 .w-view-tabs { flex: none; display: inline-flex; gap: 2px; padding: 2px; background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-md); }
-.w-view-tab { font-size: 12px; color: var(--muted); padding: 4px 12px; border-radius: calc(var(--r-md) - 2px); transition: color var(--dur-fast), background var(--dur-fast); }
+.w-view-tab { font-size: 12px; color: var(--muted); padding: 4px 12px; border-radius: calc(var(--r-md) - 2px); transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
 .w-view-tab:hover { color: var(--ink); background: var(--hover-tint); }
 .w-view-tab.active { color: var(--amber); background: var(--amber-tint); }
 .w-editor { flex: 1; min-height: 0; padding: 0 18px 12px; }
@@ -1212,12 +1244,12 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .w-add-head { flex: none; font-size: 11px; letter-spacing: 0.1em; color: var(--faint); }
 .w-add select, .w-add input {
   background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-sm);
-  color: var(--ink); font-size: 13px; padding: 6px 10px; outline: none; transition: border-color var(--dur-fast);
+  color: var(--ink); font-size: 13px; padding: 6px 10px; outline: none; transition: border-color var(--dur-fast) var(--ease-out);
 }
 .w-add select:focus, .w-add input:focus { border-color: var(--amber); }
 .w-add select { flex: none; max-width: 150px; }
 .w-add input { flex: 1; min-width: 0; }
-.w-add-btn { flex: none; font-size: 13px; color: var(--bg); font-weight: 500; background: var(--amber); padding: 6px 14px; border-radius: var(--r-md); transition: background var(--dur-fast); }
+.w-add-btn { flex: none; font-size: 13px; color: var(--bg); font-weight: 500; background: var(--amber); padding: 6px 14px; border-radius: var(--r-md); transition: background var(--dur-fast) var(--ease-out); }
 .w-add-btn:hover:not(:disabled) { background: var(--amber-tint-strong); color: var(--bg); }
 .w-add-btn:disabled { background: var(--line-strong); color: var(--faint); cursor: default; }
 .world-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 20px 48px; }
@@ -1242,6 +1274,8 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 }
 .world-stage > .world-scroll.leaving, .world-stage > .world-graph-view.leaving {
   visibility: visible; z-index: 1;
+  /* 正在滑出的那一层仍在文档里:立刻交还点击,别让用户点到已经在走的视图 */
+  pointer-events: none;
   animation: slide-out-left var(--dur-base) var(--ease-inout) forwards;
 }
 
@@ -1262,7 +1296,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .w-cst-row input[type="text"], .w-cst-row textarea {
   width: 100%; box-sizing: border-box; background: var(--bg-elev); border: 1px solid var(--line);
   border-radius: var(--r-sm); color: var(--ink); font-size: 13px; padding: 6px 10px; outline: none;
-  transition: border-color var(--dur-fast);
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 .w-panel textarea { resize: vertical; min-height: 40px; }
 .w-panel textarea:focus, .w-panel input[type="text"]:focus, .w-panel input[type="search"]:focus, .w-panel select:focus,
@@ -1271,7 +1305,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .w-switch input[type="checkbox"] { width: 14px; height: 14px; accent-color: var(--amber); cursor: pointer; }
 .w-input, .w-field input[type="text"], .w-field select, .w-field textarea {
   width: 100%; background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-sm);
-  color: var(--ink); font-size: 13px; padding: 6px 10px; outline: none; transition: border-color var(--dur-fast);
+  color: var(--ink); font-size: 13px; padding: 6px 10px; outline: none; transition: border-color var(--dur-fast) var(--ease-out);
 }
 .w-input:focus, .w-field input[type="text"]:focus, .w-field select:focus, .w-field textarea:focus { border-color: var(--amber); }
 .w-select { height: auto; padding: 4px 8px; }
@@ -1300,26 +1334,26 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .w-story {
   display: grid; grid-template-columns: 62px minmax(90px, 1.1fr) 108px minmax(90px, 1fr) minmax(90px, 1fr) auto;
   gap: 8px; align-items: center; padding: 8px 10px; border-radius: var(--r-md);
-  transition: background var(--dur-fast);
+  transition: background var(--dur-fast) var(--ease-out);
 }
 .w-story:hover { background: var(--hover-tint); }
 .w-story:last-child { border-bottom: none; }
 .w-story-add { display: flex; gap: 8px; padding: 10px 0 2px; }
 .w-ibtn-row { display: inline-flex; gap: 4px; flex: none; }
-.w-ibtn { font-size: 12px; color: var(--faint); padding: 2px 8px; border-radius: var(--r-sm); transition: color var(--dur-fast), background var(--dur-fast); }
+.w-ibtn { font-size: 12px; color: var(--faint); padding: 2px 8px; border-radius: var(--r-sm); transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
 .w-ibtn:hover:not(:disabled) { color: var(--amber); background: var(--hover-tint); }
 .w-ibtn:disabled { opacity: 0.35; cursor: default; }
 .w-ibtn.danger:hover:not(:disabled) { color: var(--red); }
 .w-timeline-row {
   display: grid; grid-template-columns: 140px 1fr auto; gap: 10px; align-items: center;
-  padding: 8px 10px; border-radius: var(--r-md); transition: background var(--dur-fast);
+  padding: 8px 10px; border-radius: var(--r-md); transition: background var(--dur-fast) var(--ease-out);
 }
 .w-timeline-row:hover { background: var(--hover-tint); }
 .w-chapter-tag { flex: none; font-size: 12px; color: var(--amber); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .w-timeline-text { font-size: 13px; color: var(--ink); line-height: 1.6; }
 .w-timeline-add { display: flex; gap: 8px; padding: 10px 0 2px; }
 .w-timeline-add select { flex: none; width: 140px; }
-.w-cst-row { display: grid; grid-template-columns: 150px 1fr 84px auto auto auto; gap: 8px; align-items: center; padding: 8px 10px; border-radius: var(--r-md); transition: background var(--dur-fast); }
+.w-cst-row { display: grid; grid-template-columns: 150px 1fr 84px auto auto auto; gap: 8px; align-items: center; padding: 8px 10px; border-radius: var(--r-md); transition: background var(--dur-fast) var(--ease-out); }
 .w-cst-row:hover { background: var(--hover-tint); }
 .w-cst-row .w-switch { justify-self: end; }
 .w-cst-row .w-count { padding: 0; font-family: var(--mono); font-size: 11px; white-space: nowrap; }
@@ -1344,7 +1378,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .graph-toolbar-title { font-size: 11px; letter-spacing: 0.1em; color: var(--faint); }
 .graph-filter { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); cursor: pointer; white-space: nowrap; }
 .graph-filter input { width: 13px; height: 13px; accent-color: var(--amber); cursor: pointer; }
-.graph-link-btn { flex: none; font-size: 12px; color: var(--amber); padding: 4px 12px; border: 1px solid var(--line); border-radius: var(--r-sm); transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast); }
+.graph-link-btn { flex: none; font-size: 12px; color: var(--amber); padding: 4px 12px; border: 1px solid var(--line); border-radius: var(--r-sm); transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
 .graph-link-btn:hover { color: var(--ink); background: var(--hover-tint); }
 .graph-link-btn.on { color: var(--amber); background: var(--amber-tint); border-color: var(--amber); }
 .graph-hint { font-size: 11px; color: var(--faint); }
@@ -1362,7 +1396,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 }
 .graph-zoom-btn {
   font-size: 12px; line-height: 1; color: var(--ink-2); padding: 5px 9px; border-radius: calc(var(--r-md) - 3px);
-  white-space: nowrap; transition: color var(--dur-fast), background var(--dur-fast);
+  white-space: nowrap; transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .graph-zoom-btn:hover { color: var(--amber); background: var(--hover-tint); }
 .graph-zoom-pct { font-size: 11px; color: var(--muted); min-width: 42px; text-align: center; font-variant-numeric: tabular-nums; }
@@ -1376,7 +1410,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .graph-ctx button { text-align: left; font-size: 12px; color: var(--ink); padding: 6px 10px; border-radius: calc(var(--r-md) - 2px); }
 .graph-ctx button:hover { color: var(--amber); background: var(--hover-tint); }
 .graph-ctx button.danger:hover { color: var(--red); }
-.graph-modal-mask { position: absolute; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; background: var(--mask); }
+.graph-modal-mask { position: absolute; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; background: var(--mask); animation: fade-in var(--dur-base) var(--ease-out); }
 .rel-form {
   width: 340px; max-width: calc(100% - 40px); background: var(--bg-elev-2); border: 1px solid var(--line-strong);
   border-radius: var(--r-lg); padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; box-shadow: var(--shadow-3);
@@ -1391,20 +1425,20 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .rel-arrow { flex: none; color: var(--amber); font-size: 12px; }
 .rel-field { display: flex; flex-direction: column; gap: 4px; }
 .rel-field span { font-size: 11px; letter-spacing: 0.08em; color: var(--faint); }
-.rel-field input { background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--ink); font-size: 13px; padding: 6px 10px; outline: none; transition: border-color var(--dur-fast); }
+.rel-field input { background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--ink); font-size: 13px; padding: 6px 10px; outline: none; transition: border-color var(--dur-fast) var(--ease-out); }
 .rel-field input:focus { border-color: var(--amber); }
 .rel-switch { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); cursor: pointer; }
 .rel-switch input { width: 14px; height: 14px; accent-color: var(--amber); cursor: pointer; }
 .rel-type-chips { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 2px; }
-.rel-type-chips button { font-size: 11px; color: var(--muted); padding: 3px 10px; border: 1px solid var(--line); border-radius: var(--r-full); transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast); }
+.rel-type-chips button { font-size: 11px; color: var(--muted); padding: 3px 10px; border: 1px solid var(--line); border-radius: var(--r-full); transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
 .rel-type-chips button:hover { color: var(--ink); border-color: var(--amber); background: var(--hover-tint); }
 .rel-type-chips button.on { color: var(--amber); border-color: var(--amber); background: var(--amber-tint); }
 .rel-arrow-opts { display: inline-flex; gap: 4px; }
-.rel-arrow-opts button { font-size: 12px; color: var(--muted); padding: 4px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast); }
+.rel-arrow-opts button { font-size: 12px; color: var(--muted); padding: 4px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
 .rel-arrow-opts button:hover { color: var(--ink); border-color: var(--amber); background: var(--hover-tint); }
 .rel-arrow-opts button.on { color: var(--amber); border-color: var(--amber); background: var(--amber-tint); }
 .rel-form-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 2px; }
-.rel-submit { font-size: 12px; color: var(--bg); font-weight: 500; background: var(--amber); padding: 6px 16px; border-radius: var(--r-sm); transition: background var(--dur-fast); }
+.rel-submit { font-size: 12px; color: var(--bg); font-weight: 500; background: var(--amber); padding: 6px 16px; border-radius: var(--r-sm); transition: background var(--dur-fast) var(--ease-out); }
 .rel-submit:hover:not(:disabled) { background: var(--amber-tint-strong); color: var(--bg); }
 .rel-submit:disabled { color: var(--faint); background: var(--line-strong); cursor: default; }
 .rel-form-dup { font-size: 12px; color: var(--red); }
@@ -1427,7 +1461,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .entry-field-label { font-size: 11px; letter-spacing: 0.08em; color: var(--faint); }
 .entry-field input[type="text"], .entry-field select, .entry-field textarea {
   width: 100%; background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-sm);
-  color: var(--ink); font-size: 13px; padding: 6px 10px; outline: none; transition: border-color var(--dur-fast);
+  color: var(--ink); font-size: 13px; padding: 6px 10px; outline: none; transition: border-color var(--dur-fast) var(--ease-out);
 }
 .entry-field input[type="text"]:focus, .entry-field select:focus, .entry-field textarea:focus { border-color: var(--amber); }
 .entry-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -1440,7 +1474,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .entry-rel-head { padding-top: 4px; border-top: 1px solid var(--line); }
 .entry-rel-empty { font-size: 12px; color: var(--faint); }
 .entry-rel-list { list-style: none; display: flex; flex-direction: column; gap: 2px; }
-.entry-rel-item { display: flex; align-items: baseline; gap: 6px; width: 100%; text-align: left; font-size: 13px; color: var(--muted); padding: 5px 8px; border-radius: var(--r-sm); transition: color var(--dur-fast), background var(--dur-fast); }
+.entry-rel-item { display: flex; align-items: baseline; gap: 6px; width: 100%; text-align: left; font-size: 13px; color: var(--muted); padding: 5px 8px; border-radius: var(--r-sm); transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
 .entry-rel-item:hover:not(:disabled) { color: var(--amber); background: var(--hover-tint); }
 .entry-rel-item:disabled { color: var(--faint); cursor: default; }
 .entry-rel-dir { flex: none; font-size: 11px; color: var(--faint); }
@@ -1456,7 +1490,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .entry-img-cell.avatar { border-color: var(--amber); }
 .entry-img-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .entry-img-tag { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.55); color: #fff; font-size: 11px; text-align: center; line-height: 16px; }
-.entry-img-ops { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 4px; background: rgba(0, 0, 0, 0.45); opacity: 0; transition: opacity 0.15s ease; }
+.entry-img-ops { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 4px; background: rgba(0, 0, 0, 0.45); opacity: 0; transition: opacity var(--dur-fast) var(--ease-out); }
 .entry-img-cell:hover .entry-img-ops, .entry-thumb:hover .entry-img-ops { opacity: 1; }
 .entry-img-ops button { background: transparent; border: none; color: #fff; cursor: pointer; font-size: 13px; padding: 2px 4px; }
 .entry-img-ops button:disabled { color: var(--faint); cursor: default; }
@@ -1467,7 +1501,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .entry-viewer-zone { position: absolute; top: 0; height: 100%; width: 40%; border: none; background: transparent; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 5; padding: 0; }
 .entry-viewer-zone.left { left: 0; }
 .entry-viewer-zone.right { right: 0; }
-.entry-viewer-arrow { opacity: 0; background: rgba(0, 0, 0, 0.35); color: #fff; padding: 4px 12px; border-radius: var(--r-full); font-size: 1.5rem; line-height: 1.4; transition: opacity 0.15s ease; }
+.entry-viewer-arrow { opacity: 0; background: rgba(0, 0, 0, 0.35); color: #fff; padding: 4px 12px; border-radius: var(--r-full); font-size: 1.5rem; line-height: 1.4; transition: opacity var(--dur-fast) var(--ease-out); }
 .entry-viewer-zone:hover .entry-viewer-arrow { opacity: 1; }
 .entry-viewer-counter { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); background: rgba(0, 0, 0, 0.6); color: #f0f4fa; padding: 3px 14px; border-radius: var(--r-full); font-size: 0.75rem; pointer-events: none; z-index: 6; }
 .entry-viewer-caption { display: flex; justify-content: space-between; align-items: center; padding: 6px 2px 4px; font-size: 0.8rem; color: var(--faint); }
@@ -1477,7 +1511,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .entry-thumb.on { border-color: var(--amber); }
 .entry-thumb-img { display: block; width: 100%; height: 100%; padding: 0; border: none; background: var(--bg-elev); cursor: pointer; }
 .entry-thumb-img img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.entry-thumb-add { width: 44px; height: 44px; flex: none; border: 1px dashed var(--muted); border-radius: var(--r-sm); background: transparent; color: var(--faint); font-size: 1.2rem; cursor: pointer; transition: color 0.15s, border-color 0.15s; }
+.entry-thumb-add { width: 44px; height: 44px; flex: none; border: 1px dashed var(--muted); border-radius: var(--r-sm); background: transparent; color: var(--faint); font-size: 1.2rem; cursor: pointer; transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); }
 .entry-thumb-add:hover:not(:disabled) { color: var(--amber); border-color: var(--amber); }
 .entry-thumb-add:disabled { color: var(--faint); cursor: default; }
 .entry-show { display: flex; flex-direction: column; gap: 8px; }
@@ -1498,7 +1532,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .settings { flex: 1; min-width: 0; display: flex; overflow: hidden; }
 .settings-inner { max-width: 720px; margin: 0 auto; padding: 26px 24px 48px; }
 .settings .notice { max-width: none; margin: 12px 0 0; }
-/* 设置页分类导航布局(2026-08-12):左侧分类栏 + 右侧分组内容(设计稿左侧导航式) */
+/* 设置页分类导航布局(2026-08-12):左侧分类栏 + 右侧分组内容 */
 .settings-side {
   flex: none; width: 190px; display: flex; flex-direction: column; gap: 2px;
   padding: 16px 10px 20px; background: var(--bg-elev); border-right: 1px solid var(--line);
@@ -1508,7 +1542,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .settings-nav { display: flex; flex-direction: column; gap: 2px; }
 .st-cat {
   display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: var(--r-md);
-  font-size: 13px; color: var(--muted); transition: color var(--dur-fast), background var(--dur-fast);
+  font-size: 13px; color: var(--muted); transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .st-cat:hover { color: var(--ink); background: var(--hover-tint); }
 .st-cat.active { color: var(--amber); background: var(--amber-tint); }
@@ -1524,7 +1558,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .s-select {
   margin-left: auto; flex: none; min-width: 280px; background: var(--bg-elev);
   border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--ink);
-  font-family: var(--mono); font-size: 13px; padding: 6px 10px; outline: none; transition: border-color var(--dur-fast);
+  font-family: var(--mono); font-size: 13px; padding: 6px 10px; outline: none; transition: border-color var(--dur-fast) var(--ease-out);
 }
 .s-select:focus { border-color: var(--amber); }
 .s-select:disabled { color: var(--faint); cursor: default; }
@@ -1534,7 +1568,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .s-tag.ok { color: var(--green); border: 1px solid var(--green-tint-strong); background: var(--green-tint); }
 .s-note { padding: 12px 14px; font-size: 12px; color: var(--faint); line-height: 1.7; }
 .s-hint { padding: 6px 14px 12px; font-size: 12px; color: var(--faint); line-height: 1.7; }
-.s-search { width: 100%; background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--ink); font-size: 13px; padding: 7px 12px; outline: none; margin-bottom: 8px; transition: border-color var(--dur-fast); }
+.s-search { width: 100%; background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--ink); font-size: 13px; padding: 7px 12px; outline: none; margin-bottom: 8px; transition: border-color var(--dur-fast) var(--ease-out); }
 .s-search:focus { border-color: var(--amber); }
 .s-provider { flex-wrap: wrap; gap: 8px; align-items: baseline; }
 .s-provider .s-key { min-width: 150px; }
@@ -1546,10 +1580,10 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   width: 100%; min-height: 240px; resize: vertical;
   background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-sm);
   color: var(--ink); font-family: var(--mono); font-size: 13px; line-height: 1.6;
-  padding: 10px 12px; outline: none; transition: border-color var(--dur-fast);
+  padding: 10px 12px; outline: none; transition: border-color var(--dur-fast) var(--ease-out);
 }
 .s-mcp-raw-input:focus { border-color: var(--amber); }
-.s-input { background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--ink); font-family: var(--mono); font-size: 13px; padding: 6px 10px; outline: none; flex: 1; min-width: 0; transition: border-color var(--dur-fast); }
+.s-input { background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--ink); font-family: var(--mono); font-size: 13px; padding: 6px 10px; outline: none; flex: 1; min-width: 0; transition: border-color var(--dur-fast) var(--ease-out); }
 .s-input:focus { border-color: var(--amber); }
 .s-note-inline { font-size: 11px; color: var(--faint); }
 /* 主题选择卡片(浅深合并;规范 03-组件规范/02)
@@ -1649,7 +1683,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   margin-top: 4px;
 }
 
-/* —— 下拉(唯一实现,规范见设计稿 03-组件规范/01:原生 <select> 弹层不可样式化) —— */
+/* —— 下拉 —— */
 .sel {
   display: inline-flex; align-items: center; gap: 8px; height: 38px; flex: none;
   padding: 0 12px; min-width: 240px; max-width: 100%; text-align: left;
@@ -1740,7 +1774,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   color: var(--ink); font-size: 13px;
   padding: 8px 12px; outline: none;
   margin-bottom: 10px;
-  transition: border-color var(--dur-fast);
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 .s-search:focus { border-color: var(--amber); }
 
@@ -1749,7 +1783,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .s-provider-row {
   border-radius: var(--r-sm);
   padding: 10px 12px;
-  transition: background var(--dur-fast);
+  transition: background var(--dur-fast) var(--ease-out);
 }
 .s-provider-row:hover { background: var(--hover-tint); }
 .s-provider-row.configured { border-left: 2px solid var(--green); padding-left: 10px; }
@@ -1781,7 +1815,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   font-family: var(--mono); font-size: 13px;
   padding: 7px 10px; outline: none;
   flex: 1; min-width: 0;
-  transition: border-color var(--dur-fast);
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 .s-input:focus { border-color: var(--amber); }
 .s-note-inline { font-size: 11px; color: var(--faint); }
@@ -1794,12 +1828,12 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   background: transparent; border: none; color: var(--ink-2);
   font-size: 14px; font-weight: 600;
   cursor: pointer; letter-spacing: 0.02em;
-  transition: background var(--dur-fast);
+  transition: background var(--dur-fast) var(--ease-out);
 }
 .s-collapsible-head:hover { background: var(--hover-tint); }
 .s-collapsible-arrow {
   font-size: 12px; color: var(--faint);
-  transition: transform var(--dur-fast);
+  transition: transform var(--dur-fast) var(--ease-out);
   display: inline-block;
 }
 .s-collapsible-arrow.open { transform: rotate(90deg); }
@@ -1826,7 +1860,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   position: relative;
   padding: 0;
   flex: none;
-  transition: background var(--dur-fast);
+  transition: background var(--dur-fast) var(--ease-out);
 }
 .toggle-switch.on { background: var(--amber); }
 .toggle-switch.disabled { opacity: 0.4; cursor: default; }
@@ -1835,28 +1869,36 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   width: 18px; height: 18px;
   border-radius: 50%;
   background: var(--ink);
-  transition: transform var(--dur-fast);
+  transition: transform var(--dur-fast) var(--ease-out);
 }
 .toggle-switch.on .toggle-knob { transform: translateX(16px); }
 
-/* —— 预览卡片(AI 编辑结果,消息流内嵌;设计稿 03-组件规范/03) —— */
+/* —— 预览卡片 —— */
 .previem-wcard { margin: 6px 0; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; background: var(--bg-elev); box-shadow: var(--shadow-1); flex: none; }
-.preview-toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px; background: transparent; border: none; color: var(--muted); font-size: 12px; cursor: pointer; text-align: left; transition: color var(--dur-fast); }
+.preview-toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px; background: transparent; border: none; color: var(--muted); font-size: 12px; cursor: pointer; text-align: left; transition: color var(--dur-fast) var(--ease-out); }
 .preview-toggle:hover { color: var(--ink); }
-.preview-arrow { color: var(--faint); font-size: 11px; }
+.preview-arrow {
+  /* 展开箭头:单枚 chevron 旋转(与 .think-arrow 同一套) */
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--faint); font-size: 11px;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.preview-arrow.open { transform: rotate(90deg); }
 .preview-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 折叠头:路径(mono)+ 增删行数 */
 .preview-path { font-family: var(--mono); font-size: 12px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .preview-counts { margin-left: auto; flex: none; display: inline-flex; gap: 8px; font-family: var(--mono); font-size: 11px; }
 .preview-counts .add { color: var(--green); }
 .preview-counts .del { color: var(--red); }
+/* 智能折叠:默认收起时补一行摘要,说明「收了多少」(否则用户只知道被收了) */
+.preview-folded-note { padding: 0 12px 8px; color: var(--faint); font-size: 11px; line-height: 1.6; }
 .preview-body { border-top: 1px solid var(--line); overflow: hidden; }
 .preview-diff { font-family: var(--mono); font-size: 12px; line-height: 1.55; background: var(--bg); }
 /* diff 配色走主题 token(原先是写死的深底 + 硬编码色,浅色主题要另开覆盖块) */
 .preview-diff .diff-add { background: var(--green-tint); color: var(--green); }
 .preview-diff .diff-remove { background: var(--red-tint); color: var(--red); }
 .preview-diff .diff-context { color: var(--faint); }
-/* diff 折叠容器:>12 行折到 12 行(设计稿 03-组件规范/04) */
+/* diff 折叠容器:>12 行折到 12 行 */
 .diff-fold { position: relative; }
 .diff-fold.open { overflow-y: auto; }
 .diff-fold .fold-mask { bottom: 24px; }
@@ -1878,6 +1920,12 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 /* —— 动效基础 —— */
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+/* 弹出层小位移档(下拉/菜单/@ 菜单/用量卡):6px 淡入上移,配合 --dur-fast。
+   与 card-in-bottom(60px 卡片档)刻意分开 —— 浮层不需要跨屏位移。 */
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
 /* 边缘水平滑动(统一语言,复用):贴左缘容器 slide-in-left(自左滑入)、贴右缘
    slide-in-right(自右滑入),离开向左滑出 slide-out-left;偏移统一 8px
    (与 web/src/motion.ts 的 EDGE_SLIDE 同值) */
@@ -1940,6 +1988,10 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    /* 时长之外还要清 delay:关闭态用 `visibility 0s var(--dur-slow)` 做的兜底延迟
+       (等宽度过渡播完再隐藏)在降级下会变成真等 320ms —— 时长清零不等于不用等。 */
+    animation-delay: 0s !important;
+    transition-delay: 0s !important;
   }
 }
 
@@ -1948,7 +2000,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
    ════════════════════════════════════════════════════════════════ */
 /* ≤900px:书库与伙伴变抽屉,纸张独占 */
 @media (max-width: 900px) {
-  /* 设置页窄屏:侧栏横排胶囊(2026-08-12,设计稿移动端同款),整体页随容器滚动 */
+  /* 设置页窄屏:侧栏横排胶囊,整体页随容器滚动 */
   .settings { flex-direction: column; overflow-y: auto; }
   .settings-side { width: auto; flex-direction: row; flex-wrap: wrap; gap: 4px; padding: 10px 12px; border-right: none; border-bottom: 1px solid var(--line); overflow-y: visible; }
   .settings-side-title { display: none; }
@@ -2032,9 +2084,11 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 /* ════════════════════════════════════════════════════════════════
    舞台页(导演/演出):书库栏 | 舞台主区(场景头+控制条+舞台流+导演输入) | 右侧面板
    ════════════════════════════════════════════════════════════════ */
-.stage-grid { display: grid; grid-template-columns: auto minmax(0, 1fr) var(--stage-panel-w, 360px); height: 100%; flex: 1; min-width: 0; }
+/* 轨 3 用 auto + .stage-panel 自己过渡宽度(与伙伴栏/书库栏同款;grid-template-columns 不可动画) */
+.stage-grid { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; height: 100%; flex: 1; min-width: 0; }
 .stage-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
-.stage-panel { position: relative; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); background: var(--bg-elev); }
+.stage-panel { position: relative; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); background: var(--bg-elev); width: var(--stage-panel-w, 360px); overflow: hidden; transition: width var(--dur-slow) var(--ease-out); }
+.stage-panel.resizing { transition: none; }
 /* 面板左缘拖拽调宽手柄(与伙伴栏 comp-resize 同语言) */
 .sp-resize {
   position: absolute; top: 0; left: -4px; width: 8px; height: 100%;
@@ -2061,7 +2115,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   border-bottom: 1px solid var(--amber); color: var(--amber);
   font-size: 13px; letter-spacing: 0.03em;
 }
-.stage-editing .se-spin { animation: se-blink 1.2s ease-in-out infinite; }
+.stage-editing .se-spin { animation: se-blink 1.2s var(--ease-inout) infinite; }
 @keyframes se-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
 /* 演出控制条(演出前全灰:next/收尾/重演/强制发言/思考档/修订/收幕) */
@@ -2091,7 +2145,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .stage-done-bar .sd-bar-icon { color: var(--green); font-weight: 600; }
 .stage-done-bar .sd-bar-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stage-done-bar .sd-bar-spacer { margin-left: auto; }
-.stage-done-bar .btn { padding: 6px 16px; border-radius: var(--r-sm); border: 1px solid var(--green); color: var(--green); background: transparent; cursor: pointer; font-size: 13px; transition: background var(--dur-fast); }
+.stage-done-bar .btn { padding: 6px 16px; border-radius: var(--r-sm); border: 1px solid var(--green); color: var(--green); background: transparent; cursor: pointer; font-size: 13px; transition: background var(--dur-fast) var(--ease-out); }
 .stage-done-bar .btn.primary { background: var(--green); color: var(--bg); }
 .stage-done-bar .btn.primary:hover:not(:disabled) { background: var(--green-tint-strong); }
 .st-entry { display: flex; gap: 10px; align-items: center; }
@@ -2105,7 +2159,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .st-text { flex: 1; min-width: 0; font-size: 14px; line-height: 1.7; color: var(--ink-2); }
 .st-text.narr { color: var(--faint); font-style: italic; }
 /* 舞台条目的「名字行 + 正文」分组:桌面端 display:contents 让分组在布局上等于不存在
-   (保持原来的一行 flex 结构),手机端才变成两行一列(设计稿 ★移动版「舞台」) */
+   (保持原来的一行 flex 结构),手机端才变成两行一列 */
 .st-body, .st-line { display: contents; }
 .st-entry .st-tag { display: none; }
 .st-entry .st-actions { opacity: 0; margin-left: auto; }
@@ -2159,7 +2213,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .st-tabs.tabs-4 { display: flex; align-self: stretch; }
 .st-tabs.tabs-4::before { width: calc((100% - 10px) / 4); }
 .st-tabs.tabs-4 .st-tab { flex: 1; justify-content: center; }
-.st-tab { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; font-size: 13px; color: var(--muted); border-radius: calc(var(--r-md) - 2px); transition: color var(--dur-fast), background var(--dur-fast); }
+.st-tab { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; font-size: 13px; color: var(--muted); border-radius: calc(var(--r-md) - 2px); transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out); }
 .st-tab:hover { color: var(--ink); background: var(--hover-tint); }
 .st-tab.active { color: var(--amber); background: transparent; }
 .st-tab.active:hover { background: transparent; }
@@ -2184,7 +2238,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .st-cast-role { margin-left: auto; font-size: 11px; color: var(--faint); white-space: nowrap; }
 .st-revise-form { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; }
 .st-revise-form label { font-size: 11px; color: var(--faint); display: flex; flex-direction: column; gap: 4px; }
-.st-revise-form input, .st-revise-form textarea, .st-revise-form select { width: 100%; background: var(--bg-elev-2); border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--ink); font-size: 13px; padding: 6px 10px; outline: none; transition: border-color var(--dur-fast); }
+.st-revise-form input, .st-revise-form textarea, .st-revise-form select { width: 100%; background: var(--bg-elev-2); border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--ink); font-size: 13px; padding: 6px 10px; outline: none; transition: border-color var(--dur-fast) var(--ease-out); }
 .st-revise-form input:focus, .st-revise-form textarea:focus, .st-revise-form select:focus { border-color: var(--amber); }
 .st-revise-form textarea { min-height: 52px; resize: vertical; }
 .st-revise-rules { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -2205,7 +2259,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .confirm-card .cc-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; font-size: 13px; color: var(--ink-2); border-bottom: 1px solid var(--line); }
 .confirm-card .cc-title { flex: none; }
 .confirm-card .cc-file { font-family: var(--mono); font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 状态胶囊(设计稿 03-组件规范/03):待确认 / 已应用 */
+/* 状态胶囊:待确认 / 已应用 */
 .confirm-card .cc-state {
   margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 5px;
   font-size: 11px; line-height: 1; padding: 3px 9px; border-radius: var(--r-full);
@@ -2246,7 +2300,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 
 /* 注:原来这里还有一份通用 .c-tabs / .c-tab(「侧栏标签条(书库 | 备忘录)」时代的
    胶囊式标签),它的 .c-tab.active{background:$amber-tint;border-radius:6px} 会盖在
-   伙伴栏的标签上——设计稿 06 要的是**下划线式**(仅字色 + 2px 下划线),所以整块删掉。
+   伙伴栏的标签上—— 要的是**下划线式**(仅字色 + 2px 下划线),所以整块删掉。
    伙伴栏标签条的唯一实现在上方 .companion-head .c-tabs 处。 */
 
 /* ════════════════════════════════════════════════════════════════
@@ -2267,7 +2321,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   gap: 10px; padding: 32px 20px; margin: 8px;
   border: 1px dashed var(--line-strong); border-radius: var(--r-lg);
   color: var(--faint); font-size: 13px; line-height: 1.8; text-align: center;
-  transition: border-color var(--dur-fast), background var(--dur-fast);
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 /* 保留原有动画,叠加 hover 反馈 */
 .chat-empty:hover, .c-empty:hover, .st-empty:hover, .graph-empty:hover,
@@ -2291,7 +2345,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .topbar .stat.loading { color: var(--faint); display: inline-flex; align-items: center; gap: 6px; }
 .topbar .stat.loading::before {
   content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--amber);
-  animation: stat-pulse 1.6s ease-in-out infinite;
+  animation: stat-pulse 1.6s var(--ease-inout) infinite;
 }
 @keyframes stat-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.85); } }
 
@@ -2301,24 +2355,24 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .g-step {
   font-size: 11px; color: var(--faint); border: 1px solid var(--line); border-radius: var(--r-full);
   padding: 3px 10px; cursor: default;
-  transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .g-step.on { color: var(--amber); border-color: var(--amber); }
 /* 未完成的步骤在 hover 时给出「可推进」暗示(若父容器可交互) */
 .guide-steps:hover .g-step:not(.on) { color: var(--muted); }
 .guide-steps:hover .g-step:not(.on):hover { color: var(--amber); border-color: var(--amber-tint-strong); background: var(--amber-tint); cursor: pointer; }
 
-/* ---- 备忘录板(Notice 待办,2026-08-12;控件 2026-09-19 按设计稿收敛)----
+/* ---- 备忘录板----
    两行结构:①待办行 = $bg-elev-2 卡片 + 左端方形勾选框(18 / 圆角 5)+ 可编辑正文;
    ②添加行 = $line 描边圆角框 + ＋ 图标 + 输入框(回车添加)。
-   行尾一律不挂按钮(设计稿里待办行只有勾选一个控件)。 */
+   行尾一律不挂按钮。 */
 .notice-board { display: flex; flex-direction: column; gap: 6px; padding: 10px; min-height: 0; overflow-y: auto; }
 .notice-enable {
 	display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted);
 	padding: 0 0 8px; border-bottom: 1px solid var(--line); text-align: left;
 }
 .notice-enable:hover { color: var(--ink); }
-.notice-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: var(--bg-elev-2); border-radius: var(--r-sm); }
+.notice-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: var(--bg-elev-2); border-radius: var(--r-sm); animation: fade-up var(--dur-base) var(--ease-out); }
 /* 方形勾选框:未选 = 描边空框;选中 = 琥珀实心 + $bg 色的勾 */
 .check-box, .notice-check {
 	flex: none; width: 18px; height: 18px; padding: 0;
@@ -2332,16 +2386,17 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .notice-check:hover { border-color: var(--amber); }
 .notice-item .notice-text {
 	flex: 1; min-width: 0; background: transparent; border: 1px solid transparent; border-radius: 6px;
-	color: var(--ink); font-size: 13px; padding: 1px 4px; outline: none; transition: border-color var(--dur-fast);
+	color: var(--ink); font-size: 13px; padding: 1px 4px; outline: none;
+	transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-base) var(--ease-out);
 }
 .notice-item .notice-text:hover, .notice-item .notice-text:focus { border-color: var(--line-strong); }
-/* 完成态:文案变弱(设计稿没有删除线,勾选本身就是「已完成」的标记) */
+/* 完成态:文案变弱 */
 .notice-item.done .notice-text { color: var(--faint); }
 /* 添加行:＋ 图标 + 输入框,回车添加 */
 .notice-add {
 	display: flex; align-items: center; gap: 8px; margin-top: 2px; height: 34px; padding: 0 10px;
 	background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-sm);
-	transition: border-color var(--dur-fast);
+	transition: border-color var(--dur-fast) var(--ease-out);
 }
 .notice-add:focus-within { border-color: var(--amber); }
 .notice-add-plus { flex: none; width: 13px; height: 13px; color: var(--faint); }
@@ -2361,9 +2416,8 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   background: var(--mask);
   backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
   display: flex; align-items: center; justify-content: center; padding: 24px;
-  animation: wz-fade var(--dur-base) var(--ease-out);
+  animation: fade-in var(--dur-base) var(--ease-out);
 }
-@keyframes wz-fade { from { opacity: 0; } }
 .wz-panel {
   width: min(680px, 94vw); max-height: 88vh;
   display: flex; flex-direction: column; overflow: hidden;
@@ -2389,7 +2443,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   display: flex; align-items: center; justify-content: center;
   font-size: 11px; font-family: var(--mono); color: var(--faint);
   border: 1px solid var(--line-strong);
-  transition: color var(--dur-fast), background var(--dur-fast), border-color var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 .wz-step-label { font-size: 11px; color: var(--faint); white-space: nowrap; }
 .wz-step.active .wz-step-label { color: var(--ink); }
@@ -2432,7 +2486,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .wz-skip {
   margin-right: auto; font-size: 12px; color: var(--faint);
   padding: 4px 8px; border-radius: var(--r-sm);
-  transition: color var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out);
 }
 .wz-skip:hover:not(:disabled) { color: var(--muted); }
 .wz-skip:disabled { opacity: 0.4; cursor: default; }
@@ -2442,7 +2496,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   padding: 6px 18px; font-size: 13px; font-weight: 500;
   color: var(--bg); background: var(--amber); border: 1px solid var(--amber);
   border-radius: var(--r-sm); cursor: pointer;
-  transition: filter var(--dur-fast), opacity var(--dur-fast);
+  transition: filter var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
 }
 .wz-primary:hover:not(:disabled) { filter: brightness(1.08); }
 .wz-primary:disabled { opacity: 0.5; cursor: default; }
@@ -2480,7 +2534,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   padding: 8px 9px; border: 1px solid transparent; border-radius: var(--r-md);
   background: transparent; color: var(--ink-2); font-size: 13px;
   font-family: var(--ui-font); cursor: pointer;
-  transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast);
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 .pvc-item:hover { background: var(--hover-tint); color: var(--ink); }
 .pvc-item.sel { background: var(--amber-tint); border-color: var(--amber-tint-strong); color: var(--ink); }
@@ -2495,7 +2549,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   margin-top: 10px; padding: 8px 9px; border: 1px solid var(--line-strong);
   border-radius: var(--r-md); background: transparent; color: var(--muted);
   font-size: 12px; font-family: var(--ui-font); cursor: pointer;
-  transition: color var(--dur-fast), border-color var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 .pvc-add-provider:hover { color: var(--ink); border-color: var(--muted); }
 
@@ -2558,7 +2612,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   padding: 7px 13px; border: 1px solid var(--line-strong); border-radius: var(--r-sm);
   background: transparent; color: var(--muted); font-size: 12px;
   font-family: var(--ui-font); cursor: pointer;
-  transition: color var(--dur-fast), border-color var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 .pvc-add-model:hover { color: var(--ink); border-color: var(--muted); }
 
@@ -2586,7 +2640,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   padding: 5px 13px; font-size: 12px; font-family: var(--ui-font);
   color: var(--muted); background: transparent; cursor: pointer;
   border: 1px solid var(--line-strong); border-radius: var(--r-sm);
-  transition: color var(--dur-fast), background var(--dur-fast), border-color var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 .amd-check:hover { color: var(--ink); }
 .amd-check.on {
@@ -2625,7 +2679,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   border-radius: var(--r-sm);
   padding: 10px 12px;
   border: 1px solid transparent;
-  transition: background var(--dur-fast), border-color var(--dur-fast);
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 .s-plugin-row:hover { background: var(--hover-tint); }
 .s-plugin-row.disabled { opacity: 0.65; }
@@ -2718,9 +2772,8 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .ws-preview {
   position: absolute; inset: 0; z-index: 20;
   display: flex; flex-direction: column; background: var(--bg);
-  animation: ws-pv-in var(--dur-base) var(--ease-out);
+  animation: fade-up var(--dur-base) var(--ease-out);
 }
-@keyframes ws-pv-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .ws-pv-head {
   flex: none; display: flex; align-items: flex-start; gap: 12px;
   padding: 14px 22px 12px; border-bottom: 1px solid var(--line);
@@ -2746,3 +2799,108 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .ws-pv-kv { margin-top: 10px; font-size: 12px; color: var(--faint); }
 .ws-pv-kv > div { display: flex; gap: 10px; padding: 2px 0; }
 .ws-pv-kv span:first-child { width: 48px; flex: none; }
+
+/* ════════════════════════════════════════════════════════════════
+   交互反馈补齐(2026-09-30 动效覆盖度审计)
+   下列元素原先有 hover/按压反馈却没有 transition:颜色/底/透明度是瞬间跳变。
+   统一补 token(与 web/src/motion.ts 同源),新规则集中在文件末尾,不改既有声明。
+   ════════════════════════════════════════════════════════════════ */
+.c-book-confirm .danger,
+.c-resize,
+.comp-resize,
+.sp-resize,
+.err-link,
+.slash-item,
+.export-secondary,
+.input-chip-x,
+.ctx-ring.clickable,
+.usage-close,
+.rel-form-close,
+.entry-card-close,
+.confirm-card .cc-actions .cc-ok,
+.confirm-card .cc-actions .cc-revert,
+.notice-enable,
+.fold-more {
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+
+/* 上下文圆环三档色(绿/琥珀/红)随占用率变化过渡,而不是瞬间跳色 */
+.ctx-ring { transition: color var(--dur-base) var(--ease-out); }
+
+/* 舞台流条目的操作按钮:hover 由瞬间显隐改成淡入 */
+.st-entry .st-actions { transition: opacity var(--dur-fast) var(--ease-out); }
+.st-actions button {
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+/* 工具状态 run→ok/err:状态字与动作行图标的变色也要过渡 */
+.act-state,
+.act-icon,
+.act-verb,
+.act-object {
+  transition: color var(--dur-base) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+
+/* 常用按钮:把 transform 也纳入过渡,让全局 button:active 的 .96 缩放不再瞬间跳 */
+.btn-ghost,
+.btn-primary,
+.btn-send,
+.top-entry,
+.c-new,
+.c-book,
+.chapter,
+.icon-btn,
+.preview-toggle,
+.dlg-x,
+.ask-close,
+.rsm-close,
+.sel,
+.w-save {
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+
+/* ════════════════════════════════════════════════════════════════
+   入场补齐(2026-09-30 动效覆盖度审计)
+   原先这些状态是硬切:保存态文字(内联 transition 空转)、分支栏出现、
+   空态↔消息列表互换、新建书名输入行。
+   ════════════════════════════════════════════════════════════════ */
+/* 顶栏保存态文案:App 用 key={header.save} 重挂载,这里播淡入 */
+.stat-text { animation: fade-in var(--dur-fast) var(--ease-out); }
+/* 分支栏(存在多条分支时才渲染):出现时淡入上移,而不是「啪」地插进来 */
+.branch-bar { animation: fade-up var(--dur-base) var(--ease-out); }
+/* 消息列表容器:空态→有水合结果/首条消息时淡入 */
+.chat-inner { animation: fade-in var(--dur-base) var(--ease-out); }
+/* 书库栏「新建书」→ 书名输入行 */
+.c-new-input { animation: fade-in var(--dur-fast) var(--ease-out); }
+/* 世界树 / 设置页卡片列表的新增条目(挂载即播;display 切换会重播,这是既有约定) */
+
+/* ════════════════════════════════════════════════════════════════
+   骨架屏(2026-09-30 审计:全仓此前没有任何 skeleton)
+   只用于「内容还没到」的占位:书库/纸张/世界书三处;数值与 --ease-inout 同源。
+   ════════════════════════════════════════════════════════════════ */
+@keyframes sk-flow {
+  from { background-position: 140% 0; }
+  to { background-position: -40% 0; }
+}
+.skeleton {
+  border-radius: var(--r-sm);
+  background: linear-gradient(90deg, var(--bg-elev) 25%, var(--bg-elev-2) 37%, var(--bg-elev) 63%);
+  background-size: 240% 100%;
+  animation: sk-flow 1.4s var(--ease-inout) infinite;
+}
+/* 纸张区骨架:一屏文字的占位行(章节切换/加载中) */
+.sk-lines { display: flex; flex-direction: column; gap: 12px; padding: 18px 26px; }
+.sk-line { height: 13px; }
+.sk-line.title { height: 22px; width: 42%; }
+.sk-line.w90 { width: 90%; }
+.sk-line.w80 { width: 80%; }
+.sk-line.w70 { width: 70%; }
+.sk-line.w50 { width: 50%; }
+/* 书库栏骨架:书行/章节行的占位 */
+.sk-rows { display: flex; flex-direction: column; gap: 6px; padding: 6px 2px; }
+.sk-row { height: 28px; }

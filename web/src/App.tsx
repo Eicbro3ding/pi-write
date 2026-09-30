@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiClient } from "./api/client.ts";
 import { useLibrary } from "./library.ts";
+import { useExitPresence } from "./use-exit-presence.ts";
 import { syncPluginScripts } from "./plugin-scripts.ts";
 import { IconEdit, IconGear, IconGlobe, IconStage } from "./components/Icons.tsx";
+import { Lu } from "./components/Lu.tsx";
 import { SetupWizard } from "./components/SetupWizard.tsx";
 import { WritePage, type HeaderInfo } from "./pages/WritePage.tsx";
 import { StagePage } from "./pages/StagePage.tsx";
 import { WorldPage } from "./pages/WorldPage.tsx";
 import { SettingsPage, type ImageSettingsSlice } from "./pages/SettingsPage.tsx";
+import { UIRoom } from "./pages/UIRoom.tsx";
 import {
 	autoConfirmEditsEnabled,
 	autoExpandThinkingEnabled,
@@ -25,8 +28,11 @@ import {
 import type { ResolvedShellDto, ShellKindDto, WriterSettingsDto } from "./types.ts";
 import type { EnterBehavior } from "./settings.ts";
 
-/** 顶层视图:舞台(默认,导演讨论室/演出现场)| 编辑(正文 + 编剧)| 世界书 | 设置。 */
-type View = "stage" | "edit" | "world" | "settings";
+/**
+ * 顶层视图:舞台(默认,导演讨论室/演出现场)| 编辑(正文 + 编剧)| 世界书 | 设置
+ * | UI 房(组件陈列室,**只在调试模式里可达**,见 nav.ts / pages/UIRoom.tsx)。
+ */
+type View = "stage" | "edit" | "world" | "settings" | "uiroom";
 
 /**
  * 经典模式(单 agent)下仍然存在的视图:编辑页 + 世界书 + 设置——
@@ -38,7 +44,7 @@ function isClassicView(v: View): boolean {
 }
 
 /** 顶栏保存状态 → 图标与颜色 class(文案来自 WritePage 上报的 SAVE_LABELS)。
- *  设计稿顶栏右侧是「● 已保存」——一个状态点 + 文案,不用勾选图标。 */
+ *  顶栏右侧是「● 已保存」——一个状态点 + 文案,不用勾选图标。 */
 const SAVE_STYLE: Record<string, { icon: string; cls: string }> = {
 	"已保存": { icon: "●", cls: "ok" },
 	"未保存": { icon: "●", cls: "dirty" },
@@ -85,13 +91,18 @@ export function App() {
 	const setDebugMode = (v: boolean) => {
 		persistDebugMode(v);
 		setDebugModeState(v);
+		// UI 房只在调试模式里挂载:关掉开关时人可能正站在那一页上 → 拉回编辑页,别停白屏
+		if (!v) setView((cur) => (cur === "uiroom" ? "edit" : cur));
 	};
 	// 控制台解锁/锁定后(requestDebugChanged 事件)同步界面:否则设置页要刷新才认账
 	useEffect(
 		() =>
 			subscribeDebugChanged(() => {
 				setDebugShown(debugUnlocked());
-				setDebugModeState(debugModeEnabled());
+				const on = debugModeEnabled();
+				setDebugModeState(on);
+				// 控制台 piWriterDebugOff() 也会走到这里,同样要把人从 UI 房拉回来
+				if (!on) setView((cur) => (cur === "uiroom" ? "edit" : cur));
 			}),
 		[],
 	);
@@ -255,6 +266,8 @@ export function App() {
 	const [setupPhase, setSetupPhase] = useState<SetupPhase>("checking");
 	/** 设置页「重新运行配置向导」:向导以覆盖层叠加(页面保持挂载,流式状态不丢)。 */
 	const [rerunWizard, setRerunWizard] = useState(false);
+	/** 向导覆盖层的退场:关掉后仍挂 200ms,让整屏壳淡出(见 styles/presence.css)。 */
+	const wizardPresence = useExitPresence(rerunWizard);
 	useEffect(() => {
 		let cancelled = false;
 		client
@@ -387,17 +400,29 @@ export function App() {
 						<IconGear size={15} />
 						<span className="top-entry-label">设置</span>
 					</button>
+					{/* UI 房:组件陈列室,只在调试模式里出现(它是开发者的排障页,不是给用户的第五页) */}
+					{debugMode && (
+						<button
+							type="button"
+							className={view === "uiroom" ? "top-entry active" : "top-entry"}
+							onClick={() => setView("uiroom")}
+						>
+							<Lu icon="layout-grid" size={15} />
+							<span className="top-entry-label">UI 房</span>
+						</button>
+					)}
 				</nav>
 				<div className="right">
 					{header ? (
 						<span className={!header.connected ? "stat err" : `stat ${SAVE_STYLE[header.save]?.cls ?? ""}`}>
 							{header.connected ? (
 								<>
-									{/* 保存状态文案变化时柔和淡入;字数在各页页头,不在这里重复 */}
+									{/* 保存状态变化时柔和淡入:key 换掉 → 重挂载 → 播 .stat-text 的 fade-in
+									    (原来是 keyed span + 内联 transition,重挂载的元素没有过渡起点 = 空转) */}
 									<span className={`stat-icon ${SAVE_STYLE[header.save]?.cls ?? ""}`}>
 										{SAVE_STYLE[header.save]?.icon ?? ""}
 									</span>
-									<span key={header.save} style={{ transition: "opacity 140ms" }}>
+									<span key={header.save} className="stat-text">
 										{header.save}
 									</span>
 								</>
@@ -453,6 +478,18 @@ export function App() {
 						nav={{ view, onNavigate: (v) => setView(v as View) }}
 					/>
 				</section>
+					{/* UI 房:与调试模式同生命周期(关掉就卸载,不留一个空壳页面) */}
+					{debugMode && (
+						<section className={`view ${view === "uiroom" ? "" : "hidden"}`}>
+							<UIRoom
+								client={client}
+								slug={currentSlug}
+								library={library}
+								classicMode={classicMode}
+								nav={{ view, onNavigate: (v) => setView(v as View) }}
+							/>
+						</section>
+					)}
 					<section className={`view ${view === "settings" ? "" : "hidden"}`}>
 						<SettingsPage
 							client={client}
@@ -484,7 +521,7 @@ export function App() {
 					</section>
 			</div>
 			{/* 重运行形态:覆盖层叠加在已挂载页面上,不打断流式状态;建书后刷新书库列表 */}
-			{rerunWizard && (
+			{wizardPresence.mounted && (
 				<SetupWizard
 					client={client}
 					autoExpandThinking={autoExpandThinking}
@@ -493,6 +530,7 @@ export function App() {
 					onAutoConfirmEditsChange={setAutoConfirmEdits}
 					classicMode={classicMode}
 					onClassicModeChange={changeClassicMode}
+					closing={wizardPresence.closing}
 					onBooksChanged={() => void library.loadBooks()}
 					onFinished={() => setRerunWizard(false)}
 				/>

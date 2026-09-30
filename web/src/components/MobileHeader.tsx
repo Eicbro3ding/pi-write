@@ -1,11 +1,11 @@
 /**
- * 手机端页头(设计稿 ★移动版,52px)。
+ * 手机端页头。
  *
  * 桌面端每页有自己的页头(paper-head / w-bar / stage-head),手机端统一成这一条:
  * 左「主导操作」、中「标题 + 状态行」、右「图标按钮组」。只在 ≤700px 渲染
  * (由页面用 useIsPhone 决定),因此不需要额外的 CSS 隐藏规则。
  *
- * 尺寸照设计稿:Padding [0,10]、gap 6、图标按钮 34×34、图标 18、标题 14/600、
+ * 尺寸:Padding [0,10]、gap 6、图标按钮 34×34、图标 18、标题 14/600、
  * 状态行 11 + 6px 圆点;强调态按钮 = amber-tint 底 + amber 图标。
  */
 import type { ReactNode } from "react";
@@ -17,7 +17,7 @@ export interface MobileHeaderAction {
 	/** 无障碍名(也是长按 title)。 */
 	label: string;
 	onPress: () => void;
-	/** 强调态(设计稿里「伙伴」按钮的琥珀底)。 */
+	/** 强调态。 */
 	accent?: boolean;
 	/** 角标数字(待确认编辑数)。 */
 	badge?: number;
@@ -47,7 +47,7 @@ export function MobileHeader({
 	/** 左端主导操作(☰ 打开抽屉 / ← 返回);省略则不留位。 */
 	leading?: { icon: LucideName; label: string; onPress: () => void };
 	title: ReactNode;
-	/** 副行文字;与 tone 圆点同排(设计稿「已保存 · 1,284 字」)。 */
+	/** 副行文字;与 tone 圆点同排。 */
 	subtitle?: ReactNode;
 	tone?: MobileHeaderTone;
 	actions?: MobileHeaderAction[];

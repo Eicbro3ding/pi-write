@@ -26,7 +26,7 @@ interface ConstraintsPanelProps {
 }
 
 /**
- * 约束卡片(设计稿 09 右栏):头部 = 标题 + 「启用 N / M」+ ＋(新建);约束行 =
+ * 约束卡片:头部 = 标题 + 「启用 N / M」+ ＋(新建);约束行 =
  * 开关 + 名称(无边框输入)+ 作用域胶囊 + 删除,下一行为约束正文(无边框输入 + 字数)。
  * 规则包导入保留在卡片底部(酒馆式规则包:选 JSON 文件导入一组预制规则)。
  * 整体由页面统一保存。
@@ -167,7 +167,7 @@ interface StyleSamplePanelProps {
 }
 
 /**
- * 采样卡片(设计稿 09 左栏):文风样本 textarea + 字数(上限 500)+ 清空。
+ * 采样卡片:文风样本 textarea + 字数(上限 500)+ 清空。
  * 说明文案与旧版一致(供模型参考的文风样本;来源由服务端标注)。
  */
 export function StyleSamplePanel({ sample, onSample }: StyleSamplePanelProps) {

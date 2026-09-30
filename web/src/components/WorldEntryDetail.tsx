@@ -1,9 +1,9 @@
 /**
- * 世界书条目详情(只读)——手机端「世界书 · 条目详情」页(设计稿 ★移动版)。
+ * 世界书条目详情(只读)——手机端「世界书 · 条目详情」页。
  *
  * 为什么单独一个只读视图:桌面端点条目直接进表单(左边分类树一直在,改完即存),
  * 手机端没有树、屏幕只够一件事——先看清楚这条设定是什么,再决定要不要改。
- * 所以手机端是「详情 → 编辑条目 → 表单」两级,和设计稿一致。
+ * 所以手机端是「详情 → 编辑条目 → 表单」两级,一致。
  *
  * 数据全部来自条目本身 + 页面传入的章节表与关系数,不额外取数:
  * 主图走 imageUrl(与世界书条目图/图片端点同源),章节 id 用章节表映射成标题。
@@ -42,7 +42,7 @@ export function WorldEntryDetail({
 
 	return (
 		<div className="m-detail">
-			{/* 配图:点击更换(设计稿「配图 · 点击更换」) */}
+			{/* 配图:点击更换 */}
 			<button type="button" className="m-detail-photo" onClick={onChangeAvatar} aria-label="更换配图">
 				{entry.avatar ? (
 					<img src={imageUrl(slug, entry.avatar)} alt={entry.title} />
@@ -86,7 +86,7 @@ export function WorldEntryDetail({
 				</div>
 			)}
 
-			{/* 元信息(设计稿的信息表:条目 ID / 类型 / 状态 / 关联章节 / 关键词) */}
+			{/* 元信息 */}
 			<div className="m-detail-card">
 				<div className="m-detail-row">
 					<span className="m-detail-k">条目 ID</span>

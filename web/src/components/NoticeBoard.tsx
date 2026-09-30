@@ -4,8 +4,8 @@
  * agent 的上下文),用户在板子上勾选完成、就地改文案。数据存 world.json 的
  * notice.items,800ms 防抖整体 putWorld 保存(与 WorldPage 同款)。
  *
- * 控件按设计稿 02-模态与面板/02 收成两个:方形自绘勾选框(完成 = 琥珀实心),
- * 以及底部的「＋ 记一条待办…」输入行。**行尾没有删除按钮**——设计稿里这一行
+ * 控件收成两个:方形自绘勾选框(完成 = 琥珀实心),
+ * 以及底部的「＋ 记一条待办…」输入行。**行尾没有删除按钮**——这一行
  * 只有勾选一个控件;待办要清掉,改 world.json(世界书页 / AI 均可)。
  *
  * 取舍:不做多窗口冲突检测(useCrossWindowReload 的脏检测)——板子是轻量辅助,
@@ -25,7 +25,7 @@ interface NoticeBoardProps {
 	/**
 	 * 视觉变体。"full"(缺省)= 顶部「注入全部 agent 上下文」开关 + 添加行(备忘录栏用);
 	 * "minimal" = 舞台面板「备忘录」页签用:头部说明与「＋ 记一条待办…」输入行由
-	 * 舞台面板自己给(设计稿 02-模态与面板/02),板子只出条目本身。
+	 * 舞台面板自己给,板子只出条目本身。
 	 */
 	variant?: "full" | "minimal";
 	/** 条目数变化回调(添加/删除/完成切换后;舞台面板头部「备忘录 · N 条」用)。 */
@@ -149,7 +149,7 @@ export function NoticeBoard({ client, slug, variant = "full", onItemsChange }: N
 				</div>
 			)}
 			{/* 「注入全部 agent 上下文」总开关只在完整形态给;舞台面板的说明行里
-			    已经写明「未完成项会注入所有 agent」(设计稿 02),不重复一个开关 */}
+			    已经写明「未完成项会注入所有 agent」,不重复一个开关 */}
 			{!minimal && (
 				<button
 					type="button"
@@ -166,8 +166,8 @@ export function NoticeBoard({ client, slug, variant = "full", onItemsChange }: N
 				<div className="s-note">暂无待办——AI 埋伏笔、记重要事项时会写在这里;也可手动添加。</div>
 			) : (
 				notice.items.map((it) => (
-					/* 待办行 = 一张卡(设计稿 02-模态与面板/02):左端方形勾选框 + 正文,
-					   行尾不再挂删除按钮——设计稿里这一行只有勾选一个控件,勾选即完成 */
+					/* 待办行 = 一张卡:左端方形勾选框 + 正文,
+					   行尾不再挂删除按钮——这一行只有勾选一个控件,勾选即完成 */
 					<div key={it.id} className={it.done ? "notice-item done" : "notice-item"}>
 						<button
 							type="button"
@@ -190,7 +190,7 @@ export function NoticeBoard({ client, slug, variant = "full", onItemsChange }: N
 					</div>
 				))
 			)}
-			{/* 添加行:＋ 图标 + 输入框,回车添加(设计稿同款;不再多一个「添加」按钮) */}
+			{/* 添加行:＋ 图标 + 输入框,回车添加 */}
 			<div className="notice-add">
 				<PlusIcon />
 				<input
@@ -221,7 +221,7 @@ function CheckMark() {
 	);
 }
 
-/** 添加行的 + 图标(设计稿是细线加号,不用全角「＋」字符)。 */
+/** 添加行的 + 图标。 */
 function PlusIcon() {
 	return (
 		<Lu icon="plus" size={13} className="notice-add-plus" />

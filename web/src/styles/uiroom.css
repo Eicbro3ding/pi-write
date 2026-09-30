@@ -1,0 +1,440 @@
+/* ════════════════════════════════════════════════════════════════
+   UI 房(调试模式下的组件陈列室)
+   —— 只在调试模式里可达(web/src/pages/UIRoom.tsx)。这一份是页面自己的壳与
+   陈列台样式,全部以 `uiroom-` 前缀命名,避免与任何页面类撞名。
+   载入顺序:mobile.css 之后、presence.css 之前(见 main.tsx)——presence.css
+   必须最后,退场动画要压过所有入场 animation。
+   ════════════════════════════════════════════════════════════════ */
+
+.uiroom {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* ── 页头 + 工具条 ───────────────────────────────────────────── */
+.uiroom-head {
+  flex: none;
+  padding: var(--sp-4) var(--sp-5) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+}
+.uiroom-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+.uiroom-title h1 {
+  margin: 0;
+  font-size: var(--fs-15);
+  font-weight: 600;
+  color: var(--ink);
+}
+.uiroom-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--amber-tint-strong);
+  background: var(--amber-tint);
+  color: var(--amber);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.uiroom-sub {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-11);
+  color: var(--faint);
+}
+.uiroom-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+.uiroom-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-elev);
+  color: var(--faint);
+}
+.uiroom-search input {
+  width: 170px;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--ink);
+  font-size: var(--fs-12);
+}
+.uiroom-chips,
+.uiroom-sizes {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.uiroom-chip {
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-full);
+  color: var(--muted);
+  font-size: var(--fs-11);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.uiroom-chip:hover {
+  color: var(--ink);
+  background: var(--hover-tint);
+}
+.uiroom-chip.active {
+  color: var(--amber);
+  border-color: var(--amber-tint-strong);
+  background: var(--amber-tint);
+}
+.uiroom-runtime-note {
+  margin: var(--sp-2) 0 0;
+  font-size: 10px;
+  color: var(--faint);
+}
+
+/* ── 分组与格子 ─────────────────────────────────────────────── */
+.uiroom-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--sp-4) var(--sp-5) 40px;
+}
+.uiroom-group + .uiroom-group {
+  margin-top: var(--sp-6);
+}
+.uiroom-group h2 {
+  margin: 0;
+  font-size: var(--fs-14);
+  font-weight: 500;
+  color: var(--ink);
+}
+.uiroom-group-note {
+  margin: var(--sp-1) 0 var(--sp-3);
+  font-size: var(--fs-11);
+  color: var(--faint);
+}
+/* 陈列台用**多列流**而不是 grid:格子高度差极大(67 枚图标的图标墙 vs 一个开关),
+   grid 会把同一行拉到最高那个的高度,其余格子大片留白。多列按列各自堆叠,
+   高度差只影响那一列(格子顺序变成「按列自上而下」,分组标题仍在各自列流之上)。 */
+.uiroom-grid {
+  column-count: 3;
+  column-gap: var(--sp-3);
+}
+.uiroom-cell {
+  display: flex;
+  flex-direction: column;
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+  margin: 0 0 var(--sp-3);
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-elev);
+  overflow: hidden;
+}
+.uiroom-cell-head {
+  flex: none;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.uiroom-cell-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.uiroom-cell-title h3 {
+  margin: 0;
+  font-size: var(--fs-13);
+  font-weight: 500;
+  color: var(--ink);
+}
+.uiroom-cell-title code,
+.uiroom-cell-module {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--faint);
+}
+.uiroom-cell-module {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+}
+.uiroom-cell-note {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-11);
+  line-height: 1.55;
+  color: var(--faint);
+}
+.uiroom-cell-skip {
+  margin: 3px 0 0;
+  font-size: 10px;
+  color: var(--amber);
+}
+/* 「这个组件直接连真实服务」的标记:隔离态是安定绿,切到真实服务后转红警示 */
+.uiroom-cell-live {
+  margin: 4px 0 0;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--green);
+}
+.uiroom-cell-live--armed {
+  color: var(--red);
+}
+.uiroom-tabs {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-elev-2);
+}
+.uiroom-tab {
+  padding: 3px 8px;
+  border-radius: var(--r-sm);
+  color: var(--muted);
+  font-size: var(--fs-11);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.uiroom-tab:hover {
+  color: var(--ink);
+  background: var(--hover-tint);
+}
+.uiroom-tab.active {
+  color: var(--amber);
+  background: var(--amber-tint);
+}
+.uiroom-tab-note {
+  margin-left: auto;
+  align-self: center;
+  padding-right: 4px;
+  font-size: 10px;
+  color: var(--faint);
+}
+
+/* 陈列台:内容区。给固定定位弹层用的「框」——transform 造包含块,
+   否则 .dlg-overlay / .ask-layer 这类 fixed 层会以视口为包含块,一展开盖住整页。 */
+.uiroom-stage {
+  position: relative;
+  min-width: 0;
+  padding: var(--sp-3);
+}
+.uiroom-stage--fixed {
+  transform: translateZ(0);
+  overflow: hidden;
+  min-height: 340px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+.uiroom-missing {
+  padding: var(--sp-4);
+  color: var(--red);
+  font-size: var(--fs-12);
+  line-height: 1.6;
+}
+.uiroom-empty {
+  padding: 32px var(--sp-4);
+  text-align: center;
+  color: var(--faint);
+  font-size: var(--fs-12);
+}
+
+/* ── 动效 token 演示 ────────────────────────────────────────── */
+.uiroom-demo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  width: 100%;
+}
+.uiroom-demo-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 22px;
+}
+.uiroom-demo-row code {
+  flex: none;
+  min-width: 118px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.uiroom-demo-val {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--faint);
+}
+/* 位移演示条:复用 styles.css 的 slide-in-left/right 关键帧(EDGE_SLIDE 的唯一真相源) */
+.uiroom-anim {
+  flex: 1;
+  height: 10px;
+  min-width: 24px;
+  border-radius: 3px;
+  background: var(--amber-tint-strong);
+  animation: slide-in-left var(--dur-base) var(--ease-out) both;
+}
+.uiroom-anim--fast {
+  animation-duration: var(--dur-fast);
+}
+.uiroom-anim--base {
+  animation-duration: var(--dur-base);
+}
+.uiroom-anim--slow {
+  animation-duration: var(--dur-slow);
+}
+.uiroom-anim--out {
+  animation-timing-function: var(--ease-out);
+}
+.uiroom-anim--inout {
+  animation-timing-function: var(--ease-inout);
+}
+.uiroom-anim--linear {
+  animation-timing-function: linear;
+}
+.uiroom-anim--edge-left {
+  animation-name: slide-in-left;
+}
+.uiroom-anim--edge-right {
+  animation-name: slide-in-right;
+}
+.uiroom-stagger {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: none;
+}
+.uiroom-stagger li {
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-elev-2);
+  color: var(--muted);
+  font-size: var(--fs-11);
+  animation: slide-in-left var(--dur-base) var(--ease-out) both;
+}
+
+/* ── 主题色板 ───────────────────────────────────────────────── */
+.uiroom-palette {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 6px;
+  width: 100%;
+}
+.uiroom-swatch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.uiroom-swatch i {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+}
+.uiroom-swatch code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--faint);
+}
+.uiroom-themes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.uiroom-theme-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.uiroom-theme-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-12);
+  color: var(--ink-2);
+}
+.uiroom-theme-swatches {
+  flex: none;
+  display: inline-flex;
+  gap: 3px;
+}
+.uiroom-theme-swatches i {
+  width: 22px;
+  height: 18px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+}
+.uiroom-theme-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.uiroom-hint {
+  margin: 0;
+  font-size: var(--fs-11);
+  color: var(--faint);
+  line-height: 1.6;
+}
+.uiroom-hint--err {
+  color: var(--red);
+}
+.uiroom-exit {
+  width: 100%;
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── 手机端(≤700px):顶栏下线,这一页自带一条导航 ───────── */
+@media (max-width: 1240px) {
+  .uiroom-grid {
+    column-count: 2;
+  }
+}
+@media (max-width: 900px) {
+  .uiroom-grid {
+    column-count: 1;
+  }
+}
+@media (max-width: 700px) {
+  .uiroom-head {
+    padding: var(--sp-3) var(--sp-3) var(--sp-2);
+  }
+  .uiroom-body {
+    padding: var(--sp-3) var(--sp-3) 32px;
+  }
+  .uiroom-search input {
+    width: 120px;
+  }
+  .uiroom-stage--fixed {
+    min-height: 300px;
+  }
+}

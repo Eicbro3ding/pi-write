@@ -1,5 +1,5 @@
 /**
- * 手机端样式(设计稿 ★移动版 393×852)——**必须最后加载**。
+ * 手机端样式——**必须最后加载**。
  *
  * 为什么单独一个文件:页头/输入条/抽屉这些手机端规则要覆盖 .stage-head、
  * .world-body .w-bar 等各页样式,而 styles/world.css、styles/stage.css 是在
@@ -10,7 +10,7 @@
 .world-page { display: flex; flex: 1; min-width: 0; min-height: 0; }
 
 /* ════════════════════════════════════════════════════════════════
-   手机端(≤700px,设计稿 ★移动版 393×852)
+   手机端
    ════════════════════════════════════════════════════════════════
    与「窄屏 ≤900px」的分工:≤900px 只把两侧栏变抽屉(平板竖屏也适用),
    ≤700px 才换成另一套壳——顶栏下线,各页自带的 52px 页头接管标题/状态,
@@ -39,7 +39,8 @@
   border-radius: var(--r-full); background: var(--amber); color: var(--bg);
   font-size: 10px; line-height: 15px; text-align: center; font-variant-numeric: tabular-nums;
 }
-.m-live { position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); animation: tab-live-pulse 1.6s ease-in-out infinite; }
+/* 尺寸/颜色/呼吸动画在 styles.css 的 .companion-live, .m-live 那份;这里只补定位 */
+.m-live { position: absolute; top: 5px; right: 5px; }
 
 /* —— ⋯ 菜单:贴页头下方浮出(手机端唯一的二级入口) —— */
 .m-menu-mask { position: fixed; inset: 0; z-index: 55; background: transparent; }
@@ -83,9 +84,9 @@
   /* 顶部诊断条贴边(桌面是卡片内浮出的) */
   .paper-zone > .notice { margin: 8px 12px 0; }
 
-  /* —— 书库/文件抽屉:设计稿宽 312、bg-elev 底、右侧一道线 —— */
+  /* —— 书库/文件抽屉:宽 312、bg-elev 底、右侧一道线 —— */
   .chapters {
-    z-index: 50; /* 压过底部输入条(设计稿抽屉上盖着遮罩,输入条被盖住) */
+    z-index: 50; /* 压过底部输入条 */
     width: min(88vw, 312px) !important; padding: 0; gap: 0;
     background: var(--bg-elev); border-right: 1px solid var(--line);
   }
@@ -109,7 +110,7 @@
   .m-nav-item.active .m-nav-label { font-weight: 600; }
   .m-nav-bar { position: absolute; right: 12px; width: 4px; height: 16px; border-radius: var(--r-full); background: var(--amber); }
   .m-nav-divider { flex: none; height: 1px; margin: 10px 0; background: var(--line); }
-  /* 抽屉搜索(设计稿「文件抽屉」:工作区头右侧的放大镜同款) */
+  /* 抽屉搜索 */
   .m-drawer-search {
     flex: none; display: flex; align-items: center; gap: 8px; height: 34px; margin: 0 10px 10px;
     padding: 0 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-full);
@@ -119,7 +120,7 @@
     flex: 1; min-width: 0; background: transparent; border: 0; outline: none;
     color: var(--ink); font-size: var(--fs-12);
   }
-  /* 抽屉页脚:本地草稿 · 不上传 + 字数(设计稿底部一行) */
+  /* 抽屉页脚:本地草稿 · 不上传 + 字数 */
   .m-drawer-foot {
     flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 14px;
     border-top: 1px solid var(--line); font-size: var(--fs-11); color: var(--faint);
@@ -127,7 +128,7 @@
   .m-drawer-foot .m-gap { flex: 1; }
   .m-drawer-foot .m-mono { font-family: var(--mono); }
 
-  /* —— AI 伙伴:手机端整屏(设计稿「伙伴对话」页),底部由输入条接管 —— */
+  /* —— AI 伙伴:手机端整屏,底部由输入条接管 —— */
   .companion {
     left: 0; right: 0; width: 100% !important; border-left: none;
     padding-bottom: calc(66px + env(safe-area-inset-bottom));
@@ -136,7 +137,7 @@
   .companion-body > .chat { padding: 0; }
   .companion-body .chat-scroll { padding: 14px 14px 18px; }
   .companion-body .inputbar { display: none; }
-  /* 对话气泡(设计稿「伙伴对话」):用户消息右对齐暖金气泡,AI 消息保持纯文本 */
+  /* 对话气泡:用户消息右对齐暖金气泡,AI 消息保持纯文本 */
   .companion .record { border-bottom: none; padding: 0; margin-bottom: 18px; }
   .companion .record.user {
     display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
@@ -149,7 +150,7 @@
     font-size: var(--fs-13); line-height: 1.6;
   }
 
-  /* —— 管理供应商(设计稿 ★移动版「管理供应商」):整屏页 + 已连接卡片 + 添加供应商 —— */
+  /* —— 管理供应商:整屏页 + 已连接卡片 + 添加供应商 —— */
   /* 注意 .dlg-overlay 带 backdrop-filter,会给 fixed 子元素造包含块 —— 手机端整屏
      不靠 fixed,直接把弹窗壳拉满(去内边距 + 拉伸 + 去掉毛玻璃) */
   .pvd-overlay { padding: 0; align-items: stretch; backdrop-filter: none; -webkit-backdrop-filter: none; }
@@ -157,7 +158,7 @@
     width: 100%; max-width: none; height: 100%; max-height: none;
     border-radius: 0; border: none; box-shadow: none;
   }
-  /* 页头照设计稿:箭头贴左、标题与副标题左对齐(桌面那版是 space-between 靠右) */
+  /* 页头:箭头贴左、标题与副标题左对齐(桌面那版是 space-between 靠右) */
   .pvd-head { justify-content: flex-start; align-items: flex-start; gap: 6px; padding: 10px 10px 12px; }
   .pvd-head .pvd-title { font-size: var(--fs-15); font-weight: 600; }
   .pvd-sub { font-size: var(--fs-11); }
@@ -174,7 +175,7 @@
   .pvc-side { width: 100%; max-height: none; padding: 0; border-right: none; }
   .pvc-side-title { padding: 4px 2px 10px; letter-spacing: 0.04em; }
   .pvc-detail { width: 100%; max-height: none; padding: 0; border: none; background: transparent; overflow: visible; }
-  /* 已连接的供应商:一服务一卡(设计稿「管理供应商」) */
+  /* 已连接的供应商:一服务一卡 */
   .m-pv-card {
     display: flex; flex-direction: column; gap: 6px; width: 100%; text-align: left;
     padding: 12px 14px; margin-bottom: 8px;
@@ -219,7 +220,7 @@
   .pvc-m-list { grid-template-columns: 1fr; }
   .pvc-add-model { width: 100%; justify-content: center; padding: 11px; font-size: var(--fs-13); }
 
-  /* —— 设置(设计稿「设置」:一屏分组清单 + 一页一件事)——
+  /* —— 设置——
      小节标题 + 卡片 + 行(图标 | 名称/说明 | 值/开关 | ›);子页只显示这一页的卡片 */
   .m-set { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; padding: 14px 14px 20px; }
   .m-set-sec { display: flex; flex-direction: column; gap: 8px; }
@@ -232,12 +233,18 @@
   .m-set-name { font-size: var(--fs-13); font-weight: 500; color: var(--ink); }
   .m-set-sub { font-size: var(--fs-11); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .m-set-val { flex: none; max-width: 42%; font-size: var(--fs-12); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .m-set-arrow { flex: none; color: var(--faint); }
+  .m-set-arrow {
+    flex: none; color: var(--faint);
+    /* 单枚 chevron 靠旋转表达展开态(与 .sel-arrow/.think-arrow 同一套) */
+    transition: transform var(--dur-fast) var(--ease-out);
+  }
+  .m-set-arrow.menu { transform: rotate(90deg); }
+  .m-set-arrow.open { transform: rotate(-90deg); }
   /* 整行热区:铺在行内容之上,让「图标 + 文字 + 值」整块可点(开关行不铺) */
   .m-set-hit { position: absolute; inset: 0; background: transparent; border: 0; }
   .m-set-row:active .m-set-hit { background: var(--hover-tint); }
   .m-set-foot { padding-top: 6px; text-align: center; font-size: var(--fs-11); color: var(--faint); }
-  /* 主题选单(设计稿「设置 · 主题菜单」):浮在行下面盖住后面几行,卡片要放行 */
+  /* 主题选单:浮在行下面盖住后面几行,卡片要放行 */
   .m-set-card.m-menu-open { overflow: visible; }
   .m-set-menu {
     position: absolute; left: 10px; right: 10px; top: calc(100% + 4px); z-index: 6;
@@ -263,7 +270,7 @@
   /* 子页内容:桌面那套居中内边距在手机端收紧 */
   .settings { padding-top: 0; }
   .settings-inner { padding: 14px 14px 32px; }
-  /* 卡片也换成设计稿的圆角与描边(桌面是 12px 圆角 + 更松的内边距) */
+  /* 卡片也换成圆角与描边(桌面是 12px 圆角 + 更松的内边距) */
   .settings .s-card { border-radius: var(--r-lg); padding: 0 14px 4px; }
   .settings .s-card-head { padding: 12px 0 10px; }
   /* 桌面「文字 | 控件」的行在 393px 里会把左边的说明挤成一列字(2026-09 用户截图):
@@ -292,7 +299,7 @@
   .amd-foot .btn-ghost,
   .amd-foot .wz-primary { flex: 1; justify-content: center; }
 
-  /* —— 世界书 · 关系图(设计稿「关系图」):全屏画布 + 顶部芯片 + 悬浮控件 + 底部详情卡 —— */
+  /* —— 世界书 · 关系图:全屏画布 + 顶部芯片 + 悬浮控件 + 底部详情卡 —— */
   .m-wseg {
     flex: none; display: inline-flex; align-items: center; gap: 2px; padding: 2px;
     background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-full);
@@ -320,7 +327,7 @@
   .m-graph-tools .graph-hint {
     flex-basis: 100%; text-align: right; font-size: var(--fs-11); color: var(--faint);
   }
-  /* 连线胶囊(设计稿右上「连线」):琥珀描边 + 淡底 */
+  /* 连线胶囊:琥珀描边 + 淡底 */
   .m-graph .graph-link-btn { flex: none; padding: 7px 12px; border-radius: var(--r-full); background: var(--amber-tint); border: 1px solid var(--amber); color: var(--amber); font-size: var(--fs-12); font-weight: 600; }
   .m-graph .graph-link-btn.on { background: var(--amber); color: var(--bg); }
   .m-graph .graph-tool-btn {
@@ -330,7 +337,7 @@
     font-size: 0; /* 手机端只留图标(文字在桌面工具条里) */
   }
   .m-graph .graph-tool-btn svg { font-size: initial; }
-  /* 缩放条:设计稿放在画布底部居中(桌面是右下) */
+  /* 缩放条:放在画布底部居中(桌面是右下) */
   .m-graph .graph-zoom-bar {
     top: auto; bottom: 12px; left: 50%; right: auto; transform: translateX(-50%);
     background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-full);
@@ -338,7 +345,7 @@
   }
   .m-graph .graph-zoom-btn { width: 26px; height: 24px; display: inline-flex; align-items: center; justify-content: center; }
   .m-graph .graph-zoom-pct { font-size: var(--fs-11); color: var(--muted); }
-  /* 底部详情卡(设计稿:抓手 + 头像/名称/元信息 + 关系清单 + 两个动作) */
+  /* 底部详情卡 */
   .m-graph-sheet {
     flex: none; display: flex; flex-direction: column; background: var(--bg-elev);
     border-top: 1px solid var(--line); border-radius: var(--r-lg) var(--r-lg) 0 0;
@@ -386,7 +393,7 @@
   .world-tree-wrap { display: none; }
   .m-wlist { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
   .m-only { display: flex; }
-  /* 搜索 + 类型 chips(设计稿「世界书」) */
+  /* 搜索 + 类型 chips */
   .m-wfilter { flex: none; display: flex; flex-direction: column; gap: 10px; padding: 10px 14px 12px; }
   .m-wsearch {
     display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px;
@@ -458,7 +465,7 @@
     width: 42px; height: 42px; border-radius: var(--r-md);
     border: 1px solid var(--line-strong); color: var(--muted);
   }
-  /* 条目详情(手机端):表单 + 信息栏纵向铺满(设计稿「世界书 · 条目详情」) */
+  /* 条目详情(手机端):表单 + 信息栏纵向铺满 */
   .m-wdetail { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
   .m-wdetail .entry-form { padding: 12px 14px 0; }
   .m-wdetail .w-info {
@@ -468,7 +475,7 @@
   /* 条目详情(手机端):表单占满,底部让出输入条 */
   .w-view-entries .entry-form, .w-view-entries .w-phone-detail { padding-bottom: 24px; }
 
-  /* —— 导出:手机端整屏页(设计稿 ★移动版「导出」)—— */
+  /* —— 导出:手机端整屏页—— */
   .m-sheet {
     position: fixed; inset: 0; z-index: 72; display: flex; flex-direction: column;
     background: var(--bg);
@@ -490,14 +497,18 @@
   .stage-head, .stage-controls { padding: 8px 12px; }
   .stage-head { display: none; }
   .st-counts { margin-left: 0; }
-  /* 右面板(剧本/选角/修订/备忘录):手机端从页头打开,做底部抽屉 */
+  /* 右面板(剧本/选角/修订/备忘录):手机端从页头打开,做底部抽屉。
+     **注意**:这个类必须由 StagePage 真的挂上(见 stagePanelClass),否则抽屉永远打不开;
+     宽度要显式清掉桌面那条 width(--stage-panel-w),否则抽屉只有 360 宽 */
   .stage-grid.phone-panel-open .stage-panel {
     display: flex; position: fixed; left: 0; right: 0; bottom: 0; top: auto;
-    height: 72vh; z-index: 58; border-left: none; border-top: 1px solid var(--line);
+    width: auto; height: 72vh; z-index: 58; border-left: none; border-top: 1px solid var(--line);
     border-radius: var(--r-lg) var(--r-lg) 0 0; box-shadow: var(--shadow-3);
     padding-bottom: env(safe-area-inset-bottom);
+    animation: sheet-up var(--dur-slow) var(--ease-out);
   }
-  /* —— 舞台流:演员条目改「头像 + 名字行 + 气泡」,旁白居中斜体(设计稿 ★移动版「舞台」) —— */
+  @keyframes sheet-up { from { opacity: 0; transform: translateY(100%); } to { opacity: 1; transform: none; } }
+  /* —— 舞台流:演员条目改「头像 + 名字行 + 气泡」,旁白居中斜体 —— */
   .m-scene-pill {
     align-self: center; display: inline-flex; align-items: center; gap: 6px;
     padding: 4px 12px; border-radius: var(--r-full); background: var(--hover-tint);
@@ -513,11 +524,11 @@
     padding: 10px 12px; border-radius: var(--r-md); background: var(--bg-elev);
     font-family: var(--prose); font-size: var(--fs-14); line-height: 1.5; color: var(--ink);
   }
-  /* 旁白:无气泡,居中斜体(设计稿) */
+  /* 旁白:无气泡,居中斜体 */
   .st-entry .st-text.narr { background: transparent; padding: 0 14px; text-align: center; font-size: var(--fs-13); color: var(--muted); }
   .st-entry .st-name.narr { color: var(--muted); }
   .st-entry .st-actions { opacity: 1; align-self: flex-start; }
-  /* 导演发言(对话流的用户侧):琥珀指令条,与设计稿的「导演」行同型 */
+  /* 导演发言(对话流的用户侧):琥珀指令条,与「导演」行同型 */
   .stage-scroll.chat-bubble .record.user {
     align-self: stretch; max-width: none; margin-right: 0;
     background: var(--amber-tint); border: 1px solid var(--amber-tint-strong);
@@ -538,7 +549,7 @@
   }
   .m-next-chip.active { background: var(--amber-tint); border-color: var(--amber-tint-strong); color: var(--amber); font-weight: 600; }
   .m-next-chip:disabled { opacity: 0.5; }
-  /* 演员条(设计稿 46px:演员 pills + ＋) */
+  /* 演员条 */
   .m-castbar {
     flex: none; display: flex; align-items: center; gap: 8px;
     height: 46px; padding: 0 14px; border-bottom: 1px solid var(--line); overflow-x: auto;
@@ -569,7 +580,7 @@
   /* 导演输入条与编辑页同款胶囊;键位提示在触屏上无意义 */
   .stage-main .inputbar::after { display: none; }
 
-  /* —— 输入区(设计稿「输入区」):[输入框胶囊] [上下文圆环] [发送] ——
+  /* —— 输入区:[输入框胶囊] [上下文圆环] [发送] ——
      桌面那条宽带描边容器在手机端退场,胶囊只包输入框,圆环与发送钮是胶囊外的兄弟元素。
      写入页底部条(.m-composer)与舞台页底部条(.stage-main)共用同一套规则。 */
   .m-composer .inputbar-inner,
@@ -585,7 +596,7 @@
   }
   .m-composer .ib-field textarea,
   .stage-main .ib-field textarea { padding: 0; font-size: var(--fs-13); max-height: 104px; }
-  /* 发送/中断钮:设计稿是 34 的圆,且必须在胶囊里居中对齐 ——
+  /* 发送/中断钮: 34 的圆,且必须在胶囊里居中对齐 ——
      桌面那条 .btn-send{align-self:flex-end} 是为多行文本贴底设计的,手机上就是「歪」的来源 */
   .m-composer .inputbar .btn-send,
   .stage-main .inputbar .btn-send { width: 34px; height: 34px; align-self: center; }
@@ -612,4 +623,50 @@
 @media (min-width: 701px) {
   .m-head-wrap, .m-composer, .m-menu { display: none !important; }
   .m-only { display: none !important; }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   触屏反馈与层级动效补齐(2026-09-30 动效覆盖度审计)——必须写在本文件末尾,
+   手机端选择器与基础样式同为单类时后加载者胜。
+   ════════════════════════════════════════════════════════════════ */
+/* 页头状态圆点:保存态 绿/琥珀/红 切换要过渡,而不是瞬间跳色 */
+.m-dot { transition: background var(--dur-base) var(--ease-out); }
+/* 触屏按压/悬停反馈:原先全是瞬间跳(mobile.css 原本一条 transition 都没有) */
+.m-menu-item,
+.m-nav-item,
+.m-pv-card,
+.pvc-back,
+.m-set-row .m-set-hit,
+.m-set-menu-item,
+.m-wcard,
+.m-next-chip,
+.m-cast-pill,
+.m-wchip,
+.m-wseg-btn,
+.m-icon-btn {
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+
+@media (max-width: 700px) {
+  /* —— 手机端层级导航(原先是整片硬切)——
+     进入更深一层:自右推入;返回上一层:离场层加 .m-layer-leaving 向右退出
+     (由 WorldPage.phoneBackToList 延迟清空 selId 播完),目标层随后淡入 */
+  .m-wdetail { animation: slide-in-right var(--dur-base) var(--ease-out); }
+  .m-wdetail.m-layer-leaving { animation: presence-out-right var(--dur-base) var(--ease-out) both; pointer-events: none; }
+  .m-wlist { animation: fade-in var(--dur-base) var(--ease-out); }
+  /* 设置:子页自右进入(settings-main.m-focus)、返回索引自左进入 */
+  .settings-main.m-focus { animation: slide-in-right var(--dur-base) var(--ease-out); }
+  .m-set { animation: slide-in-left var(--dur-base) var(--ease-out); }
+  /* 供应商三层(列表 / 选择 / 详情):原先全是 display 硬切。两侧常驻元素在
+     display 恢复时重播入场动画 → 与「返回 / 进入」方向一致的层级感(仅手机端,
+     桌面那条弹窗已经有 pop + 双栏,不再叠第三层动效) */
+  .pvc-side { animation: slide-in-left var(--dur-base) var(--ease-out); }
+  .pvc-detail { animation: slide-in-right var(--dur-base) var(--ease-out); }
+  /* 页头 ⋯ 菜单 / 主题选单:浮层原本瞬间出现 */
+  .m-menu { animation: fade-up var(--dur-fast) var(--ease-out); }
+  .m-set-menu { animation: fade-up var(--dur-fast) var(--ease-out); }
+  /* 整屏导出页:原先进场都没有 */
+  .m-sheet { animation: fade-in var(--dur-base) var(--ease-out); }
 }

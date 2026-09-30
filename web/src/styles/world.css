@@ -1,9 +1,9 @@
-/* pi-writer · world 页样式(设计稿 v1 重做)
+/* pi-writer · world 页样式
    本文件在 styles.css 之后加载:同名选择器在此处的声明覆盖 styles.css 里的旧值。
    约定:只用 :root 设计 token(禁止写死颜色/字号);字号只取 11/12/13/14/15/18/22/34;
    圆角只用 --r-sm(8)/--r-md(12)/--r-lg(16)/--r-full。 */
 
-/* ════ 页头:世界书 + N 条目 + 分段胶囊(设计稿 08/09/10) ════ */
+/* ════ 页头:世界书 + N 条目 + 分段胶囊 ════ */
 .w-bar { padding: 16px 24px 14px; gap: 10px; align-items: center; }
 .w-page-title { font-size: 22px; font-weight: 500; letter-spacing: 0.02em; color: var(--ink); line-height: 1.2; }
 .w-count-pill {
@@ -26,7 +26,7 @@
 .w-seg-btn.active { color: var(--ink); background: var(--bg-elev-2); }
 .w-seg-btn.active:hover { background: var(--bg-elev-2); }
 
-/* ════ 分类树(设计稿 08 左栏,240) ════ */
+/* ════ 分类树 ════ */
 .world-tree {
   padding: 16px 12px 12px; gap: 0; display: flex; flex-direction: column;
   background: var(--bg-elev);
@@ -57,7 +57,7 @@
 }
 .w-node-caret {
   flex: none; width: 18px; height: 18px; margin-left: 2px; display: inline-flex; align-items: center; justify-content: center;
-  color: var(--faint); border-radius: var(--r-sm); transition: color var(--dur-fast);
+  color: var(--faint); border-radius: var(--r-sm); transition: color var(--dur-fast) var(--ease-out);
 }
 .w-node-caret:hover { color: var(--ink); }
 .w-node-caret svg { transition: transform var(--dur-fast) var(--ease-out); }
@@ -66,7 +66,7 @@
 .w-node-main {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
   text-align: left; padding: 6px 8px 6px 4px; font-size: 13px; color: var(--ink-2);
-  transition: color var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out);
 }
 .w-node.active .w-node-main { color: var(--ink); }
 .w-node.off .w-node-main { color: var(--faint); }
@@ -74,6 +74,7 @@
 .w-node-rel { flex: none; font-family: var(--mono); font-size: 11px; color: var(--faint); }
 .w-node-off { flex: none; color: var(--faint); }
 .w-children {
+  animation: fade-in var(--dur-base) var(--ease-out);
   margin-left: 14px; padding-left: 6px; border-left: 1px solid var(--line);
   display: flex; flex-direction: column; gap: 2px;
 }
@@ -92,7 +93,7 @@
 .w-create { display: flex; flex-direction: column; gap: 8px; padding-bottom: 10px; }
 .w-create input[type="text"] {
   width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-sm);
-  color: var(--ink); font-size: 13px; padding: 7px 10px; outline: none; transition: border-color var(--dur-fast);
+  color: var(--ink); font-size: 13px; padding: 7px 10px; outline: none; transition: border-color var(--dur-fast) var(--ease-out);
 }
 .w-create input[type="text"]:focus { border-color: var(--amber); }
 .w-create-actions { display: flex; gap: 8px; }
@@ -109,16 +110,16 @@
 .w-btn-ghost {
   display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted);
   padding: 7px 14px; border: 1px solid var(--line); border-radius: var(--r-sm);
-  transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .w-btn-ghost:hover { color: var(--ink); border-color: var(--line-strong); background: var(--hover-tint); }
 .w-btn-solid {
   font-size: 13px; font-weight: 500; color: var(--bg); background: var(--ink);
-  padding: 7px 16px; border-radius: var(--r-sm); transition: background var(--dur-fast);
+  padding: 7px 16px; border-radius: var(--r-sm); transition: background var(--dur-fast) var(--ease-out);
 }
 .w-btn-solid:hover { background: var(--ink-2); }
 
-/* ════ 条目视图:中栏表单 + 右栏信息栏(设计稿 08) ════ */
+/* ════ 条目视图:中栏表单 + 右栏信息栏 ════ */
 .world-scroll.w-view-entries { padding: 0; display: flex; overflow: hidden; }
 .w-entries-main { flex: 1; min-width: 0; overflow-y: auto; padding: 20px 24px 48px; }
 .w-info {
@@ -169,14 +170,14 @@
 .w-chapters { display: flex; flex-direction: column; gap: 2px; }
 .w-chapter {
   display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: var(--r-sm);
-  font-size: 13px; color: var(--ink-2); cursor: pointer; transition: background var(--dur-fast);
+  font-size: 13px; color: var(--ink-2); cursor: pointer; transition: background var(--dur-fast) var(--ease-out);
 }
 .w-chapter:hover { background: var(--hover-tint); }
 .w-chapter.on { background: var(--amber-tint); color: var(--ink); }
 .w-chapter input[type="checkbox"] {
   flex: none; appearance: none; width: 15px; height: 15px; border-radius: var(--r-sm);
   border: 1px solid var(--line-strong); background: var(--bg); cursor: pointer;
-  position: relative; transition: background var(--dur-fast), border-color var(--dur-fast);
+  position: relative; transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 .w-chapter input[type="checkbox"]:checked { background: var(--amber); border-color: var(--amber); }
 .w-chapter input[type="checkbox"]:checked::after {
@@ -204,7 +205,7 @@
 .w-title-input {
   width: 100%; background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-md);
   color: var(--ink); font-size: 15px; padding: 11px 40px 11px 14px; outline: none;
-  transition: border-color var(--dur-fast);
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 .w-title-input:focus { border-color: var(--amber); }
 .w-title-clear {
@@ -237,11 +238,11 @@
   width: 100%; min-height: 320px; resize: vertical;
   background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-md);
   color: var(--ink); font-size: 14px; line-height: 1.85; padding: 14px; outline: none;
-  transition: border-color var(--dur-fast);
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 .w-body-input:focus { border-color: var(--amber); }
 
-/* ════ 空态(设计稿 03) ════ */
+/* ════ 空态 ════ */
 .w-empty-state {
   min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
   text-align: center; padding: 40px 24px; gap: 2px;
@@ -255,7 +256,7 @@
 .w-empty-new { padding: 9px 18px; box-shadow: var(--shadow-1); }
 .w-empty-hint { font-size: 11px; color: var(--faint); margin-top: 12px; }
 
-/* ════ 设定视图:两栏卡片(设计稿 09) ════ */
+/* ════ 设定视图:两栏卡片 ════ */
 .world-scroll.w-view-settings { padding: 0; overflow-y: auto; }
 .w-settings {
   display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
@@ -297,7 +298,7 @@
 .w-card .w-summary textarea {
   width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-sm);
   color: var(--ink); font-size: 13px; line-height: 1.8; padding: 10px 12px; outline: none;
-  resize: vertical; min-height: 96px; transition: border-color var(--dur-fast);
+  resize: vertical; min-height: 96px; transition: border-color var(--dur-fast) var(--ease-out);
 }
 .w-card .w-summary textarea:focus { border-color: var(--amber); }
 .w-card .w-summary .w-count { font-family: var(--mono); font-size: 11px; color: var(--faint); text-align: right; padding-top: 6px; }
@@ -311,7 +312,7 @@
 .w-story-title {
   flex: 1; min-width: 0; background: none; border: 1px solid transparent; border-radius: var(--r-sm);
   color: var(--ink); font-size: 13px; font-weight: 500; padding: 4px 6px; outline: none;
-  transition: border-color var(--dur-fast), background var(--dur-fast);
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .w-story-title:hover { background: var(--hover-tint); }
 .w-story-title:focus { border-color: var(--line-strong); background: var(--bg); }
@@ -319,7 +320,7 @@
 .w-sub-field {
   display: flex; align-items: center; gap: 8px; min-width: 0;
   background: var(--bg-elev-2); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 6px 10px;
-  transition: border-color var(--dur-fast);
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 .w-sub-field:focus-within { border-color: var(--amber); }
 .w-sub-label { flex: none; font-size: 11px; color: var(--faint); }
@@ -354,7 +355,7 @@
 .w-cst-name {
   flex: 1; min-width: 0; background: none; border: 1px solid transparent; border-radius: var(--r-sm);
   color: var(--ink); font-size: 13px; font-weight: 500; padding: 3px 6px; outline: none;
-  transition: border-color var(--dur-fast), background var(--dur-fast);
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .w-cst-name:hover { background: var(--hover-tint); }
 .w-cst-name:focus { border-color: var(--line-strong); background: var(--bg); }
@@ -362,7 +363,7 @@
 .w-cst-text {
   width: 100%; resize: vertical; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-sm);
   color: var(--ink-2); font-size: 13px; line-height: 1.7; padding: 8px 10px; outline: none;
-  transition: border-color var(--dur-fast);
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 .w-cst-text:focus { border-color: var(--amber); }
 .w-cst-row .w-count { text-align: right; }
@@ -372,7 +373,7 @@
 .w-sample-text {
   width: 100%; resize: vertical; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-sm);
   color: var(--ink-2); font-size: 13px; line-height: 1.8; padding: 10px 12px; outline: none;
-  transition: border-color var(--dur-fast);
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 .w-sample-text:focus { border-color: var(--amber); }
 .w-sample-foot { display: flex; align-items: center; gap: 10px; }
@@ -391,7 +392,7 @@
 /* 通用小图标按钮 */
 .w-ibtn {
   flex: none; font-size: 12px; line-height: 1; color: var(--faint); padding: 4px 6px;
-  border-radius: var(--r-sm); transition: color var(--dur-fast), background var(--dur-fast);
+  border-radius: var(--r-sm); transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .w-ibtn:hover:not(:disabled) { color: var(--ink); background: var(--hover-tint); }
 .w-ibtn:disabled { opacity: 0.3; cursor: default; }
@@ -402,13 +403,13 @@
 .w-count { font-family: var(--mono); font-size: 11px; color: var(--faint); }
 .w-count.over { color: var(--red); }
 
-/* ════ 关系图(设计稿 10) ════ */
+/* ════ 关系图 ════ */
 .graph-toolbar { padding: 12px 20px; gap: 12px; flex-wrap: nowrap; }
 .graph-filters { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
 .graph-filter {
   flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2);
   padding: 4px 12px; border: 1px solid var(--line); border-radius: var(--r-full); background: var(--bg-elev);
-  transition: color var(--dur-fast), border-color var(--dur-fast), opacity var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out);
 }
 .graph-filter:hover { border-color: var(--line-strong); }
 .graph-filter:not(.on) { opacity: 0.45; }
@@ -420,11 +421,11 @@
 .graph-link-btn { border-radius: var(--r-full); padding: 5px 14px; }
 .graph-tool-btn {
   flex: none; font-size: 12px; color: var(--muted); padding: 5px 10px; border-radius: var(--r-full);
-  transition: color var(--dur-fast), background var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .graph-tool-btn:hover:not(:disabled) { color: var(--ink); background: var(--hover-tint); }
 .graph-tool-btn:disabled { color: var(--faint); opacity: 0.5; cursor: default; }
-/* 图操作条:设计稿 10 放在画布右下角 */
+/* 图操作条: 放在画布右下角 */
 .graph-zoom-bar { top: auto; bottom: 14px; right: 16px; border-radius: var(--r-full); }
 .graph-empty { background: transparent; }
 
@@ -455,7 +456,7 @@
 .world-graph-view .entry-rel-item {
   display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border-radius: var(--r-sm);
   font-size: 13px; color: var(--muted); padding: 8px 10px; border-radius: var(--r-sm);
-  background: var(--bg-elev-2); transition: color var(--dur-fast), background var(--dur-fast);
+  background: var(--bg-elev-2); transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .world-graph-view .entry-rel-item:hover:not(:disabled) { color: var(--ink); background: var(--hover-tint-strong); }
 .world-graph-view .entry-rel-item:disabled { color: var(--faint); cursor: default; }
@@ -475,17 +476,17 @@
   flex: 1; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   font-size: 12px; color: var(--ink-2); padding: 8px 12px; border: 1px solid var(--line);
   border-radius: var(--r-sm); background: var(--bg-elev-2);
-  transition: color var(--dur-fast), border-color var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 .entry-card-edit:hover { color: var(--amber); border-color: var(--amber); }
 .entry-card-del {
   flex: none; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center;
   color: var(--faint); border: 1px solid var(--line); border-radius: var(--r-sm);
-  transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast);
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .entry-card-del:hover { color: var(--red); border-color: var(--red); background: var(--red-tint); }
 
-/* ════ 删除确认模态(设计稿 04) ════ */
+/* ════ 删除确认模态 ════ */
 .w-modal-mask {
   position: fixed; inset: 0; z-index: 400; display: flex; align-items: center; justify-content: center;
   background: var(--mask); padding: 24px;
@@ -505,3 +506,29 @@
 /* ════ 备忘录板(伙伴栏)════
    NoticeBoard 本体已全部走设计 token,且舞台面板并行改造中——本页不覆盖它的样式,
    避免并行改动的样式互相打架。 */
+
+/* ════════════════════════════════════════════════════════════════
+   交互反馈补齐(2026-09-30 动效覆盖度审计)
+   这些元素原先有 hover 反馈却没有 transition(颜色/底瞬间跳);补 token。
+   注意必须写在本文件(而不是 styles.css):同为单类选择器时后加载的文件胜,
+   写在 styles.css 会被这里的原始声明压掉。
+   ════════════════════════════════════════════════════════════════ */
+.w-info-link,
+.w-info-copy,
+.w-title-clear,
+.w-key-chip button,
+.w-key-add,
+.w-card-add,
+.w-card-iconbtn,
+.ws-chip,
+.ws-row {
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+/* 关键词 chip 的 × 原先是 opacity 0.75→1 瞬间跳;现在过渡由上面的规则承担 */
+/* .ws-chip 原先用 outline 表示 hover(outline 不可过渡),换成等价的 box-shadow 描边 */
+.ws-chip:hover { outline: none; box-shadow: 0 0 0 1px var(--amber-tint-strong); }
+
+/* 词条表单:条目→详情→编辑是挂载即播的推入(原先是硬切;居中容器用 fade-up 语言) */
+.w-form { animation: fade-up var(--dur-base) var(--ease-out); }

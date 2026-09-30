@@ -1,0 +1,97 @@
+/**
+ * 退场层(2026-09-30 动效覆盖度审计后补)——**必须最后 import**。
+ *
+ * 条件挂载的弹层/浮层由 `useExitPresence`(web/src/use-exit-presence.ts)在卸载前
+ * 打上 `.is-closing`,这里播放与入场对应的反向动画。放最后加载的原因与 mobile.css
+ * 相同:各页入场 animation 分散在 styles.css / world.css / stage.css / dialog.css /
+ * wizard.css / mobile.css 里,退场规则必须排在他们之后才能稳定生效。
+ *
+ * 数值一律取 token(--dur-fast/base/slow、--ease-out),与 web/src/motion.ts 同源。
+ */
+
+/* 遮罩/整屏层:淡出 */
+@keyframes presence-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+/* 居中弹窗面板:原路缩回(与 dialog.css 的 wz-pop 反向,幅度也统一成 6px/0.99) */
+@keyframes presence-pop-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(6px) scale(0.99); }
+}
+/* 自底部升起的浮层/抽屉:滑回屏幕下缘 */
+@keyframes presence-out-down {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(100%); }
+}
+/* 自底部弹出的小浮层(下拉/菜单):小幅下沉淡出 */
+@keyframes presence-out-up {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(6px); }
+}
+/* 自右缘滑入的层级(手机两级导航的返回):原路向右退出 */
+@keyframes presence-out-right {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateX(8px); }
+}
+
+.is-closing {
+  /* 兜底淡出:整屏壳(.fs-editor / .ws-preview / .wz-overlay)的入场就是 fade,
+     这里是对偶。pointer-events 立即交还,不等动画播完。
+     ⚠️ 时长必须与 useExitPresence 的超时一致(默认 DUR.base),否则元素会在动画
+     播到一半时被卸载,看起来「卡一下再消失」——下面所有退场规则统一 200ms 正是为此;
+     某处若确实要更久,必须同时给那个调用点传 ms(按元素对齐)。 */
+  animation: presence-out var(--dur-base) var(--ease-out) both;
+  pointer-events: none;
+}
+
+/* 居中弹窗:遮罩淡出 + 面板缩回(面板是子元素,保留"缩回"的层次感) */
+.dlg-overlay.is-closing .dlg-panel,
+.rsm-mask.is-closing .rsm-panel {
+  animation: presence-pop-out var(--dur-base) var(--ease-out) both;
+}
+
+/* 从输入条/按钮下方弹出的小浮层:小幅下沉 */
+.export-panel.is-closing,
+.usage-pop.is-closing,
+.sel-menu.is-closing,
+.m-menu.is-closing,
+.m-set-menu.is-closing {
+  animation: presence-out-up var(--dur-fast) var(--ease-out) both;
+}
+
+/* 手机端底部表单页(添加供应商/模型):整层淡出 + 面板滑回下缘 */
+@media (max-width: 700px) {
+  .amd-overlay.is-closing .dlg-panel {
+    animation: presence-out-down var(--dur-base) var(--ease-out) both;
+  }
+}
+
+/* 手机整屏导出页:入场是 fade-in(mobile.css),退场同款淡出 */
+.m-sheet.is-closing {
+  animation: presence-out var(--dur-base) var(--ease-out) both;
+}
+
+/* 舞台右面板:桌面收起成 48px 竖条(不卸载,走 grid 轨过渡);手机端底部抽屉走这里,
+   与入场 sheet-up(同样 200ms)同长 */
+.stage-panel.is-closing {
+  animation: presence-out-down var(--dur-base) var(--ease-out) both;
+}
+
+/* 手机两级导航:详情返回列表由「延迟清空 selId + .m-layer-leaving」承担
+   (见 WorldPage.phoneBackToList),不走 presence —— presence-out-right 关键帧
+   由 mobile.css 的 .m-wdetail.m-layer-leaving 复用 */
+
+/* 提问浮层:遮罩淡出 + 卡片小幅下沉(卡片本体用 framer 入场,退场交给这里) */
+.ask-layer.is-closing .ask-card {
+  animation: presence-out-up var(--dur-base) var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .is-closing,
+  .is-closing .dlg-panel,
+  .is-closing .rsm-panel,
+  .is-closing .ask-card {
+    animation: none;
+  }
+}

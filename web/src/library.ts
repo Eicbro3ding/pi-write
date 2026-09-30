@@ -14,6 +14,8 @@ import type { BookDetail, BookMeta, ChapterRef } from "./types.ts";
 
 export interface Library {
 	books: BookMeta[];
+	/** 首次拉书列表是否已结束(成功或失败都置位)——区分「加载中」与「真的没有书」。 */
+	booksLoaded: boolean;
 	bookDetail: BookDetail | null;
 	currentChapter: ChapterRef | null;
 	busySlug: string | null;
@@ -57,6 +59,8 @@ export interface Library {
 
 export function useLibrary(client: ApiClient, onBookChange?: (slug: string | null) => void): Library {
 	const [books, setBooks] = useState<BookMeta[]>([]);
+	/** 首次拉书是否已结束:空列表要区分「还没拉到」与「真的没有书」(骨架屏 vs 空态)。 */
+	const [booksLoaded, setBooksLoaded] = useState(false);
 	const [bookDetail, setBookDetail] = useState<BookDetail | null>(null);
 	const [currentChapter, setCurrentChapter] = useState<ChapterRef | null>(null);
 	const [busySlug, setBusySlug] = useState<string | null>(null);
@@ -126,6 +130,7 @@ export function useLibrary(client: ApiClient, onBookChange?: (slug: string | nul
 	const loadBooks = useCallback(async () => {
 		const list = await client.getBooks();
 		setBooks(list);
+		setBooksLoaded(true);
 		return list;
 	}, [client]);
 
@@ -239,6 +244,7 @@ export function useLibrary(client: ApiClient, onBookChange?: (slug: string | nul
 
 	return {
 		books,
+		booksLoaded,
 		bookDetail,
 		currentChapter,
 		busySlug,

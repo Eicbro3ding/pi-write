@@ -45,7 +45,7 @@ interface InputBarProps {
 	onCommandError?: (message: string) => void;
 	/** 回车行为(设置页开关);缺省 newline = 回车换行、Ctrl/Cmd+Enter 发送。 */
 	enterBehavior?: EnterBehavior;
-	/** 上下文占用(设计稿 ★输入区·上下文圆环):给值就在发送按钮左侧显示比例圆环。 */
+	/** 上下文占用:给值就在发送按钮左侧显示比例圆环。 */
 	usage?: ContextUsageDto | null;
 	/** 点圆环的回调(给了就把圆环做成按钮)。页面据此展开「本会话用量」浮层。 */
 	onUsageClick?: () => void;
@@ -67,7 +67,7 @@ interface SlashMenuState {
 }
 
 /**
- * `@` 引用菜单内部状态(设计稿 ★输入区 · @ 菜单)。
+ * `@` 引用菜单内部状态。
  *
  * 与 `/` 菜单的结构性差异:那是「先选命令再搜候选」,**这是一次搜全部** ——
  * 所有 `sigil: "@"` 的命令并发跑一遍,结果按命令分区并列出来,用户一次就能看到
@@ -96,13 +96,13 @@ export interface InputBarHandle {
 const MAX_HEIGHT = 160;
 
 /**
- * 上下文占用圆环(设计稿 ★输入区 · 上下文圆环):输入框右侧的比例环 + 百分比。
+ * 上下文占用圆环:输入框右侧的比例环 + 百分比。
  *
- * 三档配色照设计稿:充足绿($green) / 正常琥珀($amber) / 接近上限红($red)。
+ * 三档配色:充足绿($green) / 正常琥珀($amber) / 接近上限红($red)。
  * 阈值与 context-usage.ts 的 COMPACT_HINT_PERCENT(80%)对齐 —— 环变红的那一刻,
  * 正好也是「建议 /compact」提示该出现的那一刻。
  *
- * 已知偏差:设计稿的悬停明细卡分了「系统提示 / 世界书常驻 / 对话历史 / 当前草稿」
+ * 已知偏差:悬停明细卡分了「系统提示 / 世界书常驻 / 对话历史 / 当前草稿」
  * 四类,而 ContextUsageDto 只有总量(tokens / contextWindow / percent),没有分类
  * 拆分。**不编造数字**,悬停只给总量。
  */
@@ -532,7 +532,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 
 	return (
 		<div className="inputbar" data-enter={enterBehavior}>
-			{/* `@` 引用菜单(设计稿 ★输入区 · @ 菜单):浮在输入框上方,按命令分区列出
+			{/* `@` 引用菜单:浮在输入框上方,按命令分区列出
 			    候选;选中后原处替换成引用芯片,发送时才展开成完整内容 */}
 			{atMenu && (
 				<div className="at-menu" role="listbox" aria-label="引用">
@@ -627,7 +627,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 				)}
 				{/* .ib-field 只是手机端的胶囊外壳:桌面端 display:contents(布局上等于不存在,
 				    输入框仍是那条宽带描边容器里的一行);手机端它才是「输入框胶囊」,圆环与
-				    发送钮留在胶囊外(设计稿「输入区」) */}
+				    发送钮留在胶囊外 */}
 				<div className="ib-field">
 					<textarea
 						ref={taRef}
@@ -665,7 +665,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 						disabled={sendDisabled || (text.trim().length === 0 && chips.length === 0)}
 						onClick={send}
 					>
-						{/* 设计稿 04/06:两处输入条都是「琥珀圆形 ↑」,不再用「发送」文字按钮 */}
+						{/* :两处输入条都是「琥珀圆形 ↑」,不再用「发送」文字按钮 */}
 						<Lu icon="arrow-up" size={14} strokeWidth={1.8} />
 					</button>
 				)}

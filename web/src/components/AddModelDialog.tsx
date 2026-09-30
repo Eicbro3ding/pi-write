@@ -41,6 +41,7 @@ export function AddModelDialog({
 	initialModel,
 	onSaved,
 	onClose,
+	closing = false,
 }: {
 	client: ApiClient;
 	mode: AddModelMode;
@@ -55,6 +56,8 @@ export function AddModelDialog({
 	/** 保存成功(已关弹窗由本组件负责,onSaved 由父组件刷新列表/详情)。 */
 	onSaved: () => void | Promise<void>;
 	onClose: () => void;
+	/** 退场中(父级 useExitPresence):给根壳加 .is-closing 播反向动画。 */
+	closing?: boolean;
 }) {
 	const editing = mode === "edit";
 	const [formModel, setFormModel] = useState(initialModel?.id ?? "");
@@ -144,7 +147,7 @@ export function AddModelDialog({
 	const title = editing ? "编辑模型" : "添加模型";
 
 	return (
-		<div className="dlg-overlay amd-overlay" role="dialog" aria-modal="true" aria-label={title}>
+		<div className={`dlg-overlay amd-overlay${closing ? " is-closing" : ""}`} role="dialog" aria-modal="true" aria-label={title}>
 			<div className="dlg-panel amd-panel">
 				<header className="amd-head">
 					<span className="amd-head-text">
