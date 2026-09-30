@@ -49,7 +49,7 @@ export function statusCodeOf(raw: string): number | null {
  * 只有 `hint` 存在这一条**判断规则**:提示行讲的是「重试之外还得做什么」——
  * 密钥、额度、模型名、上下文窗口这四类光点「重试」不会变好,所以给提示;
  * 限流/超时/网络/服务端这些「等一会儿再点重试就行」的不给提示,免得把
- * 一句正确但没用的建议塞满卡片(设计稿也只有 key 那张卡带提示行)。
+ * 一句正确但没用的建议塞满卡片。
  */
 const RULES: ReadonlyArray<{ kind: ChatErrorKind; title: string; hint?: string; re: RegExp }> = [
 	// —— 本地前置检查类(vendor 的 auth-guidance 文案,发请求之前就抛出来) ——
@@ -133,7 +133,7 @@ const BY_CODE: Record<number, { title: string; kind: ChatErrorKind }> = {
 };
 
 /**
- * 出错那一刻的 `provider: x · model: y` 行(设计稿原文框里的第三行)。
+ * 出错那一刻的 `provider: x · model: y` 行。
  *
  * 两个字段都来自 vendor 的报错消息本身(provider/model 是那一刻的实际取值,
  * 不是前端猜的)。缺一就不编:provider 与 model 都没有 → null,原文框只放原文。
@@ -177,7 +177,7 @@ export function describeChatError(raw: string, meta: string | null = null): Chat
 	};
 }
 
-/** 报错卡图标:`key` 类用钥匙(设计稿 ★组件规范·回复渲染 v2 第二张卡),其余用圆形叹号。 */
+/** 报错卡图标:`key` 类用钥匙,其余用圆形叹号。 */
 export function chatErrorIcon(kind: ChatErrorKind): "key-round" | "circle-alert" {
 	return kind === "key" ? "key-round" : "circle-alert";
 }

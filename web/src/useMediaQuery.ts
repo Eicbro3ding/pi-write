@@ -17,7 +17,7 @@ export function useMediaQuery(query: string): boolean {
  * 手机端判定(≤700px)。
  *
  * 与「窄屏(≤900px)」分开:≤900px 只是把两侧栏变抽屉(平板竖屏也适用),
- * 手机端(设计稿 ★移动版,393×852)是另一套壳——52px 页头、底部常驻输入条、
+ * 手机端是另一套壳——52px 页头、底部常驻输入条、
  * 全屏抽屉/全屏对话。断点数值在 styles.css 里也有对应媒体查询,改一处要同步另一处。
  */
 export const PHONE_QUERY = "(max-width: 700px)";

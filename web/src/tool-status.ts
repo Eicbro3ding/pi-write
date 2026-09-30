@@ -1,7 +1,7 @@
 /**
  * 简化输出模式下的工具动作流:工具名 → 中文动作 + 宾语(在改哪个文件/搜什么)。
  *
- * 依据设计稿 03-组件规范/05:简化模式不是「什么都不显示」,而是把工具调用压成
+ * 依据:简化模式不是「什么都不显示」,而是把工具调用压成
  * 一行可读的动作——**带上宾语**(在改哪个文件)、**完成的行留在流水里**、
  * **不用 emoji**(各平台渲染不一致;图标在组件侧用线性 SVG)。
  * 覆盖 web 工具集(web.ts ALL_WEB_TOOLS,移动端剔除 grep/find);
@@ -24,7 +24,7 @@ export const TOOL_STATUS: Record<string, string> = {
 export const DEFAULT_TOOL_STATUS = "正在调用工具";
 
 /**
- * 失败文案(工具名 → 失败时)。设计稿 03-组件规范/05 的 V1 示例是
+ * 失败文案(工具名 → 失败时)。
  * 「✕ 写入失败 notes/city.md」——失败行给的是**失败动词**,而不是「已编辑」+ 红叉。
  */
 export const TOOL_FAIL: Record<string, string> = {
@@ -40,7 +40,7 @@ export const TOOL_FAIL: Record<string, string> = {
 };
 export const DEFAULT_TOOL_FAIL = "调用失败";
 
-/** 完成文案(工具名 → 已完成时);设计稿要求完成的行留在流水里。 */
+/** 完成文案(工具名 → 已完成时);要求完成的行留在流水里。 */
 export const TOOL_DONE: Record<string, string> = {
 	read: "已阅读",
 	write: "已编辑",

@@ -215,7 +215,7 @@ export interface ChatErrorInfo {
 	/** 处置提示(仅「重试之外还得做什么」的类别给,如密钥/额度/模型名);无则 null。 */
 	hint: string | null;
 	/**
-	 * 出错那一刻的 `provider: x · model: y`(设计稿原文框里那第三行)。
+	 * 出错那一刻的 `provider: x · model: y`。
 	 * 只有 provider 侧报错(vendor 消息带 provider/model)才有;本地前置检查类
 	 * (未配置密钥/未选模型)没有 provider 可写,为 null —— 不编。
 	 */
