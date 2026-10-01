@@ -95,13 +95,3 @@ cd web && npx tsc --noEmit -p tsconfig.json
 - 允许手写(≤50 行且无安全边界):HTTP 路由表、SSE 帧协议、CLI 参数解析、If-Match 条件写、回环 Host/Origin 守卫。
 - 必须用库:multipart → **busboy**;zip → **yazl/yauzl**;JSON Schema → **typebox**。
 
-## 已知未做(0.1.2 待补)
-
-2026-09-30 那次动效审查的底稿已经收敛成下面四条 —— 审查里**已落地**的部分(P0/P1 全部、死代码去重、以及它自己建议的契约测试)见 CHANGELOG 的 0.1.1 动效组与 `test/motion.test.ts`,底稿本身已删;这几条都是 P2/P3,不影响功能:
-
-- **两处注释与实际不符**:① `web/src/main.tsx` 的「系统开启『减少动态效果』时,全部 framer 动画自动降级为即时切换」—— framer 的 `reducedMotion="user"` 只降级**位移类**属性(width/height/top/left/right/bottom + 全部 transform),opacity 与 margin/padding 不在名单里(章节侧栏的 margin/padding 退场因此要单独用 `useReducedMotion()` 短路);② `web/src/components/MessageList.tsx` 思考展开体的注释还写着「180ms ease-inOut」,实际已接 `var(--dur-base)`。
-- **隐藏容器里的无限动画 / 定时器没停**:≤900px 抽屉关闭态只有 `visibility: hidden`、桌面伴侣栏收起只把 grid 轨道压到 48px —— `.companion-live` 的 `tab-live-pulse`、`.thinking-face`、压缩指示器的流光与旋转,以及 `MessageList.tsx` 里 `setInterval(…, 150)` 的帧轮换都还在跑。可考虑 `content-visibility: hidden`,或按开合条件停挂。
-- **舞台标签页没有离场对偶;消息入场有两套引擎**(framer 与纯 CSS 各一份)。
-- **`STAGGER` 没覆盖卡片**(目前只有 MessageList 用)。
-
-
