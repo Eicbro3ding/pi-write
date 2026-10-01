@@ -143,3 +143,47 @@ describe("开场纪律(新书还没定风格时的一次性提议)", () => {
 		expect(prompt).toContain("stage-scripting/SKILL.md");
 	});
 });
+
+/**
+ * 回归护栏:起笔纪律(2026-10-01,用户点名要求)。
+ *
+ * 背景:世界书 / 大纲 / 约束三样全空时闷头起笔,写出来的正文没有任何可依的设定与风格依据,
+ * 用户事后才发现"AI 直接开始写了"。要求:三样都空时先问一句要不要补进去;用户说直接写就不阻塞。
+ * 这里把触发条件、问法边界(与开场纪律合并成一次,不连问两轮)与"不再提"都钉住。
+ */
+describe("起笔纪律(世界书/大纲/约束都没有时先问再写)", () => {
+	it("写作 agent:三样都空才触发 + 先问再写 + 具体到点", () => {
+		const main = loadPromptText("writer-main.md");
+		expect(main).toContain("起笔纪律");
+		expect(main).toContain("都没有内容");
+		expect(main).toContain("世界书");
+		expect(main).toContain("发展线");
+		expect(main).toContain("写作约束");
+		expect(main).toContain("先问再写");
+		// 问要问到点上(哪几个条目/什么样的大纲/哪几条约束),而不是空问一句"要不要补"
+		expect(main).toContain("具体到点");
+	});
+
+	it("不阻塞动笔:用户说直接写就写,且同一场对话不再提", () => {
+		const main = loadPromptText("writer-main.md");
+		expect(main).toContain("用户说直接写就写");
+		expect(main).toContain("同一场对话里不许再提");
+		// 三样里任何一样有内容都不提(免得每本书都被问一遍)
+		expect(main).toContain("任意一样有内容");
+	});
+
+	it("与开场纪律合并成一次问询(新书不会被连问两轮)", () => {
+		const main = loadPromptText("writer-main.md");
+		expect(main).toContain("合并成一次问询");
+	});
+
+	it("编剧:同一条纪律按它的权限改写(设定归导演,建议走 advice.md)", () => {
+		const editor = loadPromptText("writer-editor.md");
+		expect(editor).toContain("起笔纪律");
+		// 它写不了世界书:指出归属,并落 advice.md 交导演
+		expect(editor).toContain("advice.md");
+		expect(editor).toContain("归导演");
+		// 同样不阻塞:用户让直接写就写,不再提
+		expect(editor).toContain("直接写就写");
+	});
+});
