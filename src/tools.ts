@@ -2,11 +2,69 @@ import type { Stats } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { defineTool, type ToolDefinition } from "../vendor/pi-coding-agent/src/index.ts";
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
 import { cjkCount } from "./cjk.ts";
 import { ensureWorld, newId, saveWorld, validateWorld, writeWorldEditRecord, WorldValidationError, type ConstraintTarget, type EntryStatus, type EntryType, type RelationArrow, type StoryNodeStatus, type WorldData, type WorldEntry } from "./world-data.ts";
 import { pathWithinRoot, toolGuardContext } from "./tool-guard.ts";
 import { withWorldLock } from "./world-lock.ts";
+
+/**
+ * 把「判别联合」(Type.Union of Type.Object,以 op 字面量区分)压平成**单一对象** schema:
+ * 合并所有分支的字段,非 op 字段一律 optional,op 收成枚举。
+ *
+ * 为什么:world_update / style_update 原本把 op 联合直接当工具参数暴露,JSON Schema 是一段
+ * 约 7KB 的 anyOf。pi 运行时用 typebox 校验工具入参,"第一个分支"的 required 会成为模型的
+ * 心智负担——实机表现为「op 常量与字段不符」以及「关系操作被 upsert_entry 的 title/type 卡住」
+ * (2026-10-02 用户反馈)。压平后模型看到的是普通对象,必填性改由 narrowOp 按 op 在运行时兜底,
+ * 报错信息也直接回给模型自我纠正(比 typebox 的英文 anyOf 报错更有指导性)。
+ */
+function flattenOpUnion(union: TSchema): TSchema {
+	const members = (union as { anyOf?: TSchema[] }).anyOf ?? [];
+	const props: Record<string, TSchema> = {};
+	const ops: string[] = [];
+	for (const m of members) {
+		const member = m as { properties?: Record<string, TSchema> };
+		for (const [key, schema] of Object.entries(member.properties ?? {})) {
+			if (key === "op") {
+				const c = (schema as { const?: unknown }).const;
+				if (typeof c === "string") ops.push(c);
+			} else if (!(key in props)) {
+				props[key] = Type.Optional(schema);
+			}
+		}
+	}
+	return Type.Object({ op: Type.String({ enum: ops, description: "操作类型(见工具说明)" }), ...props });
+}
+
+/** 从判别联合提取「每个 op 的必填字段」,让运行时校验复用 schema 这唯一真相源。 */
+function requiredFieldsByOp(union: TSchema): Record<string, string[]> {
+	const out: Record<string, string[]> = {};
+	for (const m of (union as { anyOf?: TSchema[] }).anyOf ?? []) {
+		const member = m as { required?: string[]; properties?: Record<string, TSchema> };
+		const op = (member.properties?.op as { const?: unknown } | undefined)?.const;
+		if (typeof op === "string") out[op] = member.required ?? [];
+	}
+	return out;
+}
+
+/**
+ * 按 op 收窄工具入参:压平 schema 丢掉了「哪个字段属于哪个 op」的必填约束,这里补回来。
+ * 缺字段/未知 op 抛 WorldValidationError(报错原样进模型上下文,让它下一轮自我纠正,
+ * 而不是写坏数据或静默无操作)。
+ */
+function narrowOp<T>(raw: unknown, required: Record<string, string[]>, label: string): T {
+	if (typeof raw !== "object" || raw === null) throw new WorldValidationError(`${label} 的 update 必须是对象`);
+	const op = (raw as { op?: unknown }).op;
+	const names = Object.keys(required).join(" / ");
+	if (typeof op !== "string" || op.length === 0) {
+		throw new WorldValidationError(`${label} 缺少 op;可用操作: ${names}`);
+	}
+	const fields = required[op];
+	if (!fields) throw new WorldValidationError(`${label} 不支持的 op: ${op};可用操作: ${names}`);
+	const missing = fields.filter((f) => f !== "op" && (raw as Record<string, unknown>)[f] === undefined);
+	if (missing.length > 0) throw new WorldValidationError(`${label} 的 ${op} 缺少必填参数: ${missing.join(" / ")}`);
+	return raw as T;
+}
 
 /**
  * word_count tool — accurate length metrics for writer drafts.
@@ -35,13 +93,9 @@ function cwdBase(): string {
 const COUNT_METRICS = ["cn_chars", "en_words", "sentences", "paragraphs"] as const;
 type CountMetric = (typeof COUNT_METRICS)[number];
 
-const CountModeEnum = Type.Union([
-	Type.Literal("cn_chars"),
-	Type.Literal("en_words"),
-	Type.Literal("sentences"),
-	Type.Literal("paragraphs"),
-	Type.Literal("all"),
-]);
+// 用 string + enum 而不是 Type.Union([Type.Literal...]):后者渲染成 anyOf,
+// 受限解码 / 只读首分支的 provider 会把它塌成 "cn_chars" 一种(与 world_update 同源问题)。
+const CountModeEnum = Type.String({ enum: [...COUNT_METRICS, "all"] });
 
 const wordCountParameters = Type.Object({
 	path: Type.String({
@@ -278,6 +332,40 @@ export type WorldUpdateOp =
 	| { op: "upsert_relation"; id?: string; from: string; to: string; type?: string; label?: string; emphasized?: boolean; arrow?: RelationArrow }
 	| { op: "delete_relation"; id: string };
 
+/** world_update 的操作联合(schema 唯一真相源;对外暴露的是压平版 WORLD_UPDATE_FLAT)。 */
+const WORLD_UPDATE_UNION = Type.Union([
+	Type.Object({ op: Type.Literal("upsert_entry"), id: Type.Optional(Type.String()), type: Type.String(), title: Type.String(), keys: Type.Optional(Type.Array(Type.String())), chapters: Type.Optional(Type.Array(Type.String())), status: Type.Optional(Type.String()), parent: Type.Optional(Type.Union([Type.String(), Type.Null()])), body: Type.Optional(Type.String()), avatar: Type.Optional(Type.Union([Type.String(), Type.Null()])), images: Type.Optional(Type.Array(Type.String())) }),
+	Type.Object({ op: Type.Literal("delete_entry"), id: Type.String() }),
+	Type.Object({ op: Type.Literal("set_status"), id: Type.String(), status: Type.String() }),
+	Type.Object({ op: Type.Literal("append_timeline"), chapter: Type.Optional(Type.String()), text: Type.String() }),
+	Type.Object({ op: Type.Literal("update_timeline"), id: Type.String(), chapter: Type.Optional(Type.String()), text: Type.Optional(Type.String()) }),
+	Type.Object({ op: Type.Literal("delete_timeline"), id: Type.String() }),
+	Type.Object({ op: Type.Literal("update_notice"), enabled: Type.Optional(Type.Boolean()) }),
+	Type.Object({ op: Type.Literal("notice_append"), text: Type.String() }),
+	Type.Object({ op: Type.Literal("notice_update"), id: Type.String(), text: Type.Optional(Type.String()) }),
+	Type.Object({ op: Type.Literal("notice_set_done"), id: Type.String(), done: Type.Boolean() }),
+	Type.Object({ op: Type.Literal("notice_delete"), id: Type.String() }),
+	Type.Object({ op: Type.Literal("advance_storyline"), id: Type.String(), status: Type.String(), next: Type.Optional(Type.Union([Type.String(), Type.Null()])) }),
+	Type.Object({ op: Type.Literal("upsert_storyline_node"), id: Type.Optional(Type.String()), title: Type.String(), status: Type.Optional(Type.String()), goal: Type.Optional(Type.String()), next: Type.Optional(Type.Union([Type.String(), Type.Null()])) }),
+	Type.Object({ op: Type.Literal("upsert_constraint"), id: Type.Optional(Type.String()), name: Type.String(), text: Type.String(), enabled: Type.Optional(Type.Boolean()), target: Type.Optional(Type.Union([Type.Literal("main"), Type.Literal("director"), Type.Literal("writer"), Type.Literal("all")])) }),
+	Type.Object({ op: Type.Literal("delete_constraint"), id: Type.String() }),
+	Type.Object({ op: Type.Literal("update_style_sample"), text: Type.String(), source: Type.Optional(Type.String()) }),
+	Type.Object({ op: Type.Literal("set_world_summary"), text: Type.String() }),
+	Type.Object({ op: Type.Literal("upsert_relation"), id: Type.Optional(Type.String()), from: Type.String(), to: Type.String(), type: Type.Optional(Type.String()), label: Type.Optional(Type.String()), emphasized: Type.Optional(Type.Boolean()), arrow: Type.Optional(Type.Union([Type.Literal("none"), Type.Literal("single"), Type.Literal("double")])) }),
+	Type.Object({ op: Type.Literal("delete_relation"), id: Type.String() }),
+]);
+
+/** 送给 LLM 的 world_update.update 参数 schema(压平,无 anyOf)。 */
+const WORLD_UPDATE_FLAT = flattenOpUnion(WORLD_UPDATE_UNION);
+
+/** op → 必填字段,从 WORLD_UPDATE_UNION 派生,避免两处手写漂移。 */
+const WORLD_UPDATE_REQUIRED = requiredFieldsByOp(WORLD_UPDATE_UNION);
+
+/** 校验并收窄 world_update 入参;缺字段/未知 op 抛 WorldValidationError。 */
+export function normalizeWorldUpdate(raw: unknown): WorldUpdateOp {
+	return narrowOp<WorldUpdateOp>(raw, WORLD_UPDATE_REQUIRED, "world_update");
+}
+
 /**
  * `style_update`(编剧窄工具)的操作集:**只碰写作风格三件套**
  * (写作约束 / 文风采样 / 世界观概述),碰不到条目、关系、时间线、大纲、发展线、Notice。
@@ -298,6 +386,24 @@ export type StyleUpdateOp =
 	| { op: "delete_constraint"; name: string }
 	| { op: "update_style_sample"; text: string; source?: string }
 	| { op: "set_world_summary"; text: string };
+
+/** style_update 的操作联合(schema 唯一真相源;对外暴露的是压平版 STYLE_UPDATE_FLAT)。 */
+const STYLE_UPDATE_UNION = Type.Union([
+	Type.Object({ op: Type.Literal("upsert_constraint"), name: Type.String(), text: Type.String(), enabled: Type.Optional(Type.Boolean()) }),
+	Type.Object({ op: Type.Literal("delete_constraint"), name: Type.String() }),
+	Type.Object({ op: Type.Literal("update_style_sample"), text: Type.String(), source: Type.Optional(Type.String()) }),
+	Type.Object({ op: Type.Literal("set_world_summary"), text: Type.String() }),
+]);
+
+/** 送给 LLM 的 style_update.update 参数 schema(压平,无 anyOf)。 */
+const STYLE_UPDATE_FLAT = flattenOpUnion(STYLE_UPDATE_UNION);
+
+const STYLE_UPDATE_REQUIRED = requiredFieldsByOp(STYLE_UPDATE_UNION);
+
+/** 校验并收窄 style_update 入参;缺字段/未知 op 抛 WorldValidationError。 */
+export function normalizeStyleUpdate(raw: unknown): StyleUpdateOp {
+	return narrowOp<StyleUpdateOp>(raw, STYLE_UPDATE_REQUIRED, "style_update");
+}
 
 /**
  * 应用一次写作风格更新(纯函数,复用 applyWorldUpdate 的引擎与校验)。
@@ -661,27 +767,7 @@ export const worldUpdateTool: ToolDefinition = defineTool({
 	description:
 		"更新世界书(world.json):增删改条目、关系、约束、Notice、发展线、采样、简要世界观与时间线。这是修改世界设定的唯一通道;结构性约束(重复 id、悬空引用、多个 in-progress 等)由程序校验。upsert_entry 是真 upsert:带 id 时查不到就按该 id 新建;不带 id 时按 (type, title) 匹配已有条目(存在则更新、保留原 id),都不命中才新建——更新已有条目通常不需要先查 id。关系的 from/to 接受条目 id 或标题(标题自动解析为条目 id;标题匹配到多个条目时返回报错并列出候选 id,请用 world_find 查 id 消歧;成功时返回会回显解析结果 from id(标题) → to id(标题))。枚举只接受英文:type=character/world/timeline/outline;status=alive/dead/unknown/active/archived/draft;关系 arrow=none/single/double;发展线 status=pending/in-progress/done/shelved。注意 status 是条目状态,与条目是否参与上下文注入(active 字段,界面「注入上下文」开关)无关,world_update 不改 active。发展线:节点按数组顺序推进,upsert_storyline_node 创建/更新节点,advance_storyline 推进状态;节点的 next 字段 = 该节点完成后的下一步内容(填标题或描述;也接受已有节点 id,会自动转为该节点标题)。查找条目 id 用 world_find 工具。set_world_summary 覆盖简要世界观概述(常驻注入,每次会话都会读到;建议 1-2 段,≤600 字)。新建条目后若与现有条目存在剧情关联,建议一并创建关系(upsert_relation)。",
 	parameters: Type.Object({
-		update: Type.Union([
-			Type.Object({ op: Type.Literal("upsert_entry"), id: Type.Optional(Type.String()), type: Type.String(), title: Type.String(), keys: Type.Optional(Type.Array(Type.String())), chapters: Type.Optional(Type.Array(Type.String())), status: Type.Optional(Type.String()), parent: Type.Optional(Type.Union([Type.String(), Type.Null()])), body: Type.Optional(Type.String()), avatar: Type.Optional(Type.Union([Type.String(), Type.Null()])), images: Type.Optional(Type.Array(Type.String())) }),
-			Type.Object({ op: Type.Literal("delete_entry"), id: Type.String() }),
-			Type.Object({ op: Type.Literal("set_status"), id: Type.String(), status: Type.String() }),
-			Type.Object({ op: Type.Literal("append_timeline"), chapter: Type.Optional(Type.String()), text: Type.String() }),
-			Type.Object({ op: Type.Literal("update_timeline"), id: Type.String(), chapter: Type.Optional(Type.String()), text: Type.Optional(Type.String()) }),
-			Type.Object({ op: Type.Literal("delete_timeline"), id: Type.String() }),
-			Type.Object({ op: Type.Literal("update_notice"), enabled: Type.Optional(Type.Boolean()) }),
-			Type.Object({ op: Type.Literal("notice_append"), text: Type.String() }),
-			Type.Object({ op: Type.Literal("notice_update"), id: Type.String(), text: Type.Optional(Type.String()) }),
-			Type.Object({ op: Type.Literal("notice_set_done"), id: Type.String(), done: Type.Boolean() }),
-			Type.Object({ op: Type.Literal("notice_delete"), id: Type.String() }),
-			Type.Object({ op: Type.Literal("advance_storyline"), id: Type.String(), status: Type.String(), next: Type.Optional(Type.Union([Type.String(), Type.Null()])) }),
-			Type.Object({ op: Type.Literal("upsert_storyline_node"), id: Type.Optional(Type.String()), title: Type.String(), status: Type.Optional(Type.String()), goal: Type.Optional(Type.String()), next: Type.Optional(Type.Union([Type.String(), Type.Null()])) }),
-			Type.Object({ op: Type.Literal("upsert_constraint"), id: Type.Optional(Type.String()), name: Type.String(), text: Type.String(), enabled: Type.Optional(Type.Boolean()), target: Type.Optional(Type.Union([Type.Literal("main"), Type.Literal("director"), Type.Literal("writer"), Type.Literal("all")])) }),
-			Type.Object({ op: Type.Literal("delete_constraint"), id: Type.String() }),
-			Type.Object({ op: Type.Literal("update_style_sample"), text: Type.String(), source: Type.Optional(Type.String()) }),
-			Type.Object({ op: Type.Literal("set_world_summary"), text: Type.String() }),
-			Type.Object({ op: Type.Literal("upsert_relation"), id: Type.Optional(Type.String()), from: Type.String(), to: Type.String(), type: Type.Optional(Type.String()), label: Type.Optional(Type.String()), emphasized: Type.Optional(Type.Boolean()), arrow: Type.Optional(Type.Union([Type.Literal("none"), Type.Literal("single"), Type.Literal("double")])) }),
-			Type.Object({ op: Type.Literal("delete_relation"), id: Type.String() }),
-		]),
+		update: WORLD_UPDATE_FLAT,
 	}),
 	async execute(_callId, params) {
 		const dir = worldBookDir();
@@ -689,29 +775,30 @@ export const worldUpdateTool: ToolDefinition = defineTool({
 		// 读-改-写整体持锁:并行 world_update(agent 多工具调用)串行执行,
 		// 消除丢失更新与共享 tmp 竞态(saveWorld 另以唯一 tmp + 备份兜底)
 		return withWorldLock(dir, async () => {
+			// 压平 schema 丢掉了「哪个 op 必填哪些字段」,这里按 op 收窄并给出可读报错
+			const update = normalizeWorldUpdate(params.update);
 			const world = await ensureWorld(dir);
 			// 关系回显:解析结果带条目 id 与标题,形成教学回路——LLM 看到
 			// 解析后的 id,后续自然改用 id(与 applyWorldUpdate 内同一解析逻辑,
 			// 纯函数幂等;歧义/未命中/反向冲突在 applyWorldUpdate 内抛错兜底)
 			let echo = "";
-			if (params.update.op === "upsert_relation") {
-				const u = params.update as WorldUpdateOp & { op: "upsert_relation" };
-				const from = resolveRelationTarget(world, u.from, "from");
-				const to = resolveRelationTarget(world, u.to, "to");
+			if (update.op === "upsert_relation") {
+				const from = resolveRelationTarget(world, update.from, "from");
+				const to = resolveRelationTarget(world, update.to, "to");
 				echo = `:from ${from.id}(${from.title}) → to ${to.id}(${to.title})`;
 			}
-			const next = applyWorldUpdate(world, params.update as WorldUpdateOp);
+			const next = applyWorldUpdate(world, update);
 			await saveWorld(dir, next);
 			// 世界书编辑记录(内容 tmp、文件不 tmp):before/after 快照落盘,前端
 			// 回合结束据此渲染预览卡——diff 在此刻算好,无 before/after 抓取竞态
 			try {
-				await writeWorldEditRecord(dir, { op: params.update.op, before: world, after: next, timestamp: Date.now() });
+				await writeWorldEditRecord(dir, { op: update.op, before: world, after: next, timestamp: Date.now() });
 			} catch {
 				/* 记录写失败不影响世界书更新(卡片只是展示,world.json 已落盘) */
 			}
 			return {
-				content: [{ type: "text", text: `已更新世界书(${params.update.op})${echo}。` }],
-				details: { op: params.update.op },
+				content: [{ type: "text", text: `已更新世界书(${update.op})${echo}。` }],
+				details: { op: update.op },
 			};
 		});
 	},
@@ -731,24 +818,20 @@ export const styleUpdateTool: ToolDefinition = defineTool({
 	description:
 		"更新**写作风格**设定:写作约束(你与成文要遵守的硬规矩)、文风采样(作者文风基准)、简要世界观概述。这是你唯一能改世界书的通道——人物/关系/时间线/大纲/发展线/Notice 你改不了,那些归导演,你的相关建议写 advice.md。语义:① 约束按**名字** upsert——同名即更新(不会重复立规矩),所以重述一条已有规矩不需要先查 id;约束只作用于**你自己**(编辑页对话与收幕成文),要约束导演得用户直接对导演讲。② 删除按名字,名字见上下文【写作约束】块(那里没有 id,别去找 id)。③ 约束要**可判定**(「禁用破折号」「每章 2500 字上下」),不要写「文笔要优美」;条数控制在 8 条以内。④ update_style_sample 的 text 是 300–500 字的代表性样本(用户自己写的,或他想靠近的片段),**绝不编造**;set_world_summary 是 1-2 句题材与基调定位(常驻注入,≤600 字)。op 名与 world_update 的同名操作一致,便于对照。",
 	parameters: Type.Object({
-		update: Type.Union([
-			Type.Object({ op: Type.Literal("upsert_constraint"), name: Type.String(), text: Type.String(), enabled: Type.Optional(Type.Boolean()) }),
-			Type.Object({ op: Type.Literal("delete_constraint"), name: Type.String() }),
-			Type.Object({ op: Type.Literal("update_style_sample"), text: Type.String(), source: Type.Optional(Type.String()) }),
-			Type.Object({ op: Type.Literal("set_world_summary"), text: Type.String() }),
-		]),
+		update: STYLE_UPDATE_FLAT,
 	}),
 	async execute(_callId, params) {
 		const dir = worldBookDir();
 		if (!dir) throw new Error("style_update 未配置书目录");
 		// 与 world_update 同一把锁:两个工具可能并行调用(agent 一轮多工具),串行化避免丢失更新
 		return withWorldLock(dir, async () => {
+			const update = normalizeStyleUpdate(params.update);
 			const world = await ensureWorld(dir);
-			const next = applyStyleUpdate(world, params.update as StyleUpdateOp);
+			const next = applyStyleUpdate(world, update);
 			await saveWorld(dir, next);
 			return {
-				content: [{ type: "text", text: `已更新写作风格(${params.update.op})。` }],
-				details: { op: params.update.op },
+				content: [{ type: "text", text: `已更新写作风格(${update.op})。` }],
+				details: { op: update.op },
 			};
 		});
 	},

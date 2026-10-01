@@ -2,8 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyStyleUpdate, applyWorldUpdate, setWordCountCwd, setWorldUpdateBookDir, styleUpdateTool, wordCountTool, worldFindTool } from "../src/tools.ts";
-import { createEmptyWorld, WorldValidationError } from "../src/world-data.ts";
+import { applyStyleUpdate, applyWorldUpdate, normalizeStyleUpdate, normalizeWorldUpdate, setWordCountCwd, setWorldUpdateBookDir, styleUpdateTool, wordCountTool, worldFindTool, worldUpdateTool } from "../src/tools.ts";
+import { createEmptyWorld, ensureWorld, WorldValidationError } from "../src/world-data.ts";
 
 type ToolParams = Parameters<typeof wordCountTool.execute>[1];
 type ToolContext = Parameters<typeof wordCountTool.execute>[4];
@@ -483,9 +483,87 @@ describe("applyStyleUpdate（编剧窄通道）", () => {
 	});
 
 	it("碰不到条目/关系/时间线/发展线(窄通道的参数 schema 只有四个 op)", () => {
-		const ops = (styleUpdateTool.parameters as { properties: { update: { anyOf: Array<{ properties: { op: { const: string } } }> } } })
-			.properties.update.anyOf.map((o) => o.properties.op.const);
-		expect(ops.sort()).toEqual(["delete_constraint", "set_world_summary", "update_style_sample", "upsert_constraint"]);
+		const flat = (styleUpdateTool.parameters as { properties: { update: { anyOf?: unknown; required?: string[]; properties: { op: { enum?: string[] } } } } })
+			.properties.update;
+		expect(flat.anyOf).toBeUndefined();
+		expect((flat.properties.op.enum ?? []).slice().sort()).toEqual(["delete_constraint", "set_world_summary", "update_style_sample", "upsert_constraint"]);
 		expect(styleUpdateTool.name).toBe("style_update");
+	});
+});
+
+/**
+ * 工具参数 schema 压平(2026-10-02 实机反馈):world_update / style_update 曾把 op 判别联合
+ * 直接当工具参数暴露(约 7KB 的 anyOf)。受限解码 / 只读首分支的 provider 拿到的就是
+ * upsert_entry 分支的 required(type/title),于是 set_world_summary、upsert_relation 这类
+ * 非首分支操作根本发不出来。这里钉住:对模型暴露的是单一对象(无 anyOf,只有 op 必填),
+ * 必填性改由 normalize* 按 op 在运行时兜底并给出可读报错。
+ */
+describe("world_update/style_update 参数 schema 压平", () => {
+	type FlatSchema = { anyOf?: unknown; required?: string[]; properties: Record<string, { enum?: string[] }> };
+	const flatOf = (tool: { parameters: unknown }): FlatSchema =>
+		(tool.parameters as { properties: { update: FlatSchema } }).properties.update;
+
+	it("world_update 暴露单一对象:无 anyOf、只有 op 必填、关系字段可见", () => {
+		const flat = flatOf(worldUpdateTool);
+		expect(flat.anyOf).toBeUndefined();
+		expect(flat.required).toEqual(["op"]);
+		expect(flat.properties.op.enum).toContain("upsert_relation");
+		expect(flat.properties.op.enum).toContain("set_world_summary");
+		// 关系操作需要的 from/to 在 schema 里,不再被 upsert_entry 的 title/type 挡住
+		expect(flat.properties.from).toBeDefined();
+		expect(flat.properties.to).toBeDefined();
+	});
+
+	it("style_update 同样压平", () => {
+		const flat = flatOf(styleUpdateTool);
+		expect(flat.anyOf).toBeUndefined();
+		expect(flat.required).toEqual(["op"]);
+	});
+
+	it("word_count 的 modes 用 string+enum,不再有 anyOf", () => {
+		const items = (wordCountTool.parameters as { properties: { modes: { items: { anyOf?: unknown; enum?: string[] } } } }).properties.modes.items;
+		expect(items.anyOf).toBeUndefined();
+		expect(items.enum).toContain("en_words");
+		expect(items.enum).toContain("all");
+	});
+
+	it("normalizeWorldUpdate 按 op 校验必填字段与未知 op", () => {
+		const ok = { op: "set_world_summary", text: "蒸汽与旧神共存的雾港。" };
+		expect(normalizeWorldUpdate(ok)).toBe(ok);
+		expect(normalizeWorldUpdate({ op: "upsert_relation", from: "菲利克斯", to: "巨头" }).op).toBe("upsert_relation");
+		expect(() => normalizeWorldUpdate({ op: "upsert_entry", type: "character" })).toThrow(/title/);
+		expect(() => normalizeWorldUpdate({ op: "upsert_relation", from: "菲利克斯" })).toThrow(/to/);
+		expect(() => normalizeWorldUpdate({ op: "not_an_op" })).toThrow(/不支持的 op/);
+		expect(() => normalizeWorldUpdate({})).toThrow(/缺少 op/);
+		expect(() => normalizeWorldUpdate(null)).toThrow(/必须是对象/);
+	});
+
+	it("normalizeStyleUpdate 按 op 校验", () => {
+		expect(normalizeStyleUpdate({ op: "delete_constraint", name: "文风" }).op).toBe("delete_constraint");
+		expect(() => normalizeStyleUpdate({ op: "upsert_constraint", name: "文风" })).toThrow(/text/);
+		expect(() => normalizeStyleUpdate({ op: "upsert_entry", title: "x" })).toThrow(/不支持的 op/);
+	});
+
+	it("world_update 端到端:upsert_relation / set_world_summary 确实写得进 world.json", async () => {
+		setWorldUpdateBookDir(tmp);
+		try {
+			const run = (update: Record<string, unknown>) =>
+				worldUpdateTool.execute("call", { update } as never, undefined, undefined, {} as ToolContext);
+			const textOf = (r: { content: Array<{ text?: string }> }) => r.content.map((c) => c.text ?? "").join("\n");
+			await run({ op: "upsert_entry", type: "character", title: "菲利克斯" });
+			await run({ op: "upsert_entry", type: "world", title: "跨国煤炭能源垄断巨头" });
+			const rel = await run({ op: "upsert_relation", from: "菲利克斯", to: "跨国煤炭能源垄断巨头", label: "受雇", arrow: "single" });
+			expect(textOf(rel)).toContain("upsert_relation");
+			await run({ op: "set_world_summary", text: "雾港:煤与雾的年代。" });
+			const world = await ensureWorld(tmp);
+			expect(world.relations).toHaveLength(1);
+			expect(world.relations[0]!.label).toBe("受雇");
+			expect(world.relations[0]!.arrow).toBe("single");
+			expect(world.worldSummary).toBe("雾港:煤与雾的年代。");
+			// 缺字段给可读报错(模型据此自我纠正),而不是写坏数据
+			await expect(run({ op: "upsert_relation", from: "菲利克斯" })).rejects.toThrow(/to/);
+		} finally {
+			setWorldUpdateBookDir(null);
+		}
 	});
 });
