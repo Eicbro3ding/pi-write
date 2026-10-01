@@ -78,7 +78,9 @@
     width: 100%; margin: 0; padding: 0; border: none; border-radius: 0;
     background: var(--bg); box-shadow: none;
   }
-  .paper-zone { padding-bottom: calc(66px + env(safe-area-inset-bottom)); }
+  /* 底部留白 = 常驻输入条的实测高度(--m-composer-h 由 WritePage 的 ResizeObserver
+     写进根元素;输入多行时输入条会变高,纸张要跟着让位,否则最后几行被盖住) */
+  .paper-zone { padding-bottom: calc(var(--m-composer-h, 66px) + env(safe-area-inset-bottom)); }
   .paper-surface .d-body { padding: 0 20px; }
   .paper-surface .d-body .cm-content { padding: 22px 0; }
   /* 顶部诊断条贴边(桌面是卡片内浮出的) */
@@ -131,7 +133,7 @@
   /* —— AI 伙伴:手机端整屏,底部由输入条接管 —— */
   .companion {
     left: 0; right: 0; width: 100% !important; border-left: none;
-    padding-bottom: calc(66px + env(safe-area-inset-bottom));
+    padding-bottom: calc(var(--m-composer-h, 66px) + env(safe-area-inset-bottom));
   }
   .companion .comp-resize, .companion .companion-head, .companion .companion-collapse { display: none; }
   .companion-body > .chat { padding: 0; }
@@ -588,14 +590,26 @@
     align-items: center; flex-wrap: wrap; gap: 8px; min-height: 40px;
     padding: 0; border: 0; background: transparent;
   }
+  /* 胶囊高度**跟着 textarea 长**(InputBar 给 textarea 设 inline height,最多受
+     max-height 104px 约束):单行 42px = 24(textarea min-height)+ 8×2 内边距 + 2 边框,
+     多行时随内容撑开;min-height 40 只是兜底(空框/字体未就绪时不塌)。原先写死
+     height: 40px,多行文本会从胶囊上下两侧穿出去——胶囊边框只框住中间两行
+     (2026-10-01 手机端截图)。 */
   .m-composer .ib-field,
   .stage-main .ib-field {
     flex: 1 1 auto; min-width: 0; display: flex; align-items: center;
-    height: 40px; padding: 0 16px;
+    height: auto; min-height: 40px; padding: 8px 16px;
     background: var(--bg-elev); border: 1px solid var(--line-strong); border-radius: var(--r-full);
   }
+  /* 到顶就内部滚动(104px ≈ 5 行,13px × 1.6):手机端输入条不无限拉长——长文往下滚,
+     整条输入区的占屏上限因此是固定的。上限是 JS 自动增高的依据(InputBar 会读这个
+     max-height,不再自持一份 160px)。overflow 显式写出:textarea 默认虽是 auto,
+     这里把它钉成契约;overscroll-behavior 挡住滚动链(滚到底后手势不再传给正文/对话)。 */
   .m-composer .ib-field textarea,
-  .stage-main .ib-field textarea { padding: 0; font-size: var(--fs-13); max-height: 104px; }
+  .stage-main .ib-field textarea {
+    padding: 0; font-size: var(--fs-13); max-height: 104px;
+    overflow-y: auto; overscroll-behavior: contain;
+  }
   /* 发送/中断钮: 34 的圆,且必须在胶囊里居中对齐 ——
      桌面那条 .btn-send{align-self:flex-end} 是为多行文本贴底设计的,手机上就是「歪」的来源 */
   .m-composer .inputbar .btn-send,
@@ -641,8 +655,8 @@
     z-index: 60; border-radius: var(--r-lg) var(--r-lg) 0 0;
     /* 底部让出常驻输入条的高度:伙伴栏(z-index 40)整层在输入条(45)之下,
        抽屉是它的子元素,再高的 z-index 也压不过输入条 —— 不让开就会挡掉最后一行
-       (用与 .companion 同一个 66px,两处口径一致) */
-    border-bottom: 0; padding-bottom: calc(66px + env(safe-area-inset-bottom));
+       (与 .companion 同一个 --m-composer-h,三处口径一致) */
+    border-bottom: 0; padding-bottom: calc(var(--m-composer-h, 66px) + env(safe-area-inset-bottom));
     animation: sheet-up var(--dur-base) var(--ease-out);
   }
   .m-cv-menu .cv-menu-head { padding: 12px 14px; }

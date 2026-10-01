@@ -92,8 +92,21 @@ export interface InputBarHandle {
 	prefillIfEmpty: (text: string) => boolean;
 }
 
-/** textarea 自动增高的最大高度(px),超过后内部滚动。 */
-const MAX_HEIGHT = 160;
+/**
+ * textarea 自动增高的**兜底**上限(px),只在样式表没给 max-height 时用。
+ *
+ * 真正的上限写在 CSS 的 `max-height` 里(桌面 `.inputbar textarea` 160px;手机端
+ * 胶囊内的 textarea 104px)—— 手机端输入条不许无限拉长,到顶就由 textarea 自己
+ * 内部滚动(见 mobile.css)。这里读计算值而不是再写一个常量:两处各持一个数
+ * 已经出现过不一致(JS 以为能长到 160,CSS 只给到 104)。
+ */
+const MAX_HEIGHT_FALLBACK = 160;
+
+/** 读样式表给这个 textarea 的 max-height(px);没限制(或非 px 值)时返回 null。 */
+function maxHeightOf(el: HTMLElement): number | null {
+	const value = Number.parseFloat(getComputedStyle(el).maxHeight);
+	return Number.isFinite(value) ? value : null;
+}
 
 /**
  * 上下文占用圆环:输入框右侧的比例环 + 百分比。
@@ -201,7 +214,7 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 	 */
 	const menuKeyRef = useRef<string | null>(null);
 
-	// textarea 自动增高(受 MAX_HEIGHT 约束)。
+	// textarea 自动增高(上限取样式表的 max-height,见 MAX_HEIGHT_FALLBACK)。
 	// 注意:双常驻标签(伙伴栏对话/批注)下,隐藏标签内的输入条在 display:none 容器中
 	// 挂载,scrollHeight 为 0——仅靠 [text] 依赖会把 textarea 钉成 0 高度,切换标签后
 	// 输入条塌陷直到用户输入才恢复。ResizeObserver 在容器恢复显示(尺寸 0 → 实际)
@@ -210,8 +223,19 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 		const ta = taRef.current;
 		if (!ta) return;
 		const resize = () => {
+			const cap = maxHeightOf(ta) ?? MAX_HEIGHT_FALLBACK;
+			// 内容已超过上限:到顶就不再长,多出来的行由 textarea 内部滚动。
+			// **这一支不能走下面的 auto 测量** —— 把高度置 auto 会把 scrollTop 清 0,
+			// 光标随即掉出可视区(手机端刚封顶时实测:打到第 6 行后还在看第 1 行)。
+			if (ta.scrollHeight > cap) {
+				ta.style.height = `${cap}px`;
+				// 光标在末尾(打字/粘贴的常态)就把视图钉在末尾;挪到中间编辑时不插手,
+				// 浏览器自己的光标跟随负责
+				if (ta.selectionStart === ta.value.length) ta.scrollTop = ta.scrollHeight;
+				return;
+			}
 			ta.style.height = "auto";
-			ta.style.height = `${Math.min(ta.scrollHeight, MAX_HEIGHT)}px`;
+			ta.style.height = `${Math.min(ta.scrollHeight, cap)}px`;
 		};
 		resize();
 		const ro = new ResizeObserver(resize);

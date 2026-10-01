@@ -1531,6 +1531,30 @@ export function WritePage({
 	if (filePreview) lastPreviewRef.current = filePreview;
 	const previewShown = filePreview ?? lastPreviewRef.current;
 
+	/** 手机端底部输入条的容器(仅手机端渲染):实测高度写进 `--m-composer-h`。 */
+	const composerRef = useRef<HTMLDivElement>(null);
+
+	/**
+	 * 手机端底部输入条是 `position: fixed`,而纸张(.paper-zone)、伙伴栏(.companion)
+	 * 与对话切换抽屉(.m-cv-menu)都按它的高度留底部空白 —— 输入条会随行数长高
+	 * (InputBar 的自动增高),留白要是写死值,长高后就会盖住最后几行。
+	 * 所以把实测高度写进根元素的 `--m-composer-h`,三处留白同源(见 mobile.css)。
+	 */
+	useEffect(() => {
+		if (!isPhone) return;
+		const el = composerRef.current;
+		if (!el) return;
+		const root = document.documentElement;
+		const apply = () => root.style.setProperty("--m-composer-h", `${Math.round(el.getBoundingClientRect().height)}px`);
+		apply();
+		const ro = new ResizeObserver(apply);
+		ro.observe(el);
+		return () => {
+			ro.disconnect();
+			root.style.removeProperty("--m-composer-h");
+		};
+	}, [isPhone]);
+
 	/**
 	 * 编剧输入条:桌面端挂在伙伴栏底部,手机端提到壳层底部
 	 * (.m-composer)——手机端编辑页与伙伴页共用同一条输入区,所以实例只有这一个,
@@ -2027,6 +2051,7 @@ export function WritePage({
 			    所以抽屉滑出不会把它卸载,焦点与已输入的文字都留着。 */}
 			{isPhone && (
 				<div
+					ref={composerRef}
 					className="m-composer"
 					onPointerDown={() => setMobileDrawer("companion")}
 					onFocusCapture={() => setMobileDrawer("companion")}
