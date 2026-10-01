@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appendStageEntry, makeStageEntry } from "../src/stage/stage-store.ts";
 import { getBookDir } from "../src/config.ts";
 import { ensureWorld, saveWorld } from "../src/world-data.ts";
-import { latestStageTranscript, stableFingerprint, WriterHost } from "../src/web/writer-host.ts";
+import { latestStageTranscript, stableFingerprint, WriterHost, writerToolset } from "../src/web/writer-host.ts";
 
 interface FakeHostLike {
 	subscribe(l: (e: unknown) => void): () => void;
@@ -297,5 +297,38 @@ describe("setShell(shell 方言,2026-09-18)", () => {
 		const on = (shellOn as unknown as { editorSystemPrompt(): string }).editorSystemPrompt();
 		expect(on).toContain("# 外部命令");
 		expect(on).toContain("PowerShell 7(pwsh)");
+	});
+});
+
+/**
+ * 权限边界唯一真相源:`writerToolset`(2026-10-01 从 roleFactory 内联里抽出来)。
+ *
+ * 抽出来就是为了能被单测钉住——此前这段清单埋在一个几百行的私有工厂里,
+ * 「编剧该有哪些工具」这件事没有任何测试看守。舞台形态下编剧**不能**有
+ * world_update(人物/关系/时间线归导演),但**必须**有 style_update
+ * (否则用户在编辑页说「以后别用破折号」只会得到一句口头答应)。
+ */
+describe("writerToolset（编剧 / 写作 agent 的权限边界）", () => {
+	const names = (t: ReturnType<typeof writerToolset>): string[] => t.map((x) => x.name).sort();
+
+	it("舞台形态的编剧:有只读 world_find 与窄通道 style_update,没有 world_update", () => {
+		const n = names(writerToolset({ classicMode: false, mcpTools: [] }));
+		expect(n).toContain("world_find");
+		expect(n).toContain("style_update");
+		expect(n).not.toContain("world_update");
+		expect(n).not.toContain("word_count");
+	});
+
+	it("经典模式的写作 agent:升到全量(world_update + word_count),不再需要窄通道", () => {
+		const n = names(writerToolset({ classicMode: true, mcpTools: [] }));
+		expect(n).toContain("world_update");
+		expect(n).toContain("word_count");
+		expect(n).not.toContain("style_update");
+	});
+
+	it("MCP 工具两种形态都带上", () => {
+		const mcp = [{ name: "mcp_echo" }] as never;
+		expect(names(writerToolset({ classicMode: false, mcpTools: mcp }))).toContain("mcp_echo");
+		expect(names(writerToolset({ classicMode: true, mcpTools: mcp }))).toContain("mcp_echo");
 	});
 });

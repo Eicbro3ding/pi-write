@@ -54,7 +54,8 @@ interface ChapterSidebarProps {
 	nav?: { view: string; onNavigate: (view: string) => void };
 	/**
 	 * 经典模式(单 agent):抽屉主导航去掉「舞台」入口,与顶栏(桌面)一致。
-	 * 缺省 false(多 agent:舞台/编辑/世界书/设置四个入口)。
+	 * 缺省 false = 四个入口,但这只是**组件自身**的缺省:App 总会传真实模式
+	 * (服务端 `classicMode`,**2026-10-02 起默认 true**),别把这里的 false 当成产品默认。
 	 */
 	classicMode?: boolean;
 	/**

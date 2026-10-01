@@ -29,10 +29,12 @@ afterEach(() => {
 });
 
 describe("parseWriterSettings", () => {
-	it("缺省关闭经典模式,shell 方言为 auto(按平台识别)、路径为空", () => {
+	it("缺省开启单 Agent 经典模式,shell 方言为 auto(按平台识别)、路径为空", () => {
 		expect(defaultWriterSettings()).toEqual({
 			version: WRITER_SETTINGS_VERSION,
-			classicMode: false,
+			classicMode: true,
+			// 对话与章节绑定(现状):默认值不许替老用户改行为
+			conversationScope: "chapter",
 			enableShell: false,
 			shellKind: "auto",
 			shellPath: "",
@@ -62,6 +64,36 @@ describe("parseWriterSettings", () => {
 			...defaultWriterSettings(),
 			classicMode: true,
 		});
+	});
+
+	it("旧文件缺 classicMode → 走新默认(单 Agent);显式 false 仍保持多 Agent", () => {
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION }).classicMode).toBe(true);
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, classicMode: false }).classicMode).toBe(false);
+	});
+
+	/**
+	 * conversationScope(对话与章节的关系)是**追加式字段**:不递增
+	 * WRITER_SETTINGS_VERSION,旧文件缺这个字段时按默认 "chapter" 解析 ——
+	 * 那正是老用户的实际形态(一段对话绑一章),升级不能悄悄改掉对话归属。
+	 */
+	it("conversationScope 缺省 chapter;旧文件缺字段 → 回落 chapter", () => {
+		expect(defaultWriterSettings().conversationScope).toBe("chapter");
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION }).conversationScope).toBe("chapter");
+		// 老文件(字段出现之前写的)同样回落
+		expect(
+			parseWriterSettings({ version: WRITER_SETTINGS_VERSION, classicMode: true, enableShell: false }).conversationScope,
+		).toBe("chapter");
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, conversationScope: "book" }).conversationScope).toBe("book");
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, conversationScope: "chapter" }).conversationScope).toBe("chapter");
+	});
+
+	it("conversationScope 非法值一律回落 chapter(不把未知形态带进装配)", () => {
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, conversationScope: "global" }).conversationScope).toBe("chapter");
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, conversationScope: "BOOK" }).conversationScope).toBe("chapter");
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, conversationScope: 1 }).conversationScope).toBe("chapter");
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, conversationScope: null }).conversationScope).toBe("chapter");
+		// 版本不符时整个结构按默认值(与既有字段同款)
+		expect(parseWriterSettings({ version: 999, conversationScope: "book" }).conversationScope).toBe("chapter");
 	});
 
 	it("enableShell 缺省关闭,非法值回退关闭", () => {
@@ -114,6 +146,20 @@ describe("settings.json 读写", () => {
 		const off = await updateWriterSettings({ classicMode: false });
 		expect(off.classicMode).toBe(false);
 		await expect(readWriterSettings()).resolves.toEqual({ ...defaultWriterSettings(), classicMode: false, shellKind: "bash" });
+	});
+
+	it("conversationScope 可单独更新并往返落盘(不影响其他字段)", async () => {
+		await updateWriterSettings({ classicMode: true });
+		const toBook = await updateWriterSettings({ conversationScope: "book" });
+		expect(toBook).toMatchObject({ classicMode: true, conversationScope: "book" });
+		// 落盘 → 再读:往返一致(与其他窗口/重启后读到的一致)
+		expect(await readWriterSettings()).toEqual(toBook);
+		const toChapter = await updateWriterSettings({ conversationScope: "chapter" });
+		expect(toChapter).toMatchObject({ classicMode: true, conversationScope: "chapter" });
+		expect(JSON.parse(readFileSync(getWriterSettingsPath(), "utf8"))).toMatchObject({ conversationScope: "chapter" });
+		// 只传别的字段不会把它带跑
+		const otherField = await updateWriterSettings({ enableShell: true });
+		expect(otherField).toMatchObject({ conversationScope: "chapter", enableShell: true });
 	});
 
 	it("图片生成(实验)字段可单独更新,且不影响其他开关", async () => {

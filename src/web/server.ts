@@ -56,6 +56,7 @@ import {
 } from "../setup.ts";
 import { readWriterSettings, updateWriterSettings, type WriterSettings } from "../writer-settings.ts";
 import { resolveWriterShell } from "../shell-kind.ts";
+import { listSkills } from "../skills-index.ts";
 import { BOOK_FILE_GROUPS, classifyBookFileKind, isWorkspaceFile, listBookFiles, readWorkspaceText, statWorkspaceFile } from "../book-files.ts";
 import { MAX_ZIP_BYTES, exportBookZip, readImportZip, type BookZipImport } from "./book-zip.ts";
 import { ensureWorld, newId, readWorldEditRecord, saveWorld, WorldValidationError, type WorldData } from "../world-data.ts";
@@ -69,7 +70,7 @@ import type { McpManager, McpServerStatus } from "../mcp/manager.ts";
 import { getMcpConfigPath, saveRawMcpConfig, type McpServerConfig } from "../mcp/config.ts";
 import { WorldWatcher } from "./file-watcher.ts";
 import { StageCommandError, type StageHost } from "./stage-host.ts";
-import { WriterHost } from "./writer-host.ts";
+import { WriterHost, isSafeSessionId } from "./writer-host.ts";
 
 /** SSE 心跳间隔。 */
 const PING_INTERVAL_MS = 30_000;
@@ -517,10 +518,11 @@ export class WriterServer {
 			});
 		}
 		// 常驻编剧事件 → SSE 广播(writer_event:前端复用 processAgentEvent 归约,
-		// 消息/思考/工具卡片与主会话同款逻辑;chapterFile 透传供前端按章节过滤)
+		// 消息/思考/工具卡片与主会话同款逻辑;chapterFile 透传供前端按章节过滤,
+		// book 模式(对话与章节分离)的会话另带 conversation,前端据它过滤到具体对话)
 		if (options.writerHost) {
-			options.writerHost.setEventSink((slug, chapterFile, event) => {
-				this.broadcast({ type: "writer_event", slug, chapterFile, event });
+			options.writerHost.setEventSink((slug, chapterFile, event, conversation) => {
+				this.broadcastWriterEvent(slug, chapterFile, event, conversation);
 			});
 		}
 		// watchdog 重连成功后重建会话:新工具快照注入(与配置变更的 handleMcpReload 一致)
@@ -627,6 +629,13 @@ export class WriterServer {
 			{ method: "GET", segments: ["writer", ":slug", "context"], handler: (ctx) => this.handleGetWriterContext(ctx) },
 			{ method: "GET", segments: ["writer", ":slug", "stats"], handler: (ctx) => this.handleGetWriterStats(ctx) },
 			{ method: "POST", segments: ["writer", ":slug", "compact"], handler: (ctx) => this.handlePostWriterCompact(ctx) },
+			// conversations(对话清单/新建/删除;book 模式「章节与对话各聊各的」的入口。
+			//   静态段 conversations 与参数段无同段数冲突,仍按约定静态在前)
+			{ method: "GET", segments: ["conversations"], handler: (ctx) => this.handleGetConversations(ctx) },
+			{ method: "POST", segments: ["conversations"], handler: (ctx) => this.handlePostConversation(ctx) },
+			{ method: "DELETE", segments: ["conversations", ":id"], handler: (ctx) => this.handleDeleteConversation(ctx) },
+			// skills(技能清单:给前端 `/skill` 菜单用;与 agent 装配同源,纯读不建会话)
+			{ method: "GET", segments: ["skills"], handler: (ctx) => this.handleGetSkills(ctx) },
 			// themes(用户自定义主题资产文件)
 			{ method: "GET", segments: ["themes"], handler: (ctx) => this.handleGetThemes(ctx) },
 			{ method: "GET", segments: ["themes", ":file"], handler: (ctx) => this.handleGetThemeFile(ctx) },
@@ -706,6 +715,21 @@ export class WriterServer {
 	/** 插件预留缝:向所有 SSE 客户端广播自定义事件(前端按未知事件忽略,不会破坏既有 reducer)。 */
 	broadcastEvent(event: unknown): void {
 		this.broadcast(event);
+	}
+
+	/**
+	 * writer_event 帧的**唯一构造点**(事件转发与 chat_error 兜底同款)。
+	 *
+	 * 章节模式(conversation 为 undefined)的负载与本次改动前**逐字节一致**:
+	 * `{ type, slug, chapterFile, event }`。book 模式(对话与章节分离)的会话多一个
+	 * `conversation` 字段,前端据它把事件过滤到具体对话。
+	 */
+	private broadcastWriterEvent(slug: string, chapterFile: string | null, event: unknown, conversation?: string): void {
+		this.broadcast(
+			conversation === undefined
+				? { type: "writer_event", slug, chapterFile, event }
+				: { type: "writer_event", slug, chapterFile, conversation, event },
+		);
 	}
 
 	/**
@@ -2140,46 +2164,84 @@ export class WriterServer {
 
 	// ---- writer 路由(常驻编剧/编辑 agent) ----
 
-	/** GET /api/writer/:slug?chapterFile=:编剧会话状态(纯读不创建会话;未装配 writerHost 时 404)。
-	 *  chapterFile 可选:缺省用该书最近对话章节。 */
-	private async handleGetWriter(ctx: RouteContext): Promise<void> {
-		const writer = this.options.writerHost;
-		if (!writer) throw new HttpError(404, "not_found", "常驻编剧未启用");
-		const chapterFile = ctx.url.searchParams.get("chapterFile");
-		this.send(ctx.res, 200, await writer.state(ctx.params.slug!, chapterFile));
+	/**
+	 * 读 writer 端点的可选定位参数(chapterFile / conversation)。
+	 *
+	 * - `chapterFile`:章节文件名。chapter 模式下**就是**会话身份(现状);
+	 *   book 模式下不再决定会话身份,只登记「用户正在看的章节」(易变上下文注入)。
+	 * - `conversation`:对话 id(book 模式:createConversation 产出的不透明 id;
+	 *   chapter 模式:章节文件名)。传了它按它定位,与 chapterFile 并存。
+	 * - 都不传 → 沿用今天的回落规则(最近声明的章节 → 该书当前对话 → default)。
+	 *
+	 * 取值语义:`undefined` = 没传(保留上次登记);`null` = **显式空值**
+	 * (`?chapterFile=`)= 用户没有正在看的章节 → book 模式据此清掉正文块的注入
+	 * (否则关掉章节后 AI 还看得到上一章的正文);字符串 = 定位到它。
+	 * `conversation` 的空值当没传(不存在"清空当前对话"这种操作)。
+	 *
+	 * GET 走 query、POST 走 body;两边都给时 body 优先(body 放得下的地方就别塞 query)。
+	 */
+	private writerRef(ctx: RouteContext, body: unknown): { chapterFile?: string | null; conversation?: string } {
+		const args = (body ?? null) as Record<string, unknown> | null;
+		const read = (key: "chapterFile" | "conversation"): string | null | undefined => {
+			const raw = args?.[key] ?? ctx.url.searchParams.get(key);
+			if (raw === undefined || raw === null) return undefined;
+			if (typeof raw !== "string") throw new HttpError(400, "bad_request", `字段 ${key} 必须是字符串`);
+			const trimmed = raw.trim();
+			if (trimmed.length === 0) return key === "chapterFile" ? null : undefined;
+			if (!isSafeSessionId(trimmed)) throw new HttpError(400, "bad_request", `非法${key === "conversation" ? "对话 id" : "章节文件名"}: ${trimmed}`);
+			return trimmed;
+		};
+		const conversation = read("conversation");
+		return { chapterFile: read("chapterFile"), conversation: conversation ?? undefined };
 	}
 
 	/**
-	 * POST /api/writer/:slug/chat {text, chapterFile?}:发消息给编剧(惰性建会话,
-	 * chapterFile 声明上下文注入的章节)。202 立即返回,消息/工具事件经 writer_event SSE 到达。
+	 * GET /api/writer/:slug?chapterFile=&conversation=:编剧会话状态(纯读不创建会话;
+	 * 未装配 writerHost 时 404)。两个参数都可选:chapterFile = 章节(chapter 模式的身份 /
+	 * book 模式正在看的章节),conversation = 对话 id;缺省用该书当前对话/最近对话章节。
+	 */
+	private async handleGetWriter(ctx: RouteContext): Promise<void> {
+		const writer = this.options.writerHost;
+		if (!writer) throw new HttpError(404, "not_found", "常驻编剧未启用");
+		const ref = this.writerRef(ctx, null);
+		this.send(ctx.res, 200, await writer.state(ctx.params.slug!, ref.chapterFile, ref.conversation));
+	}
+
+	/**
+	 * POST /api/writer/:slug/chat {text, chapterFile?, conversation?}:发消息给编剧
+	 * (惰性建会话,chapterFile 声明上下文注入的章节、conversation 指定对话)。
+	 * 202 立即返回,消息/工具事件经 writer_event SSE 到达。
 	 */
 	private async handlePostWriterChat(ctx: RouteContext): Promise<void> {
 		const writer = this.options.writerHost;
 		if (!writer) throw new HttpError(404, "not_found", "常驻编剧未启用");
 		const body = await readJsonBody(ctx.req);
 		const text = requireString(body, "text");
-		const args = body as Record<string, unknown>;
-		const chapterFile = args.chapterFile === undefined ? undefined : requireString(body, "chapterFile");
+		const ref = this.writerRef(ctx, body);
 		this.send(ctx.res, 202, { ok: true });
-		void writer.chat(ctx.params.slug!, text, chapterFile).catch((err) => {
+		void writer.chat(ctx.params.slug!, text, ref.chapterFile, ref.conversation).catch((err) => {
 			const message = err instanceof Error ? err.message : String(err);
-			this.broadcast({ type: "writer_event", slug: ctx.params.slug!, chapterFile: chapterFile ?? null, event: { type: "chat_error", message } });
+			// 与事件转发同款帧构造:book 模式的会话要带 conversation,前端才知道是哪段对话出错
+			this.broadcastWriterEvent(ctx.params.slug!, ref.chapterFile ?? null, { type: "chat_error", message }, ref.conversation);
 		});
 	}
 
-	/** POST /api/writer/:slug/abort:中止编剧当前生成(无会话时静默成功)。 */
+	/** POST /api/writer/:slug/abort {conversation?}:中止编剧当前生成(无会话时静默成功;
+	 *  不带 conversation 时中止该书全部对话的生成)。 */
 	private async handlePostWriterAbort(ctx: RouteContext): Promise<void> {
 		const writer = this.options.writerHost;
 		if (!writer) throw new HttpError(404, "not_found", "常驻编剧未启用");
+		const body = (await readJsonBody(ctx.req)) as Record<string, unknown> | null;
+		const ref = this.writerRef(ctx, body);
 		askUserGate.cancelAll();
-		await writer.abort(ctx.params.slug!);
+		await writer.abort(ctx.params.slug!, ref.conversation);
 		this.send(ctx.res, 200, { ok: true });
 	}
 
 	/**
-	 * POST /api/writer/:slug/retract {entryId, replacement?, chapterFile?}:编剧会话
+	 * POST /api/writer/:slug/retract {entryId, replacement?, chapterFile?, conversation?}:编剧会话
 	 * 「编辑重发」——撤回最新一条用户消息及其后所有消息(leaf 回退,AI 上下文同步截断),
-	 * replacement 存在时撤回后异步重发。chapterFile 缺省用该书最近对话章节。
+	 * replacement 存在时撤回后异步重发。两个定位参数缺省用该书当前对话。
 	 * 广播 messages_retracted(与主会话同款,前端编剧会话重新对齐)。
 	 */
 	private async handlePostWriterRetract(ctx: RouteContext): Promise<void> {
@@ -2188,10 +2250,9 @@ export class WriterServer {
 		const body = await readJsonBody(ctx.req);
 		const entryId = requireString(body, "entryId");
 		const replacement = optionalString(body, "replacement");
-		const args = body as Record<string, unknown>;
-		const chapterFile = args.chapterFile === undefined ? undefined : requireString(body, "chapterFile");
+		const ref = this.writerRef(ctx, body);
 		try {
-			await writer.retractMessage(ctx.params.slug!, entryId, replacement, chapterFile);
+			await writer.retractMessage(ctx.params.slug!, entryId, replacement, ref.chapterFile, ref.conversation);
 		} catch (err) {
 			// 未知 entry / 非 user 消息 / 非最新消息 / 流式中:业务性错误,映射 400
 			throw new HttpError(400, "bad_request", err instanceof Error ? err.message : String(err));
@@ -2200,27 +2261,26 @@ export class WriterServer {
 		this.send(ctx.res, 200, { ok: true });
 	}
 
-	/** GET /api/writer/:slug/tree?chapterFile=:编剧会话分支树(切换 UI 数据;无会话返回空树,不创建)。 */
+	/** GET /api/writer/:slug/tree?chapterFile=&conversation=:编剧会话分支树(切换 UI 数据;无会话返回空树,不创建)。 */
 	private async handleGetWriterTree(ctx: RouteContext): Promise<void> {
 		const writer = this.options.writerHost;
 		if (!writer) throw new HttpError(404, "not_found", "常驻编剧未启用");
-		const chapterFile = ctx.url.searchParams.get("chapterFile");
-		this.send(ctx.res, 200, await writer.getSessionTree(ctx.params.slug!, chapterFile));
+		const ref = this.writerRef(ctx, null);
+		this.send(ctx.res, 200, await writer.getSessionTree(ctx.params.slug!, ref.chapterFile, ref.conversation));
 	}
 
 	/**
-	 * POST /api/writer/:slug/navigate {entryId, chapterFile?}:编剧会话分支切换——leaf 移到
-	 * 指定消息,以其为当前分支重建上下文;广播 messages_retracted(前端编剧会话重新对齐)。
+	 * POST /api/writer/:slug/navigate {entryId, chapterFile?, conversation?}:编剧会话分支切换——
+	 * leaf 移到指定消息,以其为当前分支重建上下文;广播 messages_retracted(前端编剧会话重新对齐)。
 	 */
 	private async handlePostWriterNavigate(ctx: RouteContext): Promise<void> {
 		const writer = this.options.writerHost;
 		if (!writer) throw new HttpError(404, "not_found", "常驻编剧未启用");
 		const body = await readJsonBody(ctx.req);
 		const entryId = requireString(body, "entryId");
-		const args = body as Record<string, unknown>;
-		const chapterFile = args.chapterFile === undefined ? undefined : requireString(body, "chapterFile");
+		const ref = this.writerRef(ctx, body);
 		try {
-			await writer.navigate(ctx.params.slug!, entryId, chapterFile);
+			await writer.navigate(ctx.params.slug!, entryId, ref.chapterFile, ref.conversation);
 		} catch (err) {
 			throw new HttpError(400, "bad_request", err instanceof Error ? err.message : String(err));
 		}
@@ -2229,7 +2289,7 @@ export class WriterServer {
 	}
 
 	/**
-	 * GET /api/writer/:slug/stats?chapterFile=&warm=1:编剧会话**用量统计**
+	 * GET /api/writer/:slug/stats?chapterFile=&conversation=&warm=1:编剧会话**用量统计**
 	 * (2026-09-23 接上 vendor 原生的 getSessionStats:累计 token / 成本 / 按模型拆分)。
 	 * 口径是整个会话文件(含被压缩掉的历史)—— 与 /context 的"现在多大"不同;
 	 * 响应里顺带带上 contextUsage,前端一次请求就能把用量卡和圆环都填上。
@@ -2237,29 +2297,29 @@ export class WriterServer {
 	private async handleGetWriterStats(ctx: RouteContext): Promise<void> {
 		const writer = this.options.writerHost;
 		if (!writer) throw new HttpError(404, "not_found", "常驻编剧未启用");
-		const chapterFile = ctx.url.searchParams.get("chapterFile");
+		const ref = this.writerRef(ctx, null);
 		const warm = ctx.url.searchParams.get("warm") === "1";
-		const stats = await writer.sessionStats(ctx.params.slug!, chapterFile, { warm });
+		const stats = await writer.sessionStats(ctx.params.slug!, ref.chapterFile, { warm, conversation: ref.conversation });
 		this.send(ctx.res, 200, { stats });
 	}
 
 	/**
-	 * GET /api/writer/:slug/context?chapterFile=:编剧会话上下文占用(纯读;
+	 * GET /api/writer/:slug/context?chapterFile=&conversation=:编剧会话上下文占用(纯读;
 	 * 无活跃会话/压缩后尚无新的模型响应时 usage 为 null)。
-	 * `warm=1`:磁盘上已有该章会话文件时把会话带起来再读(打开页面就有圆环数据;见
+	 * `warm=1`:磁盘上已有该对话会话文件时把会话带起来再读(打开页面就有圆环数据;见
 	 * writer-host.contextUsage 的注释)。
 	 */
 	private async handleGetWriterContext(ctx: RouteContext): Promise<void> {
 		const writer = this.options.writerHost;
 		if (!writer) throw new HttpError(404, "not_found", "常驻编剧未启用");
-		const chapterFile = ctx.url.searchParams.get("chapterFile");
+		const ref = this.writerRef(ctx, null);
 		const warm = ctx.url.searchParams.get("warm") === "1";
-		const usage = await writer.contextUsage(ctx.params.slug!, chapterFile, { warm });
+		const usage = await writer.contextUsage(ctx.params.slug!, ref.chapterFile, { warm, conversation: ref.conversation });
 		this.send(ctx.res, 200, { usage });
 	}
 
 	/**
-	 * POST /api/writer/:slug/compact {chapterFile?, instructions?}:手动压缩编剧会话
+	 * POST /api/writer/:slug/compact {chapterFile?, conversation?, instructions?}:手动压缩编剧会话
 	 * 上下文。压缩是模型总结回合(可能耗时 1-10 分钟),compaction_start/end 经
 	 * writer_event SSE 驱动前端「正在压缩上下文」提示;本端点等压缩完成才响应。
 	 */
@@ -2267,16 +2327,65 @@ export class WriterServer {
 		const writer = this.options.writerHost;
 		if (!writer) throw new HttpError(404, "not_found", "常驻编剧未启用");
 		const body = await readJsonBody(ctx.req);
-		const args = body as Record<string, unknown>;
-		const chapterFile = args.chapterFile === undefined ? undefined : requireString(body, "chapterFile");
+		const ref = this.writerRef(ctx, body);
 		const instructions = optionalString(body, "instructions");
 		try {
-			const result = await writer.compact(ctx.params.slug!, chapterFile, instructions);
+			const result = await writer.compact(ctx.params.slug!, ref.chapterFile, instructions, ref.conversation);
 			this.send(ctx.res, 200, { ok: true, ...result });
 		} catch (err) {
 			// "Nothing to compact"/模型未配置等业务性失败映射 400,避免 500
 			throw new HttpError(400, "bad_request", err instanceof Error ? err.message : String(err));
 		}
+	}
+
+	// ---- conversations 路由(对话清单/新建/删除;book 模式「章节与对话各聊各的」) ----
+
+	/** writer 端点与对话端点共用:书必须存在(不存在的书 404,而不是凭空造 sessions 目录)。 */
+	private requireBookExists(slug: string): void {
+		if (!isSafeSessionId(slug)) throw new HttpError(400, "bad_request", `非法书 slug: ${slug}`);
+		if (!existsSync(getBookDir(slug))) throw new HttpError(404, "not_found", `书不存在: ${slug}`);
+	}
+
+	/**
+	 * GET /api/conversations?slug=:该书的对话清单(标题从会话内容派生、时间取文件 mtime、
+	 * 倒序;isCurrent 标记 writer 端点缺省会定位到的那条)。
+	 *
+	 * **不读元数据文件**:会话文件 (`sessions/<slug>/writer-*.jsonl`) 是唯一真相源,
+	 * 没有 conversations.json 之类需要同步的第二份清单。
+	 */
+	private async handleGetConversations(ctx: RouteContext): Promise<void> {
+		const writer = this.options.writerHost;
+		if (!writer) throw new HttpError(404, "not_found", "常驻编剧未启用");
+		const slug = ctx.url.searchParams.get("slug") ?? "";
+		this.requireBookExists(slug);
+		this.send(ctx.res, 200, { conversations: await writer.listConversations(slug) });
+	}
+
+	/**
+	 * POST /api/conversations {slug}:新建一段与章节无关的对话(book 模式的用法),
+	 * 并把它设为当前对话;返回新对话 + 最新清单(前端一次请求即可刷新列表并选中)。
+	 */
+	private async handlePostConversation(ctx: RouteContext): Promise<void> {
+		const writer = this.options.writerHost;
+		if (!writer) throw new HttpError(404, "not_found", "常驻编剧未启用");
+		const body = await readJsonBody(ctx.req);
+		const slug = requireString(body, "slug").trim();
+		this.requireBookExists(slug);
+		const conversation = await writer.createConversation(slug);
+		this.send(ctx.res, 201, { conversation, conversations: await writer.listConversations(slug) });
+	}
+
+	/** DELETE /api/conversations/:id?slug=:删除一段对话(释放宿主 + 删会话文件;不存在 404)。 */
+	private async handleDeleteConversation(ctx: RouteContext): Promise<void> {
+		const writer = this.options.writerHost;
+		if (!writer) throw new HttpError(404, "not_found", "常驻编剧未启用");
+		const slug = ctx.url.searchParams.get("slug") ?? "";
+		this.requireBookExists(slug);
+		const id = ctx.params.id ?? "";
+		if (!isSafeSessionId(id)) throw new HttpError(400, "bad_request", `非法对话 id: ${id}`);
+		const deleted = await writer.deleteConversation(slug, id);
+		if (!deleted) throw new HttpError(404, "not_found", `对话不存在: ${id}`);
+		this.send(ctx.res, 200, { ok: true });
 	}
 
 	// ---- themes 路由(用户自定义主题资产文件) ----
@@ -2288,6 +2397,29 @@ export class WriterServer {
 			throw new HttpError(400, "bad_request", "非法主题文件名(仅允许 *.css)");
 		}
 		return join(getThemesDir(), name);
+	}
+
+	/**
+	 * GET /api/skills?slug=:当前装配会加载到的技能清单(name + description + explicitOnly)。
+	 *
+	 * 给前端 `/` 菜单的「技能」命令用:菜单列出的名字必须与 `/skill:<name>` 能展开的
+	 * 那份一致(vendor 对认不出的名字**原样透传**,对不上就是「点了技能但没生效」)。
+	 * 所以这里不自己扫目录,走 `listSkills`(vendor loadSkills + sessionSkillDirs,与
+	 * agent 装配同源)。目录基准取书的目录,拿不到书就退回进程 cwd —— 自带技能与全局
+	 * 技能与 cwd 无关,项目级技能(`<cwd>/.pi/skills`)才用得上。纯读,不创建会话。
+	 */
+	private async handleGetSkills(ctx: RouteContext): Promise<void> {
+		const slug = ctx.url.searchParams.get("slug");
+		let cwd: string | null = null;
+		if (slug) {
+			// 书目录不合法(路径穿越 / 不存在)不报错:退回进程 cwd,菜单照常出内置技能
+			try {
+				cwd = getBookDir(slug);
+			} catch {
+				cwd = null;
+			}
+		}
+		this.send(ctx.res, 200, { skills: listSkills({ cwd }) });
 	}
 
 	/** GET /api/themes:主题清单——内置(web/public|dist/themes 资产,零 ts 注册)
@@ -2369,11 +2501,12 @@ export class WriterServer {
 	}
 
 	/**
-	 * PUT /api/settings {classicMode?, enableShell?, shellKind?, shellPath?}:
+	 * PUT /api/settings {classicMode?, conversationScope?, enableShell?, shellKind?, shellPath?}:
 	 * 更新设置(只收白名单字段,未知字段忽略)。
 	 *
-	 * 这些开关都改变**服务端 agent 装配**(经典模式换提示词与工具集;外部命令放开
-	 * shell;shellKind/shellPath 换方言与可执行文件),所以落盘后立即应用:
+	 * 这些开关都改变**服务端 agent 装配**(经典模式换提示词与工具集;对话与章节的关系换
+	 * 会话身份规则;外部命令放开 shell;shellKind/shellPath 换方言与可执行文件),
+	 * 所以落盘后立即应用:
 	 * - WriterHost(编辑页会话)按开关释放已建会话,下次对话按新装配重建;
 	 * - 主 SessionHost 走 reloadRuntime()(与 MCP 配置变更同一路径:复用当前会话文件重建
 	 *   运行时,新工具随之生效,leaf 指针保留)。重建失败不回滚设置——设置已落盘,
@@ -2385,6 +2518,7 @@ export class WriterServer {
 	private async handlePutSettings(ctx: RouteContext): Promise<void> {
 		const body = (await readJsonBody(ctx.req)) as Record<string, unknown> | null;
 		const rawClassic = body?.classicMode;
+		const rawScope = body?.conversationScope;
 		const rawShell = body?.enableShell;
 		const rawKind = body?.shellKind;
 		const rawPath = body?.shellPath;
@@ -2400,6 +2534,9 @@ export class WriterServer {
 		const rawImageConfirm = body?.imageConfirmBeforeGen;
 		if (rawClassic !== undefined && typeof rawClassic !== "boolean") {
 			throw new HttpError(400, "bad_request", "字段 classicMode 必须是布尔值");
+		}
+		if (rawScope !== undefined && rawScope !== "chapter" && rawScope !== "book") {
+			throw new HttpError(400, "bad_request", "字段 conversationScope 只能是 chapter 或 book");
 		}
 		if (rawShell !== undefined && typeof rawShell !== "boolean") {
 			throw new HttpError(400, "bad_request", "字段 enableShell 必须是布尔值");
@@ -2439,6 +2576,7 @@ export class WriterServer {
 		}
 		const settings: WriterSettings = await updateWriterSettings({
 			...(rawClassic === undefined ? {} : { classicMode: rawClassic }),
+			...(rawScope === undefined ? {} : { conversationScope: rawScope }),
 			...(rawShell === undefined ? {} : { enableShell: rawShell }),
 			...(rawKind === undefined ? {} : { shellKind: rawKind }),
 			...(rawPath === undefined ? {} : { shellPath: rawPath.trim().slice(0, 500) }),
@@ -2455,6 +2593,9 @@ export class WriterServer {
 		// 解析实际方言:选 pwsh 而本机没有 → none(会话按无 shell 装配,提示词如实叙述)
 		const shell = resolveWriterShell(settings);
 		await this.options.writerHost?.setClassicMode(settings.classicMode);
+		// 对话与章节的关系(缺省 chapter):换形态即释放已建会话——两种形态的会话身份
+		// 规则与上下文注入方式都不同,复用旧会话会把旧规则带过去
+		await this.options.writerHost?.setConversationScope(settings.conversationScope);
 		await this.options.writerHost?.setShell({
 			enabled: settings.enableShell,
 			dialect: shell.dialect,

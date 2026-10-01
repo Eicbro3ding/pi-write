@@ -1,7 +1,7 @@
 /**
- * 首次启动配置向导(五步:介绍 → 接入模型服务 → 默认模型 → 建第一本书 → 界面偏好)。
- * 完成后经 client.completeSetup 把标记写到服务端 ~/.pi/writer/setup.json(跨窗口/跨浏览器
- * 一致),onFinished 交还控制权。
+ * 首次启动配置向导(八步:介绍 → 创作方式 → 对话范围 → 执行命令 → 接入模型服务 →
+ * 默认模型 → 建第一本书 → 界面偏好)。完成后经 client.completeSetup 把标记写到服务端
+ * ~/.pi/writer/setup.json(跨窗口/跨浏览器一致),onFinished 交还控制权。
  *
  * 两种打开形态(由 App 控制,**组件不分叉**,只靠 CSS 区分):
  * - 首次启动:向导独占渲染,主界面四页尚未挂载——完成后才挂载,WritePage 的
@@ -10,9 +10,18 @@
  * - 设置页「重新运行配置向导」:作为覆盖层叠加在已挂载页面上(`.app > .wz-overlay`),
  *   不打断流式状态 → 加一层 $mask 遮罩;此时建的书经 onBooksChanged 通知 App 刷新书库列表。
  *
- * 版式:顶栏(品牌 + 跳过向导)→ 五步进度条
+ * 版式:顶栏(品牌 + 跳过向导)→ 八步进度条
  * (等宽 900,当前 $amber / 已过 $green / 未到 $line)→ 内容列(720,步骤号 + 34 号标题 +
  * 说明 + 卡片)→ 页脚(左侧提示 + 右侧主按钮,与内容列同宽对齐)。
+ *
+ * 三个「形态 / 权限」步(2026-10-02):
+ *   1. 创作方式 —— 多 Agent / 单 Agent;
+ *   2. 对话范围 —— 绑定章节 / 分离;
+ *   3. 执行命令 —— 保持关闭 / 开启 shell(选中「开启」先过风险确认条)。
+ * 三者都用同一套单选卡片(ChoiceCards.tsx;与设置页「Agent 形态」「对话与章节」卡同一
+ * 实现,只有数据不同 —— 早先「执行命令」是挤在「创作方式」步里的一行开关,用户会
+ * 顺手划过,而它是整份向导里唯一的权限授予)。值都写在服务端 settings.json,点了立即
+ * 生效,所以不需要额外的「保存」动作。
  *
  * 各步骤「真正做过」的标记(点了什么、存了什么)随完成请求一并上报;
  * 「跳过向导」同样置完成标记(空 steps),避免每次启动重复弹。
@@ -20,10 +29,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
-import type { ProviderInfo, UserThemeInfo } from "../types.ts";
+import type { ConversationScopeDto, ProviderInfo, UserThemeInfo } from "../types.ts";
 import type { SelectGroup } from "../select-logic.ts";
 import type { ThemeId } from "../themes.ts";
 import { applyTheme, currentTheme } from "../theme.ts";
+import { CreationModeCards } from "./CreationModeCards.tsx";
+import { ConversationScopeCards } from "./ConversationScopeCards.tsx";
+import { SHELL_CONFIRM_TEXT, ShellCards } from "./ShellCards.tsx";
 import { Select } from "./Select.tsx";
 import { ThemeCardsFromManifest } from "./ThemeCards.tsx";
 import { ToggleSwitch } from "./ToggleSwitch.tsx";
@@ -36,6 +48,9 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "ma
 /** 向导步骤(id 与服务端 src/setup.ts 的 SETUP_STEPS 对齐;顺序即展示顺序)。 */
 const WIZARD_STEPS = [
 	{ id: "intro", label: "介绍" },
+	{ id: "mode", label: "创作方式" },
+	{ id: "scope", label: "对话范围" },
+	{ id: "shell", label: "执行命令" },
 	{ id: "provider", label: "模型服务" },
 	{ id: "model", label: "默认模型" },
 	{ id: "book", label: "第一本书" },
@@ -44,9 +59,21 @@ const WIZARD_STEPS = [
 
 type WizardStepId = (typeof WIZARD_STEPS)[number]["id"];
 
+/**
+ * 步骤 id → 下标。**所有跳转都走这里**,不写字面下标 —— 加/挪步骤时下标会整体顺移,
+ * 写死一处就是「进度条在第 N 步、界面还是第 N-1 步的控件」(2026-10-02 加「对话范围」
+ * 「执行命令」两步时,原来的 setStep(1..5) 全部顺移了一次)。
+ */
+function stepIndex(id: WizardStepId): number {
+	return WIZARD_STEPS.findIndex((s) => s.id === id);
+}
+
 /** 各步骤的大标题。 */
 const STEP_TITLE: Record<WizardStepId, string> = {
 	intro: "欢迎使用 pi-writer",
+	mode: "你更希望以哪一种方式创作",
+	scope: "AI 的对话怎么和章节对应",
+	shell: "要不要给 AI 执行命令的权限",
 	provider: "接入模型服务",
 	model: "选择默认模型",
 	book: "创建第一本书",
@@ -55,7 +82,10 @@ const STEP_TITLE: Record<WizardStepId, string> = {
 
 /** 页脚左侧的一行提示(与各步语境对应)。 */
 const STEP_FOOT_HINT: Record<WizardStepId, string> = {
-	intro: "共 5 步,随时可以跳过,稍后在设置里补",
+	intro: "共 8 步,随时可以跳过,稍后在设置里补",
+	mode: "选完即生效,随时可以在「设置 → 高级 → Agent 形态」里改",
+	scope: "选完即生效,随时可以在「设置 → 高级 → 对话与章节」里改",
+	shell: "默认关闭更安全;开启前会再问一次,随时可以在「设置 → 高级」里关掉",
 	provider: "key 只存在本地,不会上传。稍后可在「设置 → 模型」中修改",
 	model: "保存后立即生效;稍后可在「设置 → 模型」里修改",
 	book: "首启已自动建了一本「未命名」,这里起名即复用它;留空则保持默认名",
@@ -99,6 +129,10 @@ export function SetupWizard({
 	onAutoConfirmEditsChange,
 	classicMode,
 	onClassicModeChange,
+	conversationScope,
+	onConversationScopeChange,
+	shellEnabled,
+	onShellEnabledChange,
 	onBooksChanged,
 	onFinished,
 	closing = false,
@@ -114,6 +148,14 @@ export function SetupWizard({
 	classicMode: boolean;
 	/** 切换经典模式(写服务端;失败抛出由本步显示错误)。 */
 	onClassicModeChange: (enabled: boolean) => Promise<void>;
+	/** 对话与章节的关系(chapter 缺省 = 一节一段对话;book = 各聊各的)。 */
+	conversationScope: ConversationScopeDto;
+	/** 切换对话与章节的关系(写服务端;失败抛出由本步显示错误)。 */
+	onConversationScopeChange: (scope: ConversationScopeDto) => Promise<void>;
+	/** 外部命令(shell)是否放开(服务端 settings.json 的 enableShell,缺省关闭)。 */
+	shellEnabled: boolean;
+	/** 开关外部命令(写服务端并重建会话;失败抛出由本步显示错误)。 */
+	onShellEnabledChange: (enabled: boolean) => Promise<void>;
 	/** 向导创建了书后回调(重运行形态下 App 刷新书库列表;首启形态不需要)。 */
 	onBooksChanged?: () => void | Promise<void>;
 	/** 向导完成(含跳过)后回调;完成标记已写到服务端。 */
@@ -121,9 +163,24 @@ export function SetupWizard({
 	/** 退场中(重运行形态由 App 的 useExitPresence 传入):给整屏壳加 .is-closing。 */
 	closing?: boolean;
 }) {
-	/** 当前步骤下标(0..4)。 */
+	/** 当前步骤下标(0..5)。 */
 	const [step, setStep] = useState(0);
-	const [flags, setFlags] = useState<StepFlags>({ intro: false, provider: false, model: false, book: false, prefs: false });
+	/**
+	 * 当前步骤 id。**步骤判断一律用它,不用下标** —— 2026-10-02 在介绍后插入
+	 * 「创作方式」步时,所有 `step === N` 都要顺移一次,漏一处就是"进度条在第三步、
+	 * 界面还是第二步的控件";按 id 判断则插步骤不用改这些分支。
+	 */
+	const stepId = WIZARD_STEPS[step]!.id;
+	const [flags, setFlags] = useState<StepFlags>({
+		intro: false,
+		mode: false,
+		scope: false,
+		shell: false,
+		provider: false,
+		model: false,
+		book: false,
+		prefs: false,
+	});
 	const mark = useCallback((id: WizardStepId) => {
 		setFlags((f) => (f[id] ? f : { ...f, [id]: true }));
 	}, []);
@@ -131,6 +188,16 @@ export function SetupWizard({
 	// —— 完成请求 ——
 	const [finishing, setFinishing] = useState(false);
 	const [finishErr, setFinishErr] = useState<string | null>(null);
+
+	// —— 创作方式 / 对话范围 / 执行命令三步的状态 ——
+	/** 创作方式切换中(两张大卡进入禁用态,避免连点)。 */
+	const [modeBusy, setModeBusy] = useState(false);
+	/** 对话与章节关系切换中(两张大卡进入禁用态,避免连点)。 */
+	const [scopeBusy, setScopeBusy] = useState(false);
+	/** 外部命令的开启确认条(关:直接生效,无风险;开:先过确认 —— 与设置页同款)。 */
+	const [shellConfirm, setShellConfirm] = useState(false);
+	/** 外部命令开关请求进行中。 */
+	const [shellBusy, setShellBusy] = useState(false);
 
 	// —— 服务商步状态 ——
 	/** null = 未加载(进入该步时拉取)。 */
@@ -165,6 +232,14 @@ export function SetupWizard({
 	/** 当前步骤内的操作错误(模型设置失败/建书失败等;切步清除)。 */
 	const [stepErr, setStepErr] = useState<string | null>(null);
 
+	/**
+	 * 从「界面偏好」步的「改」按钮跳回卡片步时为 true:这三个卡片步的「下一步」变成
+	 * 「返回界面偏好」,直接跳回末步 —— 否则用户改完一个选项要重走模型 / 建书几步,
+	 * 而**建书步不能重走**(书名已被改成用户输入的名字,`findAutoCreatedBook` 只认
+	 * 「未命名」,再走一次会真的又建一本,2026-10-02 修)。
+	 */
+	const [returnToPrefs, setReturnToPrefs] = useState(false);
+
 	/** 主题清单:挂载时拉一次(失败只剩 night,不挡向导)。 */
 	useEffect(() => {
 		let cancelled = false;
@@ -192,7 +267,7 @@ export function SetupWizard({
 
 	/** 进入服务商步且未加载过 → 拉取;默认选中第一个已配置的(没有则第一个)。 */
 	useEffect(() => {
-		if (step !== 1 || providers !== null) return;
+		if (stepId !== "provider" || providers !== null) return;
 		let cancelled = false;
 		setStepErr(null);
 		void loadProviders()
@@ -210,7 +285,7 @@ export function SetupWizard({
 		return () => {
 			cancelled = true;
 		};
-	}, [step, providers, loadProviders]);
+	}, [stepId, providers, loadProviders]);
 
 	/** 列表默认只列前 5 个,展开后列全部;已选中项一定可见。 */
 	const providerRows = useMemo(() => {
@@ -287,7 +362,7 @@ export function SetupWizard({
 
 	/** 进入模型步且未加载过 → 拉取(models 置空表示需要重拉,如 provider 认证变化)。 */
 	useEffect(() => {
-		if (step !== 2 || models !== null) return;
+		if (stepId !== "model" || models !== null) return;
 		let cancelled = false;
 		setStepErr(null);
 		void loadModels().catch((e) => {
@@ -298,7 +373,7 @@ export function SetupWizard({
 		return () => {
 			cancelled = true;
 		};
-	}, [step, models, loadModels]);
+	}, [stepId, models, loadModels]);
 
 	/** provider 步认证变化:标记步骤走过 + 模型列表置空(下一步重新拉)。 */
 	function handleAuthChanged() {
@@ -368,49 +443,143 @@ export function SetupWizard({
 	}
 
 	/**
-	 * 经典模式开关:写服务端(settings.json,决定 agent 装配),失败留在偏好步
-	 * 显示错误——静默失败会让用户以为已经切到单 agent。
+	 * 选创作方式:写服务端(settings.json,决定 agent 装配),失败留在本步显示错误
+	 * —— 静默失败会让用户以为已经切到单 Agent。切换会释放已建会话,下次对话生效。
 	 */
-	async function toggleClassic(v: boolean) {
+	async function pickMode(classic: boolean) {
+		if (modeBusy) return;
 		setStepErr(null);
+		setModeBusy(true);
 		try {
-			await onClassicModeChange(v);
-			mark("prefs");
+			await onClassicModeChange(classic);
+			mark("mode");
 		} catch (e) {
-			setStepErr(`经典模式设置失败: ${friendlyError(e)}`);
+			setStepErr(`创作方式设置失败: ${friendlyError(e)}`);
+		} finally {
+			setModeBusy(false);
+		}
+	}
+
+	/**
+	 * 选「对话与章节」的关系:与创作方式同款 —— 写服务端(settings.json,决定
+	 * WriterHost 的会话身份语义),失败留在本步显示错误;切换会释放已建会话。
+	 */
+	async function pickConversationScope(scope: ConversationScopeDto) {
+		if (scopeBusy) return;
+		setStepErr(null);
+		setScopeBusy(true);
+		try {
+			await onConversationScopeChange(scope);
+			mark("scope");
+		} catch (e) {
+			setStepErr(`对话与章节设置失败: ${friendlyError(e)}`);
+		} finally {
+			setScopeBusy(false);
+		}
+	}
+
+	/** 执行命令卡片:开要过风险确认条,关直接生效(与设置页同款)。 */
+	function askShellEnable(checked: boolean) {
+		setStepErr(null);
+		if (checked) {
+			setShellConfirm(true);
+			return;
+		}
+		void toggleShell(false);
+	}
+
+	async function toggleShell(enabled: boolean) {
+		if (shellBusy) return;
+		setShellConfirm(false);
+		setStepErr(null);
+		setShellBusy(true);
+		try {
+			await onShellEnabledChange(enabled);
+			mark("shell");
+		} catch (e) {
+			setStepErr(`执行命令设置失败: ${friendlyError(e)}`);
+		} finally {
+			setShellBusy(false);
 		}
 	}
 
 	/** 上一步(回到模型步时保留已选值;错误清除)。 */
 	function back() {
 		setStepErr(null);
+		setReturnToPrefs(false);
 		setStep((s) => Math.max(0, s - 1));
+	}
+
+	/**
+	 * 进入下一步。**只按 +1 走**(不写字面下标):加/挪步骤时这里不用改,
+	 * 各步的收口动作只决定「什么时候可以走」。
+	 */
+	function nextStep() {
+		setStep((s) => Math.min(s + 1, WIZARD_STEPS.length - 1));
+	}
+
+	/**
+	 * 三个卡片步的「下一步」:从偏好页跳回来的 → 直接回偏好页(不重走中间几步),
+	 * 否则正常前进。
+	 */
+	function leaveCardStep() {
+		if (returnToPrefs) {
+			setReturnToPrefs(false);
+			setStep(stepIndex("prefs"));
+			return;
+		}
+		nextStep();
+	}
+
+	/** 从偏好页的「改」跳到某个卡片步:记住要回来。 */
+	function editFromPrefs(id: WizardStepId) {
+		setStepErr(null);
+		setReturnToPrefs(true);
+		setStep(stepIndex(id));
 	}
 
 	/** 下一步/完成:各步收口(模型与建书是异步操作,失败留在原步显示错误)。 */
 	async function next() {
 		setStepErr(null);
-		if (step === 0) {
+		if (stepId === "intro") {
 			mark("intro");
-			setStep(1);
+			nextStep();
 			return;
 		}
-		if (step === 1) {
+		if (stepId === "mode") {
+			// 创作方式 / 对话与章节 / shell 都是「点了就落盘」的即时设置,
+			// 这三步没有别的收口动作
+			if (modeBusy) return;
+			leaveCardStep();
+			return;
+		}
+		if (stepId === "scope") {
+			if (scopeBusy) return;
+			leaveCardStep();
+			return;
+		}
+		if (stepId === "shell") {
+			// 确认条还挂着 = 还没决定,别让它跟着翻页(回来时状态还在)
+			if (shellBusy || shellConfirm) return;
+			leaveCardStep();
+			return;
+		}
+		if (stepId === "provider") {
 			// provider 步不强求配置(列表内部自行处理错误);认证与否都放行。
 			// 但**已经配好的供应商也算这一步走过** —— 否则重跑向导(或上次已经存过 key)
 			// 时该标记永远是 false,用户看着像"我明明配过"(2026-09-23)。
 			if (selectedProvider?.configured) mark("provider");
-			setStep(2);
+			nextStep();
 			return;
 		}
-		if (step === 2) {
+		if (stepId === "model") {
 			if (modelBusy) return;
 			setModelBusy(true);
 			try {
 				if (modelSel && modelSel !== currentModel) await client.setModel(modelSel);
 				if (thinkingSel && thinkingSel !== thinkingCur) await client.setThinking(thinkingSel);
 				if (modelSel || thinkingSel) mark("model");
-				setStep(3);
+				nextStep();
 			} catch (e) {
 				setStepErr(`模型设置失败: ${friendlyError(e)}`);
 			} finally {
@@ -418,11 +587,11 @@ export function SetupWizard({
 			}
 			return;
 		}
-		if (step === 3) {
+		if (stepId === "book") {
 			// 建第一本书:标题留空 = 跳过(不创建);填写则建书 + 可选首章
 			const title = bookTitle.trim();
 			if (title === "") {
-				setStep(4);
+				nextStep();
 				return;
 			}
 			if (bookBusy) return;
@@ -443,7 +612,7 @@ export function SetupWizard({
 				} catch {
 					/* 列表刷新失败不影响向导(首启形态下页面挂载时会全量重拉) */
 				}
-				setStep(4);
+				nextStep();
 			} catch (e) {
 				setStepErr(`建书失败: ${friendlyError(e)}`);
 			} finally {
@@ -451,7 +620,7 @@ export function SetupWizard({
 			}
 			return;
 		}
-		// step === 4:完成
+		// stepId === "prefs":完成
 		await finish();
 	}
 
@@ -469,20 +638,23 @@ export function SetupWizard({
 		}
 	}
 
-	const busy = finishing || modelBusy || bookBusy;
-	const stepId = WIZARD_STEPS[step]!.id;
+	const busy = finishing || modelBusy || bookBusy || modeBusy || scopeBusy || shellBusy;
 	const isLast = step === WIZARD_STEPS.length - 1;
+	/** 正在「改」卡片步(从偏好页跳回来的):主按钮回偏好页,页脚提示跟着换。 */
+	const backToPrefs = returnToPrefs && (stepId === "mode" || stepId === "scope" || stepId === "shell");
 
 	/** 主按钮文案:完成/下一步 + 各异步步的进行态。 */
 	const primaryLabel = isLast
 		? finishing
 			? "保存中…"
 			: "完成 ✓"
-		: modelBusy && step === 2
-			? "设置中…"
-			: bookBusy && step === 3
-				? "创建中…"
-				: "下一步 →";
+		: backToPrefs
+			? "返回界面偏好 →"
+			: modelBusy && stepId === "model"
+				? "设置中…"
+				: bookBusy && stepId === "book"
+					? "创建中…"
+					: "下一步 →";
 
 	return (
 		<div className={`wz-overlay${closing ? " is-closing" : ""}`} role="dialog" aria-modal="true" aria-label="首次启动配置向导">
@@ -496,7 +668,7 @@ export function SetupWizard({
 				</button>
 			</header>
 
-			{/* 五步进度条:每步等宽,线上色即状态(当前 $amber / 已过 $green / 未到 $line) */}
+			{/* 八步进度条:每步等宽,线上色即状态(当前 $amber / 已过 $green / 未到 $line) */}
 			<nav className="wz-steps" aria-label="配置向导步骤">
 				{WIZARD_STEPS.map((s, i) => (
 					<div key={s.id} className={`wz-step${i === step ? " on" : ""}${i < step ? " done" : ""}`}>
@@ -513,7 +685,7 @@ export function SetupWizard({
 					</div>
 					<h1 className="wz-h1">{STEP_TITLE[stepId]}</h1>
 
-					{step === 0 && (
+					{stepId === "intro" && (
 						<>
 							<p className="wz-lead">AI 长篇写作工作台。只需一分钟完成初始配置,之后随时可以在设置里修改。</p>
 							<div className="wz-feats">
@@ -563,7 +735,64 @@ export function SetupWizard({
 						</>
 					)}
 
-					{step === 1 && (
+					{stepId === "mode" && (
+						<>
+							<p className="wz-lead">
+								两种方式的界面与 AI 分工不同;不确定就用带「默认」的那一张,随时可以在「设置 → 高级 →
+								Agent 形态」改回来。
+							</p>
+							{/* 两张大卡:与设置页「Agent 形态」卡同一实现(骨架与文案都只写一份) */}
+							<CreationModeCards classic={classicMode} onPick={(v) => void pickMode(v)} busy={modeBusy || finishing} />
+						</>
+					)}
+
+					{stepId === "scope" && (
+						<>
+							<p className="wz-lead">
+								决定 AI 的对话按什么单位走:跟着章节走,还是和章节各聊各的。不确定就用带「默认」的那一张,随时可以在「设置 →
+								高级 → 对话与章节」改回来。
+							</p>
+							{/* 与设置页「对话与章节」卡同一实现(骨架与文案都只写一份) */}
+							<ConversationScopeCards
+								scope={conversationScope}
+								onPick={(v) => void pickConversationScope(v)}
+								busy={scopeBusy || finishing}
+							/>
+							<div className="wz-hint">
+								改这里会释放已建的编剧会话,下一次对话按新关系走。两种关系在编辑器里都能用,区别只在「一段对话记得多少、能改哪里」。
+							</div>
+						</>
+					)}
+
+					{stepId === "shell" && (
+						<>
+							<p className="wz-lead">
+								这是整份向导里唯一一项权限授予:开了 AI 才能在你这台机器上真执行命令。默认关闭,只有需要它调 pandoc、git
+								这类外部工具时才打开。
+							</p>
+							{/* 两选一卡片:风险确认文案与设置页那一处共用一份(SHELL_CONFIRM_TEXT) */}
+							<ShellCards enabled={shellEnabled} onPick={askShellEnable} busy={shellBusy || finishing} />
+							{shellConfirm && (
+								<div className="s-plugin-trust-confirm">
+									<div className="s-plugin-trust-warn">{SHELL_CONFIRM_TEXT}</div>
+									<div className="st-actions">
+										<button type="button" className="btn-ghost danger" disabled={shellBusy} onClick={() => void toggleShell(true)}>
+											确认启用
+										</button>
+										<button type="button" className="btn-ghost" onClick={() => setShellConfirm(false)}>
+											取消
+										</button>
+									</div>
+								</div>
+							)}
+							<div className="wz-hint">
+								开启后命令与输出会实时显示在对话里(调试模式下也可见);方言与可执行文件路径在「设置 →
+								高级 → 执行命令」里改。
+							</div>
+						</>
+					)}
+
+					{stepId === "provider" && (
 						<>
 							<p className="wz-lead">
 								选一个服务商,填入 API key,它的模型就能在下一步选为默认。key 只保存在本地{" "}
@@ -643,7 +872,7 @@ export function SetupWizard({
 						</>
 					)}
 
-					{step === 2 && (
+					{stepId === "model" && (
 						<>
 							<p className="wz-lead">选择默认模型与思考级别;列表为空时请先配置服务商或联网刷新。</p>
 							<div className="wz-card">
@@ -680,7 +909,7 @@ export function SetupWizard({
 						</>
 					)}
 
-					{step === 3 && (
+					{stepId === "book" && (
 						<>
 							<p className="wz-lead">创建你的第一本书;标题留空则跳过,之后随时在编辑页新建。</p>
 							<div className="wz-card">
@@ -714,7 +943,7 @@ export function SetupWizard({
 						</>
 					)}
 
-					{step === 4 && (
+					{stepId === "prefs" && (
 						<>
 							<p className="wz-lead">挑选主题与界面偏好,立即生效,随时可在设置中修改。</p>
 							<div className="wz-sec">
@@ -726,12 +955,43 @@ export function SetupWizard({
 								<ThemeCardsFromManifest builtin={builtinThemes} user={userThemes} current={theme} onPick={selectTheme} />
 							</div>
 							<div className="wz-prefs">
+								{/*
+								 * 三个「形态 / 权限」设置在各自那一步用大卡选过,这里只回显 + 一键跳回。
+								 * 跳回走 editFromPrefs:那三步的主按钮会变成「返回界面偏好」,不重走中间几步
+								 * (建书步不能重走,2026-10-02)。
+								 */}
 								<div className="wz-pref-row">
 									<div className="wz-pref-text">
-										<div className="wz-pref-title">经典模式(单 Agent)</div>
-										<div className="wz-pref-desc">开启后去掉舞台,编辑页换成带全量工具的唯一写作 agent。</div>
+										<div className="wz-pref-title">创作方式</div>
+										<div className="wz-pref-desc">
+											当前:{classicMode ? "单 Agent 写作(经典模式)" : "多 Agent 协作"}。
+										</div>
 									</div>
-									<ToggleSwitch checked={classicMode} onChange={(v) => void toggleClassic(v)} ariaLabel="经典模式" />
+									<button type="button" className="btn-ghost" disabled={busy} onClick={() => editFromPrefs("mode")}>
+										改
+									</button>
+								</div>
+								<div className="wz-pref-row">
+									<div className="wz-pref-text">
+										<div className="wz-pref-title">对话与章节</div>
+										<div className="wz-pref-desc">
+											当前:{conversationScope === "book" ? "分离(各聊各的)" : "绑定章节(新章节 = 新对话)"}。
+										</div>
+									</div>
+									<button type="button" className="btn-ghost" disabled={busy} onClick={() => editFromPrefs("scope")}>
+										改
+									</button>
+								</div>
+								<div className="wz-pref-row">
+									<div className="wz-pref-text">
+										<div className="wz-pref-title">执行命令(shell)</div>
+										<div className="wz-pref-desc">
+											当前:{shellEnabled ? "已开启(命令与输出实时可见)" : "关闭(不给 AI 本机命令权限)"}。
+										</div>
+									</div>
+									<button type="button" className="btn-ghost" disabled={busy} onClick={() => editFromPrefs("shell")}>
+										改
+									</button>
 								</div>
 								<div className="wz-pref-row">
 									<div className="wz-pref-text">
@@ -777,7 +1037,9 @@ export function SetupWizard({
 						</div>
 					)}
 					<div className="wz-foot-row">
-						<div className="wz-foot-hint">{STEP_FOOT_HINT[stepId]}</div>
+						<div className="wz-foot-hint">
+							{backToPrefs ? "改完点右下角回「界面偏好」,不用重走中间几步" : STEP_FOOT_HINT[stepId]}
+						</div>
 						<div className="wz-foot-actions">
 							{step > 0 && (
 								<button type="button" className="wz-ghost" disabled={busy} onClick={back}>

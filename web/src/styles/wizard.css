@@ -4,7 +4,7 @@
    (旧的 .wz-panel 弹窗形态、.wz-step-dot 圆点、.wz-body/.wz-head 已不再使用)。
 
    版式全部来自导出稿(1440 逻辑宽)的实测值:
-   - 顶栏 64 / 步骤条 900(5×175 + 4×7)/ 内容列 720 居中 / 页脚与内容列同宽对齐;
+   - 顶栏 64 / 步骤条 900(六段等宽,段数随步骤表走)/ 内容列 720 居中 / 页脚与内容列同宽对齐;
    - 步骤条:段宽 175、线厚 2、圆头;标签 12,当前 $ink 其余 $faint;
    - 服务商行高 48 / 单选圈 18(环 2 + 内点 8)/ 「已配置」胶囊高 20;
    - 表单控件高 44 / 页脚主按钮高 42 / 特性卡图标底 34。
@@ -60,12 +60,13 @@
 .wz-skip:hover:not(:disabled) { color: var(--ink-2); background: var(--hover-tint); }
 .wz-skip:disabled { opacity: 0.4; cursor: default; }
 
-/* —— 五步进度条:等宽,线上色即状态 —— */
+/* —— 六步进度条:等宽,线上色即状态 —— */
 .wz-steps {
-  /* 段宽 175、间隙 7:900 = 5×175 + 4×7,左右不留白(窄屏才留 $sp-6) */
+  /* 段数随 WIZARD_STEPS 走(grid-auto-flow: column):加一步不用回来改列数。
+     实测宽 900,间隙 $sp-2(1500 逻辑宽下的 175 段宽是五步时代的数值)。 */
   flex: none; width: min(calc(var(--wz-steps-w) + var(--sp-6) * 2), 100%); margin: var(--sp-5) auto 0;
   padding: 0 var(--sp-6); box-sizing: border-box;
-  display: grid; grid-template-columns: repeat(5, 1fr); gap: var(--sp-2);
+  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: var(--sp-2);
 }
 /* padding/border 复位:旧 .wz-step 是带下边框的圆点步骤条 */
 .wz-step {
@@ -156,7 +157,12 @@
 /* 向导里的下拉(Select):撑满字段宽,控件高与输入框一致 */
 .sel.wz-sel { width: 100%; min-width: 0; height: var(--wz-ctl-h); flex: 1; }
 
-/* —— 步骤二:服务商单选列表 + 一行 key —— */
+/* —— 步骤二/三/四:三个单选卡片页(创作方式 / 对话范围 / 执行命令)——
+   卡片样式在 styles.css 的 .choice-*(ChoiceCards.tsx,与设置页共用) —— 向导这边只补间距:
+   大卡之后接说明文字时留一段呼吸,别和卡片贴在一起 */
+.choice-cards + .wz-hint { margin-top: var(--sp-4); }
+
+/* —— 步骤五:服务商单选列表 + 一行 key —— */
 .wz-prov { padding: var(--sp-2); }
 .wz-prov-list { display: flex; flex-direction: column; }
 .wz-prov-empty {
@@ -211,7 +217,7 @@
 .wz-key-err { margin-top: var(--sp-2); font-size: var(--fs-12); color: var(--red); }
 .wz-key-ok { margin-top: var(--sp-2); font-size: var(--fs-12); color: var(--green); }
 
-/* —— 步骤五:主题 + 界面偏好 —— */
+/* —— 步骤六:主题 + 界面偏好 —— */
 .wz-sec-head {
   display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-4);
   margin-bottom: var(--sp-3);
@@ -229,6 +235,9 @@
 .wz-pref-text { flex: 1; min-width: 0; }
 .wz-pref-title { font-size: var(--fs-13); color: var(--ink); margin-bottom: 2px; }
 .wz-pref-desc { font-size: var(--fs-12); line-height: 1.5; color: var(--muted); }
+/* 偏好行里的跳转钮(「改」回第 2 步):跟行高走 —— 手机端全局 button{min-height:44px}
+   会把这一行撑成两倍高(选择器权重高于元素选择器,不受加载顺序影响) */
+.wz-pref-row .btn-ghost { min-height: 0; }
 
 /* —— 页脚:左提示 + 右按钮(与内容列同宽对齐) —— */
 /* background/border 复位:旧 .wz-foot 是带 $bg-elev 底与上边框的弹窗页脚 */
@@ -277,7 +286,8 @@
 @media (max-width: 560px) {
   .wz-top { height: 56px; padding: 0 var(--sp-4); }
   .wz-steps { padding: 0 var(--sp-4); gap: var(--sp-1); }
-  .wz-step-label { font-size: var(--fs-11); }
+  /* 六段在 393px 下每段约 57px:标签允许折成两行(段线仍在同一行,不会错位) */
+  .wz-step-label { font-size: var(--fs-11); white-space: normal; text-align: center; line-height: 1.2; }
   .wz-main { padding: 40px var(--sp-4) var(--sp-4); }
   .wz-foot { padding: 0 var(--sp-4) var(--sp-5); }
   .wz-h1 { font-size: var(--fs-22); }

@@ -26,8 +26,9 @@ description: pi-writer 写作 agent 项目(独立仓库, vendor 化 pi 核心包
 | `src/atomic-write.ts` | **原子写唯一实现**(唯一 tmp + rename 重试);book-manager/world-data/mcp 配置共用 |
 | `src/session-text.ts` | **会话消息文本提取唯一实现**(chatTextOfMessage/chatThinkingOfMessage);TUI extension 与 web session-host 共用 |
 | `src/extension.ts` | TUI 内联扩展:`pi.registerTool`(word_count/world_update/world_find)+ 全部 `/` 命令 |
-| `src/prompt.ts` | `WRITER_SYSTEM_PROMPT` 写作系统提示词(工具约束/场景节奏/世界维护) |
-| `src/tools.ts` | 自定义工具:word_count(手写词扫描,不依赖 `\p{L}`)、world_update、world_find(defineTool + typebox) |
+| `src/prompt.ts` | `WRITER_SYSTEM_PROMPT` 写作系统提示词(工具约束/场景节奏/世界维护/**开场纪律**:新书没定风格时提一次并把长期偏好落盘) |
+| `prompts/` | 角色提示词本体:`writer-main.md`(写作 agent,TUI/经典模式/主会话,**2026-10-02 起 web 默认落地页**)/`writer-editor.md`(常驻编剧,**只有 world_find**)/`director.md`(导演,有 world_update,仅多 Agent 形态可达)。三份都带开场纪律,但落盘能力不同:写作 agent 与导演能写世界书,编剧只能写 `advice.md` 转交。`director.md` 的 `{STYLE_SETUP_PATH}` 由 `stage-extension.ts` 渲染成 onboarding 剧本绝对路径(舞台角色 `packagedSkills:false`,拿不到 `<available_skills>`) |
+| `src/tools.ts` | 自定义工具:word_count(手写词扫描,不依赖 `\p{L}`)、world_update、world_find、**style_update**(编剧窄通道:只写写作约束/文风采样/世界观概述,`applyStyleUpdate` 复用 `applyWorldUpdate` 引擎,约束强制 target=writer 且按**名字** upsert/删除;不写 `stage/last-world-edit.json` 记录——那只归舞台页消费)(defineTool + typebox) |
 | `src/tool-guard.ts` | `installToolPathGuard` 工具路径守卫(书目录内读写 + skills 只读) |
 | `src/mcp/` | MCP 配置(config.ts typebox 校验)/连接管理(manager.ts SDK 封装)/工具适配(tools.ts JSON Schema→typebox) |
 | `src/stage/` | 舞台区(导演/演员/编剧多 agent 共演 demo):orchestrator(状态机)/types/cast/script-store/stage-store/assembler/counters/stage-extension/cli |
@@ -36,7 +37,7 @@ description: pi-writer 写作 agent 项目(独立仓库, vendor 化 pi 核心包
 | `electron/` | Electron 壳:main.ts(进程内起服务 + 窗口)、preload.ts |
 | `dist/web/server.cjs` | 服务端 esbuild 单文件产物(全部依赖内联);**必须 .cjs 后缀**(包根 type:module) |
 | `test/` | vitest 测试(globals:true,只测纯逻辑,不碰真实 provider) |
-| `skills/` | 打包的写作技能 outline/critique/revise(SKILL.md) |
+| `skills/` | 打包的写作技能:outline/critique/revise/stage-scripting(SKILL.md)+ `craft`(**网文创作方法论文库**:76 份原样 vendor 的第三方 references,来源与 commit 见 `skills/craft/references/ATTRIBUTION.md`;SKILL.md 只做路由,不含流程)+ `onboarding`(**上手引导**:环境心智模型 / 风格引导剧本 / 功能教程备料三份 references;补首启向导不覆盖的「写作风格与题材风格」,三条铁律=没问不讲、不泄内部名、一次只讲一条) |
 
 ## Web 前端架构(深夜书房,2026-08-07 重设计)
 
@@ -59,6 +60,8 @@ description: pi-writer 写作 agent 项目(独立仓库, vendor 化 pi 核心包
 ## 关键实现位置(新功能索引)
 
 - **书/章节重命名**:`renameBook`(book-manager.ts)→ `PATCH /api/books/:slug`(server.ts,当前书走 enqueueSwitch 迁移会话)→ 前端 ChapterSidebar 行内输入 → TUI `/rename-book`(extension.ts)
+- **创作方式(多 Agent / 单 Agent)**:唯一实现 `web/src/components/CreationModeCards.tsx`(首启向导「创作方式」步 + 设置页「Agent 形态」卡,文案只写一份;手机端设置索引里是「Agent 形态」子页)。值是服务端 `settings.json` 的 `classicMode`,链路 `App.changeClassicMode` → `PUT /api/settings` → `WriterHost.setClassicMode`(切换即释放已建会话,下次对话生效)。**默认值有两份且必须同步翻转**:`src/writer-settings.ts` 的 `defaultWriterSettings()`(权威,2026-10-02 起 `classicMode: true` = 单 Agent)与 `web/src/settings.ts` 的 `parseClassicMode`(浏览器首帧缓存;只改一处会先画出舞台入口再收回,`test/settings.test.ts` 有护栏比对)。**首启向导八步**(2026-10-02:6 → 8,新增「对话范围」「执行命令」两步):步骤表两份必须同序 —— `SETUP_STEPS`(src/setup.ts)与 `WIZARD_STEPS`(SetupWizard.tsx);步骤判断一律用 `stepId` 不用 `step === N`,跳转走 `nextStep()` / `stepIndex(id)` 不写字面下标(插步骤时下标全体顺移,漏一处就是"进度条在第 N 步、界面还是第 N-1 步的控件");加步骤是追加式,不递增 `SETUP_VERSION`。已有 `settings.json` 的安装不受默认值翻转影响(文件里是显式值)
+- **三处两选一卡片**:骨架唯一实现 `web/src/components/ChoiceCards.tsx`(`.choice-*` 样式在 styles.css;图标底 + 标题胶囊 + 一句话定位 + 要点列表 + 右上单选圈),数据各一份 —— `CreationModeCards.tsx`(多/单 Agent)、`ConversationScopeCards.tsx`(绑定章节/分离)、`ShellCards.tsx`(保持关闭/开启 shell,并导出两处共用的风险确认正文 `SHELL_CONFIRM_TEXT`)。加第四处 = 只加一份数据,不要复制骨架。三处都**不落盘**:写服务端 + 失败回滚在调用方(`App.changeClassicMode` / `changeConversationScope` / `changeShellEnabled`)
 - **MCP**:`src/mcp/`(config/manager/tools)→ `GET|POST|PUT|DELETE /api/mcp` + `GET|PUT /api/mcp/raw`(直接编辑文件,原样读写含 imports/mcpServers 形状;保存后 reloadRuntime + 重新注入背景包)→ 设置页 McpServerList.tsx。传输 stdio/sse/http(streamable);兼容 Claude Code 配置(`imports: ["claude-code"]` 合并 ~/.claude.json);断线自动重连(watchdog 3-30s,重连后 handleMcpReload 重建会话)
 - **撤回/编辑/分支**:session-host.ts(`retractMessage` 仅限最新 user 消息/`branchMessage`/`navigateTo`/`getSessionTree`)→ server.ts 端点 → 前端 MessageList.tsx(按钮:最新=编辑/撤回,旧=分支)+ BranchBar.tsx(分支栏切换)
 - **cot 合并+计时**:session-host `extractMessages` 按 user 开组合并(服务端分组权威);store.ts 实时同规则合并;MessageList ThinkingBlock 计时
@@ -69,7 +72,8 @@ description: pi-writer 写作 agent 项目(独立仓库, vendor 化 pi 核心包
 - **自定义供应商 / 模型(models.json)**:`src/custom-models.ts` 是 models.json 增删改的**唯一纯函数实现**(`upsertCustomProvider`/`hasCustomProvider`/`updateCustomModel`/`deleteCustomModel`/`deleteCustomProvider`),落盘与热重载在 server.ts(`writeModelsConfig` + `reloadModels`)。两个入口分开:**加供应商** = `POST /api/providers/custom`(只写 provider 级 api/baseUrl/apiKey/name,`models: []`),**加模型** = `POST /api/models/custom`(在已有供应商下追加,不再覆盖条目的 `api`/`baseUrl`)。`GET /api/providers` 走 `listProvidersWithCustom()`:`SessionHost.listProviders()` 是从**模型目录反推** provider 的(`new Set(mr.getModels().map(m => m.provider))`),零模型的供应商没有痕迹,所以 server 再把 models.json 的条目补进来并 `sortProviders`。前端 ProviderList(桌面双栏 / 手机三态)+ AddProviderDialog + AddModelDialog
 - **换模型 / 换思考档位(会话级设置)**:`POST /api/model`、`POST /api/thinking` → `WriterServer.applyToAllSessions`(三处宿主齐发)→ `WriterHost.setModel`/`setThinkingLevel`、`StageHost` 与 `StageOrchestrator` 的同名方法(已建会话即时生效,演员级 `model` 覆盖优先);装配工厂里的 model/thinkingLevel 是 getter。**漏一处就等于「同一个对话窗口换模型不生效」**(2026-10-01,详见坑 23)
 - **手机端**:`useIsPhone()`/`PHONE_QUERY`(useMediaQuery.ts)+ `MobileHeader.tsx` + `WorldEntryDetail.tsx`(条目只读详情)+ `styles/mobile.css`,之后还有一层 `styles/presence.css`(**必须最后 import**,退场动画要压过各页入场 animation);四页 `MobileHeader` 由 App 传 `nav={{view, onNavigate}}` 接抽屉导航;编辑页底部输入条 `.m-composer`;设置页的 `PHONE_PAGES` + `cardClass()` 决定手机子页显示哪张卡
-- **斜杠命令**:`web/src/slash-commands.ts`(parseSlashQuery/SlashCommand/SlashSuggestion + node/chapter/compact 工厂)→ `InputBar.tsx`(commands/context props,↑/↓+Enter/Tab 选择)→ `WritePage`/`StagePage` 注册;测试 `test/slash-commands.test.ts`
+- **斜杠命令**:`web/src/slash-commands.ts`(parseSlashQuery/SlashCommand/SlashSuggestion + node/chapter/compact/skill 工厂)→ `InputBar.tsx`(commands/context props,↑/↓+Enter/Tab 选择)→ `WritePage`/`StagePage` 注册;测试 `test/slash-commands.test.ts`。**`/skill`(2026-10-02)**:候选来自 `GET /api/skills`(`src/skills-index.ts` 用 vendor `loadSkills` + `sessionSkillDirs`,与 agent 装配同源 —— 菜单名字必须等于 `/skill:<name>` 能展开的那份),插入文本是 `/skill:<名字> ` 字面形态(vendor `agent-session.ts` 的 `_expandSkillCommand` 只认消息**首位**的 `/skill:`,所以 `composeMessageWithAttachments` 带引用芯片时把技能指令提到最前);技能正文由 vendor 展开,前端不要再拼一遍
+- **技能纪律(2026-10-02 放宽)**:三份提示词里 `writer-main.md` / `writer-editor.md` 有《技能(按需使用)》一节 —— 场景命中就**直接按方法做事**,不再要求「只在用户提出时提供」;唯一保留的边界是**多轮流程先问一句**(不朗读方法论、不倒清单、不报技能名与路径),另有用户显式点名通道 `/skill:<name>`。舞台角色是**故意不给**技能浏览的(`packagedSkills:false`,避免诱导演员/导演去改正文),它们只有 `{SKILLS_PATH}` 指到的方法论文件
 - **上下文压缩**:`SessionHost.getContextUsage/compact`(vendor getContextUsage/compact)→ writer 端点 `GET /api/writer/:slug/context` + `POST /api/writer/:slug/compact`;导演走 `stage command compact` + 快照 `directorUsage`;前端 compaction_start/end → MessageList 压缩提示 + context-usage 80% 提示
 - **UI 房(调试模式的组件陈列室)**:`web/src/pages/UIRoom.tsx`(页面壳:搜索 / 分组 / 带框格子宽度)+ `web/src/uiroom-types.ts`(**展项契约**:分组 / 展项 / 状态档类型 + 覆盖计算)+ 六个展项文件 `web/src/uiroom/{atoms,chat,world,settings,stage,tokens}.tsx` + `web/src/uiroom-runtime.tsx`(展项取 client/slug/library 的上下文,含 `demoLibrary()`)+ `web/src/styles/uiroom.css`。入口由 `web/src/nav.ts` 的 `navItems({debugMode})` 决定(App 顶栏 + ChapterSidebar 手机抽屉 + UI 房自带手机导航)。**加组件的同一条提交里要加展项**(或在 `UIROOM_NOT_EXHIBITED` 登记理由),否则 `test/uiroom.test.ts` 红
 - **插件预留**:`src/plugins.ts` 类型 + `WriterServerOptions.extraRoutes` + `broadcastEvent()`;后端执行式插件未来注入 `extensionFactories`,前端只接受声明式清单(不在 renderer 跑用户 JS)

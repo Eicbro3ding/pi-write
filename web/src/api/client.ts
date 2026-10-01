@@ -5,7 +5,7 @@
  * 注意:本文件不得在 import 时触碰 DOM 专属 API(EventSource 只在 subscribeEvents 内使用),
  * 以兼容 node 环境的 vitest 单测。
  */
-import type { AgentEventDto, BookDetail, BookFileTextDto, BookFilesDto, BookMeta, ChapterRef, ContextUsageDto, ImageProviderDto, ImageSizeDto, McpServerInfo, McpServerStatus, PluginInfoDto, PluginSettingsItemDto, ProviderDetailDto, ProviderInfo, ProviderRefreshError, ResolvedShellDto, SessionState, SessionUsageStatsDto, SessionTreeDto, SetupStateDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, WorldDataDto, ShellKindDto, WriterSettingsDto, WriterStateDto } from "../types.ts";
+import type { AgentEventDto, BookDetail, BookFileTextDto, BookFilesDto, BookMeta, ChapterRef, ContextUsageDto, ConversationDto, ConversationScopeDto, ImageProviderDto, ImageSizeDto, McpServerInfo, McpServerStatus, PluginInfoDto, PluginSettingsItemDto, ProviderDetailDto, ProviderInfo, ProviderRefreshError, ResolvedShellDto, SessionState, SessionUsageStatsDto, SessionTreeDto, SetupStateDto, SkillInfoDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, WorldDataDto, ShellKindDto, WriterSettingsDto, WriterStateDto } from "../types.ts";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
 
 /** 图片访问 URL(同源相对路径;生产/Electron 同源,vite dev 经代理)。 */
@@ -41,6 +41,33 @@ async function apiErrorFrom(res: Response): Promise<ApiError> {
 		/* 错误体不是 JSON:忽略,用默认消息 */
 	}
 	return new ApiError(res.status, message);
+}
+
+/**
+ * writer 端点的两个可选定位参数 → 传输形态的**唯一翻译点**(与 server.ts 的
+ * `writerRef` 对齐)。三态语义(别用 `if (x)` 一把梭,会丢掉「显式清空」):
+ *
+ * - `undefined` = 不传 → 服务端保留上次登记(chapter 模式的回落链靠它);
+ * - `null` / `""` = **显式空值** → `chapterFile=`(book 模式 = 没有正在看的章节,
+ *   服务端据此清掉正文块注入);`conversation` 的空值当没传(不存在"清空当前对话");
+ * - 字符串 = 定位到它。
+ *
+ * 返回值同时可用作 GET 的 query 与 POST 的 body —— 两种载荷里空串都表达"显式清空"
+ * (JSON 的 null 会被服务端的 `?? searchParams` 吞掉,所以只能用空串)。
+ * 两个参数各自独立:chapter 模式只传 chapterFile(= 会话身份,零变化),
+ * book 模式额外传 conversation(= 会话身份,chapterFile 只决定注入哪章正文)。
+ */
+export function writerLocator(chapterFile?: string | null, conversation?: string | null): Record<string, string> {
+	const locator: Record<string, string> = {};
+	if (chapterFile !== undefined) locator.chapterFile = chapterFile ?? "";
+	if (conversation) locator.conversation = conversation;
+	return locator;
+}
+
+/** 把定位参数拼进 query 串(空对象 → 空串,URL 与改动前逐字节一致)。 */
+function withQuery(path: string, locator: Record<string, string>): string {
+	const q = new URLSearchParams(locator).toString();
+	return q ? `${path}?${q}` : path;
 }
 
 export class ApiClient {
@@ -329,6 +356,8 @@ export class ApiClient {
 	 */
 	async putSettings(patch: {
 		classicMode?: boolean;
+		/** 对话与章节的关系(chapter 缺省 / book);切换会释放服务端已建编剧会话。 */
+		conversationScope?: ConversationScopeDto;
 		enableShell?: boolean;
 		shellKind?: ShellKindDto;
 		shellPath?: string;
@@ -499,6 +528,21 @@ export class ApiClient {
 		return this.request<ThemeManifest>("/api/themes");
 	}
 
+	/**
+	 * 技能清单(`/skill` 菜单的候选项)。与 agent 装配同源:后端走 vendor 的 loadSkills,
+	 * 所以这里列出的名字就是 `/skill:<name>` 能展开的那份。读不到时返回空数组(菜单空着,
+	 * 不影响用户自己打字)。
+	 */
+	async getSkills(slug?: string): Promise<SkillInfoDto[]> {
+		try {
+			const q = slug ? `?${new URLSearchParams({ slug }).toString()}` : "";
+			const r = await this.request<{ skills: SkillInfoDto[] }>(`/api/skills${q}`);
+			return r.skills;
+		} catch {
+			return [];
+		}
+	}
+
 	/** 插件列表(id 排序;含启用状态与装载错误)。 */
 	async getPlugins(): Promise<PluginInfoDto[]> {
 		const r = await this.request<{ plugins: PluginInfoDto[] }>("/api/plugins");
@@ -658,37 +702,43 @@ export class ApiClient {
 	}
 
 	/** 常驻编剧会话状态(纯读;未对话过的章节返回空态,不创建会话)。
-	 *  chapterFile 可选:缺省用该书最近对话章节。 */
-	async getWriterState(slug: string, chapterFile?: string | null): Promise<WriterStateDto> {
-		const q = new URLSearchParams();
-		if (chapterFile) q.set("chapterFile", chapterFile);
-		const qs = q.toString();
-		return this.request<WriterStateDto>(`/api/writer/${encodeURIComponent(slug)}${qs ? `?${qs}` : ""}`);
+	 *  chapterFile 可选:缺省用该书最近对话章节;book 模式下传 null 表示「没在看任何章节」。
+	 *  conversation 可选(book 模式):定位到具体对话,并登记为当前对话。 */
+	async getWriterState(slug: string, chapterFile?: string | null, conversation?: string | null): Promise<WriterStateDto> {
+		return this.request<WriterStateDto>(
+			withQuery(`/api/writer/${encodeURIComponent(slug)}`, writerLocator(chapterFile, conversation)),
+		);
 	}
 
 	/** 发消息给编剧(202 立即返回,消息/工具事件经 writer_event SSE 到达)。 */
-	async writerChat(slug: string, text: string, chapterFile?: string): Promise<void> {
+	async writerChat(slug: string, text: string, chapterFile?: string | null, conversation?: string | null): Promise<void> {
 		await this.request<{ ok: boolean }>(`/api/writer/${encodeURIComponent(slug)}/chat`, {
 			method: "POST",
-			body: JSON.stringify({ text, ...(chapterFile ? { chapterFile } : {}) }),
+			body: JSON.stringify({ text, ...writerLocator(chapterFile, conversation) }),
 		});
 	}
 
-	/** 中止编剧当前生成。 */
-	async writerAbort(slug: string): Promise<void> {
-		await this.request<{ ok: boolean }>(`/api/writer/${encodeURIComponent(slug)}/abort`, { method: "POST" });
+	/** 中止编剧当前生成(book 模式按对话中止;不传 conversation 时中止该书全部对话)。 */
+	async writerAbort(slug: string, conversation?: string | null): Promise<void> {
+		await this.request<{ ok: boolean }>(`/api/writer/${encodeURIComponent(slug)}/abort`, {
+			method: "POST",
+			body: JSON.stringify(writerLocator(undefined, conversation)),
+		});
 	}
 
 	/** 编剧会话上下文占用(无会话/未知 → null;供「建议 /compact」提示与输入条的圆环)。
 	 *  `warm` = 磁盘上已有该章会话时请服务端顺带把会话带起来 —— 打开页面/重连时用,
 	 *  否则服务重启后圆环要等本章说一句话才出现(2026-09-23)。 */
-	async writerContext(slug: string, chapterFile?: string | null, warm?: boolean): Promise<ContextUsageDto | null> {
-		const q = new URLSearchParams();
-		if (chapterFile) q.set("chapterFile", chapterFile);
-		if (warm) q.set("warm", "1");
-		const qs = q.toString();
+	async writerContext(
+		slug: string,
+		chapterFile?: string | null,
+		warm?: boolean,
+		conversation?: string | null,
+	): Promise<ContextUsageDto | null> {
+		const locator = writerLocator(chapterFile, conversation);
+		if (warm) locator.warm = "1";
 		const r = await this.request<{ usage: ContextUsageDto | null }>(
-			`/api/writer/${encodeURIComponent(slug)}/context${qs ? `?${qs}` : ""}`,
+			withQuery(`/api/writer/${encodeURIComponent(slug)}/context`, locator),
 		);
 		return r.usage;
 	}
@@ -698,13 +748,16 @@ export class ApiClient {
 	 * `warm` 同 writerContext:磁盘已有该章会话就带起来再读,否则服务重启后首次打开
 	 * 会拿到 null(2026-09-23)。
 	 */
-	async writerStats(slug: string, chapterFile?: string | null, warm?: boolean): Promise<SessionUsageStatsDto | null> {
-		const q = new URLSearchParams();
-		if (chapterFile) q.set("chapterFile", chapterFile);
-		if (warm) q.set("warm", "1");
-		const qs = q.toString();
+	async writerStats(
+		slug: string,
+		chapterFile?: string | null,
+		warm?: boolean,
+		conversation?: string | null,
+	): Promise<SessionUsageStatsDto | null> {
+		const locator = writerLocator(chapterFile, conversation);
+		if (warm) locator.warm = "1";
 		const r = await this.request<{ stats: SessionUsageStatsDto | null }>(
-			`/api/writer/${encodeURIComponent(slug)}/stats${qs ? `?${qs}` : ""}`,
+			withQuery(`/api/writer/${encodeURIComponent(slug)}/stats`, locator),
 		);
 		return r.stats;
 	}
@@ -714,12 +767,13 @@ export class ApiClient {
 		slug: string,
 		chapterFile?: string | null,
 		instructions?: string,
+		conversation?: string | null,
 	): Promise<{ summary: string; tokensBefore: number; estimatedTokensAfter?: number }> {
 		const res = await fetch(`${this.baseUrl}/api/writer/${encodeURIComponent(slug)}/compact`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
-				...(chapterFile ? { chapterFile } : {}),
+				...writerLocator(chapterFile, conversation),
 				...(instructions ? { instructions } : {}),
 			}),
 			signal: AbortSignal.timeout(600_000),
@@ -729,31 +783,67 @@ export class ApiClient {
 	}
 
 	/** 编剧会话「编辑重发」:撤回最新用户消息(及之后),replacement 非空时撤回后重发。
-	 *  chapterFile 声明归属章节(编剧对话按章节隔离)。 */
-	async writerRetract(slug: string, entryId: string, replacement?: string, chapterFile?: string | null): Promise<void> {
+	 *  chapterFile 声明归属章节(编剧对话按章节隔离);conversation 声明归属对话。 */
+	async writerRetract(
+		slug: string,
+		entryId: string,
+		replacement?: string,
+		chapterFile?: string | null,
+		conversation?: string | null,
+	): Promise<void> {
 		await this.request<{ ok: boolean }>(`/api/writer/${encodeURIComponent(slug)}/retract`, {
 			method: "POST",
 			body: JSON.stringify({
 				entryId,
 				...(replacement ? { replacement } : {}),
-				...(chapterFile ? { chapterFile } : {}),
+				...writerLocator(chapterFile, conversation),
 			}),
 		});
 	}
 
-	/** 编剧会话分支树(切换 UI 数据;按章节)。 */
-	async writerTree(slug: string, chapterFile?: string | null): Promise<SessionTreeDto> {
-		const q = new URLSearchParams();
-		if (chapterFile) q.set("chapterFile", chapterFile);
-		const qs = q.toString();
-		return this.request<SessionTreeDto>(`/api/writer/${encodeURIComponent(slug)}/tree${qs ? `?${qs}` : ""}`);
+	/** 编剧会话分支树(切换 UI 数据;按章节/对话)。 */
+	async writerTree(slug: string, chapterFile?: string | null, conversation?: string | null): Promise<SessionTreeDto> {
+		return this.request<SessionTreeDto>(
+			withQuery(`/api/writer/${encodeURIComponent(slug)}/tree`, writerLocator(chapterFile, conversation)),
+		);
 	}
 
 	/** 编剧会话分支切换(leafId);服务端重建上下文并广播,前端经 messages_retracted 对齐。 */
-	async writerNavigate(slug: string, entryId: string, chapterFile?: string | null): Promise<void> {
+	async writerNavigate(
+		slug: string,
+		entryId: string,
+		chapterFile?: string | null,
+		conversation?: string | null,
+	): Promise<void> {
 		await this.request<{ ok: boolean }>(`/api/writer/${encodeURIComponent(slug)}/navigate`, {
 			method: "POST",
-			body: JSON.stringify({ entryId, ...(chapterFile ? { chapterFile } : {}) }),
+			body: JSON.stringify({ entryId, ...writerLocator(chapterFile, conversation) }),
 		});
+	}
+
+	// ---- 对话(book 模式:对话与章节各聊各的) ----
+
+	/** 该书的对话清单(mtime 倒序;id 是章节文件名或裸 id `c-xxxxxx`)。 */
+	async getConversations(slug: string): Promise<ConversationDto[]> {
+		const r = await this.request<{ conversations: ConversationDto[] }>(
+			withQuery("/api/conversations", { slug }),
+		);
+		return r.conversations;
+	}
+
+	/** 新建一段与章节无关的对话(后端返回 201);新对话自动成为当前,返回最新清单。 */
+	async createConversation(slug: string): Promise<{ conversation: ConversationDto; conversations: ConversationDto[] }> {
+		return this.request<{ conversation: ConversationDto; conversations: ConversationDto[] }>("/api/conversations", {
+			method: "POST",
+			body: JSON.stringify({ slug }),
+		});
+	}
+
+	/** 删除一段对话(释放内存宿主 + 删会话文件;**不动** `<id>.cards.json` 卡片)。 */
+	async deleteConversation(slug: string, id: string): Promise<void> {
+		await this.request<{ ok: boolean }>(
+			withQuery(`/api/conversations/${encodeURIComponent(id)}`, { slug }),
+			{ method: "DELETE" },
+		);
 	}
 }

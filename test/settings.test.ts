@@ -15,7 +15,12 @@ import {
 	setAutoExpandThinking,
 	setClassicMode,
 	setDebugMode,
+	parseConversationScope,
+	conversationScope,
+	setConversationScope,
 } from "../web/src/settings.ts";
+// 跨模块比对「两处默认值」:服务端默认(权威)与浏览器首帧缓存必须一致
+import { defaultWriterSettings } from "../src/writer-settings.ts";
 
 const DEBUG_KEY = "pi-writer-debug-mode";
 const DEBUG_UNLOCK_KEY = "pi-writer-debug-unlocked";
@@ -23,6 +28,7 @@ const DEBUG_MIGRATED_KEY = "pi-writer-debug-migrated";
 const LEGACY_KEY = "pi-writer-simplified-tools";
 const AUTO_EXPAND_KEY = "pi-writer-auto-expand-thinking";
 const CLASSIC_MODE_KEY = "pi-writer-classic-mode";
+const CONVERSATION_SCOPE_KEY = "pi-writer-conversation-scope";
 
 function stubStorage(init: Record<string, string> = {}) {
 	const store = new Map(Object.entries(init));
@@ -152,9 +158,9 @@ describe("自动展开思考设置", () => {
 });
 
 describe("经典模式本地缓存", () => {
-	it("缺省关闭(未存储任何值时不是经典模式)", () => {
+	it("缺省开启(未存储任何值 = 默认单 Agent)", () => {
 		stubStorage();
-		expect(classicModeEnabled()).toBe(false);
+		expect(classicModeEnabled()).toBe(true);
 	});
 	it("开启('1')/关闭('0')往返一致", () => {
 		stubStorage();
@@ -170,11 +176,46 @@ describe("经典模式本地缓存", () => {
 		setClassicMode(false);
 		expect(store.get(CLASSIC_MODE_KEY)).toBe("0");
 	});
-	it("parseClassicMode:缺省/非法值回退关闭,仅 '1' 开启", () => {
-		expect(parseClassicMode(null)).toBe(false);
-		expect(parseClassicMode(undefined)).toBe(false);
-		expect(parseClassicMode("0")).toBe(false);
-		expect(parseClassicMode("junk")).toBe(false);
+	it("parseClassicMode:缺省/非法值回退开启,仅显式 '0' 关闭", () => {
+		expect(parseClassicMode(null)).toBe(true);
+		expect(parseClassicMode(undefined)).toBe(true);
+		expect(parseClassicMode("junk")).toBe(true);
 		expect(parseClassicMode("1")).toBe(true);
+		expect(parseClassicMode("0")).toBe(false);
+	});
+	/**
+	 * 缺省值在前后端各有一份(服务端 settings.json 的默认 / 浏览器首帧缓存)。
+	 * 只改一处 → 顶栏先按旧默认画出舞台入口,对账后再收回(视觉抖动 + 用户困惑)。
+	 * 这条护栏不检查两处实现,只比对**两处的默认结论**。
+	 */
+	it("本地缺省与服务端缺省一致(两份默认值必须同步翻转)", () => {
+		expect(parseClassicMode(null)).toBe(defaultWriterSettings().classicMode);
+	});
+});
+
+describe("对话与章节关系(conversationScope)首帧缓存", () => {
+	it("parseConversationScope:仅显式 'book' 分离,其余(含缺省)一律绑定章节", () => {
+		expect(parseConversationScope("book")).toBe("book");
+		expect(parseConversationScope("chapter")).toBe("chapter");
+		expect(parseConversationScope(null)).toBe("chapter");
+		expect(parseConversationScope(undefined)).toBe("chapter");
+		expect(parseConversationScope("junk")).toBe("chapter");
+	});
+	it("开启/关闭往返一致并持久化到 localStorage 键", () => {
+		const store = stubStorage();
+		expect(conversationScope()).toBe("chapter");
+		setConversationScope("book");
+		expect(conversationScope()).toBe("book");
+		expect(store.get(CONVERSATION_SCOPE_KEY)).toBe("book");
+		setConversationScope("chapter");
+		expect(conversationScope()).toBe("chapter");
+		expect(store.get(CONVERSATION_SCOPE_KEY)).toBe("chapter");
+	});
+	/**
+	 * 与经典模式那条护栏同源:缺省值在前后端各有一份(服务端 settings.json 的默认 /
+	 * 浏览器首帧缓存)。只改一处 → 首帧按旧模式渲染再跳(切换器闪一下)。
+	 */
+	it("本地缺省与服务端缺省一致(两份默认值必须同步翻转)", () => {
+		expect(parseConversationScope(null)).toBe(defaultWriterSettings().conversationScope);
 	});
 });

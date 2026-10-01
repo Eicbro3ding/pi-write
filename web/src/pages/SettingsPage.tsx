@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { ApiError, type ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
-import { IMAGE_SIZE_PX_TEXT, type ImageProviderDto, type ImageSizeDto, type PluginInfoDto, type ResolvedShellDto, type ShellDialectDto, type ShellKindDto, type UserThemeInfo, type WorldDataDto, type WriterSettingsDto } from "../types.ts";
+import { IMAGE_SIZE_PX_TEXT, type ConversationScopeDto, type ImageProviderDto, type ImageSizeDto, type PluginInfoDto, type ResolvedShellDto, type ShellDialectDto, type ShellKindDto, type UserThemeInfo, type WorldDataDto, type WriterSettingsDto } from "../types.ts";
 import type { EnterBehavior } from "../settings.ts";
 import { buildThemeFamilies, NIGHT_THEME, themeFamilyPick, themeLabelFromCss, themeStarterCss, USER_THEME_PREFIX, userThemeFile, type ThemeId } from "../themes.ts";
 import { applyTheme, currentTheme } from "../theme.ts";
 import { ProviderList } from "../components/ProviderList.tsx";
+import { CreationModeCards } from "../components/CreationModeCards.tsx";
+import { ConversationScopeCards } from "../components/ConversationScopeCards.tsx";
+import { SHELL_CONFIRM_TEXT } from "../components/ShellCards.tsx";
 import { McpServerList } from "../components/McpServerList.tsx";
 import { PluginList } from "../components/PluginList.tsx";
 import { PluginSettings } from "../components/PluginSettings.tsx";
@@ -94,6 +97,8 @@ const PHONE_PAGES: Record<string, { cat: string; cards: string[]; title: string 
 	world: { cat: "world", cards: ["world"], title: "世界书注入" },
 	image: { cat: "experimental", cards: ["image", "image-when"], title: "图片生成" },
 	shell: { cat: "advanced", cards: ["shell"], title: "执行命令" },
+	agent: { cat: "advanced", cards: ["agent"], title: "Agent 形态" },
+	conversation: { cat: "advanced", cards: ["conversation"], title: "对话与章节" },
 	deps: { cat: "advanced", cards: ["deps", "wizard"], title: "依赖与配置向导" },
 	mcp: { cat: "integrations", cards: ["mcp"], title: "MCP 服务器" },
 	plugins: { cat: "integrations", cards: ["plugins"], title: "插件" },
@@ -210,6 +215,8 @@ export function SettingsPage({
 	onAutoConfirmEditsChange,
 	classicMode,
 	onClassicModeChange,
+	conversationScope,
+	onConversationScopeChange,
 	shellEnabled,
 	onShellEnabledChange,
 	shellKind,
@@ -246,6 +253,10 @@ export function SettingsPage({
 	classicMode: boolean;
 	/** 切换经典模式(写服务端并释放已建会话;失败抛出由本页展示)。 */
 	onClassicModeChange: (enabled: boolean) => Promise<void>;
+	/** 对话与章节的关系(chapter = 一节一段对话;book = 各聊各的,AI 可编辑任意章节)。 */
+	conversationScope: ConversationScopeDto;
+	/** 切换对话与章节的关系(写服务端并释放已建会话;失败抛出由本页展示)。 */
+	onConversationScopeChange: (scope: ConversationScopeDto) => Promise<void>;
 	/** 外部命令(bash):agent 能否执行 shell 命令(存服务端 settings.json,缺省关闭)。 */
 	shellEnabled: boolean;
 	/** 开关外部命令(写服务端并重建会话;失败抛出由本页展示)。 */
@@ -464,14 +475,37 @@ export function SettingsPage({
 	/**
 	 * 切换经典模式:App 侧落盘 + 置位(开关即时响应),服务端写失败会回滚状态,
 	 * 这里只负责把错误摆到页面上(服务端切换会释放已建会话,下次对话才生效,
-	 * 失败不能静默——用户会以为已经切了)。
+	 * 失败不能静默——用户会以为已经切了)。busy 期间两张大卡禁用,避免连点。
 	 */
+	const [classicBusy, setClassicBusy] = useState(false);
 	async function toggleClassicMode(checked: boolean) {
+		if (classicBusy) return;
 		setActErr(null);
+		setClassicBusy(true);
 		try {
 			await onClassicModeChange(checked);
 		} catch (e) {
-			setActErr(`切换经典模式失败: ${friendlyError(e)}`);
+			setActErr(`切换创作方式失败: ${friendlyError(e)}`);
+		} finally {
+			setClassicBusy(false);
+		}
+	}
+
+	/**
+	 * 切换「对话与章节」的关系:与创作方式同款 —— App 侧落盘 + 置位,服务端写失败
+	 * 回滚状态,这里只负责把错误摆到页面上(切换会释放已建编剧会话,下次对话才生效)。
+	 */
+	const [scopeBusy, setScopeBusy] = useState(false);
+	async function toggleConversationScope(scope: ConversationScopeDto) {
+		if (scopeBusy) return;
+		setActErr(null);
+		setScopeBusy(true);
+		try {
+			await onConversationScopeChange(scope);
+		} catch (e) {
+			setActErr(`切换对话与章节失败: ${friendlyError(e)}`);
+		} finally {
+			setScopeBusy(false);
 		}
 	}
 
@@ -1020,12 +1054,18 @@ export function SettingsPage({
 			rows: [
 				{ key: "shell", icon: "wrench", label: "执行命令(shell)", value: shellEnabled ? (resolvedShell?.dialect ?? shellKind) : "关", page: "shell" },
 				{
-					key: "classic",
+					key: "agent",
 					icon: "users",
-					label: "经典模式",
-					sub: "去掉舞台,单一写作 agent",
-					on: classicMode,
-					onToggle: (v) => void toggleClassicMode(v),
+					label: "Agent 形态",
+					value: classicMode ? "单 Agent" : "多 Agent",
+					page: "agent",
+				},
+				{
+					key: "conversation",
+					icon: "message-square",
+					label: "对话与章节",
+					value: conversationScope === "book" ? "分离" : "绑定章节",
+					page: "conversation",
 				},
 				{ key: "deps", icon: "info", label: "依赖与配置向导", sub: "运行环境要求 · 重走一遍向导", page: "deps" },
 			],
@@ -1503,9 +1543,8 @@ export function SettingsPage({
 										</div>
 										{shellConfirm && (
 											<div className="s-plugin-trust-confirm">
-												<div className="s-plugin-trust-warn">
-													开启后,命令以与 pi-writer 相同的权限在真实 shell 里运行:可以读写整台磁盘、访问网络,书目录的路径限制对它无效。它只能被「看得见」约束——每条命令与输出都会实时显示在对话里。确认开启吗?
-												</div>
+												{/* 风险确认正文与首启向导「执行命令」步共用一份(ShellCards.tsx) */}
+												<div className="s-plugin-trust-warn">{SHELL_CONFIRM_TEXT}</div>
 												<div className="st-actions">
 													<button type="button" className="btn-ghost danger" onClick={() => void toggleShell(true)}>
 														确认启用
@@ -1571,20 +1610,27 @@ export function SettingsPage({
 									)}
 								</section>
 
-								{/* Agent 形态:经典模式(单 Agent) */}
+								{/* Agent 形态:多 Agent / 单 Agent 两张大卡(与首启向导「创作方式」步同一实现) */}
 								<section className={cardClass("agent")}>
 									<div className="s-card-head">Agent 形态</div>
-									<div className="s-pref-list">
-										<div className="s-pref-item">
-											<div className="s-pref-text">
-												<div className="s-pref-title">经典模式(单 Agent)</div>
-												<div className="s-pref-desc">
-													开启后去掉舞台(没有导演 / 演员 / 旁白),编辑页换成带全量工具的单一写作 agent。切换会重建服务端会话,下一次对话生效。
-												</div>
-											</div>
-											<ToggleSwitch checked={classicMode} onChange={(v) => void toggleClassicMode(v)} ariaLabel="经典模式" />
-										</div>
+									<div className="s-card-desc">
+										决定界面与 AI 的分工。切换会重建服务端会话,下一次对话生效(已写的正文与世界书不受影响)。
 									</div>
+									<CreationModeCards classic={classicMode} onPick={(v) => void toggleClassicMode(v)} busy={classicBusy} />
+								</section>
+
+								{/* 对话与章节:一节一段对话 / 对话与章节各聊各的(与首启向导「创作方式」步同一实现) */}
+								<section className={cardClass("conversation")}>
+									<div className="s-card-head">对话与章节</div>
+									<div className="s-card-desc">
+										决定「一段对话管一章」还是「对话与章节各聊各的」。分离后对话可以自由新建与切换,切章节不再切对话,对话里的
+										AI 也能编辑任意章节。切换会重建编剧会话,下一次对话生效(已写的正文不受影响)。
+									</div>
+									<ConversationScopeCards
+										scope={conversationScope}
+										onPick={(v) => void toggleConversationScope(v)}
+										busy={scopeBusy}
+									/>
 								</section>
 							</div>
 
@@ -1597,7 +1643,7 @@ export function SettingsPage({
 												重新运行配置向导
 											</button>
 										</div>
-										<div className="s-card-desc st-desc-tight">重新走一遍模型服务 / 默认模型 / 第一本书 / 界面偏好。</div>
+										<div className="s-card-desc st-desc-tight">重新走一遍创作方式 / 模型服务 / 默认模型 / 第一本书 / 界面偏好。</div>
 									</section>
 								)}
 

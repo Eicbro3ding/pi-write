@@ -28,7 +28,7 @@ function completedState(): SetupState {
 	return {
 		version: 1,
 		completedAt: "2026-09-05T12:00:00.000Z",
-		steps: { intro: true, provider: true, model: false, book: false, prefs: false },
+		steps: { intro: true, mode: true, scope: true, shell: true, provider: true, model: false, book: false, prefs: false },
 	};
 }
 
@@ -52,7 +52,16 @@ describe("parseSetupState(容错与白名单)", () => {
 			completedAt: null,
 			steps: { intro: true, hacked: true, provider: "yes", model: 1 },
 		});
-		expect(s.steps).toEqual({ intro: true, provider: false, model: false, book: false, prefs: false });
+		expect(s.steps).toEqual({
+			intro: true,
+			mode: false,
+			scope: false,
+			shell: false,
+			provider: false,
+			model: false,
+			book: false,
+			prefs: false,
+		});
 		expect(s.completedAt).toBeNull();
 	});
 
@@ -65,11 +74,25 @@ describe("parseSetupState(容错与白名单)", () => {
 	it("合法完成态原样解析", () => {
 		expect(parseSetupState(completedState())).toEqual(completedState());
 	});
+
+	it("旧五步文件(无 mode/scope/shell 键)→ 新步骤未走过,其余照旧(加步骤不递增版本)", () => {
+		const legacy = { version: 1, completedAt: "2026-09-05T00:00:00Z", steps: { intro: true, provider: true, model: true, book: true, prefs: true } };
+		const s = parseSetupState(legacy);
+		expect(s.steps.mode).toBe(false);
+		expect(s.steps.scope).toBe(false);
+		expect(s.steps.shell).toBe(false);
+		expect(s.steps.intro).toBe(true);
+		expect(s.steps.prefs).toBe(true);
+		// 已完成标记仍生效:老用户不会被重新弹一遍八个步骤
+		expect(isSetupCompleted(s)).toBe(true);
+	});
 });
 
 describe("isSetupStepId / isSetupCompleted", () => {
-	it("五个白名单步骤为 true,其余为 false", () => {
-		for (const id of ["intro", "provider", "model", "book", "prefs"]) expect(isSetupStepId(id)).toBe(true);
+	it("八个白名单步骤为 true,其余为 false", () => {
+		for (const id of ["intro", "mode", "scope", "shell", "provider", "model", "book", "prefs"]) {
+			expect(isSetupStepId(id)).toBe(true);
+		}
 		expect(isSetupStepId("hacked")).toBe(false);
 		expect(isSetupStepId(1)).toBe(false);
 		expect(isSetupStepId(null)).toBe(false);
@@ -138,13 +161,22 @@ describe("/api/setup 路由(真实 http + 最小 sessionHost)", () => {
 		const res = await fetch(`${base}/api/setup`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ steps: { intro: true, provider: true, model: true } }),
+			body: JSON.stringify({ steps: { intro: true, mode: true, scope: true, shell: true, provider: true, model: true } }),
 		});
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as { completed: boolean; setup: SetupState };
 		expect(body.completed).toBe(true);
 		expect(body.setup.completedAt).toBeTruthy();
-		expect(body.setup.steps).toEqual({ intro: true, provider: true, model: true, book: false, prefs: false });
+		expect(body.setup.steps).toEqual({
+			intro: true,
+			mode: true,
+			scope: true,
+			shell: true,
+			provider: true,
+			model: true,
+			book: false,
+			prefs: false,
+		});
 		// 磁盘与后续 GET 一致(跨窗口语义)
 		expect(await readSetupState()).toEqual(body.setup);
 		const res2 = await fetch(`${base}/api/setup`);

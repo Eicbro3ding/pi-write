@@ -1301,6 +1301,23 @@ describe("WriterServer 静态服务(webDistDir)", () => {
 			rmSync(resDir, { recursive: true, force: true });
 		}
 	});
+	it("GET /api/skills 列出技能清单(给 /skill 菜单;名字 + 描述 + explicitOnly)", async () => {
+		const res = await fetch(`${base}/api/skills`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { skills: Array<{ name: string; description: string; explicitOnly: boolean }> };
+		const names = body.skills.map((s) => s.name);
+		// 与 agent 装配同源(vendor loadSkills):自带技能一定在里面
+		expect(names).toEqual(expect.arrayContaining(["outline", "critique", "revise"]));
+		for (const s of body.skills) {
+			expect(typeof s.name).toBe("string");
+			expect(typeof s.description).toBe("string");
+			expect(typeof s.explicitOnly).toBe("boolean");
+		}
+		// 未知 slug 不报错(退回进程 cwd):菜单照常出内置技能
+		const bogus = await fetch(`${base}/api/skills?slug=../etc`);
+		expect(bogus.status).toBe(200);
+		expect(((await bogus.json()) as { skills: unknown[] }).skills.length).toBeGreaterThan(0);
+	});
 	it("GET /api/themes 无用户主题,内置主题从资产文件自动发现", async () => {
 		const res = await fetch(`${base}/api/themes`);
 		expect(res.status).toBe(200);
@@ -1684,6 +1701,8 @@ describe("WriterServer · /api/settings(全局设置 · 经典模式)", () => {
 	const shellCalls: Array<{ enabled: boolean; dialect: string; path: string | null }> = [];
 	/** 图片生成开关的应用记录(0.1.0):它决定 image_generate 工具存不存在。 */
 	const imageGenCalls: boolean[] = [];
+	/** 对话与章节的关系(conversationScope)的应用记录:切换同样要释放已建会话。 */
+	const scopeCalls: string[] = [];
 	/** SSE 广播帧(验证 settings_changed 会推给其他窗口)。 */
 	const events: Array<{ type: string; settings?: { classicMode: boolean; enableShell: boolean } }> = [];
 
@@ -1696,6 +1715,9 @@ describe("WriterServer · /api/settings(全局设置 · 经典模式)", () => {
 			compact: async () => ({ summary: "", tokensBefore: 0, estimatedTokensAfter: 0 }),
 			setClassicMode: async (enabled: boolean) => {
 				classicCalls.push(enabled);
+			},
+			setConversationScope: async (scope: string) => {
+				scopeCalls.push(scope);
 			},
 			setShell: async (next: { enabled: boolean; dialect: string; path: string | null }) => {
 				shellCalls.push(next);
@@ -1743,10 +1765,10 @@ describe("WriterServer · /api/settings(全局设置 · 经典模式)", () => {
 		rmSync(join(getWriterDir(), "settings.json"), { force: true });
 	});
 
-	it("缺省 GET /api/settings:经典模式关闭", async () => {
+	it("缺省 GET /api/settings:单 Agent 经典模式开启(2026-10-02 起为新默认)", async () => {
 		const res = await fetch(`${base}/api/settings`);
 		expect(res.status).toBe(200);
-		expect(await res.json()).toMatchObject({ settings: { classicMode: false } });
+		expect(await res.json()).toMatchObject({ settings: { classicMode: true } });
 	});
 
 	it("PUT 开启:落盘 + 应用到 WriterHost + 广播 settings_changed", async () => {

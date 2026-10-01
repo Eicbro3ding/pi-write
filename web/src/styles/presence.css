@@ -55,6 +55,7 @@
 .export-panel.is-closing,
 .usage-pop.is-closing,
 .sel-menu.is-closing,
+.cv-menu.is-closing,
 .m-menu.is-closing,
 .m-set-menu.is-closing {
   animation: presence-out-up var(--dur-fast) var(--ease-out) both;
@@ -75,6 +76,11 @@
 /* 舞台右面板:桌面收起成 48px 竖条(不卸载,走 grid 轨过渡);手机端底部抽屉走这里,
    与入场 sheet-up(同样 200ms)同长 */
 .stage-panel.is-closing {
+  animation: presence-out-down var(--dur-base) var(--ease-out) both;
+}
+
+/* 手机端对话切换器的底部抽屉:入场 sheet-up(mobile.css),退场原路滑回下缘 */
+.m-cv-menu.is-closing {
   animation: presence-out-down var(--dur-base) var(--ease-out) both;
 }
 

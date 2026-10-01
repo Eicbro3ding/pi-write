@@ -7,9 +7,17 @@
  * Android 壳)状态一致,且服务端重启后装配结果不会与界面显示分叉。
  *
  * 当前设置项:
- * - **classicMode(经典模式)**:单 agent 模式——界面上只有编辑页(隐藏舞台与
- *   世界书),编辑页的 AI 不再是受限编剧,而是带全量工具的写作 agent。切换后
- *   已建会话必须重建,新工具集才生效(server 侧 PUT 时释放 WriterHost 会话)。
+ * - **classicMode(经典模式)**:单 agent 模式——隐藏舞台(导演/演员/旁白那套多 agent
+ *   共演),编辑页的 AI 不再是受限编剧,而是带全量工具的写作 agent。**缺省开启**
+ *   (2026-10-02 翻转:多 agent 那套需要用户理解"导演/演员/编剧"的分工,新用户更容易
+ *   卡在第一步;单 agent 只有一个对话口,先能写起来更重要)。切换后已建会话必须重建,
+ *   新工具集才生效(server 侧 PUT 时释放 WriterHost 会话)。
+ * - **conversationScope(对话与章节的关系)**:`"chapter"`(缺省)= 一段对话绑一章,
+ *   新章节就是新对话(会话文件 `writer-<章节>.jsonl`);`"book"` = 章节与对话各聊各的,
+ *   对话可以不看章节自由新建,AI 也能编辑任意章节的正文。**缺省 chapter 是为了不替
+ *   老用户改变行为**——老安装的会话文件、前端调用方式、事件过滤全都建立在「一段对话
+ *   一章」上,直接翻默认等于悄悄换掉他们的对话历史归属;想要分离形态的用户在设置页
+ *   显式打开即可。切换时同样释放已建会话(两种形态的装配与身份规则都不同)。
  * - **enableShell(外部命令)**:放开 agent 的 shell 工具;缺省关闭(风险自担)。
  * - **shellKind / shellPath**:shell 方言(auto 按平台识别 / bash / pwsh)与显式可执行文件路径。
  *   选 pwsh 时实际执行的是 PowerShell 语法,提示词按方言叙述(见 shell-kind.ts)。
@@ -38,8 +46,14 @@ export const WRITER_SETTINGS_VERSION = 1;
 /** 全局设置结构。 */
 export interface WriterSettings {
 	version: number;
-	/** 经典模式:单 agent(只有编辑页),写作 agent 带全量工具;缺省关闭。 */
+	/** 经典模式:单 agent(只有编辑页),写作 agent 带全量工具;**缺省开启**(2026-10-02)。 */
 	classicMode: boolean;
+	/**
+	 * 对话与章节的关系(**缺省 "chapter"**,不替老用户改行为):
+	 * - `"chapter"`:一段对话绑一章,新章节就是新对话(现状);
+	 * - `"book"`:章节与对话分离——对话可自由新建、与章节无关,对话里的 AI 可编辑任意章节。
+	 */
+	conversationScope: ConversationScope;
 	/**
 	 * 外部命令(bash):允许 agent 在书目录外执行 shell 命令;缺省**关闭**。
 	 *
@@ -91,6 +105,15 @@ export interface WriterSettings {
 /** 图片接口形态。目前只有一种;留成联合类型是为了加第二种时不必改调用方。 */
 export type ImageProvider = "openai-images";
 
+/**
+ * 对话与章节的关系(见 WriterSettings.conversationScope)。
+ *
+ * 加字段是**追加式变更**:不递增 WRITER_SETTINGS_VERSION —— 旧文件缺这个字段时
+ * 按默认值("chapter")解析(与 setup.json 加步骤同一风格);只有整个结构不兼容
+ * 才动版本号。
+ */
+export type ConversationScope = "chapter" | "book";
+
 /** 出图尺寸档位。 */
 export type ImageSize = "1:1" | "3:2" | "16:9";
 
@@ -107,11 +130,22 @@ export const IMAGE_SIZE_PX: Record<ImageSize, string> = {
 	"16:9": "1792x1024",
 };
 
-/** 默认设置(缺省:多 agent 形态、无外部命令、bash、图片生成关闭)。 */
+/**
+ * 默认设置(缺省:单 Agent 经典模式、无外部命令、bash、图片生成关闭)。
+ *
+ * ⚠️ `classicMode` 的默认值有**两份**,必须同步翻转:这里(服务端权威)与
+ * `web/src/settings.ts` 的 `parseClassicMode`(浏览器首帧缓存,读不到服务端就按它渲染)。
+ * 只改一处会让界面先画出舞台入口再收回。`test/settings.test.ts` 有一条护栏比对两者。
+ *
+ * 已经有 `settings.json` 的安装不受影响 —— 文件里 `classicMode` 是显式值,解析时覆盖默认;
+ * 只有「从未写过 settings.json」的安装(即从没动过任何服务端设置)会跟着新默认走。
+ */
 export function defaultWriterSettings(): WriterSettings {
 	return {
 		version: WRITER_SETTINGS_VERSION,
-		classicMode: false,
+		classicMode: true,
+		// 对话与章节绑定(现状):老用户升级后行为逐字不变,分离形态由用户显式开启
+		conversationScope: "chapter",
 		enableShell: false,
 		shellKind: "auto",
 		shellPath: "",
@@ -140,6 +174,9 @@ export function parseWriterSettings(raw: unknown): WriterSettings {
 	const obj = raw as Record<string, unknown>;
 	if (typeof obj.version !== "number" || obj.version !== WRITER_SETTINGS_VERSION) return out;
 	if (typeof obj.classicMode === "boolean") out.classicMode = obj.classicMode;
+	// 对话与章节的关系:枚举只认合法值——旧文件缺字段 / 拼错 → 回落 "chapter"(现状),
+	// 不能因为缺字段就把老用户的对话归属换成别的形态
+	if (obj.conversationScope === "chapter" || obj.conversationScope === "book") out.conversationScope = obj.conversationScope;
 	if (typeof obj.enableShell === "boolean") out.enableShell = obj.enableShell;
 	// 枚举字段只认合法值(shellKind 拼错 → 回落 bash,而不是把未知值带进装配)
 	if (obj.shellKind === "auto" || obj.shellKind === "bash" || obj.shellKind === "pwsh") out.shellKind = obj.shellKind;
@@ -190,6 +227,7 @@ export async function updateWriterSettings(patch: Partial<Omit<WriterSettings, "
 	const next: WriterSettings = {
 		...current,
 		...(patch.classicMode !== undefined ? { classicMode: patch.classicMode } : {}),
+		...(patch.conversationScope !== undefined ? { conversationScope: patch.conversationScope } : {}),
 		...(patch.enableShell !== undefined ? { enableShell: patch.enableShell } : {}),
 		...(patch.shellKind !== undefined ? { shellKind: patch.shellKind } : {}),
 		...(patch.shellPath !== undefined ? { shellPath: patch.shellPath } : {}),

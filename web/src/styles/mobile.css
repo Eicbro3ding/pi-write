@@ -621,8 +621,40 @@
 }
 
 @media (min-width: 701px) {
-  .m-head-wrap, .m-composer, .m-menu { display: none !important; }
+  .m-head-wrap, .m-composer, .m-menu, .m-cv-bar { display: none !important; }
   .m-only { display: none !important; }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   手机端对话切换器(book 模式;ConversationSwitcher.tsx 的 `phone` 形态)
+   桌面那条 .cv-bar 挤在伙伴栏头部,手机端没有那条横条 —— 入口挂在伙伴抽屉
+   内容顶部(WritePage 的 .m-cv-bar),展开是**底部抽屉**(.m-cv-menu)。
+   类名一律 m- 前缀,避免与既有 .cv-* 撞名。
+   ════════════════════════════════════════════════════════════════ */
+@media (max-width: 700px) {
+  .m-cv-bar { padding: 8px 12px; }
+  /* 抽屉:整层从屏幕下缘升起(与 .stage-panel / .m-sheet 同一套语言);
+     放在带框层(transform)里时包含块就是那一格,UI 房才关得住 */
+  .m-cv-menu {
+    position: fixed; left: 0; right: 0; bottom: 0; top: auto;
+    width: auto; min-width: 0; max-height: min(72vh, 520px);
+    z-index: 60; border-radius: var(--r-lg) var(--r-lg) 0 0;
+    /* 底部让出常驻输入条的高度:伙伴栏(z-index 40)整层在输入条(45)之下,
+       抽屉是它的子元素,再高的 z-index 也压不过输入条 —— 不让开就会挡掉最后一行
+       (用与 .companion 同一个 66px,两处口径一致) */
+    border-bottom: 0; padding-bottom: calc(66px + env(safe-area-inset-bottom));
+    animation: sheet-up var(--dur-base) var(--ease-out);
+  }
+  .m-cv-menu .cv-menu-head { padding: 12px 14px; }
+  .m-cv-menu .cv-menu-title { font-size: var(--fs-14); }
+  .m-cv-menu .cv-close { display: inline-flex; }
+  .m-cv-menu .cv-list { padding: 6px 8px; }
+  /* ≤600 段的 `button { min-height: 44px }` 会把行内小控件撑变形:逐个还原 */
+  .m-cv-menu .cv-opt { min-height: 44px; padding: 10px; font-size: var(--fs-14); }
+  .m-cv-menu .cv-del { width: 36px; height: 36px; min-height: 0; }
+  .m-cv-menu .cv-new { min-height: 30px; font-size: var(--fs-12); }
+  .m-cv-menu .cv-confirm-del, .m-cv-menu .cv-confirm-cancel { min-height: 30px; font-size: var(--fs-12); }
+  .m-cv .cv-current { min-height: 38px; font-size: var(--fs-13); }
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -633,6 +665,7 @@
 .m-dot { transition: background var(--dur-base) var(--ease-out); }
 /* 触屏按压/悬停反馈:原先全是瞬间跳(mobile.css 原本一条 transition 都没有) */
 .m-menu-item,
+.m-cv-menu .cv-opt,
 .m-nav-item,
 .m-pv-card,
 .pvc-back,

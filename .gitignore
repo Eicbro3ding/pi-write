@@ -5,6 +5,8 @@ dist/
 
 
 gui-test-screenshots/
+# 无头 chromium 走查脚本(自写 CDP,临时数据目录;一次性产物,不入库)
+.e2e/
 # 设计稿导出与手机端对照截图(pen.dev 导出的一次性产物,不入库)
 .mobile-design/
 tsconfig.tmp.json

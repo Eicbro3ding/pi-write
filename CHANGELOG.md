@@ -2,6 +2,89 @@
 
 ## [Unreleased]
 
+首启向导从 6 步加到 8 步,并把「两选一卡片」收敛成一份实现。
+
+- [feat] **「对话范围」步**(第 3 步)：绑定章节 / 分离 两张大卡，与设置页「对话与章节」卡同一实现、同一份文案；默认仍是「绑定章节」(选中带「默认」的那张)。
+- [feat] **「执行命令」步**(第 4 步)：保持关闭 / 开启 shell 两张大卡，选中「开启」先过设置页同款的风险确认条 —— 确认文案 `SHELL_CONFIRM_TEXT` 只有一份，向导与设置页共用。此前它是挤在「创作方式」步底部「工具」小节里的一行开关，而它是整份向导里**唯一**一项权限授予，最容易被顺手划过。
+- [refactor] **卡片实现收敛**：`cmode-*`(创作方式) 与 `cscope-*`(对话与章节) 两份几乎相同的卡片实现合并成一份骨架 `ChoiceCards.tsx` + 一组 `.choice-*` 样式，三处(向导三步 + 设置页两张卡)只写各自的数据；新增 `ShellCards.tsx` 只负责执行命令那两组文案。
+- [fix] **向导跳转不再写字面下标**：`next()` 一律走 `nextStep()`(+1)，末步回显行的「改」走 `stepIndex(id)`。加这两步时原来的 `setStep(1..5)` 会整体错位 —— 那正是文件里早就写过的坑。
+- [test] `test/setup.test.ts` 跟上八步(旧文件兼容用例扩到 `scope`/`shell`)；UI 房新增 `choice-cards` / `shell-cards` 两个展项，向导展项从两档扩到四档(介绍 / 创作方式 / 对话范围 / 执行命令)。
+
+补齐第三方许可声明:MIT 只要求一件事——版权行 + 许可全文随每一份拷贝分发——而发行物里此前一份都没有。
+
+- [fix] **`vendor/` 补上游 MIT 全文**:`vendor/LICENSE-pi.txt`(从 [earendil-works/pi](https://github.com/earendil-works/pi) 根 `LICENSE` 原样拷入,`Copyright (c) 2025 Mario Zechner`)。此前 `vendor/` 下只有 `NOTICE.md` 一句「MIT(见各包 package.json)」,而 package.json 里只有 `"license": "MIT"` 字符串——那不是许可全文,不满足 MIT 的随附义务。
+- [fix] **`vendor/NOTICE.md` 重写**:版权行改成上游 LICENSE 原文(此前写的「Mario Zechner / Earendil Works」不是原文),补六个包与上游包名/目录的对应表,并写明**本副本相对上游有修改、未逐条标注 diff、不保证对应某个 commit**。
+- [fix] **声明随四种发行形态走**(这是原本真正缺的一环):`package.json` 的 `files`(npm)、`npm run bundle`(单文件 exe 拷进 `release/`)、`electron-builder.yml` 的 `files`(桌面端)、`scripts/make-release-zips.mjs` 的 `EXTRA`(GitHub Release zip)。动机:产物是**内联**的——`dist/web/server.cjs` 是 esbuild 全量打包(含 vendor 的 pi 内核与 500+ npm 模块),`web/dist/assets/*.js` 也内联了前端依赖,属于 MIT 说的 "substantial portions"。
+- [docs] 新增根目录 [`THIRD-PARTY.md`](THIRD-PARTY.md):第三方组件清单(pi 核心包 / craft 方法论文库 / npm 依赖)+ 各发行物必须携带哪些文件 + 已知待办。README 的 License 段落补上来源、许可全文位置与指向该文件;`skills/` 的第三方来源核查结论也写进 `vendor/NOTICE.md`(`craft` 的 oh-story 收录本就带 ATTRIBUTION + 完整 LICENSE 全文;`outline`/`critique`/`revise`/`stage-scripting`/`onboarding` 经比对**不是**来自 pi 上游、也不是来自 oh-story,判断为自研)。
+- [verify] `npm pack --dry-run` 确认包内含 `LICENSE` / `THIRD-PARTY.md` / `vendor/LICENSE-pi.txt` / `vendor/NOTICE.md`;`electron-builder.yml` 解析出的 files 列表含四份声明;`bundle` 脚本的拷贝等价命令实测产出齐全。依赖侧全量扫过 553 个包,**零 GPL/AGPL/LGPL**,全部宽松许可(仅 `busboy`/`streamsearch`/`rechoir` 的 `package.json` 缺 license 字段、实际为 MIT,已记进待办)。
+
+技能从「用户不问就不许用」改成**按需使用**，并给斜杠菜单补上主动点名技能的入口。
+
+- [feat] **`/skill` 命令**（编辑器输入条的斜杠菜单）：列出当前装配加载到的技能（名字 + 描述），选中插入 `/skill:<名字> `。这是**唯一**能调用 `disable-model-invocation` 技能的入口——那类技能被 vendor 从 `<available_skills>` 里排除，模型看不到它们，只能由用户点名。
+- [feat] **清单与 agent 装配同源**：`GET /api/skills` → `src/skills-index.ts` 用 vendor 的 `loadSkills` + `session-factory` 的 `sessionSkillDirs` 加载（自带 `skills/` + 全局技能目录）。不自己扫目录是硬要求：vendor 对认不出的名字**原样透传**，菜单名字与展开名单对不上就是「点了技能但没生效」。
+- [feat] **技能纪律放宽**（`prompts/writer-main.md` / `prompts/writer-editor.md` 新增《技能(按需使用)》）：用户的要求落在某个技能的适用场景里（「这章哪里不对」「太 AI 味了」「卡文了」）就**直接按它的方法做事**，不必先问、也不必等用户点名——旧写法「不自动套用 outline/critique/revise 方法论，只在用户提出时提供」把技能变成了死库存（用户不知道有哪些技能，就永远不会用上）。唯一保留的边界是**多轮流程先问一句**：需要连续提问 / 要样本 / 逐节确认的流程，先用一句话说明再开始；另外仍然不许朗读方法论、倒清单、把技能名与文件路径写进回复。
+- [fix] **`/skill:` 与引用芯片同用时也会展开**：vendor 的展开只认消息**首位**的 `/skill:`（`agent-session.ts` 的 `_expandSkillCommand`），而 `composeMessageWithAttachments` 把引用芯片排在前面——带 `@` 引用的技能指令会退化成一段普通文本。现在文本以 `/skill:` 开头时把它提到最前。
+- [fix] **选中命令后直接出候选**：`InputBar` 的 `insertRange` 加了 `reopenMenu`，插入的正是 `/命令 ` 时立刻重算菜单——此前只在 onChange/keyup 上重算，于是选完 `/skill` 菜单关闭、技能清单要等用户**再敲一个字**才出现（`/node`、`/chapter` 是 `@` 引用菜单不受影响，`/compact` 也顺带直接显示它的动作候选）。
+- [docs] `onboarding` 技能的三处「不自动套用」表述改成「多轮流程先问一句 + `/skill:` 点名不用再问」（`SKILL.md` 铁律一、`references/environment.md` 技能清单、`references/style-setup.md` 的四连问）；pi-writer SKILL 补 `/skill` 与技能纪律两条索引。舞台角色**故意不参与**：演员 / 导演是 `packagedSkills:false` 装配，放开技能浏览会诱导它们去改正文（2026-09-22 的既有设计），它们只有 `{SKILLS_PATH}` 指到的方法论文件。
+- [test] 新增 `test/skills-index.test.ts`（自带技能在列、`disable-model-invocation` 标 `explicitOnly`、坏目录不抛错）；`test/slash-commands.test.ts` 补 4 例（`/skill` 命令形态、插入文本字面量、描述过滤与显式调用标注、`/skill:` 带芯片时排最前）；`test/prompts.test.ts` 把旧断言换成新的按需使用边界（含「旧的全禁写法不许回来」）；`test/server.test.ts` 补 `GET /api/skills`。
+- [verify] **端到端跑通**（本机无可用模型，用临时 mock LLM）：浏览器里 `/` → `/skill` → `/critique` 插入 `/skill:critique `，发送后会话 jsonl 里的用户消息是展开后的 `<skill name="critique" location="…/skills/critique/SKILL.md">…` 块，mock LLM 收到的 prompt 里确实带这份内容——菜单、插入格式、vendor 展开、送达模型四段全链路验证。
+
+默认创作方式翻转为单 Agent（经典模式）：新用户第一眼就是「一个对话口直接写」，不用先弄懂导演 / 演员 / 编剧的分工。
+
+- [feat] **`classicMode` 缺省值 false → true**（`src/writer-settings.ts` 的 `defaultWriterSettings()`）。多 Agent 那套要用户先理解角色分工才用得起来，新用户容易卡在「我该跟谁说话」；单 Agent 只有一个写作 agent、工具全开，先能写起来更重要。首启向导「创作方式」步里「默认」标签跟着搬到单 Agent 那张卡（多 Agent 改成「多角色」标签），向导说明也改成「不确定就用带默认的那一张」。
+- [fix] **前端首帧缓存同步翻转**（`web/src/settings.ts` 的 `parseClassicMode`：仅显式 `"0"` 表示多 Agent）。这个默认值在前后端各有一份（服务端权威 + 浏览器缓存，后者决定首帧顶栏画哪几页、落在哪一页），只改一处会先渲染出舞台入口再收回。`test/settings.test.ts` 新增一条**跨模块护栏**直接比对两处默认结论（`parseClassicMode(null) === defaultWriterSettings().classicMode`），`test/writer-settings.test.ts` 新增「旧文件缺 `classicMode` → 走新默认；显式 `false` 仍保持多 Agent」。
+- [docs] 跟着改的还有：`docs/architecture.md`（默认落地页：单 Agent → 编辑页 / 多 Agent → 舞台；设置入口已迁到「高级 → Agent 形态」）、`skills/onboarding/references/environment.md`（两种形态表把默认列换到经典模式，并写明「别自作主张替用户切模式」）、pi-writer SKILL 的 `prompts/` 行与创作方式索引条。
+- **升级影响**：`settings.json` 已经存在（即改过任何服务端设置、或在设置 / 向导里选过创作方式）的安装**不受影响** —— 文件里 `classicMode` 是显式值，解析时覆盖默认。只有「从未写过 `settings.json`」的安装会跟着新默认切到单 Agent（表现形式：舞台入口消失、编辑页的 AI 换成带全量工具的写作 agent）。
+
+给编剧一条「只写写作风格」的窄通道，并把约束默认范围从「全部」收窄到「编剧」。
+
+- [feat] 新增工具 `style_update`（编剧专用窄通道）：只写**写作风格三件套**——写作约束 / 文风采样 / 世界观概述；人物 / 关系 / 时间线 / 大纲 / 发展线 / Notice 一律碰不到（仍是导演的活）。此前编剧只有只读的 `world_find`，于是用户在编辑页说「以后别用破折号」时，它只能把结论写进 `advice.md` 等导演下次开会话才落盘——**"说了没生效"**。两条与 `world_update` 不同的语义是刻意的：① 约束**强制** `target="writer"`（编剧只约束自己，要约束导演得用户直接对导演讲）；② 约束按**名字** upsert / 删除——注入给编剧的【写作约束】块只有 `名字: 正文`、没有 id，不能要求模型先查 id。实现复用 `applyWorldUpdate` 的引擎与校验（`applyStyleUpdate` 纯函数），不另写一套写入逻辑；也**不写** `stage/last-world-edit.json` 编辑记录（那只归舞台页消费，编辑页写它既无消费方、又会在窄窗口里串成一张舞台预览卡）。
+- [feat] 约束默认生效范围从「全部」改为**「编剧」**：动笔写正文的是编剧（多 Agent 的收幕成文与编辑页对话，单 Agent 的写作 agent），导演管节奏与调度，不该被写作风格绑住；只有用户明确说「连剧本和演出也要守」时才用「全部」。`onboarding` 剧本、导演与编剧提示词都按这个默认值改写。
+- [fix] **改这个默认值会踩到的坑**：`buildChapterContext`（TUI / 单 Agent 走这条）此前只收 `target ∈ {main, all}`，而 `writer-host` 的经典模式早就是 `writer || main` 的并集——两份口径不一致。约束默认一旦收窄到 `writer`，TUI 就会**静默丢约束**。现在主会话也收 `writer`（主会话在 TUI 里就是唯一动笔的那个，既是「主会话」也是「编剧」）。
+- [refactor] 写作 agent 的工具清单从 `roleFactory` 内联里抽成纯函数 `writerToolset`：这段「编剧只有 world_find、经典模式才是全量」的权限边界，此前埋在一个几百行的私有工厂里、**没有任何测试看守**——这次两个 bug 都长在这种缝里。抽出来后单测直接钉住边界。
+- [test] 新增 13 例：`applyStyleUpdate` 六例（强制 writer 范围 / 同名 upsert 不重复立规矩 / 重述即重新启用 / 按名字删且未命中报错并指路约束块 / 采样与概述同语义 / 参数 schema 只有四个 op）；`writerToolset` 三例（编剧有 `style_update` 无 `world_update`、经典模式相反、MCP 两侧都带）；`buildChapterContext` 的 target 过滤补 `writer` 一例；`prompts` 里编剧那条从"不得谎称已写入"改成"当场用 style_update 落盘 + 边界仍在"。
+
+首启向导把「创作方式」从设置页里一个不显眼的开关，搬成两张大选项卡；顺带把危险的工具开关摆到首启一屏内（带风险确认）。
+
+- [feat] **新增「创作方式」步**（向导 5 步 → 6 步，插在介绍之后、接模型服务之前）：两张大选项卡把「多 Agent 协作 / 单 Agent 写作」的差别写在卡面上（各三到四条要点），选完立即写服务端 `~/.pi/writer/settings.json` 的 `classicMode`。此前它是「设置 → 高级」里的一行 `ToggleSwitch`——用户既看不到两者的差别，也找不到那个开关。
+- [feat] **同一个组件两处复用**：新组件 `web/src/components/CreationModeCards.tsx` 同时供向导「创作方式」步与设置页「Agent 形态」卡使用；设置页也从一行开关换成这两张大卡（手机端设置索引里「经典模式」那行改成「Agent 形态」子页，卡片样式 `cmode-*` 写在 `styles.css`）。文案与要点只有一份，两处说法不会漂移。
+- [feat] **工具配置首次进向导**：同一屏给出「执行命令(shell)」开关，复用设置页已有的 `enableShell` 服务端设置与同款风险确认条（打开前必须过一条明确说明：命令以与本程序相同的权限运行，书目录的路径限制对它无效）。shell 方言（bash / pwsh）与可执行文件路径仍只在「设置 → 高级 → 执行命令」里改。
+- [refactor] 向导的步骤判断从 `step === N` 下标改成 `stepId`：这次插步骤正好暴露了下标判断的脆弱——介绍步之后的所有分支都要顺移，漏一处就是「进度条在第 3 步、界面还是第 2 步的控件」。进度条列数也改成随步骤表走（`grid-auto-flow: column`），以后加步骤不用再改 CSS。
+- [fix] 步骤表追加式兼容：`SETUP_STEPS` 加 `mode` **不**递增 `SETUP_VERSION`——旧 `setup.json`（五步）读到缺键按「未走过」解析，已完成的用户不会因加步骤被重新弹一遍。
+- [test] `test/setup.test.ts` 跟上六步（新增「旧五步文件 → mode 未走过且 `completedAt` 仍生效」一例）；`test/uiroom.test.ts` 的覆盖 / 逐字同序 / SSR 冒烟自动覆盖新组件与向导新档。
+
+按「两种模式」核对风格落点，揪出两处「设了但没送到」——都只在多 Agent 模式下成立。
+
+- [fix] **TUI 多 Agent 模式下写作约束到不了真正落笔的地方**：收幕成文的委托消息（`buildWriterMessage`）只带【文风采样】不带【写作约束】。web 侥幸不漏——收幕委托走常驻编剧会话，那个会话的 context 钩子会注入 writer/all 的约束；但 CLI/TUI 的内置收幕编剧是 `writerRole()`（`extensions: []`，**没有任何 context 钩子**），于是用户设的「禁用破折号 / 每章 2500 字 / 人称」在**真正写正文那一步**被完全无视。现在约束进委托消息，与文风采样同款（web 下会与 context 钩子重复一次，这是既有设计、也是刻意的：换来整条委托链路自包含）。
+- [fix] **导演看不到【文风采样】**：`directorContext` 注入了发展线 / Notice / 写作约束(director) / 编剧建议，唯独没有采样——可导演正是它的**维护者**（剧本文字段的【风格示例】按它校准，收幕编剧收到的采样还被标成「来源: 导演维护的风格基准」）。那句「导演维护」在导演本人那儿一直是空的：用户改了采样，舞台表演语气照旧漂移，导演也无从对照样本。现在随 `storylineBlock` 注入，只在**剧本模式 / 讨论模式**挂载；演出中不挂——演出时导演每轮都在看舞台，每轮多带一份 300–500 字样本不值当。
+- [test] `test/stage-orchestrator.test.ts` 补 4 例：约束进委托消息 / 无约束不出现 / 导演收到采样 / 空世界不注入；并锁住「约束块排在委托指令之前」的顺序（与 `world-context` 常驻组的「约束 → 采样」一致）。
+- [docs] `onboarding` 的风格剧本补一张「约束生效范围」的表。（**该默认值已在上面那组改为「编剧」**，此处保留说明、不再以「全部」为准。）
+
+开场纪律进系统提示词：新书还没定风格时，AI 必须主动提一次，而不是等用户问。
+
+- [feat] **开场纪律**写进三个对话入口的提示词（不是靠技能被问到才生效）：触发条件是三条同时成立——上下文里没有【写作约束】、没有【文风采样】、当前章节还没有正文。满足时**在写任何正文之前先用一句话提议**（「这本书还没定风格。要不要先花两分钟定一下？…」），并在用户同意后按剧本执行：一轮 `ask_user` 问四件事 → 要一段 300–500 字样本 → 写进世界书。**同一场对话只提一次**，用户拒绝或直接给了写作指令就不再提；三条里任一条不成立也不提（所以一旦开写就自然消失，不会每章追问）。
+- [feat] **三个入口落盘能力不同，提示词各自写明**——这是查代码才看清的一处关键事实，也是只改一个文件会漏掉的地方：web 默认落地页是**舞台**（非经典模式 → `App` 初始 view 为 `"stage"`），用户第一个说话的是**导演**（有 `world_update`，能落盘）；TUI 与经典模式走**写作 agent**（`writer-main.md`，能落盘）；**常驻编剧**（`writer-editor.md`，编辑页 AI 伙伴）只有 `world_find`，**写不了世界书**——所以它的纪律是「提议 + 把结论写进 `advice.md` 交给导演落盘 + 告诉用户也可以在世界书页自己加」，并明写**绝不谎称已经写进世界书**。
+- [feat] **长期偏好必须落盘**：用户说「以后都这样写」「记住：别用破折号」这类明确表达长期性的要求时，不能只在回复里答应——当场写进世界书（写作约束 / 文风采样）。此前这类话会被答应下来然后下一章就丢。三个入口都加了这条，并限定「只针对长期要求，一次性要求不要写成规则」。
+- [feat] 导演提示词新增 `{STYLE_SETUP_PATH}` 占位，由 `src/stage/stage-extension.ts` 的 `styleSetupScriptPath()` 渲染成 `onboarding` 剧本的**绝对路径**（舞台角色是 `packagedSkills:false` 装配，拿不到 `<available_skills>`，相对路径又会解析到书目录内、读不到——同 2026-08-11 `{SKILLS_PATH}` 的根因）。
+- [fix] `writer-main.md`「不自动套用 outline/critique/revise 方法论」这条纪律保留，并开了一条**明确且唯一**的例外（开场纪律那一次提议）——否则两条规则会互相打架。
+- [test] `test/prompts.test.ts` 新增 6 例回归护栏（8 → 14）：三个入口各自的触发条件 / 只提一次 / 落盘纪律与「不得谎称已写入」；「不自动套用」例外仍在；并直接取真实 `directorRole({}).systemPrompt` 断言 `{STYLE_SETUP_PATH}` **与** `{SKILLS_PATH}` 都已渲染、指向真实存在的文件——只断言模板是不够的（`renderPrompt` 会把未提供的键原样留下，模板测试照样绿，而导演读到的是一个字面量路径）。
+
+新增上手引导技能：模型终于知道「pi-writer 是什么、怎么教用户用、动笔前怎么把风格定下来」。
+
+- [feat] 新增 `onboarding` 技能，补的是**首启向导够不着的那块**：`SetupWizard` 只管模型服务 → 默认模型 → 第一本书 → 主题与界面偏好，**完全不管写作风格与题材风格**。三份 references 分工——`environment.md`（给模型自己看的心智模型：三句话版本、世界书里存什么、背景包注入哪些东西、落点纪律、舞台 vs 经典模式、可用技能与「不自动套用」纪律、边界问题怎么答）、`style-setup.md`（风格引导剧本）、`feature-tour.md`（功能教程备料）。`SKILL.md` 只做路由，不装内容。
+- [feat] **风格引导剧本**：先在现有世界书里查一遍（已有就复述现状、只问要改的那项，不重问），再用一轮 `ask_user` 问清四件事（题材 / 人称视角 / 基调节奏 / 篇幅），然后要一段 300–500 字的文风样本（自己写的或想靠近的片段，**绝不编造**），最后真的落进世界书——世界观概述 + 写作约束 + 文风采样。剧本里写死了两条经验：约束必须**可判定**（「不用破折号」而不是「文笔要优美」）、**条数 ≤ 8**（多了互相打架且挤上下文预算）。
+- [feat] **三条铁律**写进 `SKILL.md`，都是对齐既有纪律而不是新发明：① 用户没问就不讲——系统提示词里「不自动套用 outline/critique/revise 方法论」这条对引导同样适用；② 回复里不出现内部名（`world.json` / `world_update` / 背景包 / 约束 target 一律翻译成界面语言，对齐 `writer-main.md` 的回复纪律）；③ 一次只讲一条，不朗读功能清单。
+- [test] `test/skill-references.test.ts` 从「只管 craft」扩成**所有技能通用**的护栏（12 → 15 例）：每个技能的 SKILL.md 都能被 vendor 真实加载并出现在 `<available_skills>` 里、`<location>` 正确；显式写出的 `references/` 路径不悬空，**跨技能转发**（`outline`/`critique`/`revise` 指向 `craft` 的方法论）在别的技能里唯一命中、不歧义；每个技能 `references/` 下的文件都被自己的 SKILL.md 提到过；每个技能的 frontmatter `name` 与目录名一致、`description` 不超 vendor 的 1024 字符上限、且都能通过 vendor 的加载校验。以后新增技能忘接线，这组直接拦下。
+- [docs] README 的「写作技能」一行补上 `onboarding` 与 `craft`（此前只列了四个）。
+
+引入网文创作方法论文库：agent 有了「怎么写」的方法，而不只是「写到哪」的工具。
+
+- [feat] 新增 `craft` 技能（`skills/craft/`）：收录开源项目 oh-story-claudecode（MIT）的**纯创作方法**文档 76 份 / 约 884KB，覆盖选题卖点、金手指、大纲与卷纲节奏、开篇黄金一章、人物设计与关系感情线、情绪与爽点、章级钩子、反转与悬念、对话、场景、去 AI 味与文风裁决、题材框架与 32 张题材正文卡、审稿 rubric。其中**只有 `SKILL.md` 是手写的**——一张「什么场景读哪一份」的路由表；方法论文档逐字节原样保留（已逐份 sha1 比对上游），既保真，也让以后同步上游可机械化。
+- [feat] 收录判据（写在 `ATTRIBUTION.md` 里）：只收**方法**，不收**流程**。凡依赖上游宿主机制才能执行的一律排除——8 个 hook、7 个专业 agent、`/story-setup` 部署器、`workflow-*.md` 与 `_tracking-state.json` 追踪协议、拆文/扫榜/导入流程、宿主适配、短篇专用，以及上游在多个 skill 下重复存放的同名副本（342 份 references 里只有 252 份唯一，重复占用约 850KB）。
+- [feat] `outline` / `critique` / `revise` 三个技能各加一节，把对应方法论转发到 `craft` 的具体文件——**不复制副本**，符合本仓库「单一真相源」的约定。`craft/SKILL.md` 另有一条硬约束：这批文档配的是上游的「文件树当记忆」，本仓库的落地形态仍是 `world.json` 唯一真相源，文档里出现的 `设定/`、`大纲/`、`追踪/`、`拆文库/` 路径只当内容组织思路看，不得照写。
+- [docs] MIT 许可证随副本保留（`references/LICENSE-oh-story-claudecode.txt`）；上游 commit `dab9e18` 与「再 vendor 步骤」记在 `ATTRIBUTION.md`。收录文件里残留 5 个指向上游流程文件的交叉引用，逐个登记在案并写明「忽略即可、不要去找」——改写上游原文会让「逐字节一致、可机械升级」失效，不值当。
+- [test] 新增 `test/skill-references.test.ts`（12 例）：① 路由表索引的每份文档都在磁盘上、磁盘上每份文档都被索引到（双向一致——同步上游时挑进新文件却忘登记、或漏改路由表，直接红）；② 收录文件不含上游流程/宿主耦合标记（`拆文库`、`tracking_commit`、`storyctl`、`{PYTHON}`、`target_cli` 等），防止同步时夹带流程类进来；③ 残留断链逐个在 `ATTRIBUTION.md` 登记过；④ `description` 不超过 vendor 的 1024 字符上限；⑤ 用真实的 vendor `loadSkills`/`formatSkillsForPrompt` 跑一遍，确认 `craft` 真的进得了 `<available_skills>` 且 `<location>` 正确（前四组只证明「文件是对的」，这一组证明「模型看得见」）。
+
 技能目录清单收敛到唯一真相源：编辑页对话（常驻编剧会话）也拿到打包自带的技能。
 
 - [fix] 「模型说它目录里有 skill，但没加载进系统提示词」：打包自带 `skills/`（outline / critique / revise / stage-scripting）此前靠各装配点自己经 `additionalSkillPaths` 传入，`src/web/writer-host.ts`（编辑页「AI 伙伴」对话与经典模式背后的常驻编剧会话）漏传——它的系统提示词里只剩全局 `~/.agents/skills`，而模型能经 `read` 读到 `skills/<name>/SKILL.md`（工具守卫只读放行），于是自报「目录里有、提示词里没有」。现在清单收敛到 `src/session-factory.ts` 的 `sessionSkillDirs()`（自带 `skills/` 恒加载 + 调用方附加目录 + 全局技能目录，且 `skillPaths` 与守卫的 `readOnlyDirs` 同源），cli / web 不再各自传；舞台角色显式 `packagedSkills: false` 保留原有收窄（剧本方法以绝对路径注入）。回归护栏 `test/skills-dir.test.ts`。

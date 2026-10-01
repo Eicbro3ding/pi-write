@@ -391,7 +391,10 @@ export type AgentEventDto =
 	// 前端复用 processAgentEvent 归约,消息/思考/工具卡片零新逻辑)。
 	// chapterFile 标记归属章节:编剧会话按章节隔离(WriterHost 键 = 书+章节),
 	// 前端必须按 slug+chapterFile 过滤,否则切章后其他章节编剧的流式会串进本页(2026-08-13)。
-	| { type: "writer_event"; slug: string; chapterFile: string | null; event: WriterSessionEventDto }
+	// **book 模式(对话与章节分离)**:chapterFile 恒为 null,归属改由 `conversation`
+	// 标记(该字段在 chapter 模式的帧里不存在 —— 保持负载逐字节不变);
+	// 前端按 slug+conversation 过滤,见 WritePage 的 acceptsWriterEvent。
+	| { type: "writer_event"; slug: string; chapterFile: string | null; conversation?: string; event: WriterSessionEventDto }
 	// 服务端设置变更(PUT /api/settings 后广播):其他窗口据此同步导航与开关
 	// (经典模式切换会改变可用页面与 agent 装配,不能各窗口各说各话)
 	| { type: "settings_changed"; settings: WriterSettingsDto };
@@ -401,6 +404,13 @@ export interface WriterSettingsDto {
 	version: number;
 	/** 经典模式:单 agent(只有编辑页),写作 agent 带全量工具。 */
 	classicMode: boolean;
+	/**
+	 * 对话与章节的关系(与 src/writer-settings.ts 的 ConversationScope 对齐):
+	 * - `"chapter"`(缺省):一段对话绑一章,新章节 = 新对话;
+	 * - `"book"`:对话与章节各聊各的,对话里的 AI 可自由编辑任意章节。
+	 * 切换由 PUT /api/settings 落盘,服务端随即释放已建编剧会话。
+	 */
+	conversationScope: ConversationScopeDto;
 	/**
 	 * 外部命令(shell):允许 agent 在书目录外执行 shell 命令;缺省关闭。
 	 * 打开后命令以服务进程权限运行(路径守卫对它无效),靠命令与输出实时可见来约束。
@@ -613,6 +623,29 @@ export interface WriterStateDto {
 	messages: SessionMessageDto[];
 }
 
+/**
+ * 对话与章节的关系(与 src/writer-settings.ts 的 ConversationScope 对齐;
+ * 前端不 import src/,所以这里单列一份 —— 改一边记得改另一边)。
+ */
+export type ConversationScopeDto = "chapter" | "book";
+
+/**
+ * 一段编剧对话(book 模式下前端对话切换器的列表项;
+ * 与后端 src/web/writer-host.ts 的 ConversationSummary 对齐)。
+ *
+ * `id` 是会话身份:该对话对应 book.json 里的章节文件时是章节文件名(`ch01.jsonl`,
+ * 与既有 chapterFile 同形),否则是裸 id(`c-xxxxxx`);无章节的兜底会话是 `"default"`。
+ */
+export interface ConversationDto {
+	id: string;
+	/** 第一条用户消息压平空白后截断(≤24 字);空对话是「新对话」。 */
+	title: string;
+	/** 会话文件 mtime(ms);列表按它倒序。 */
+	updatedAt: number;
+	/** 本进程登记过的当前对话;未登记时是最近更新的一条。 */
+	isCurrent: boolean;
+}
+
 /** 用户自定义主题(资产文件:主题目录下的 *.css)。 */
 export interface UserThemeInfo {
 	/** 文件名(含 .css)。 */
@@ -625,6 +658,19 @@ export interface UserThemeInfo {
 export interface ThemeManifest {
 	user: UserThemeInfo[];
 	builtin: UserThemeInfo[];
+}
+
+/**
+ * 技能清单项(/api/skills;与服务端 src/skills-index.ts 的 SkillSummary 对齐)。
+ * 前端 `/` 菜单据此列出 `/skill:<name>` 候选项。
+ */
+export interface SkillInfoDto {
+	/** `/skill:<name>` 里的名字。 */
+	name: string;
+	/** frontmatter 的 description(菜单说明)。 */
+	description: string;
+	/** true = 不在模型的 `<available_skills>` 里,只能靠用户显式调用。 */
+	explicitOnly: boolean;
 }
 
 /** 插件列表项(/api/plugins;与服务端 PluginRuntimeInfo 对齐)。 */
@@ -745,6 +791,7 @@ export interface SetupStateDto {
 	/** 各步骤是否真正走过(跳过向导时全 false)。 */
 	steps: {
 		intro: boolean;
+		mode: boolean;
 		provider: boolean;
 		model: boolean;
 		book: boolean;

@@ -10,24 +10,35 @@ import type {
 	BookFileEntryDto,
 	ChapterRef,
 	ContextUsageDto,
+	ConversationDto,
+	ConversationScopeDto,
 	DraftStatus,
 	SessionTreeDto,
 	SessionUsageStatsDto,
 	TextSelectionSnapshot,
 	WorldDataDto,
 } from "../types.ts";
+import {
+	acceptsWriterEvent,
+	currentConversationId,
+	nextConversationAfterDelete,
+	writerAlignKey,
+	writerTarget,
+} from "../writer-scope.ts";
 import { contextUsageHint, formatCacheHit } from "../context-usage.ts";
 import {
 	makeChapterCommand,
 	makeCompactCommand,
 	makeNodeCommand,
 	makePluginCommand,
+	makeSkillCommand,
 	worldEntryInsertText,
 	type SlashCommand,
 	type SlashContext,
 } from "../slash-commands.ts";
 import { BranchBar } from "../components/BranchBar.tsx";
 import { ChapterSidebar } from "../components/ChapterSidebar.tsx";
+import { ConversationSwitcher } from "../components/ConversationSwitcher.tsx";
 import { IconEdit } from "../components/Icons.tsx";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
 import { DraftWorkspace } from "../components/DraftWorkspace.tsx";
@@ -115,6 +126,12 @@ function EmptyBooks({ onCreate }: { onCreate: (title: string) => void }) {
  * classicMode(2026-09-18,单 agent):页面结构不变,只是——服务端这个会话已经是
  * 带全量工具的写作 agent(不是受限编剧),界面去掉「编剧」这个身份标签,免得
  * 用户以为旁边还有别人。舞台页在经典模式下不渲染(见 App);世界书页照常。
+ *
+ * conversationScope(2026-10-03,对话与章节的关系):`"chapter"`(缺省)下**本页行为
+ * 与改动前逐字节一致** —— 章节即会话,切章节即切对话,界面多一个入口都不加;
+ * `"book"` 下对话与章节解绑,伙伴栏头部多一个对话切换器,**切章节不切对话**。
+ * 两处的分叉都收敛在 `web/src/writer-scope.ts` 的纯函数与 ref 上(SSE 订阅闭包
+ * 只订阅一次,读 state 恒为首帧值,所以模式与选中对话一律经 ref 取最新)。
  */
 export function WritePage({
 	client,
@@ -124,6 +141,7 @@ export function WritePage({
 	enterBehavior,
 	autoConfirmEdits,
 	classicMode,
+	conversationScope,
 	onOpenSettings,
 	nav,
 }: {
@@ -139,6 +157,8 @@ export function WritePage({
 	autoConfirmEdits: boolean;
 	/** 经典模式(单 agent):AI 是带全量工具的写作 agent,标签与文案不再称「编剧」。 */
 	classicMode: boolean;
+	/** 对话与章节的关系(chapter 缺省 = 一节一段对话;book = 对话与章节各聊各的)。 */
+	conversationScope: ConversationScopeDto;
 	/** 打开设置页(报错卡的「去设置模型 ›」;App 提供,缺省不画该入口)。 */
 	onOpenSettings?: () => void;
 	/** 手机端抽屉主导航:当前页与切页回调(App 提供;手机端顶栏下线后入口收进抽屉)。 */
@@ -295,6 +315,26 @@ export function WritePage({
 	const confirmRestoringRef = useRef(false);
 	/** 已对齐过编剧会话的书 slug(切书/重连后重拉对齐;null = 未对齐)。 */
 	const writerAlignedRef = useRef<string | null>(null);
+	/**
+	 * 对话与章节的关系:SSE 订阅闭包只订阅一次,读 prop 会拿到首帧值 ——
+	 * 判定一律经这个 ref(与 draftStatusRef / currentChapterRef 同款)。
+	 */
+	const conversationScopeRef = useRef(conversationScope);
+	conversationScopeRef.current = conversationScope;
+	/** book 模式的对话清单(按 mtime 倒序;chapter 模式恒为空,不拉也不用)。 */
+	const [conversations, setConversations] = useState<ConversationDto[]>([]);
+	/** 当前选中的对话 id;chapter 模式恒为 null。 */
+	const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+	/**
+	 * 选中对话的 ref —— **必须与 state 同时写**(只写 state 会让 SSE 过滤 / 对齐键
+	 * 在读 ref 的地方慢一拍:切完对话立刻到的事件会被判成别的对话而丢掉)。
+	 * 唯一写入口是 applySelectedConversation。
+	 */
+	const selectedConversationRef = useRef<string | null>(null);
+	/** 新建 / 删除对话请求进行中(切换器入口禁用,避免连点)。 */
+	const [conversationBusy, setConversationBusy] = useState(false);
+	/** 同上,但用于「同步」防重入:自动新建(空清单)与手动新建可能同时发起。 */
+	const conversationBusyRef = useRef(false);
 	/** 编剧会话分支树(编辑重发产生新分支后,分支栏切换旧分支);空 = 无分支历史。 */
 	const [writerTree, setWriterTree] = useState<SessionTreeDto | null>(null);
 	/** 编辑免确认(设置页开关):经 ref 供 SSE 订阅闭包读取最新值。 */
@@ -324,6 +364,49 @@ export function WritePage({
 		lastSentTextRef.current = "";
 		// 换书/换章后旧文件预览已不属当前上下文:关掉(避免看的是别书的 notes)
 		setFilePreview(null);
+	}
+
+	/**
+	 * 选中对话的**唯一写入口**(state + ref 一起写;只写一半会让 SSE 过滤与对齐键
+	 * 读到上一段对话的 id)。chapter 模式恒传 null。
+	 */
+	function applySelectedConversation(id: string | null) {
+		selectedConversationRef.current = id;
+		setSelectedConversationId(id);
+	}
+
+	/**
+	 * 换书时的编剧清理:会话状态 + 对话清单 + 选中对话一起清。
+	 * (对话按书隔离:新书的清单还没拉回来之前,绝不能拿旧书的 id 去定位。)
+	 */
+	function resetWriterForBook() {
+		resetChat();
+		setConversations([]);
+		applySelectedConversation(null);
+	}
+
+	/**
+	 * 换**章节**时的清理。chapter 模式:章节即会话 → 走完整的 resetChat(与改动前一致);
+	 * book 模式:对话不跟着章节走 —— 消息与会话本体留着(要清的只有本章的编辑捕获基线,
+	 * 卡片队列由下面那个按「书+章节」归属的 effect 自己重新恢复),否则切一章就把
+	 * 整段对话清空、看起来像「对话丢了」。
+	 */
+	function resetWriterForChapter() {
+		if (conversationScopeRef.current === "book") {
+			writerCapture.clear();
+			setFilePreview(null);
+			return;
+		}
+		resetChat();
+	}
+
+	/**
+	 * 本次 writer 请求的定位参数(唯一出处)。chapter 模式只有 chapterFile
+	 * (= 会话身份,与改动前逐字节一致);book 模式额外带 conversation(身份),
+	 * chapterFile 仍照传 —— 它决定注入哪一章的正文。
+	 */
+	function writerTargetNow(chapterFile: string | null) {
+		return writerTarget(conversationScopeRef.current, chapterFile, selectedConversationRef.current);
 	}
 
 	/** 确认卡持久化与恢复:按「书+章节」归属——书/章节变化(含未经 resetChat 的
@@ -373,20 +456,24 @@ export function WritePage({
 	}, [confirmCards, bookDetail, currentChapter]);
 
 	/** 编剧会话对齐:拉服务端状态 → RESET + 逐条水合(与主会话 alignWithServer 同模式,
-	 *  按「书+章节」对齐一次——编剧会话按章节隔离,切章后重新对齐;
+	 *  按「书+对话」对齐一次 —— chapter 模式对话即章节,切章后重新对齐;
 	 *  切书/切章后 resetChat 置 writerAlignedRef=null 触发重新对齐)。 */
 	function alignWriter() {
 		const slug = bookDetailRef.current?.slug;
 		const ch = currentChapterRef.current;
 		if (!slug) return;
-		const scope = `${slug}:${ch?.file ?? ""}`;
+		// book 模式的对话清单还没就位:此刻对齐会落到服务端的「当前对话」上(未必是
+		// 用户上次选的那段),等清单回来再对齐 —— 否则首屏先闪一段别的对话再跳。
+		if (conversationScopeRef.current === "book" && selectedConversationRef.current === null) return;
+		const scope = writerAlignKey(conversationScopeRef.current, slug, ch?.file ?? null, selectedConversationRef.current);
 		if (writerAlignedRef.current === scope) return;
 		writerAlignedRef.current = scope;
 		const run = (attempt: number): void => {
+			const t = writerTargetNow(ch?.file ?? null);
 			client
-				.getWriterState(slug, ch?.file ?? null)
+				.getWriterState(slug, t.chapterFile, t.conversation)
 				.then((st) => {
-					if (writerAlignedRef.current !== scope) return; // 对齐期间又切书/切章:放弃
+					if (writerAlignedRef.current !== scope) return; // 对齐期间又切书/切章/切对话:放弃
 					writerDispatch(RESET);
 					for (const ev of messagesToEvents(st.messages)) writerDispatch(ev);
 					refreshWriterUsage(true);
@@ -410,13 +497,106 @@ export function WritePage({
 		refreshWriterTree();
 	}
 
-	/** 编剧分支树刷新(对齐/编辑重发/分支切换后调用,更新分支栏;按章节)。 */
+	/**
+	 * 拉该书的对话清单(book 模式;chapter 模式直接不拉 —— 章节侧栏就是切换器)。
+	 * 选中规则:本地已选且仍在列表里就保留;否则用服务端登记的当前对话(isCurrent,
+	 * 服务端在没登记时已把最近更新的一条标为 true),列表空则自动新建一段
+	 * (首屏总得有个落脚点,否则用户面对一个选不中任何对话的输入条)。
+	 */
+	async function loadConversations(): Promise<void> {
+		const slug = bookDetailRef.current?.slug;
+		if (!slug || conversationScopeRef.current !== "book") return;
+		try {
+			const list = await client.getConversations(slug);
+			if (bookDetailRef.current?.slug !== slug || conversationScopeRef.current !== "book") return;
+			if (list.length === 0) {
+				await createConversation();
+				return;
+			}
+			setConversations(list);
+			const keep = selectedConversationRef.current && list.some((c) => c.id === selectedConversationRef.current)
+				? selectedConversationRef.current
+				: currentConversationId(list);
+			if (keep !== selectedConversationRef.current) applySelectedConversation(keep);
+		} catch {
+			/* 拉取失败:切换器空态;对话本身照常(缺省落服务端当前对话) */
+		}
+	}
+
+	/**
+	 * 切换对话:与「切章节」走**同一套水合路径** —— 清本地会话态 → resetChat 置
+	 * writerAlignedRef=null → alignWriter 重拉 state/tree/context(不另写一套)。
+	 * 选中态必须**同步**写进 ref:紧随其后到达的 SSE 帧要靠它判定归属。
+	 */
+	function selectConversation(id: string) {
+		if (id === selectedConversationRef.current) return;
+		applySelectedConversation(id);
+		resetChat();
+		alignWriter();
+	}
+
+	/** 新建一段对话(服务端 201 返回新对话 + 最新清单,一次请求即可刷新并选中)。 */
+	async function createConversation(): Promise<void> {
+		const slug = bookDetailRef.current?.slug;
+		if (!slug || conversationBusyRef.current) return;
+		conversationBusyRef.current = true;
+		setConversationBusy(true);
+		try {
+			const r = await client.createConversation(slug);
+			if (bookDetailRef.current?.slug !== slug || conversationScopeRef.current !== "book") return;
+			setConversations(r.conversations);
+			applySelectedConversation(r.conversation.id);
+			resetChat();
+			alignWriter();
+		} catch (e) {
+			setError(`新建对话失败: ${friendlyError(e)}`);
+		} finally {
+			conversationBusyRef.current = false;
+			setConversationBusy(false);
+		}
+	}
+
+	/**
+	 * 删除一段对话。**不允许出现「选中一条已删除对话」的死状态**:删掉的是当前对话
+	 * 就落到清单里的第一条,清单空了就自动新建一段。
+	 */
+	async function deleteConversation(id: string): Promise<void> {
+		const slug = bookDetailRef.current?.slug;
+		if (!slug) return;
+		setError(null);
+		try {
+			await client.deleteConversation(slug, id);
+		} catch (e) {
+			setError(`删除对话失败: ${friendlyError(e)}`);
+			return;
+		}
+		if (bookDetailRef.current?.slug !== slug || conversationScopeRef.current !== "book") return;
+		try {
+			const list = await client.getConversations(slug);
+			if (bookDetailRef.current?.slug !== slug || conversationScopeRef.current !== "book") return;
+			setConversations(list);
+			if (list.some((c) => c.id === selectedConversationRef.current)) return; // 删的不是当前对话
+			const next = nextConversationAfterDelete(list, id);
+			if (next === null) {
+				await createConversation();
+				return;
+			}
+			applySelectedConversation(next);
+			resetChat();
+			alignWriter();
+		} catch (e) {
+			setError(`刷新对话清单失败: ${friendlyError(e)}`);
+		}
+	}
+
+	/** 编剧分支树刷新(对齐/编辑重发/分支切换后调用,更新分支栏;按章节/对话)。 */
 	function refreshWriterTree() {
 		const slug = bookDetailRef.current?.slug;
 		const ch = currentChapterRef.current;
 		if (!slug) return;
+		const t = writerTargetNow(ch?.file ?? null);
 		client
-			.writerTree(slug, ch?.file ?? null)
+			.writerTree(slug, t.chapterFile, t.conversation)
 			.then((tree) => {
 				if (bookDetailRef.current?.slug !== slug) return; // 期间切书:放弃
 				setWriterTree(tree);
@@ -427,13 +607,14 @@ export function WritePage({
 	}
 
 	/** 编剧分支切换(分支栏):服务端 navigate 重建上下文并广播,前端经
-	 *  messages_retracted 重新对齐(消息列表与分支树随之更新;按章节)。 */
+	 *  messages_retracted 重新对齐(消息列表与分支树随之更新;按章节/对话)。 */
 	async function navigateWriter(leafId: string) {
 		const slug = bookDetailRef.current?.slug;
 		const ch = currentChapterRef.current;
 		if (!slug) return;
+		const t = writerTargetNow(ch?.file ?? null);
 		try {
-			await client.writerNavigate(slug, leafId, ch?.file ?? null);
+			await client.writerNavigate(slug, leafId, t.chapterFile, t.conversation);
 		} catch (err) {
 			setError(`分支切换失败: ${friendlyError(err)}`);
 		}
@@ -540,9 +721,11 @@ export function WritePage({
 				// 会话事件复用主 reducer(writerDispatch),不触碰主会话(无 UI,C 档已删其水合)
 				if (start.type === "writer_event") {
 					if (start.slug !== bookDetailRef.current?.slug) return;
-					// 编剧会话按章节隔离:只消费当前章节事件(切章后其他章节编剧
-					// 流式不再串进本页;writer_event 携带 chapterFile 供过滤)
-					if ((start.chapterFile ?? null) !== (currentChapterRef.current?.file ?? null)) return;
+					// 事件归属:chapter 模式按章节文件过滤(与改动前逐字节同规则);
+					// book 模式的帧不带章节(chapterFile 恒为 null)、改带 conversation,
+					// 照旧按 chapterFile 判定会把编剧事件**全部丢掉**。判定收敛在
+					// writer-scope.ts 的 acceptsWriterEvent(可单测),这里只取最新选中态。
+					if (!acceptsWriterEvent(start, selectedConversationRef.current, currentChapterRef.current?.file ?? null)) return;
 					const ev = start.event;
 					if (ev.type === "message_start" && ev.message?.role === "user") {
 						// 编剧回合开始:预取编辑前基线(工具执行快于 SSE+fetch 时,
@@ -564,6 +747,9 @@ export function WritePage({
 					writerDispatch(ev);
 					// 回合结束 / 压缩结束后刷新上下文占用,「建议 /compact」提示才有依据
 					if (ev.type === "agent_settled" || ev.type === "compaction_end") refreshWriterUsage();
+					// 回合结束后对话标题/时间会变(标题取自第一条用户消息):重拉清单,
+					// 切换器里的「新对话」才会变成用户真正说的那句话
+					if (ev.type === "agent_settled") void loadConversations();
 					return;
 				}
 				// 主会话其余事件(message_start/update/end、tool_* 等)不再消费:
@@ -576,6 +762,8 @@ export function WritePage({
 				// 再对齐,否则重连后编剧状态永远停在旧快照(isStreaming 卡死、消息
 				// 不回显,2026-08-10 根因)
 				writerAlignedRef.current = null;
+				// 重连后对话清单可能也过期了(他窗口新建/删除):book 模式下先重拉再对齐
+				void loadConversations();
 				alignWriter();
 				refreshWriterUsage(true);
 			},
@@ -584,12 +772,34 @@ export function WritePage({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [client]);
 
-	// 编剧会话对齐:书/章节就位后执行;切书/切章后 resetChat 置 writerAlignedRef=null,
-	// bookDetail/currentChapter 变化触发重新对齐(编剧会话按章节隔离,切章必须重拉)
+	/**
+	 * 关系模式切换(设置页 / 首启向导 / 其他窗口的 settings_changed):两种模式的
+	 * 会话身份语义不同,旧状态一律作废 —— 清空对话清单与选中态 + resetChat,
+	 * 随后由下面两个 effect 重新拉清单并对齐。
+	 * 声明在「对齐 / 拉清单」两个 effect **之前**:effect 按声明顺序跑,先清后拉,
+	 * 切模式时不会拿着上一模式的选中 id 去对齐一次。
+	 */
+	useEffect(() => {
+		setConversations([]);
+		applySelectedConversation(null);
+		resetChat();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [conversationScope]);
+
+	// 编剧会话对齐:书/章节/选中对话就位后执行;切书/切章后 resetChat 置
+	// writerAlignedRef=null,变化触发重新对齐(chapter 模式切章必须重拉;
+	// book 模式的对齐键只认对话,切章节不重拉 —— 见 writerAlignKey)
 	useEffect(() => {
 		if (bookDetail) alignWriter();
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [bookDetail, currentChapter]);
+	}, [bookDetail, currentChapter, selectedConversationId, conversationScope]);
+
+	// 对话清单(book 模式;chapter 模式不拉也不用):换书、换模式时重拉,
+	// 选中对话由 loadConversations 依「本地选中仍在列表中 → 否则 isCurrent」决定
+	useEffect(() => {
+		if (bookDetail) void loadConversations();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [bookDetail, conversationScope]);
 
 	// 初始化:拉书列表 → 打开第一本(服务端启动时已自动创建「未命名」与第一章)
 	useEffect(() => {
@@ -659,7 +869,7 @@ export function WritePage({
 				setBookDetail(null);
 				setCurrentChapter(null);
 				onBookChange?.(null);
-				resetChat();
+				resetWriterForBook();
 				return;
 			}
 			setBookDetail(detail);
@@ -668,7 +878,8 @@ export function WritePage({
 			// 以服务端实际会话为准(事件后可能又有切换);章节不存在时退回第一章
 			const ch = detail.chapters.find((c) => c.file === (st.chapterFile ?? chapterFile)) ?? detail.chapters[0] ?? null;
 			setCurrentChapter(ch);
-			resetChat();
+			// 同书换章节:book 模式下对话不跟着章节走(见 resetWriterForChapter)
+			resetWriterForChapter();
 		} catch (err) {
 			if (gen !== sessionGenRef.current) return; // 过期失败:静默放弃(较新切换已接管)
 			setError(`会话同步失败: ${friendlyError(err)}`);
@@ -694,7 +905,8 @@ export function WritePage({
 			const ch = detail.chapters.find((c) => c.file === file) ?? detail.chapters[0] ?? null;
 			if (gen !== sessionGenRef.current) return;
 			setCurrentChapter(ch);
-			resetChat();
+			// 换书:编剧会话/对话清单/选中对话都按书隔离,整体清掉重来
+			resetWriterForBook();
 			setError(null);
 			setConnected(true);
 			// 会话按「书 + 章节」双键判断:默认章节名恒为 ch01.jsonl,只比较 basename
@@ -730,7 +942,7 @@ export function WritePage({
 		const srv = serverSessionRef.current;
 		const isServerSession = srv !== null && srv.slug === bookDetail.slug && srv.chapterFile === ch.file;
 		setCurrentChapter(ch);
-		resetChat();
+		resetWriterForChapter();
 		// 查看模式标记:目标章节 != 服务端会话则提示(不切服务端);相等即实时模式。
 		// 服务端空闲(无 stream)时不进查看模式——查看 = 不打断流式,空闲时直接切
 		// 服务端会话(实时),避免「正在查看」提示滞留(agent_settled 已发过、无事件
@@ -790,7 +1002,7 @@ export function WritePage({
 			if (gen !== sessionGenRef.current) return;
 			await client.switchSession(bookDetail.slug, ch.file);
 			if (gen !== sessionGenRef.current) return;
-			resetChat();
+			resetWriterForChapter();
 			const detail = await client.getBook(bookDetail.slug);
 			if (gen !== sessionGenRef.current) return;
 			setBookDetail(detail);
@@ -868,7 +1080,7 @@ export function WritePage({
 						setViewingOther(false);
 						setBookDetail(null);
 						setCurrentChapter(null);
-						resetChat();
+						resetWriterForBook();
 						onBookChange?.(null);
 						setError(null); // 回空书引导:清掉旧错误提示,避免残留
 					}
@@ -1030,7 +1242,8 @@ export function WritePage({
 				setUsageStats(null);
 				return;
 			}
-			setUsageStats(await client.writerStats(slug, currentChapterRef.current?.file ?? null, true));
+			const t = writerTargetNow(currentChapterRef.current?.file ?? null);
+			setUsageStats(await client.writerStats(slug, t.chapterFile, true, t.conversation));
 		} catch (e) {
 			setUsageErr(`用量读取失败: ${friendlyError(e)}`);
 		} finally {
@@ -1049,11 +1262,17 @@ export function WritePage({
 		const slug = bookDetailRef.current?.slug;
 		if (!slug) return;
 		const ch = currentChapterRef.current;
+		const conv = selectedConversationRef.current;
+		const t = writerTargetNow(ch?.file ?? null);
 		void client
-			.writerContext(slug, ch?.file ?? null, warm)
+			.writerContext(slug, t.chapterFile, warm, t.conversation)
 			.then((usage) => {
-				// 期间切书/切章:丢弃过期快照
-				if (bookDetailRef.current?.slug === slug && currentChapterRef.current?.file === ch?.file) {
+				// 期间切书/切章/切对话:丢弃过期快照
+				if (
+					bookDetailRef.current?.slug === slug &&
+					currentChapterRef.current?.file === ch?.file &&
+					selectedConversationRef.current === conv
+				) {
 					setWriterUsage(usage);
 				}
 			})
@@ -1066,7 +1285,8 @@ export function WritePage({
 		if (!slug) return;
 		if (writerCompactingRef.current) return;
 		try {
-			await client.writerCompact(slug, currentChapterRef.current?.file ?? null, instructions || undefined);
+			const t = writerTargetNow(currentChapterRef.current?.file ?? null);
+			await client.writerCompact(slug, t.chapterFile, instructions || undefined, t.conversation);
 			refreshWriterUsage();
 		} catch (err) {
 			setError(`压缩上下文失败: ${friendlyError(err)}`);
@@ -1108,6 +1328,8 @@ export function WritePage({
 	const writerSlashCommands: SlashCommand[] = [
 		makeNodeCommand({ loadWorld: loadWorldForSlash }),
 		makeChapterCommand(),
+		/* /skill:主动点名技能(清单来自服务端,与 agent 装配同源;读失败就是没这一条命令) */
+		makeSkillCommand({ loadSkills: () => client.getSkills(bookDetailRef.current?.slug) }),
 		makeCompactCommand({ run: runWriterCompact }),
 		...(pluginCommands ?? []),
 	];
@@ -1122,8 +1344,9 @@ export function WritePage({
 		// prompt:那条路径在写用户消息之前就抛了)对话里一条用户消息都不会有,
 		// 报错卡的「重试」只能靠这份留底把话再说一遍(见 retryWriterTurn)。
 		lastSentTextRef.current = text;
+		const t = writerTargetNow(currentChapterRef.current?.file ?? null);
 		void client
-			.writerChat(slug, text, currentChapterRef.current?.file ?? undefined)
+			.writerChat(slug, text, t.chapterFile, t.conversation)
 			.catch((err) => setError(`发送失败: ${friendlyError(err)}`));
 		return true;
 	}
@@ -1132,10 +1355,10 @@ export function WritePage({
 	 *  sendMessage;messages_retracted 广播后编剧会话重新对齐;按章节定位会话)。 */
 	async function editWriterMessage(m: { id: string; entryId?: string }, newText: string) {
 		const slug = bookDetailRef.current?.slug;
-		const ch = currentChapterRef.current;
 		if (!slug || m.entryId === undefined) return;
+		const t = writerTargetNow(currentChapterRef.current?.file ?? null);
 		try {
-			await client.writerRetract(slug, m.entryId, newText, ch?.file ?? null);
+			await client.writerRetract(slug, m.entryId, newText, t.chapterFile, t.conversation);
 		} catch (err) {
 			setError(`编辑重发失败: ${friendlyError(err)}`);
 		}
@@ -1325,7 +1548,8 @@ export function WritePage({
 			onSend={sendWriter}
 			onAbort={() => {
 				const s = bookDetailRef.current?.slug;
-				if (s) void client.writerAbort(s);
+				// book 模式按对话中止(别把另一段对话的生成也停了)
+				if (s) void client.writerAbort(s, conversationScopeRef.current === "book" ? selectedConversationRef.current : null);
 			}}
 			/* 占位符只留短句;键位与 / 命令的说明不再塞进输入框 */
 			placeholder={classicMode ? "向 AI 说话…" : "向编剧说话…"}
@@ -1349,6 +1573,32 @@ export function WritePage({
 			}
 		/>
 	);
+
+	/**
+	 * 对话切换器(book 模式):「与章节各聊各的」时章节侧栏不再是切换器,
+	 * AI 伙伴栏头部就得多一个入口。
+	 *
+	 * 桌面挂在伙伴栏头部(浮层下拉);手机端挂在伙伴抽屉内容顶部(底部抽屉)。
+	 * 两处**不同时**渲染(与 writerInputBar 同一手法),只有这一个实例,
+	 * 所以不会出现第二份「正在确认删除」的状态。
+	 */
+	const conversationSwitcher = (
+		<ConversationSwitcher
+			conversations={conversations}
+			selectedId={selectedConversationId}
+			onSelect={selectConversation}
+			onCreate={() => void createConversation()}
+			onDelete={(id) => void deleteConversation(id)}
+			busy={conversationBusy}
+			phone={isPhone}
+		/>
+	);
+
+	/** 当前对话标题(手机端页头副标题用;chapter 模式没有对话概念,返回 null)。 */
+	const currentConversationTitle =
+		conversationScope === "book"
+			? ((conversations.find((c) => c.id === selectedConversationId) ?? conversations[0])?.title ?? null)
+			: null;
 
 	return (
 		// 三栏壳:书库(轨 1 auto,宽度由 ChapterSidebar 决定并随折叠/拖拽动画)
@@ -1627,9 +1877,15 @@ export function WritePage({
 							title={classicMode ? "AI" : "编剧"}
 							tone={writerSession.isStreaming ? "busy" : "ok"}
 							subtitle={
-								writerUsage?.percent != null
-									? `${currentChapter?.title ?? "草稿"} · 上下文 ${Math.round(writerUsage.percent)}%`
-									: (currentChapter?.title ?? "草稿")
+								// book 模式:标题行先说是哪一段对话(章节不再是身份);
+								// 后面仍带「正在看的章节 / 上下文占用」
+								[
+									currentConversationTitle ? `对话「${currentConversationTitle}」` : null,
+									currentChapter?.title ?? "草稿",
+									writerUsage?.percent != null ? `上下文 ${Math.round(writerUsage.percent)}%` : null,
+								]
+									.filter((s): s is string => s !== null)
+									.join(" · ")
 							}
 							actions={[
 								{
@@ -1700,6 +1956,12 @@ export function WritePage({
 							<Lu icon="chevrons-right" size={14} />
 						</button>
 					</div>
+					{/* 对话切换器(book 模式,「AI」标签头部):当前对话标题 + 切换入口。
+					    chapter 模式**不渲染**——章节侧栏就是切换器,界面零变化。
+					    手机端不在这里(挂进伙伴抽屉内容顶部,见下) */}
+					{conversationScope === "book" && memoTab === "chat" && !isPhone && (
+						<div className="cv-bar">{conversationSwitcher}</div>
+					)}
 					{/* data-memo-dir:标签切换方向 → 内容滑入方向(styles.css 的
 					    .companion-body[data-memo-dir] 规则;两个方向都有动画) */}
 					<div className="companion-body" data-memo-dir={memoDir}>
@@ -1707,6 +1969,12 @@ export function WritePage({
 								<NoticeBoard client={client} slug={bookDetail?.slug ?? null} />
 							) : (
 						<div className="chat active">
+							{/* 手机端(book 模式):对话切换器挂在抽屉内容顶部 ——
+							    手机没有「伙伴栏头部」那条常驻横条,抽屉就是它的家;
+							    展开后是底部抽屉(.m-cv-menu)。桌面端在上面 cv-bar 里 */}
+							{conversationScope === "book" && isPhone && (
+								<div className="cv-bar m-cv-bar">{conversationSwitcher}</div>
+							)}
 							{/* 编剧(常驻编辑 agent)对话:会话状态经 processAgentEvent 维护,
 							   MessageList/InputBar 原样复用;确认卡锚定在触发编辑的 assistant 消息下;
 							   选中正文会自动预填选区上下文(见 handleSelectionChange)。

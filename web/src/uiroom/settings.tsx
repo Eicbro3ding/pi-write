@@ -15,12 +15,17 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ApiClient } from "../api/client.ts";
 import { AddModelDialog } from "../components/AddModelDialog.tsx";
 import { AddProviderDialog } from "../components/AddProviderDialog.tsx";
+import { ChoiceCards } from "../components/ChoiceCards.tsx";
+import { CREATION_MODES } from "../components/CreationModeCards.tsx";
+import { ConversationScopeCards } from "../components/ConversationScopeCards.tsx";
+import { CreationModeCards } from "../components/CreationModeCards.tsx";
 import { ExportPanel } from "../components/ExportPanel.tsx";
 import { FullScreenEditor } from "../components/FullScreenEditor.tsx";
 import { McpServerList } from "../components/McpServerList.tsx";
 import { PluginList } from "../components/PluginList.tsx";
 import { PluginSettings } from "../components/PluginSettings.tsx";
 import { ProviderList } from "../components/ProviderList.tsx";
+import { SHELL_CHOICES, ShellCards } from "../components/ShellCards.tsx";
 import { SetupWizard } from "../components/SetupWizard.tsx";
 import type { PluginInfoDto } from "../types.ts";
 import { useUIRoomRuntime } from "../uiroom-runtime.tsx";
@@ -104,13 +109,49 @@ export const SETTINGS_ENTRIES: readonly UIRoomEntry[] = [
 		frame: "viewport",
 	},
 	{
+		id: "creation-mode-cards",
+		group: "settings",
+		title: "创作方式卡",
+		module: "components/CreationModeCards.tsx",
+		symbols: ["CreationModeCards", "CREATION_MODES"],
+		note: "多 Agent / 单 Agent 两张大选项卡(首启向导「创作方式」步与设置页「Agent 形态」卡共用)。文案与要点只写在这一份里,两处说法不会漂移;点已选中的那张不重复请求。",
+		variants: ["多 Agent 选中", "单 Agent 选中"],
+	},
+	{
+		id: "conversation-scope-cards",
+		group: "settings",
+		title: "对话与章节选择",
+		module: "components/ConversationScopeCards.tsx",
+		symbols: ["ConversationScopeCards", "CONVERSATION_SCOPES"],
+		note: "绑定章节 / 分离 两选一(设置页「对话与章节」卡与首启向导「对话范围」步共用)。骨架走 ChoiceCards,文案与要点只写在这一份里,两处说法不会漂移;点已选中的那个不重复请求。",
+		variants: ["绑定章节选中", "分离选中"],
+	},
+	{
+		id: "choice-cards",
+		group: "settings",
+		title: "选择卡(骨架)",
+		module: "components/ChoiceCards.tsx",
+		symbols: ["ChoiceCards"],
+		note: "单选卡片组的**唯一骨架**:创作方式 / 对话范围 / 执行命令三处向导步与设置页两张卡都套它,各自只给一份数据(2026-10-02 由三份实现收敛成这一份)。图标底 + 标题胶囊 + 一句话定位 + 要点列表 + 右上单选圈。",
+		variants: ["创作方式数据", "执行命令数据"],
+	},
+	{
+		id: "shell-cards",
+		group: "settings",
+		title: "执行命令卡",
+		module: "components/ShellCards.tsx",
+		symbols: ["ShellCards", "SHELL_CHOICES", "SHELL_CONFIRM_TEXT"],
+		note: "保持关闭 / 开启 shell 两选一(首启向导「执行命令」步)。风险确认条由调用方画,正文 `SHELL_CONFIRM_TEXT` 与设置页「执行命令」那一处共用一份 —— 改口径两处一起变。",
+		variants: ["保持关闭", "已开启"],
+	},
+	{
 		id: "setup-wizard",
 		group: "settings",
 		title: "首启向导",
 		module: "components/SetupWizard.tsx",
 		symbols: ["SetupWizard"],
-		note: "五步整屏向导(介绍 → 模型服务 → 默认模型 → 第一本书 → 界面偏好),这里看介绍步:经典模式会去掉「舞台」那张特性卡。整屏覆盖层,已加框。向导在渲染期读浏览器 localStorage(主题),所以这一档服务端(SSR)只出一行说明、挂载后才换成真向导。",
-		variants: ["介绍", "经典模式"],
+		note: "八步整屏向导(介绍 → 创作方式 → 对话范围 → 执行命令 → 模型服务 → 默认模型 → 第一本书 → 界面偏好)。四档都按**新默认(单 Agent)**渲染,后三档挂载后连环点「下一步」,分别停在创作方式 / 对话范围 / 执行命令三步 —— 每一步都是同一套两选一卡片(ChoiceCards),执行命令那步选「开启」才会出现风险确认条。整屏覆盖层,已加框。向导在渲染期读浏览器 localStorage(主题),所以这几档在服务端(SSR)只出一行说明、挂载后才换成真向导。",
+		variants: ["介绍", "创作方式", "对话范围", "执行命令"],
 		frame: "viewport",
 	},
 ];
@@ -449,6 +490,43 @@ function FsEditorOutline() {
 	);
 }
 
+// —— 创作方式卡(两张大卡;向导与设置页共用) ——
+
+function CreationModeMulti() {
+	return <CreationModeCards classic={false} onPick={() => {}} />;
+}
+
+function CreationModeSingle() {
+	return <CreationModeCards classic onPick={() => {}} />;
+}
+
+// —— 对话与章节 / 选择卡骨架 / 执行命令卡 ——
+
+function ConversationScopeChapter() {
+	return <ConversationScopeCards scope="chapter" onPick={() => {}} />;
+}
+
+function ConversationScopeBook() {
+	return <ConversationScopeCards scope="book" onPick={() => {}} />;
+}
+
+/** 骨架本身:同一份 DOM / 样式套两组真实数据(创作方式、执行命令)。 */
+function ChoiceCardsModes() {
+	return <ChoiceCards ariaLabel="创作方式" options={CREATION_MODES} value onPick={() => {}} />;
+}
+
+function ChoiceCardsShell() {
+	return <ChoiceCards ariaLabel="执行命令" options={SHELL_CHOICES} value={false} onPick={() => {}} />;
+}
+
+function ShellOff() {
+	return <ShellCards enabled={false} onPick={() => {}} />;
+}
+
+function ShellOn() {
+	return <ShellCards enabled onPick={() => {}} />;
+}
+
 // —— 首启向导 ——
 
 /**
@@ -457,10 +535,34 @@ function FsEditorOutline() {
  * 真向导 —— 浏览器里第一次 effect 之后就是真的,看不到这一行。
  * (不登记 ssrSkip:展项本身在 node 里能渲染出来,不该跳过冒烟。)
  */
-function WizardMount({ classicMode }: { classicMode: boolean }) {
+function WizardMount({ classicMode, openSteps = 0 }: { classicMode: boolean; openSteps?: number }) {
 	const { client } = useUIRoomRuntime();
 	const [mounted, setMounted] = useState(false);
+	const ref = useRef<HTMLDivElement>(null);
 	useEffect(() => setMounted(true), []);
+	/**
+	 * 「走到第 N 步」档:挂载后连环点页脚主按钮。向导的当前步骤是内部 state,没有对外
+	 * 入口;这与「添加模型弹窗」档自动点一次保存是同一手法。每点一次要等 React 把下一步
+	 * 画出来(下一次点击才有新的 .wz-primary),所以用定时器排队而不是一口气点 N 下。
+	 * effect 在 node 下不跑,所以 SSR 仍渲染介绍步,浏览器里才跳。
+	 */
+	useEffect(() => {
+		if (!mounted || openSteps <= 0) return;
+		let cancelled = false;
+		const timers: number[] = [];
+		let n = 0;
+		const tick = () => {
+			if (cancelled) return;
+			ref.current?.querySelector<HTMLButtonElement>(".wz-foot .wz-primary")?.click();
+			n += 1;
+			if (n < openSteps) timers.push(window.setTimeout(tick, 50));
+		};
+		timers.push(window.setTimeout(tick, 0));
+		return () => {
+			cancelled = true;
+			for (const t of timers) window.clearTimeout(t);
+		};
+	}, [mounted, openSteps]);
 	if (!mounted) {
 		return (
 			<p className="uiroom-hint">
@@ -470,27 +572,43 @@ function WizardMount({ classicMode }: { classicMode: boolean }) {
 	}
 	return (
 		<FrameBox height={620}>
-			<SetupWizard
-				client={client}
-				autoExpandThinking
-				onAutoExpandThinkingChange={() => {}}
-				autoConfirmEdits={false}
-				onAutoConfirmEditsChange={() => {}}
-				classicMode={classicMode}
-				onClassicModeChange={async () => {}}
-				onFinished={() => {}}
-			/>
+			<div ref={ref}>
+				<SetupWizard
+					client={client}
+					autoExpandThinking
+					onAutoExpandThinkingChange={() => {}}
+					autoConfirmEdits={false}
+					onAutoConfirmEditsChange={() => {}}
+					classicMode={classicMode}
+					onClassicModeChange={async () => {}}
+					conversationScope="chapter"
+					onConversationScopeChange={async () => {}}
+					shellEnabled={false}
+					onShellEnabledChange={async () => {}}
+					onFinished={() => {}}
+				/>
+			</div>
 		</FrameBox>
 	);
 }
 
 function WizardIntro() {
-	return <WizardMount classicMode={false} />;
+	return <WizardMount classicMode />;
 }
 
-/** 经典模式:介绍步会去掉「舞台」那张特性卡,并换掉编辑页的说明。 */
-function WizardIntroClassic() {
-	return <WizardMount classicMode />;
+/** 创作方式步:多/单 Agent 两张大卡(默认选中单 Agent)。 */
+function WizardMode() {
+	return <WizardMount classicMode openSteps={1} />;
+}
+
+/** 对话范围步:绑定章节 / 分离 两张大卡(默认选中绑定章节)。 */
+function WizardScope() {
+	return <WizardMount classicMode openSteps={2} />;
+}
+
+/** 执行命令步:保持关闭 / 开启 shell 两张大卡(默认选中保持关闭)。 */
+function WizardShell() {
+	return <WizardMount classicMode openSteps={3} />;
 }
 
 export const SETTINGS_SECTION: UIRoomSection = {
@@ -527,8 +645,26 @@ export const SETTINGS_SECTION: UIRoomSection = {
 		{ label: "本章草稿", note: "draft/ch01.md", render: FsEditorChapter },
 		{ label: "大纲文件", note: "outline.md", render: FsEditorOutline },
 	],
+	"creation-mode-cards": [
+		{ label: "多 Agent 选中", note: "默认档:舞台共演 + 常驻编剧", render: CreationModeMulti },
+		{ label: "单 Agent 选中", note: "经典模式:只有编辑页 + 全量工具", render: CreationModeSingle },
+	],
+	"conversation-scope-cards": [
+		{ label: "绑定章节选中", note: "默认档:一节一段对话,切章节即切对话", render: ConversationScopeChapter },
+		{ label: "分离选中", note: "对话与章节各聊各的,AI 可编辑任意章节", render: ConversationScopeBook },
+	],
+	"choice-cards": [
+		{ label: "创作方式数据", note: "骨架 + 多/单 Agent 两组数据(选中单 Agent)", render: ChoiceCardsModes },
+		{ label: "执行命令数据", note: "骨架 + 关闭/开启两组数据(选中关闭)", render: ChoiceCardsShell },
+	],
+	"shell-cards": [
+		{ label: "保持关闭", note: "默认档:内置工具照常,没有本机命令", render: ShellOff },
+		{ label: "已开启", note: "开启档:危险要点 + 与设置页共用的确认文案", render: ShellOn },
+	],
 	"setup-wizard": [
-		{ label: "介绍", note: "标准模式:舞台 / 编辑 / 世界书 / 设置", render: WizardIntro },
-		{ label: "经典模式", note: "去掉舞台那张卡", render: WizardIntroClassic },
+		{ label: "介绍", note: "默认(单 Agent):编辑 / 世界书 / 设置,无「舞台」卡", render: WizardIntro },
+		{ label: "创作方式", note: "自动点到第 2 步:两张大卡,单 Agent 默认选中", render: WizardMode },
+		{ label: "对话范围", note: "自动点到第 3 步:绑定章节默认选中", render: WizardScope },
+		{ label: "执行命令", note: "自动点到第 4 步:保持关闭默认选中(点「开启」才弹确认条)", render: WizardShell },
 	],
 };

@@ -7,7 +7,9 @@
  *   IconEdit  → square-pen(编辑页 / 写作)
  *   IconGlobe → globe(世界书)
  *   IconGear  → settings(设置)
- *   IconBook  → book(书)          IconDoc → file-text(草稿文件)
+ *   IconBook  → book(书,已绑定章节)  IconDoc → file-text(草稿文件)
+ *   IconChat  → message-square(自由对话)   IconLock → lock(不开权限)
+ *   IconWrench→ wrench(外部命令)
  *   IconX     → x                 IconPlus → plus       IconTrash → trash-2
  * 需要新图标:先在 Pen 文档里看那个节点叫什么,再从 lucide 取同名路径加进 Lu.tsx。
  */
@@ -31,6 +33,9 @@ export const IconGlobe = make("globe");
 export const IconGear = make("settings");
 export const IconBook = make("book");
 export const IconDoc = make("file-text");
+export const IconChat = make("message-square");
+export const IconLock = make("lock");
+export const IconWrench = make("wrench");
 export const IconX = make("x");
 export const IconPlus = make("plus");
 export const IconTrash = make("trash-2");

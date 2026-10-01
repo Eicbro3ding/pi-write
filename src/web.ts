@@ -284,7 +284,7 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 	await host.start();
 	// 常驻编剧宿主:每本书一个 writer 会话,惰性创建;model/thinking 同 stage
 	// (writer 端点未装配时由 server 侧 404,与 MCP/stage 同款)。
-	// 设置(经典模式 / 外部命令)在启动时读一次,之后切换走 PUT /api/settings。
+	// 设置(经典模式 / 外部命令 / 对话与章节的关系)在启动时读一次,之后切换走 PUT /api/settings。
 	const writerHost = new WriterHost({
 		model: opts.model,
 		thinkingLevel: opts.thinking,
@@ -292,6 +292,9 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 		topP: opts.topP,
 		getMcpTools: () => mcpManager.getTools(),
 		classicMode: writerSettings.classicMode,
+		// 对话与章节的关系(缺省 chapter = 一段对话绑一章);启动时读一次,
+		// 之后切换走 PUT /api/settings → setConversationScope
+		conversationScope: writerSettings.conversationScope,
 		enableShell: shellEnabled,
 		// shell 方言(选 pwsh 时实际执行 PowerShell,提示词按方言叙述);解析不到则按无 shell
 		shellDialect: shellOn ? resolvedShell.dialect : "none",

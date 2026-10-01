@@ -1,8 +1,9 @@
 /**
  * 首次启动配置向导状态(~/.pi/writer/setup.json)。
  *
- * 向导引导新用户走完五步:功能介绍 → 接入模型服务商 → 选默认模型+思考级别 →
- * 建第一本书 → 界面偏好。完成标记落在服务端而非浏览器 localStorage:
+ * 向导引导新用户走完八步:功能介绍 → 创作方式(多/单 Agent) → 对话范围(绑定章节/分离) →
+ * 执行命令(是否放开 shell) → 接入模型服务商 → 选默认模型+思考级别 → 建第一本书 → 界面偏好。
+ * 完成标记落在服务端而非浏览器 localStorage:
  * - 换浏览器/清缓存/无痕模式不会重复弹;
  * - 多窗口(Electron + 浏览器 + Android 壳)状态一致;
  * - TUI 后续接入时可直接读同一文件。
@@ -23,8 +24,18 @@ import { atomicWriteFile } from "./atomic-write.ts";
  */
 export const SETUP_VERSION = 1;
 
-/** 向导步骤 id;数组顺序即向导展示顺序。 */
-export const SETUP_STEPS = ["intro", "provider", "model", "book", "prefs"] as const;
+/**
+ * 向导步骤 id;数组顺序即向导展示顺序。
+ *
+ * 「mode / scope / shell」三步连在介绍之后(2026-10-02 起):
+ *   1. mode  —— 创作方式(多 Agent / 单 Agent),决定后面几步的语境(单 Agent 没有舞台);
+ *   2. scope —— 对话与章节(绑定章节 / 分离),决定对话的身份语义;
+ *   3. shell —— 执行命令,唯一一个高风险权限,单独一页过风险确认。
+ * 三个都是「点了就写服务端 settings.json」的即时设置,选完即生效。
+ * 加步骤是**追加式**变更,不需要递增 SETUP_VERSION —— 旧 setup.json 缺这些键时按未走过
+ * 解析,不影响已完成的用户(2026-10-02 之前两次加步都是这么处理的)。
+ */
+export const SETUP_STEPS = ["intro", "mode", "scope", "shell", "provider", "model", "book", "prefs"] as const;
 
 export type SetupStepId = (typeof SETUP_STEPS)[number];
 
@@ -42,7 +53,7 @@ export function defaultSetupState(): SetupState {
 	return {
 		version: SETUP_VERSION,
 		completedAt: null,
-		steps: { intro: false, provider: false, model: false, book: false, prefs: false },
+		steps: { intro: false, mode: false, scope: false, shell: false, provider: false, model: false, book: false, prefs: false },
 	};
 }
 

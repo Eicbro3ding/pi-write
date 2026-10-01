@@ -25,11 +25,13 @@ import {
 	makeChapterCommand,
 	makeCompactCommand,
 	makeNodeCommand,
+	makeSkillCommand,
 	type SlashCommand,
 } from "../slash-commands.ts";
 import type {
 	ChatErrorInfo,
 	ChatMessage,
+	ConversationDto,
 	ContextUsageDto,
 	SessionUsageStatsDto,
 	StageScriptDto,
@@ -43,6 +45,7 @@ import type {
 import { AskUserOverlay, AskUserRecord } from "../components/AskUserCard.tsx";
 import { ConfirmCard, type ConfirmCardItem } from "../components/ConfirmCard.tsx";
 import { ConstraintsPanel, CONSTRAINT_LIMIT, SAMPLE_LIMIT, StyleSamplePanel } from "../components/ConstraintsPanel.tsx";
+import { ConversationSwitcher } from "../components/ConversationSwitcher.tsx";
 import { InputBar } from "../components/InputBar.tsx";
 import { MessageList, ThinkingBlock, ThinkingBody, ThinkingToggle, type PreviewCardSlot } from "../components/MessageList.tsx";
 import { NoticeBoard } from "../components/NoticeBoard.tsx";
@@ -833,6 +836,16 @@ export const CHAT_ENTRIES: readonly UIRoomEntry[] = [
 		variants: ["空", "有文字", "斜杠面板", "引用菜单", "生成中", "上下文满"],
 	},
 	{
+		id: "conversation-switcher",
+		group: "chat",
+		title: "对话切换器",
+		module: "components/ConversationSwitcher.tsx",
+		symbols: ["ConversationSwitcher"],
+		note: "book 模式(对话与章节各聊各的)的对话入口:头部显示当前对话标题,展开可切换 / 新建 / 删除。删除是两步内联确认(删一段对话不可恢复,不值得为它拉模态框)。第一档是桌面浮层(挂在触发的正下方);第二档是手机底部抽屉(固定定位,已加框)。数据与回调全由调用方注入,组件自己不拿 client、不发请求。",
+		variants: ["桌面浮层", "手机抽屉"],
+		frame: "viewport",
+	},
+	{
 		id: "constraints-panel",
 		group: "chat",
 		title: "约束与采样",
@@ -1023,6 +1036,13 @@ const DEMO_PLUGIN_COMMANDS: SlashCommand[] = [
 const DEMO_COMMANDS: ReadonlyArray<SlashCommand> = [
 	makeNodeCommand({ loadWorld: async () => WORLD_AFTER }),
 	makeChapterCommand(),
+	/* /skill:真实清单来自服务端;这里手写两条,只看菜单形态(不发请求) */
+	makeSkillCommand({
+		loadSkills: async () => [
+			{ name: "critique", description: "冷读诊断当前章节,只挑毛病不重写。", explicitOnly: false },
+			{ name: "outline", description: "开书或重排全书骨架:卷纲、节点、章节节拍。", explicitOnly: false },
+		],
+	}),
 	makeCompactCommand({ run: async () => {} }),
 	...DEMO_PLUGIN_COMMANDS,
 ];
@@ -1147,6 +1167,48 @@ function UsageEmpty() {
 	return <UsagePanel stats={null} loading={false} err={null} onClose={noop} />;
 }
 
+// —— 对话切换器(book 模式的对话入口) ——
+
+/** 演示数据:照 ConversationDto 形状手写(id 是章节文件名或裸 id `c-xxxxxx`)。 */
+const DEMO_CONVERSATIONS: readonly ConversationDto[] = [
+	{ id: "c-9f31ab", title: "第三幕的节奏要不要再压一压", updatedAt: Date.now() - 4 * 60_000, isCurrent: true },
+	{ id: "c-2c07de", title: "帮我把第 7 章的结尾改含蓄一点", updatedAt: Date.now() - 3 * 3_600_000, isCurrent: false },
+	{ id: "ch01.jsonl", title: "开篇那场雨写得太平了", updatedAt: Date.now() - 2 * 86_400_000, isCurrent: false },
+	{ id: "default", title: "新对话", updatedAt: Date.now() - 40 * 86_400_000, isCurrent: false },
+];
+
+/**
+ * 挂载后自动点开一次浮层(与「添加模型弹窗」档自动点保存、「向导」档自动点下一步
+ * 同一手法):SSR 下 effect 不跑、停在收起态,浏览器里才是展开的样子。
+ */
+function AutoOpenSwitcher({ phone = false }: { phone?: boolean }) {
+	const ref = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		ref.current?.querySelector<HTMLButtonElement>(".cv-current")?.click();
+	}, []);
+	return (
+		// alignSelf: 带框格子默认把内容垂直居中,浮层会顶到框外;贴顶才看得全
+		<div ref={ref} style={{ alignSelf: "flex-start", width: "100%" }}>
+			<ConversationSwitcher
+				conversations={DEMO_CONVERSATIONS}
+				selectedId="c-9f31ab"
+				onSelect={noop}
+				onCreate={noop}
+				onDelete={noop}
+				phone={phone}
+			/>
+		</div>
+	);
+}
+
+function SwitcherDesktop() {
+	return <AutoOpenSwitcher />;
+}
+
+function SwitcherPhone() {
+	return <AutoOpenSwitcher phone />;
+}
+
 /* ════════════════════════════════════════════════════════════════
    状态档渲染表(标签与顺序必须与上面 ENTRIES.variants 逐字一致)
    ════════════════════════════════════════════════════════════════ */
@@ -1199,6 +1261,10 @@ export const CHAT_SECTION: UIRoomSection = {
 		{ label: "引用菜单", note: "输入 @ 一次搜世界书与章节", render: InputAt },
 		{ label: "生成中", note: "流式中:输入仍可用,按钮变中断", render: InputStreaming },
 		{ label: "上下文满", note: "88% → 圆环转红,可点开用量", render: InputUsageHigh },
+	],
+	"conversation-switcher": [
+		{ label: "桌面浮层", note: "多段对话 + 当前标记 + 删除入口", render: SwitcherDesktop },
+		{ label: "手机抽屉", note: "底部抽屉形态(.m-cv-menu,≤700px 生效)", render: SwitcherPhone },
 	],
 	"constraints-panel": [
 		{ label: "正常", note: "启用计数 + 作用域胶囊 + 采样来源", render: ConstraintsNormal },

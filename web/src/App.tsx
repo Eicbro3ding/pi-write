@@ -15,17 +15,19 @@ import {
 	autoConfirmEditsEnabled,
 	autoExpandThinkingEnabled,
 	classicModeEnabled,
+	conversationScope as readConversationScope,
 	debugModeEnabled,
 	enterBehavior as readEnterBehavior,
 	debugUnlocked,
 	setAutoConfirmEdits as persistAutoConfirmEdits,
 	setAutoExpandThinking as persistAutoExpandThinking,
 	setClassicMode as persistClassicMode,
+	setConversationScope as persistConversationScope,
 	setDebugMode as persistDebugMode,
 	setEnterBehavior as persistEnterBehavior,
 	subscribeDebugChanged,
 } from "./settings.ts";
-import type { ResolvedShellDto, ShellKindDto, WriterSettingsDto } from "./types.ts";
+import type { ConversationScopeDto, ResolvedShellDto, ShellKindDto, WriterSettingsDto } from "./types.ts";
 import type { EnterBehavior } from "./settings.ts";
 
 /**
@@ -62,12 +64,13 @@ export function App() {
 	 * 经典模式(单 agent):去掉舞台入口(没有导演/演员/旁白的多 agent 共演),
 	 * 编辑页的 AI 换成带全量工具的写作 agent;世界书页与设置页照常。
 	 *
+	 * **缺省开启**(2026-10-02:多 agent 那套要用户先理解角色分工,新用户容易卡住)。
 	 * 权威值在服务端(~/.pi/writer/settings.json,决定 agent 装配),这里读本地
 	 * 缓存供首帧渲染(否则顶栏会先画出舞台入口再收回);挂载后 GET /api/settings
 	 * 对账,并以服务端为准覆盖;其他窗口的切换经 settings_changed SSE 同步。
 	 */
 	const [classicMode, setClassicModeState] = useState<boolean>(() => classicModeEnabled());
-	/** 顶栏视图;经典模式(本地缓存已开启)首帧直接落在编辑页。 */
+	/** 顶栏视图;经典模式(本地缓存已开启,含**缺省**)首帧直接落在编辑页。 */
 	const [view, setView] = useState<View>(() => (classicModeEnabled() ? "edit" : "stage"));
 	/**
 	 * 「去设置模型」信号(报错卡的动作行):自增计数 → 设置页据此把左栏切回「模型」。
@@ -136,6 +139,17 @@ export function App() {
 		persistClassicMode(enabled);
 		setClassicModeState(enabled);
 		if (enabled) setView((v) => (isClassicView(v) ? v : "edit"));
+	}, []);
+	/**
+	 * 对话与章节的关系(chapter = 一节一段对话 / book = 各聊各的)。与经典模式同款:
+	 * 权威值在服务端 settings.json(决定 WriterHost 的会话身份语义),这里读本地缓存
+	 * 供首帧渲染(否则编辑页会先按 chapter 模式画一帧、再冒出对话切换器),挂载后
+	 * GET /api/settings 对账并以服务端为准,其他窗口的切换经 settings_changed 同步。
+	 */
+	const [conversationScope, setConversationScopeState] = useState<ConversationScopeDto>(() => readConversationScope());
+	const applyConversationScope = useCallback((scope: ConversationScopeDto) => {
+		persistConversationScope(scope);
+		setConversationScopeState(scope);
 	}, []);
 	/**
 	 * 外部命令(bash):agent 能否执行 shell 命令。同样以服务端为准——
@@ -262,6 +276,25 @@ export function App() {
 		},
 		[client, classicMode, applyClassicMode],
 	);
+	/**
+	 * 切换对话与章节的关系:先本地落盘 + 置位(开关即时响应),再写服务端;
+	 * 服务端是权威值,以它的返回为准回写(失败回滚本地并抛给调用方展示错误)。
+	 * 服务端写入会释放已建编剧会话,下次对话按新语义定位 —— 所以不能只改本地。
+	 */
+	const changeConversationScope = useCallback(
+		async (scope: ConversationScopeDto) => {
+			const prev = conversationScope;
+			applyConversationScope(scope);
+			try {
+				const { settings } = await client.putSettings({ conversationScope: scope });
+				applyConversationScope(settings.conversationScope);
+			} catch (e) {
+				applyConversationScope(prev);
+				throw e;
+			}
+		},
+		[client, conversationScope, applyConversationScope],
+	);
 	/** 首启向导状态:挂载时查一次服务端(~/.pi/writer/setup.json)。 */
 	const [setupPhase, setSetupPhase] = useState<SetupPhase>("checking");
 	/** 设置页「重新运行配置向导」:向导以覆盖层叠加(页面保持挂载,流式状态不丢)。 */
@@ -295,6 +328,7 @@ export function App() {
 				if (cancelled) return;
 				setAppVersion(appVersion);
 				applyClassicMode(settings.classicMode);
+				applyConversationScope(settings.conversationScope);
 				applyShellEnabled(settings.enableShell);
 				applyShellSettings(settings, shell);
 				applyImageSettings(settings);
@@ -305,6 +339,7 @@ export function App() {
 		const unsub = client.subscribeEvents((e) => {
 			if (e.type !== "settings_changed") return;
 			applyClassicMode(e.settings.classicMode);
+			applyConversationScope(e.settings.conversationScope);
 			applyShellEnabled(e.settings.enableShell);
 			applyShellSettings(e.settings);
 			applyImageSettings(e.settings);
@@ -313,7 +348,7 @@ export function App() {
 			cancelled = true;
 			unsub();
 		};
-	}, [client, applyClassicMode, applyShellEnabled, applyShellSettings]);
+	}, [client, applyClassicMode, applyConversationScope, applyShellEnabled, applyShellSettings]);
 
 	// 插件前端 JS:trusted 插件的 frontend.mjs 经 <script module> 注入;状态变化(启停)
 	// 由设置页操作驱动,此处仅挂载+定期对账(30s);插件脚本错误静默不影响主界面。
@@ -351,6 +386,10 @@ export function App() {
 				onAutoConfirmEditsChange={setAutoConfirmEdits}
 				classicMode={classicMode}
 				onClassicModeChange={changeClassicMode}
+				conversationScope={conversationScope}
+				onConversationScopeChange={changeConversationScope}
+				shellEnabled={shellEnabled}
+				onShellEnabledChange={changeShellEnabled}
 				onFinished={() => setSetupPhase("done")}
 			/>
 		);
@@ -464,6 +503,7 @@ export function App() {
 							enterBehavior={enterBehavior}
 							autoConfirmEdits={autoConfirmEdits}
 							classicMode={classicMode}
+							conversationScope={conversationScope}
 							/* 报错卡的「去设置模型 ›」:导航由 App 独占(WritePage 只管请求) */
 							onOpenSettings={openModelSettings}
 							/* 手机端顶栏下线,四个页面入口收进书库抽屉(App 持有当前页与切页) */
@@ -505,6 +545,8 @@ export function App() {
 							onAutoConfirmEditsChange={setAutoConfirmEdits}
 							classicMode={classicMode}
 							onClassicModeChange={changeClassicMode}
+							conversationScope={conversationScope}
+							onConversationScopeChange={changeConversationScope}
 							shellEnabled={shellEnabled}
 							onShellEnabledChange={changeShellEnabled}
 							shellKind={shellKind}
@@ -530,6 +572,10 @@ export function App() {
 					onAutoConfirmEditsChange={setAutoConfirmEdits}
 					classicMode={classicMode}
 					onClassicModeChange={changeClassicMode}
+					conversationScope={conversationScope}
+					onConversationScopeChange={changeConversationScope}
+					shellEnabled={shellEnabled}
+					onShellEnabledChange={changeShellEnabled}
 					closing={wizardPresence.closing}
 					onBooksChanged={() => void library.loadBooks()}
 					onFinished={() => setRerunWizard(false)}
