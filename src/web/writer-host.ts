@@ -59,6 +59,7 @@ import {
 import type { AgentMessage, ThinkingLevel } from "../../vendor/pi-agent-core/src/index.ts";
 import type { ToolDefinition } from "../../vendor/pi-coding-agent/src/index.ts";
 import {
+	parseSkillBlock,
 	type AgentSessionEvent,
 	type CreateAgentSessionRuntimeFactory,
 	type ExtensionAPI,
@@ -1210,12 +1211,27 @@ function sessionFileBase(fileName: string): string | null {
 /**
  * 对话标题:第一条用户消息的前若干字(压平空白);空对话给中性默认名。
  * 内容来源是会话文件本身(唯一真相源),经 readSessionFromDisk 复用既有解析。
+ *
+ * **技能调用单独处理**:`/skill:<name>` 在发送时被 vendor 展开成整份 SKILL.md 写进
+ * 消息(见 web/src/skill-invocation.ts),照原文截前 24 字会得到
+ * `<skill name="critique" loc` 这种前缀垃圾。这里用 vendor 的 parseSkillBlock 拆开,
+ * 标题取「技能名 · 你自己说的话」。
  */
 function conversationTitle(slug: string, id: string): string {
 	const fromDisk = readSessionFromDisk(slug, id);
 	const first = fromDisk?.messages.find((m) => m.role === "user" && m.text.trim().length > 0);
 	if (!first) return DEFAULT_CONVERSATION_TITLE;
-	const flat = first.text.replace(/\s+/g, " ").trim();
+	return conversationTitleText(first.text);
+}
+
+/**
+ * 标题取值口径(纯函数,便于单测):技能调用取「技能名 · 你自己说的话」,其余取原文;
+ * 压平空白后截到 {@link TITLE_LIMIT} 字。
+ */
+export function conversationTitleText(text: string): string {
+	const skill = parseSkillBlock(text);
+	const source = skill ? [skill.name, skill.userMessage ?? ""].filter((s) => s.length > 0).join(" · ") : text;
+	const flat = source.replace(/\s+/g, " ").trim();
 	return flat.length > TITLE_LIMIT ? flat.slice(0, TITLE_LIMIT) : flat;
 }
 

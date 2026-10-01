@@ -2,6 +2,7 @@
  * 前端 DTO 类型定义 —— 字段与后端 book-manager / session-host / world-tree 对齐。
  * 仅类型(erasable TS),无运行时依赖。
  */
+import type { SkillInvocation } from "./skill-invocation.ts";
 
 /** 书列表条目(后端 BookListEntry)。 */
 export interface BookMeta {
@@ -207,6 +208,12 @@ export interface ChatMessage {
 	 * - 两者都没有 → 无法确认关联,不给「重试」按钮(提示用户重新发送)
 	 */
 	retry?: ChatRetryTarget;
+	/**
+	 * 技能调用(仅用户消息可能有):这条消息是 `/skill:<name>` 来的,vendor 已把整份
+	 * SKILL.md 展开进正文。有它时界面渲染成一枚芯片 + 你自己那句话,正文折在展开里
+	 * —— 而不是把整份方法论灌进气泡。解析见 skill-invocation.ts。
+	 */
+	skill?: SkillInvocation;
 }
 
 /** 报错卡绑定的失败回合(见 ChatMessage.retry)。 */

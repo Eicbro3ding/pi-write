@@ -576,6 +576,29 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .record-edit-actions { display: flex; gap: 10px; align-items: center; }
 .record-text { font-family: var(--prose); font-size: 15px; line-height: 1.85; color: var(--ink); white-space: pre-wrap; overflow-wrap: break-word; }
 .record.user .record-text { font-size: 14px; line-height: 1.75; color: var(--ink-2); }
+
+/* —— 技能调用芯片(/skill:<name>)——
+   vendor 把技能展开成整份 SKILL.md 进消息(见 web/src/skill-invocation.ts):气泡里
+   只留一枚「✦ 技能名」芯片 + 你自己那句话,正文折在芯片右侧箭头后面。与 TUI 的
+   `[skill] name (Ctrl+O 展开)`、HTML 导出的 `[skill] name` 同一套语言。
+   芯片独占首行(flex + fit-content):你的话从第二行开始,不跟芯片挤在一行。 */
+.skill-chip {
+  display: flex; align-items: center; gap: 5px; width: fit-content;
+  margin-bottom: 6px; padding: 2px 9px 2px 8px; border-radius: var(--r-full);
+  border: 1px solid var(--amber-tint-strong); color: var(--amber);
+  font-family: var(--mono); font-size: var(--fs-11); line-height: 1.7;
+}
+.skill-chip.clickable { cursor: pointer; transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); }
+.skill-chip.clickable:hover { background: var(--amber-tint); border-color: var(--amber); }
+.skill-chip svg { flex: none; }
+/* 展开出来的技能原文:与「思考」块同一套语言(灰底、mono、限高内滚),
+   不抢正文的视觉权重 */
+.skill-body {
+  margin: 2px 0 8px; padding: 8px 10px; max-height: 220px; overflow: auto;
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-md);
+  font-family: var(--mono); font-size: var(--fs-12); line-height: 1.7; color: var(--muted);
+  white-space: pre-wrap;
+}
 /* AI markdown */
 .record-md { white-space: normal; }
 .record-md > :first-child { margin-top: 0; }

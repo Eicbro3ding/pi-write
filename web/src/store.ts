@@ -12,6 +12,7 @@ import type { AgentEventDto, ChatMessage, ChatRetryTarget, MessageBlock, Session
 import { extractCacheHit } from "./context-usage.ts";
 import { describeChatError, providerModelLine } from "./chat-error.ts";
 import { blocksText } from "./blocks.ts";
+import { parseSkillInvocation, skillCommandText } from "./skill-invocation.ts";
 
 /** 初始会话视图状态。 */
 export function initialSessionState(): SessionViewState {
@@ -331,7 +332,9 @@ export function retryTargetForError(messages: readonly ChatMessage[]): ChatRetry
 		const m = messages[i]!;
 		if (m.role === "error") continue;
 		if (m.role !== "user") return null;
-		const text = blocksText(m.blocks);
+		// 技能消息按折叠形态重发:重发时重新走 vendor 的展开路径,而不是把上次展开的
+		// 全文当普通文本再发一遍(那会丢掉技能身份)
+		const text = m.skill ? skillCommandText(m.skill) : blocksText(m.blocks);
 		if (text.length === 0) return null;
 		return { ...(m.entryId !== undefined ? { entryId: m.entryId } : {}), text };
 	}
@@ -379,6 +382,10 @@ export function retryTargetForError(messages: readonly ChatMessage[]): ChatRetry
 			// 思考块只属于 assistant;user 消息的 content 里即便混进 thinking 块也丢掉
 			// (防御式,渲染侧不该给用户消息画思考折叠块)
 			const seg = m.role === "user" ? blocksFromContent(m.content).filter((b) => b.kind === "text") : blocksFromContent(m.content);
+			// 技能调用:展开态(`<skill …>` 块,历史水合与 SSE 回显)与字面态(`/skill:x 话`,
+			// 用户刚发那一下)都认。**这是用户气泡的唯一出生地**(实时走 SSE、历史走
+			// messagesToEvents 合成的同一批事件),所以解析只在这一处发生,见 skill-invocation.ts
+			const skill = m.role === "user" ? parseSkillInvocation(contentTextOf(m.content)) : null;
 			// 同轮回复合并:一轮 user 消息之后的多条 assistant 消息(多轮工具调用)并入
 			// 同一条气泡。**块按顺序追加,不再用 \n\n 拼成平铺字符串** —— 顺序就是数据。
 			// 新的一轮从 user 消息开始,因此最后一条是 assistant 才合并。
@@ -413,6 +420,7 @@ export function retryTargetForError(messages: readonly ChatMessage[]): ChatRetry
 							...(event.endedAt !== undefined ? { endedAt: event.endedAt } : {}),
 						}
 					: {}),
+				...(skill ? { skill } : {}),
 			};
 			return { ...state, messages: [...state.messages, msg] };
 		}

@@ -15,6 +15,7 @@ import { PreviewCard } from "./PreviewCard.tsx";
 import { ToolIcon } from "./ToolIcon.tsx";
 import { toolActionRow, toolIcon, toolRenderForm } from "../tool-status.ts";
 import { autoExpandThinkingEnabled } from "../settings.ts";
+import { skillCommandText, type SkillInvocation } from "../skill-invocation.ts";
 
 /**
  * AI 输出中的状态提示:braille 转圈帧 + 文案轮换(思考中/分析中/创作中)+
@@ -294,6 +295,39 @@ function ToolActionRow({ t }: { t: ToolCallInfo }) {
 }
 
 /**
+ * 技能调用芯片:气泡首行一枚「✦ critique」。
+ *
+ * `/skill:<name>` 在发送时被 vendor 展开成**整份 SKILL.md** 写进消息(见
+ * web/src/skill-invocation.ts),原样渲染就是一整屏方法论。这里只留技能名,
+ * 正文折在右侧箭头后面 —— 与 TUI 的 `[skill] name (Ctrl+O 展开)`、HTML 导出的
+ * `[skill] name` 同一套语言。
+ *
+ * 字面态(`/skill:x 话`,回显还没到)拿不到正文,那就只画芯片、不画箭头:
+ * 同一条消息随后会带着正文重渲染,箭头自然出现。
+ */
+function SkillChip({ skill, open, onToggle }: { skill: SkillInvocation; open: boolean; onToggle: () => void }) {
+	const head = (
+		<>
+			<Lu icon="sparkles" size={11} strokeWidth={1.8} />
+			{skill.name}
+		</>
+	);
+	if (skill.body === null) return <span className="skill-chip">{head}</span>;
+	return (
+		<button
+			type="button"
+			className={`skill-chip clickable${open ? " open" : ""}`}
+			aria-expanded={open}
+			title={open ? "收起技能原文" : "展开技能原文"}
+			onClick={onToggle}
+		>
+			{head}
+			<Lu icon={open ? "chevron-up" : "chevron-down"} size={11} strokeWidth={1.8} />
+		</button>
+	);
+}
+
+/**
  * 工具块的渲染分发(块渲染表见 tool-status.ts 的 toolRenderForm)。
  *
  * `preview`(产出型工具)优先渲染**卡片**:编剧编辑确认卡(带确认/回退)或只读预览卡
@@ -528,7 +562,13 @@ function Message({
 	const [editText, setEditText] = useState("");
 	/** 过程折叠(整轮思考 + 工具)。缺省展开;流式中强制展开。 */
 	const [procOpen, setProcOpen] = useState(true);
+	/** 技能正文展开(vendor 展开出的整份 SKILL.md;默认折叠,见 skill-invocation.ts)。 */
+	const [skillOpen, setSkillOpen] = useState(false);
 	const text = blocksText(m.blocks);
+	/** 技能调用(仅用户消息可能有):渲染成芯片 + 你自己那句话,正文不灌进气泡。 */
+	const skill = m.role === "user" ? m.skill : undefined;
+	/** 复制/编辑用文本:技能消息折回 `/skill:<name> 话`(重发时会重新展开)。 */
+	const actionText = skill ? skillCommandText(skill) : text;
 	const duration = turnDurationMs(m);
 	/** 本轮是否有「过程」(思考或工具);没有就不给折叠胶囊。 */
 	const hasProcess = m.blocks.some((b) => b.kind !== "text");
@@ -583,7 +623,8 @@ function Message({
 								title="撤回此消息及其后对话,以新文本重发"
 								onClick={() => {
 									setEditing(true);
-									setEditText(text);
+									// 技能消息预填折叠形态:重发时重新展开,而不是把整份正文当普通文本再发
+									setEditText(actionText);
 								}}
 							>
 								编辑
@@ -593,7 +634,7 @@ function Message({
 							type="button"
 							className="record-act"
 							title="复制这条消息的正文"
-							onClick={() => void navigator.clipboard?.writeText(text)}
+							onClick={() => void navigator.clipboard?.writeText(actionText)}
 						>
 							复制
 						</button>
@@ -651,7 +692,15 @@ function Message({
 						if (b.text.length === 0) return null;
 						return m.role === "user" ? (
 							<div key={i} className="record-text">
-								{b.text}
+								{skill ? (
+									<>
+										<SkillChip skill={skill} open={skillOpen} onToggle={() => setSkillOpen((v) => !v)} />
+										{skill.words.length > 0 && skill.words}
+										{skillOpen && skill.body !== null && <div className="skill-body">{skill.body}</div>}
+									</>
+								) : (
+									b.text
+								)}
 							</div>
 						) : (
 							<div
@@ -740,6 +789,12 @@ function messagePropsEqual(
 			continue;
 		}
 		if (x.text !== y.text) return false;
+	}
+	// 技能调用:字面态 → 展开态(`/skill:x 话` → 带正文的 `<skill …>` 块)是同一条消息的
+	// 身份切换,漏比会让芯片的「展开」箭头永远不出现
+	if (a.skill !== b.skill) {
+		if (!a.skill || !b.skill) return false;
+		if (a.skill.name !== b.skill.name || a.skill.body !== b.skill.body || a.skill.words !== b.skill.words) return false;
 	}
 	return true;
 }
