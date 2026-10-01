@@ -10,6 +10,7 @@ import {
 	makeCompactCommand,
 	makeNodeCommand,
 	makePluginCommand,
+	makeSkillCommand,
 	parseAtQuery,
 	parseSlashQuery,
 	scoreWorldEntry,
@@ -151,6 +152,50 @@ describe("composeMessageWithAttachments(引用芯片发送组装)", () => {
 		const chips = [{ key: "a", label: "x", text: "块" }];
 		expect(composeMessageWithAttachments(chips, "")).toBe("块");
 		expect(composeMessageWithAttachments([], "   ")).toBe("");
+	});
+	it("/skill: 指令带芯片时排到最前(vendor 只认消息首位的 /skill:)", () => {
+		const chips = [{ key: "a", label: "ch01", text: "【原文 · ch01】\n夜航。" }];
+		expect(composeMessageWithAttachments(chips, "/skill:critique 看看这章")).toBe(
+			"/skill:critique 看看这章\n\n【原文 · ch01】\n夜航。",
+		);
+		// 无芯片时不变,仍是原样
+		expect(composeMessageWithAttachments([], "/skill:outline 帮我搭大纲")).toBe("/skill:outline 帮我搭大纲");
+	});
+});
+
+describe("技能命令(makeSkillCommand)", () => {
+	const skills = [
+		{ name: "critique", description: "冷读诊断当前章节,不重写。", explicitOnly: false },
+		{ name: "outline", description: "开书或重排全书骨架。", explicitOnly: false },
+		{ name: "house-style", description: "只允许显式调用的内部风格规范。", explicitOnly: true },
+	];
+	const cmd = makeSkillCommand({ loadSkills: async () => skills });
+	const ctx = {} as SlashContext;
+
+	it("是 / 菜单命令(不是 @ 引用),带中文别名「技能」", () => {
+		expect(cmd.trigger).toBe("skill");
+		expect(cmd.aliases).toContain("技能");
+		expect(cmd.sigil).toBeUndefined();
+		expect(cmd.run).toBeUndefined();
+	});
+
+	it("空查询列出全部技能,插入文本是 /skill:<名字> + 空格(vendor 展开靠这个字面形态)", async () => {
+		const items = (await cmd.search!("", ctx)) ?? [];
+		expect(items.map((i) => i.insertText)).toEqual(["/skill:critique ", "/skill:outline ", "/skill:house-style "]);
+		// 不挂芯片:正文由 vendor 展开,前端再拼一遍会重复注入
+		expect(items.every((i) => i.attachment === undefined)).toBe(true);
+	});
+
+	it("term 按名字或描述过滤;显式调用专用的技能额外标注", async () => {
+		expect((await cmd.search!("冷读", ctx))?.map((i) => i.id)).toEqual(["skill:critique"]);
+		expect((await cmd.search!("OUT", ctx))?.map((i) => i.id)).toEqual(["skill:outline"]);
+		const only = (await cmd.search!("house", ctx)) ?? [];
+		expect(only[0]?.hint).toContain("只能这样调用");
+	});
+
+	it("描述压成一行(菜单是单行布局)", async () => {
+		const multi = makeSkillCommand({ loadSkills: async () => [{ name: "x", description: "第一行\n第二行  第三行", explicitOnly: false }] });
+		expect((await multi.search!("", ctx))?.[0]?.hint).toBe("第一行 第二行 第三行");
 	});
 });
 

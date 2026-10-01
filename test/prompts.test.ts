@@ -62,3 +62,84 @@ describe("中间产物纪律", () => {
 		expect(loadPromptText("writer-editor.md")).not.toContain("notes/");
 	});
 });
+
+/**
+ * 回归护栏:开场纪律(2026-10-01)。
+ *
+ * 背景:首启向导只管模型 / 建书 / 主题,不管写作与题材风格。而 web 默认落地页是
+ * **舞台**(非经典模式 → App 初始 view 为 "stage"),用户第一个说话的对象是**导演**;
+ * 经典模式与 TUI 走写作 agent;**编剧**(编辑页 AI 伙伴)拿不到 world_update,写不了世界书。
+ * 三个入口都要"提一次",但落盘能力不同——这里把三边都钉住,免得日后改提示词时漏掉某一路,
+ * 或者更糟:让编剧谎称自己已经写进世界书。
+ */
+describe("开场纪律(新书还没定风格时的一次性提议)", () => {
+	it("写作 agent:触发条件 + 只提一次 + 指向 onboarding 剧本", () => {
+		const main = loadPromptText("writer-main.md");
+		expect(main).toContain("开场纪律");
+		expect(main).toContain("【写作约束】");
+		expect(main).toContain("【文风采样】");
+		expect(main).toContain("同一场对话里不许再提");
+		expect(main).toContain("onboarding");
+	});
+
+	it("写作 agent:技能改成「按需使用」,但多轮流程仍要先征得同意(2026-10-02 放宽)", () => {
+		const main = loadPromptText("writer-main.md");
+		// 按需调用:场景命中就直接做,不用先问、不用等点名
+		expect(main).toContain("技能(按需使用");
+		expect(main).toContain("直接按它的方法做事");
+		// 显式调用通道(vendor 的 /skill:<name> 展开),用户点名的技能不用再问
+		expect(main).toContain("/skill:");
+		// 唯一保留的边界:多轮流程先问、不朗读流程、不报内部名
+		expect(main).toContain("先问一句再动手");
+		expect(main).toContain("不朗读方法论");
+		// 旧的全禁写法不应回来(它让用户不问就永远用不上技能)
+		expect(main).not.toContain("不自动套用 outline/critique/revise 方法论");
+	});
+
+	it("编剧:同样按需使用 + 支持 /skill: 显式点名", () => {
+		const editor = loadPromptText("writer-editor.md");
+		expect(editor).toContain("技能按需使用");
+		expect(editor).toContain("/skill:");
+		expect(editor).toContain("先一句话说清再开始");
+	});
+
+	it("导演:开场纪律 + 落盘纪律 + 剧本路径占位", () => {
+		const director = loadPromptText("director.md");
+		expect(director).toContain("开场纪律");
+		expect(director).toContain("{STYLE_SETUP_PATH}");
+		expect(director).toContain("长期偏好必须落盘");
+	});
+
+	it("编剧:提议后当场用 style_update 落盘(不再只是写 advice.md 等导演)", () => {
+		const editor = loadPromptText("writer-editor.md");
+		expect(editor).toContain("开场纪律");
+		expect(editor).toContain("style_update");
+		expect(editor).toContain("不要谎称已经写进世界书");
+		// 边界仍在:人物/关系/时间线/发展线不归它,建议走 advice.md
+		expect(editor).toContain("归导演");
+		expect(editor).toContain("advice.md");
+	});
+
+	it("三个入口都有长期偏好纪律(「以后都这样」不能只在嘴上答应)", () => {
+		for (const f of ["writer-main.md", "director.md", "writer-editor.md"]) {
+			expect(loadPromptText(f), f).toContain("长期");
+		}
+	});
+
+	it("{STYLE_SETUP_PATH} 渲染成真实存在的剧本，且导演的 RoleSpec 里确实渲染过", async () => {
+		const { directorRole, styleSetupScriptPath } = await import("../src/stage/stage-extension.ts");
+		const p = styleSetupScriptPath();
+		expect(p.endsWith("onboarding/references/style-setup.md")).toBe(true);
+		expect(existsSync(p), `风格引导剧本不存在:${p}`).toBe(true);
+
+		// 直接取真实 RoleSpec 的 systemPrompt —— 这是导演实际拿到手的东西。
+		// 只断言模板不够:renderPrompt 会把未提供的键原样留下,那样导演读到的是
+		// 字面量 "{STYLE_SETUP_PATH}" 这个不存在的路径,而模板测试照样绿。
+		// (stage 工具只在 execute 闭包里用 orch,构造 RoleSpec 不会碰它,所以传空对象即可。)
+		const prompt = directorRole({} as never).systemPrompt;
+		expect(prompt).not.toContain("{STYLE_SETUP_PATH}");
+		expect(prompt).not.toContain("{SKILLS_PATH}");
+		expect(prompt).toContain(p);
+		expect(prompt).toContain("stage-scripting/SKILL.md");
+	});
+});

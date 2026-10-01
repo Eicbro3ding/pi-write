@@ -186,14 +186,17 @@ describe("buildChapterContext", () => {
 		expect(r.text).not.toContain("保持悬疑");
 		expect(r.included.storylineNode).toBeNull();
 	});
-	it("约束按 target 过滤:主会话只收 main/all(director-only 不进)", () => {
+	it("约束按 target 过滤:主会话(=写作 agent)收 main/writer/all,director-only 不进", () => {
 		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
 		w.constraints.push({ id: "c1", name: "全局", text: "A", enabled: true, target: "all" });
 		w.constraints.push({ id: "c2", name: "主会话", text: "B", enabled: true, target: "main" });
 		w.constraints.push({ id: "c3", name: "导演", text: "C", enabled: true, target: "director" });
 		w.constraints.push({ id: "c4", name: "缺省", text: "D", enabled: true });
+		// 「编剧」范围也要收:TUI/单 Agent 下主会话就是唯一动笔的那个,而约束的默认
+		// 范围已收窄到 writer(2026-10-01)——不收就等于在那个模式下静默丢约束。
+		w.constraints.push({ id: "c5", name: "编剧", text: "E", enabled: true, target: "writer" });
 		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: DEFAULT_CONTEXT_BUDGET });
-		expect(r.included.constraints).toEqual(["全局", "主会话", "缺省"]);
+		expect(r.included.constraints).toEqual(["全局", "主会话", "缺省", "编剧"]);
 		expect(r.text).not.toContain("C");
 	});
 	it("Notice 只注入未完成项(已完成不注入)", () => {

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyWorldUpdate, setWordCountCwd, setWorldUpdateBookDir, wordCountTool, worldFindTool } from "../src/tools.ts";
+import { applyStyleUpdate, applyWorldUpdate, setWordCountCwd, setWorldUpdateBookDir, styleUpdateTool, wordCountTool, worldFindTool } from "../src/tools.ts";
 import { createEmptyWorld, WorldValidationError } from "../src/world-data.ts";
 
 type ToolParams = Parameters<typeof wordCountTool.execute>[1];
@@ -431,5 +431,61 @@ describe("worldFindTool", () => {
 	it("未配置书目录时报错", async () => {
 		setWorldUpdateBookDir(null);
 		await expect(runFind({ title: "x" })).rejects.toThrow("未配置书目录");
+	});
+});
+
+/**
+ * `style_update`:编剧的写作风格窄通道(2026-10-01)。
+ *
+ * 这条通道的存在理由见 StyleUpdateOp 的注释——编剧此前只能写 advice.md 等导演落盘,
+ * 用户在编辑页说「以后别用破折号」看到的是"说了没生效"。这里钉住四件事:
+ * ① 只能碰约束/采样/概述(参数 schema 只有四个 op);② 约束**强制** target=writer;
+ * ③ 约束按**名字** upsert(同名更新而不是重复立规矩)、按名字删;④ 越权/未命中要报错。
+ */
+describe("applyStyleUpdate（编剧窄通道）", () => {
+	it("upsert_constraint 新建,且约束强制写成编剧范围", () => {
+		const next = applyStyleUpdate(createEmptyWorld(), { op: "upsert_constraint", name: "文风", text: "禁用破折号" });
+		expect(next.constraints).toHaveLength(1);
+		expect(next.constraints[0]!.name).toBe("文风");
+		expect(next.constraints[0]!.text).toBe("禁用破折号");
+		// 编剧只约束自己——要约束导演得用户直接对导演讲
+		expect(next.constraints[0]!.target).toBe("writer");
+		expect(next.constraints[0]!.enabled).toBe(true);
+	});
+
+	it("upsert_constraint 同名即更新(不会重复立规矩)", () => {
+		const first = applyStyleUpdate(createEmptyWorld(), { op: "upsert_constraint", name: "文风", text: "禁用破折号" });
+		const second = applyStyleUpdate(first, { op: "upsert_constraint", name: "文风", text: "禁用破折号与省略号" });
+		expect(second.constraints).toHaveLength(1);
+		expect(second.constraints[0]!.text).toBe("禁用破折号与省略号");
+		// 重述一条规矩 = 它现在生效(界面上手动停用的会被重新启用)
+		expect(second.constraints[0]!.enabled).toBe(true);
+	});
+
+	it("upsert_constraint 可显式停用", () => {
+		const next = applyStyleUpdate(createEmptyWorld(), { op: "upsert_constraint", name: "文风", text: "x", enabled: false });
+		expect(next.constraints[0]!.enabled).toBe(false);
+	});
+
+	it("delete_constraint 按名字删;名字不存在时抛错并指路约束块", () => {
+		const w = applyStyleUpdate(createEmptyWorld(), { op: "upsert_constraint", name: "文风", text: "x" });
+		expect(applyStyleUpdate(w, { op: "delete_constraint", name: "文风" }).constraints).toHaveLength(0);
+		expect(() => applyStyleUpdate(w, { op: "delete_constraint", name: "没这条" })).toThrow(WorldValidationError);
+		expect(() => applyStyleUpdate(w, { op: "delete_constraint", name: "没这条" })).toThrow(/【写作约束】/);
+	});
+
+	it("update_style_sample / set_world_summary 与 world_update 同语义", () => {
+		const w = applyStyleUpdate(createEmptyWorld(), { op: "update_style_sample", text: "暮色如旧。", source: "用户提供" });
+		expect(w.styleSample?.text).toBe("暮色如旧。");
+		expect(w.styleSample?.source).toBe("用户提供");
+		const w2 = applyStyleUpdate(w, { op: "set_world_summary", text: "都市脑洞轻喜剧。" });
+		expect(w2.worldSummary).toBe("都市脑洞轻喜剧。");
+	});
+
+	it("碰不到条目/关系/时间线/发展线(窄通道的参数 schema 只有四个 op)", () => {
+		const ops = (styleUpdateTool.parameters as { properties: { update: { anyOf: Array<{ properties: { op: { const: string } } }> } } })
+			.properties.update.anyOf.map((o) => o.properties.op.const);
+		expect(ops.sort()).toEqual(["delete_constraint", "set_world_summary", "update_style_sample", "upsert_constraint"]);
+		expect(styleUpdateTool.name).toBe("style_update");
 	});
 });

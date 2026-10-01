@@ -39,6 +39,24 @@ Cliff/open: ...
 ### 2. ...
 ```
 
+## 深度方法论（craft 技能）
+
+本技能只讲**怎么把大纲落进 `world.json`**；大纲与结构本身的技法在 `craft` 技能里
+（它的 `<location>` 见系统提示词的 `<available_skills>`，方法论文档在 `references/` 下）。
+需要时 read **一份**，整份读，别 grep 摘读：
+
+| 要做的事 | 读 |
+|---|---|
+| 搭大结构、选框架、等级循环与奖励节奏 | `references/structure/plot-frameworks.md` |
+| 大纲阶段方法、五步创建法、节点设计、八节点结构 | `references/structure/outline-methods.md` |
+| 主线矛盾、拉长剧情、设门槛、冲突设计 | `references/structure/outline-conflict.md` |
+| 升级感、情绪节奏、高潮设计与逆推 | `references/structure/outline-rhythm.md` |
+| 开篇（黄金一章、题材开头模板） | `references/structure/opening-design.md` |
+| 选题与卖点是否立得住 | `references/structure/commercial-core-methods.md` |
+| 题材选型、核心梗与微创新 | `references/genre/long-genre-catalog.md`、`references/genre/long-genre-mechanics.md` |
+
+当前用户请求、本书 `world.json` 里的写作约束、以及已有的大纲条目，**都优先于这些默认做法**。
+
 ## Do not
 
 - Do not write prose during outlining. Stay at beat level.

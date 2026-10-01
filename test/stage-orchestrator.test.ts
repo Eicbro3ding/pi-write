@@ -237,6 +237,7 @@ describe("buildWriterMessage（编剧成文消息，§10.7）", () => {
 		transcript: "李四: 三年了。",
 		stateText: "【李四】内心：愧疚",
 		worldText: "【李四】跑船十年",
+		constraints: [] as string[],
 		chapter: "第一章",
 		thoughts: null,
 		thoughtAccess: 2 as const,
@@ -245,8 +246,21 @@ describe("buildWriterMessage（编剧成文消息，§10.7）", () => {
 	it("含文风采样且指令要求遵循风格", () => {
 		const msg = buildWriterMessage({ ...base, styleSample: "暮色如旧，他的眼睛像一盏将熄的灯。" });
 		expect(msg).toContain("【文风采样】");
-		expect(msg).toContain("遵循文风采样锁定语言风格");
+		expect(msg).toContain("遵循写作约束与文风采样锁定语言风格");
 		expect(msg).toContain("draft/第一章.md");
+	});
+
+	it("写作约束进入委托消息（TUI 多 agent 模式下内置收幕编剧没有 context 钩子，只能靠它）", () => {
+		const msg = buildWriterMessage({ ...base, styleSample: null, constraints: ["文风: 禁用破折号", "篇幅: 每章 2500 字上下"] });
+		expect(msg).toContain("【写作约束】");
+		expect(msg).toContain("- 文风: 禁用破折号");
+		expect(msg).toContain("- 篇幅: 每章 2500 字上下");
+		// 约束块必须在文风采样之前（与 world-context 里常驻组的顺序一致：约束 → 采样）
+		expect(msg.indexOf("【写作约束】")).toBeLessThan(msg.indexOf("你是编剧"));
+	});
+
+	it("无约束时不出现约束块", () => {
+		expect(buildWriterMessage({ ...base, styleSample: null })).not.toContain("【写作约束】");
 	});
 
 	it("无采样时不出现采样块", () => {
@@ -330,6 +344,26 @@ describe("readAdvice + directorContext 注入（advice.md，编剧统一方案 2
 		expect(content).toContain("全局规则");
 		expect(content).not.toContain("编剧规则");
 		expect(content).not.toContain("停用规则");
+	});
+	it("讨论模式：注入【文风采样】（导演是它的维护者——剧本的【风格示例】按它校准）", async () => {
+		// 2026-10-01 补：此前导演自己的上下文里没有采样，而收幕编剧拿到的采样被标成
+		// 「来源: 导演维护的风格基准」——那句「导演维护」在导演那儿是空的。
+		const w = createEmptyWorld();
+		w.styleSample = { text: "暮色如旧，他的眼睛像一盏将熄的灯。", source: "第二章", updatedAt: 1 };
+		writeFileSync(join(tmp, "world.json"), JSON.stringify(w), "utf8");
+		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
+		const result = await orch.directorContext([{ role: "user", content: "聊聊下一幕", timestamp: 1 }] as never);
+		expect(result).toBeDefined();
+		const content = (result as never as Array<{ content: string }>)[1].content;
+		expect(content).toContain("【文风采样】");
+		expect(content).toContain("暮色如旧");
+		expect(content).toContain("来源: 第二章");
+	});
+	it("无采样、无 advice、无发展线/Notice/约束时讨论模式不注入（返回 undefined）", async () => {
+		writeFileSync(join(tmp, "world.json"), JSON.stringify(createEmptyWorld()), "utf8");
+		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
+		const result = await orch.directorContext([{ role: "user", content: "聊聊下一幕", timestamp: 1 }] as never);
+		expect(result).toBeUndefined();
 	});
 });
 

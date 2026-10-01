@@ -40,6 +40,23 @@ Activates when the user wants a cold read of the current chapter (or a chosen dr
 
 **Closing.** Does the chapter end on a turn, a question, or a held breath — or does it just stop?
 
+## 深度方法论（craft 技能）
+
+上面的 checklist 是通用项；**网文口径的判据**在 `craft` 技能里（`<location>` 见系统提示词的
+`<available_skills>`，方法论文档在 `references/` 下）。按被审对象选**一份** read，整份读：
+
+| 审什么 | 读 |
+|---|---|
+| 逐项质量检查（章节结构/节奏/人物/情绪/文字） | `references/review/review-quality.md` |
+| 按平台标准打分（番茄/起点/知乎盐言） | `references/review/quality-rubric.md` |
+| 章首章尾钩子是否抓人 | `references/prose/long-chapter-hooks.md` |
+| 情绪有没有落到纸面 | `references/prose/emotion-on-page.md` |
+| 反转/悬念写得成不成立 | `references/prose/long-reversal.md`、`references/prose/long-suspense.md` |
+| 对话是不是平的 | `references/prose/dialogue-mastery.md` |
+| 读起来太 AI | `references/deslop/anti-ai-writing.md` |
+
+仍然**只提建议、不改稿**；改稿走 `/skill:revise`。审的是执行，不是用户刻意选定的前提（POV、时态、语域）。
+
 ## Do not
 
 - Do not rewrite passages. Suggestions only. The actual rewrite belongs to /skill:revise.

@@ -27,14 +27,26 @@ export function scriptWritingManualPath(): string {
 	return `${resolveSkillsDir()}/stage-scripting/SKILL.md`;
 }
 
+/**
+ * 风格引导剧本的绝对路径（渲染进导演提示词的 `{STYLE_SETUP_PATH}`）。
+ *
+ * 为什么给绝对路径:舞台角色是 `packagedSkills:false` 装配的,拿不到系统提示词里的
+ * `<available_skills>`,只能靠提示词里写死的绝对路径去 read（同 `{SKILLS_PATH}` 的
+ * 2026-08-11 根因）。导演是 web 默认落地页(非经典模式 → 舞台页)的主交互角色,
+ * 「新书还没定风格时提一次」这条纪律归它执行,所以剧本路径必须给到。
+ */
+export function styleSetupScriptPath(): string {
+	return `${resolveSkillsDir()}/onboarding/references/style-setup.md`;
+}
+
 const DIRECTOR_PROMPT_TEMPLATE = loadPromptText("director.md");
 const ACTOR_PROMPT = loadPromptText("actor.md");
 const NARRATOR_PROMPT = loadPromptText("narrator.md");
 const WRITER_PROMPT = loadPromptText("writer-scene.md");
 
-/** 导演提示词(渲染 {SKILLS_PATH} 为剧本写作手册绝对路径)。 */
-function directorPrompt(skillsPath: string): string {
-	return renderPrompt(DIRECTOR_PROMPT_TEMPLATE, { SKILLS_PATH: skillsPath });
+/** 导演提示词(渲染 {SKILLS_PATH} 为剧本写作手册绝对路径、{STYLE_SETUP_PATH} 为风格引导剧本绝对路径)。 */
+function directorPrompt(skillsPath: string, styleSetupPath: string): string {
+	return renderPrompt(DIRECTOR_PROMPT_TEMPLATE, { SKILLS_PATH: skillsPath, STYLE_SETUP_PATH: styleSetupPath });
 }
 
 /** 剧本模式注入块（scripting 模式每次调用前注入；含"必须经工具输出"状态指令）。
@@ -46,7 +58,7 @@ export function buildScriptMethodBlock(skillsDir: string): string {
 
 export function directorRole(orch: StageOrchestrator): RoleSpec {
 	return {
-		systemPrompt: directorPrompt(scriptWritingManualPath()),
+		systemPrompt: directorPrompt(scriptWritingManualPath(), styleSetupScriptPath()),
 		extensions: [{ name: "stage-director", factory: (pi) => stageDirectorExtension(pi, orch) }],
 		excludeTools: ["bash"],
 		activeTools: ["read", "write", "edit", "ls", "grep"],

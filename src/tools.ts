@@ -278,6 +278,61 @@ export type WorldUpdateOp =
 	| { op: "upsert_relation"; id?: string; from: string; to: string; type?: string; label?: string; emphasized?: boolean; arrow?: RelationArrow }
 	| { op: "delete_relation"; id: string };
 
+/**
+ * `style_update`(编剧窄工具)的操作集:**只碰写作风格三件套**
+ * (写作约束 / 文风采样 / 世界观概述),碰不到条目、关系、时间线、大纲、发展线、Notice。
+ *
+ * 为什么存在:常驻编剧(`writer-editor.md`)只有只读的 world_find,世界书归导演维护。
+ * 结果是用户在编辑页说「以后别用破折号」时,编剧只能把结论写进 advice.md 等导演下次开会话
+ * 才落盘——一个"设了但不生效"的体验(2026-10-01)。给它一条**窄通道**而不是放开
+ * `world_update` 全量权限:风格是编剧的本职,人物/关系/时间线仍然只有导演能改。
+ *
+ * 两处与 world_update 不同的语义:
+ * 1. **约束一律写 target="writer"**——编剧只约束自己(成文与编辑页对话),不替导演立规;
+ *    要约束导演得用户直接对导演讲(它有全量 world_update)。
+ * 2. **按名字 upsert / 删除**——注入给编剧的【写作约束】块只有 `名字: 正文`,没有 id,
+ *    所以不能要求模型先查 id;同名即更新,避免重复立规矩。
+ */
+export type StyleUpdateOp =
+	| { op: "upsert_constraint"; name: string; text: string; enabled?: boolean }
+	| { op: "delete_constraint"; name: string }
+	| { op: "update_style_sample"; text: string; source?: string }
+	| { op: "set_world_summary"; text: string };
+
+/**
+ * 应用一次写作风格更新(纯函数,复用 applyWorldUpdate 的引擎与校验)。
+ * 名字未命中删除目标时抛 WorldValidationError,并提示模型去看注入的约束块。
+ */
+export function applyStyleUpdate(data: WorldData, update: StyleUpdateOp): WorldData {
+	switch (update.op) {
+		case "upsert_constraint": {
+			const existing = data.constraints.find((c) => c.name === update.name);
+			return applyWorldUpdate(data, {
+				op: "upsert_constraint",
+				...(existing ? { id: existing.id } : {}),
+				name: update.name,
+				text: update.text,
+				// 用户重述一条已有规矩 = 它现在生效;缺省置 true(界面上手动停用的会被重新启用)
+				enabled: update.enabled ?? true,
+				target: "writer",
+			});
+		}
+		case "delete_constraint": {
+			const existing = data.constraints.find((c) => c.name === update.name);
+			if (!existing) {
+				throw new WorldValidationError(
+					`没有名为「${update.name}」的写作约束。现有约束见上下文【写作约束】块,按那里的名字删。`,
+				);
+			}
+			return applyWorldUpdate(data, { op: "delete_constraint", id: existing.id });
+		}
+		case "update_style_sample":
+			return applyWorldUpdate(data, { op: "update_style_sample", text: update.text, source: update.source });
+		case "set_world_summary":
+			return applyWorldUpdate(data, { op: "set_world_summary", text: update.text });
+	}
+}
+
 /** 按传入字段更新条目(仅覆盖显式提供的字段,其余保留);更新 updatedAt。 */
 function updateEntryFields(e: WorldEntry, update: Extract<WorldUpdateOp, { op: "upsert_entry" }>, now: number): void {
 	if (update.title !== undefined) e.title = update.title;
@@ -656,6 +711,43 @@ export const worldUpdateTool: ToolDefinition = defineTool({
 			}
 			return {
 				content: [{ type: "text", text: `已更新世界书(${params.update.op})${echo}。` }],
+				details: { op: params.update.op },
+			};
+		});
+	},
+});
+
+/**
+ * 编剧的写作风格窄通道(见 StyleUpdateOp 的注释:为什么给窄工具而不是放开 world_update)。
+ *
+ * **不写世界书编辑记录**(`stage/last-world-edit.json`):那个记录只有**舞台页**在消费
+ * (StagePage 在舞台流里遇到 world_update 才置 pending),编辑页不读它。编剧写它既没有消费方,
+ * 又会在「舞台 pending 已置、编辑页恰好此刻改了风格」的窄窗口里串成一张舞台预览卡。
+ * 风格改完的可见反馈走工具结果 + 编剧的一句话确认,够用。
+ */
+export const styleUpdateTool: ToolDefinition = defineTool({
+	name: "style_update",
+	label: "Style Update",
+	description:
+		"更新**写作风格**设定:写作约束(你与成文要遵守的硬规矩)、文风采样(作者文风基准)、简要世界观概述。这是你唯一能改世界书的通道——人物/关系/时间线/大纲/发展线/Notice 你改不了,那些归导演,你的相关建议写 advice.md。语义:① 约束按**名字** upsert——同名即更新(不会重复立规矩),所以重述一条已有规矩不需要先查 id;约束只作用于**你自己**(编辑页对话与收幕成文),要约束导演得用户直接对导演讲。② 删除按名字,名字见上下文【写作约束】块(那里没有 id,别去找 id)。③ 约束要**可判定**(「禁用破折号」「每章 2500 字上下」),不要写「文笔要优美」;条数控制在 8 条以内。④ update_style_sample 的 text 是 300–500 字的代表性样本(用户自己写的,或他想靠近的片段),**绝不编造**;set_world_summary 是 1-2 句题材与基调定位(常驻注入,≤600 字)。op 名与 world_update 的同名操作一致,便于对照。",
+	parameters: Type.Object({
+		update: Type.Union([
+			Type.Object({ op: Type.Literal("upsert_constraint"), name: Type.String(), text: Type.String(), enabled: Type.Optional(Type.Boolean()) }),
+			Type.Object({ op: Type.Literal("delete_constraint"), name: Type.String() }),
+			Type.Object({ op: Type.Literal("update_style_sample"), text: Type.String(), source: Type.Optional(Type.String()) }),
+			Type.Object({ op: Type.Literal("set_world_summary"), text: Type.String() }),
+		]),
+	}),
+	async execute(_callId, params) {
+		const dir = worldBookDir();
+		if (!dir) throw new Error("style_update 未配置书目录");
+		// 与 world_update 同一把锁:两个工具可能并行调用(agent 一轮多工具),串行化避免丢失更新
+		return withWorldLock(dir, async () => {
+			const world = await ensureWorld(dir);
+			const next = applyStyleUpdate(world, params.update as StyleUpdateOp);
+			await saveWorld(dir, next);
+			return {
+				content: [{ type: "text", text: `已更新写作风格(${params.update.op})。` }],
 				details: { op: params.update.op },
 			};
 		});

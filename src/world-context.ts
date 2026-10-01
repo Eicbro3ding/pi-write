@@ -211,8 +211,14 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 	const result: ChapterContextResult = { text: "", activatedIds: [], trimmedCount: 0, included: { constraints: [], hasSample: false, hasSummary: false, hasNotice: false, hasCompletedMilestones: false, storylineNode: null } };
 
 	// 常驻组:启用的约束 + 采样 + 简要世界观(裁剪顺序:先裁采样,仍超再裁概述,约束保留)
-	// 约束按 target 过滤:主写作会话只收 target ∈ {main, all}(导演/编剧各自收自己的,见注入点)
-	const enabledConstraints = data.constraints.filter((c) => c.enabled && constraintTargetMatches(c.target, "main"));
+	// 约束按 target 过滤。主会话(这个函数)是**写作 agent**——TUI 里它就是唯一动笔的那个,
+	// 所以它收 target ∈ {main, writer, all} 的并集:写作 agent 同时是「主会话」与「编剧」。
+	// 口径与 writer-host 的经典模式一致(那里也是 writer || main 的并集,2026-08-12 就有)。
+	// 2026-10-01 补:此前这里只认 main/all,而「编剧」正是最贴近"写正文的人"的那个 target ——
+	// 约束默认值一旦从 all 收窄到 writer,TUI/单 Agent 就会静默丢约束。
+	const enabledConstraints = data.constraints.filter(
+		(c) => c.enabled && (constraintTargetMatches(c.target, "main") || constraintTargetMatches(c.target, "writer")),
+	);
 	let resident = "";
 	if (enabledConstraints.length > 0) {
 		resident += "【写作约束】\n";

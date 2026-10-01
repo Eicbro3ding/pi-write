@@ -15,7 +15,7 @@
  * 用户提供的任意代码(插件 JS 一律留在后端 / vendor ExtensionAPI 侧)。
  */
 import type { ApiClient } from "./api/client.ts";
-import type { BookDetail, ChapterRef, WorldDataDto, WorldEntryDto } from "./types.ts";
+import type { BookDetail, ChapterRef, SkillInfoDto, WorldDataDto, WorldEntryDto } from "./types.ts";
 import { ENTRY_TYPE_LABELS } from "./world-entry.ts";
 
 /** 命令执行上下文:由页面每次渲染时传入 InputBar,搜索/动作读最新书与章节。 */
@@ -67,10 +67,23 @@ export interface InputChip {
 	text: string;
 }
 
-/** 组装发送消息:各芯片注入块在前,用户输入在后;空段不参与,非空段以空行连接。 */
+/**
+ * 组装发送消息:各芯片注入块在前,用户输入在后;空段不参与,非空段以空行连接。
+ *
+ * **例外:`/skill:<name>` 必须排在消息首位**。技能展开是 vendor 干的
+ * (`agent-session.ts` 的 `_expandSkillCommand`,只认 `text.startsWith("/skill:")`),
+ * 引用芯片排前面会让整条消息回到「原样透传」——用户看到的是自己发的 `/skill:critique`
+ * 变成一句普通文本,技能根本没加载。所以带芯片时把技能指令提到最前。
+ */
 export function composeMessageWithAttachments(chips: ReadonlyArray<InputChip>, text: string): string {
-	return [...chips.map((c) => c.text), text]
-		.map((s) => s.trim())
+	const head = text.trim();
+	const blocks = chips
+		.map((c) => c.text.trim())
+		.filter((s) => s.length > 0);
+	if (head.startsWith("/skill:")) {
+		return [head, ...blocks].join("\n\n");
+	}
+	return [...blocks, head]
 		.filter((s) => s.length > 0)
 		.join("\n\n");
 }
@@ -326,6 +339,51 @@ export function makeChapterCommand(): SlashCommand {
 			});
 		},
 	};
+}
+
+/**
+ * `/skill <搜索>`:让用户**主动点名技能**。
+ *
+ * 为什么需要它:技能平时由模型按场景自己 read(`<available_skills>` 里的描述),
+ * 但 (a) 用户不知道有哪些技能、也不知道能点名,(b) 标了 `disable-model-invocation`
+ * 的技能**只能**这样调用(模型看不到它们)。选中后插入 `/skill:<名字> `,
+ * 由 vendor 在发送时把 SKILL.md 正文展开进消息(`agent-session.ts` 的
+ * `_expandSkillCommand`)——**所以插入文本必须是 `/skill:<name>` 这个字面形态**,
+ * 不能改写成自然语言,否则就走不到那条展开路径。
+ *
+ * 与 `@` 引用命令不同,这里不挂芯片:技能正文由 vendor 展开(带 `<skill>` 标签与
+ * references 基准目录),前端再拼一遍会重复注入。
+ */
+export function makeSkillCommand(opts: {
+	/** 取技能清单(页面经 client.getSkills 拉,读失败返回空数组)。 */
+	loadSkills: () => Promise<readonly SkillInfoDto[]>;
+}): SlashCommand {
+	return {
+		trigger: "skill",
+		aliases: ["技能"],
+		hint: "点名一个技能,让 AI 按它的方法论做事(如 /skill:critique)",
+		search: async (term) => {
+			const skills = await opts.loadSkills();
+			const q = term.trim().toLowerCase();
+			const matched = skills.filter((s) => {
+				if (q.length === 0) return true;
+				return s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q);
+			});
+			return matched.slice(0, 20).map((s) => ({
+				id: `skill:${s.name}`,
+				label: `/${s.name}`,
+				// 描述通常是整段话,压成一行当提示;显式调用专用的技能额外标注
+				hint: s.explicitOnly ? `只能这样调用 · ${oneLine(s.description)}` : oneLine(s.description),
+				meta: "技能",
+				insertText: `/skill:${s.name} `,
+			}) satisfies SlashSuggestion);
+		},
+	};
+}
+
+/** 描述压缩成一行(菜单是单行布局;过长由 CSS 截断)。 */
+function oneLine(text: string): string {
+	return text.replace(/\s+/g, " ").trim();
 }
 
 /** `/compact`:压缩当前会话上下文;term 作为附加整理要求传给模型。 */

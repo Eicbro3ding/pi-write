@@ -378,8 +378,14 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 		}
 	}
 
-	/** 把 [start, end) 替换为 insertion,并把光标放到插入文本之后。 */
-	function insertRange(start: number, end: number, insertion: string) {
+	/**
+	 * 把 [start, end) 替换为 insertion,并把光标放到插入文本之后。
+	 *
+	 * `reopenMenu` 用于「插入的正是 `/命令 `」这一类:插入后要立刻重算菜单,让该命令的
+	 * 参数阶段候选马上出现 —— 例如 `/skill` 之后就是技能清单。此前只在 onChange/keyup
+	 * 上重算,于是选完命令菜单关闭、列表要等用户**再敲一个字**才出来(2026-10-02)。
+	 */
+	function insertRange(start: number, end: number, insertion: string, opts: { reopenMenu?: boolean } = {}) {
 		const ta = taRef.current;
 		if (!ta) {
 			setText((prev) => prev.slice(0, start) + insertion + prev.slice(end));
@@ -393,6 +399,8 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 			t.focus();
 			const pos = start + insertion.length;
 			t.setSelectionRange(pos, pos);
+			// 光标就位后再重算:refreshMenu 读的是 selectionStart,顺序反了会算到旧位置
+			if (opts.reopenMenu) refreshMenu(t);
 		});
 	}
 
@@ -431,7 +439,10 @@ export const InputBar = forwardRef<InputBarHandle, InputBarProps>(function Input
 				const insertion = await item.loadText(contextRef.current ?? ({} as SlashContext));
 				insertRange(m.query.start, m.query.end, insertion);
 			} else if (item.insertText !== undefined) {
-				insertRange(m.query.start, m.query.end, item.insertText);
+				// 命令名插入(`/skill `):立刻展开该命令的参数阶段候选
+				insertRange(m.query.start, m.query.end, item.insertText, {
+					reopenMenu: item.insertText.startsWith("/") && item.insertText.endsWith(" "),
+				});
 			}
 			setMenu(null);
 		} catch (err) {

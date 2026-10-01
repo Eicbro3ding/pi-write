@@ -208,22 +208,35 @@ export function renderStateForWriter(script: SceneScript): string {
 	return lines.join("\n") || "（导演未声明角色内心）";
 }
 
-/** 编剧成文消息组装（§10.7）：转录 + state + 世界书 + 文风采样 + 思考链（档3 可见性）。 */
+/** 编剧成文消息组装（§10.7）：转录 + state + 世界书 + 写作约束 + 文风采样 + 思考链（档3 可见性）。 */
 export function buildWriterMessage(opts: {
 	transcript: string;
 	stateText: string;
 	worldText: string;
+	/** target 匹配「编剧」的启用约束（`名字: 正文` 形式；调用方已按 target 过滤）。 */
+	constraints: string[];
 	styleSample: string | null;
 	chapter: string;
 	thoughts: string | null;
 	thoughtAccess: 1 | 2 | 3;
 }): string {
 	let msg = `【舞台转录】\n${opts.transcript}\n\n【剧本·角色内心（state，导演声明）】\n${opts.stateText}\n\n【世界书（导演已更新，含角色内心）】\n${opts.worldText}`;
+	/*
+	 * 写作约束与文风采样都写进这条委托消息，让它**自包含**。web 下收幕走常驻编剧会话，
+	 * 那个会话的 context 钩子(editorContext)本来就会注入这两样——所以 web 会出现一次重复。
+	 * 这是既有设计（文风采样一直两边都给）且必须保留：CLI/TUI 多 agent 模式下内置收幕编剧
+	 * (writerRole()，extensions: []，没有任何 context 钩子)只能靠这条消息拿。
+	 * 2026-10-01 补：此前只带采样、不带约束，导致 TUI 舞台模式下用户设的写作约束
+	 * （禁用破折号 / 每章字数 / 人称）在**真正落笔的那一步**被完全无视。
+	 */
+	if (opts.constraints.length > 0) {
+		msg += `\n\n【写作约束】\n${opts.constraints.map((c) => `- ${c}`).join("\n")}`;
+	}
 	if (opts.styleSample) {
 		// 文风采样：0.01 版机制（导演维护的标志性文本）——编剧的风格基准
 		msg += `\n\n【文风采样】(来源: 导演维护的风格基准；只模仿语感与句式，不复用原文)\n${opts.styleSample}`;
 	}
-	msg += `\n\n你是编剧。请把以上舞台记录整理成正文小说：去掉对白标签与舞台指示，叙述化、连贯成文；参考角色内心与世界书，把潜台词与心理矛盾写进正文；遵循文风采样锁定语言风格。用 write 工具把正文写入 draft/${opts.chapter}.md。`;
+	msg += `\n\n你是编剧。请把以上舞台记录整理成正文小说：去掉对白标签与舞台指示，叙述化、连贯成文；参考角色内心与世界书，把潜台词与心理矛盾写进正文；遵循写作约束与文风采样锁定语言风格。用 write 工具把正文写入 draft/${opts.chapter}.md。`;
 	if (opts.thoughtAccess === 3 && opts.thoughts) {
 		msg += `\n\n【演员思考链（用户已开启档3，仅供内心参考，不要直接引述）】\n${opts.thoughts}`;
 	}
@@ -750,6 +763,18 @@ export class StageOrchestrator {
 			if (directorConstraints.length > 0) {
 				storylineBlock += `\n\n【写作约束】\n${directorConstraints.map((c) => `- ${c.name}: ${c.text}`).join("\n")}`;
 			}
+			/*
+			 * 文风采样(2026-10-01 补):导演是它的**维护者**——剧本文字段的【风格示例】要按它校准,
+			 * 收幕编剧拿到的采样也被标成「来源: 导演维护的风格基准」。可此前导演自己的上下文里
+			 * 根本没有它,那句「导演维护」在导演那儿是空的:用户改了采样,舞台的表演语气照旧漂移,
+			 * 导演也无从对照用户给的样本。
+			 * 位置:只随 storylineBlock 注入——它只在**剧本模式 / 讨论模式**下挂载,演出中不挂
+			 * (演出中导演每轮都在看舞台,每轮多带一份 300–500 字样本不值当)。
+			 */
+			const sample = world.styleSample;
+			if (sample && sample.text) {
+				storylineBlock += `\n\n【文风采样】(来源: ${sample.source || "未知"}；只模仿语感与句式，不复用原文)\n${sample.text}`;
+			}
 		} catch {
 			/* 世界书缺失:跳过发展线注入,不阻断 */
 		}
@@ -1212,10 +1237,16 @@ export class StageOrchestrator {
 				// 编辑页按 ch01 读不到——草稿空白、编剧对话不重载的根因)
 				const chapter = this.chapterFile ? this.chapterFile.replace(/\.jsonl$/, "") : script.chapter;
 				const styleSample = world.styleSample && world.styleSample.text ? world.styleSample.text : null;
+				// 写作约束按「编剧」过滤(undefined/all/writer)——CLI 的内置收幕编剧没有
+				// context 钩子,只能靠这条消息拿到(见 buildWriterMessage 注释)
+				const writerConstraints = world.constraints
+					.filter((c) => c.enabled && constraintTargetMatches(c.target, "writer"))
+					.map((c) => `${c.name}: ${c.text}`);
 				const writerMsg = buildWriterMessage({
 					transcript: lines,
 					stateText,
 					worldText,
+					constraints: writerConstraints,
 					styleSample,
 					chapter,
 					thoughts,
