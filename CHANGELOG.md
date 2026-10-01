@@ -128,6 +128,11 @@
 - [fix] 动效审查的剩余机械收敛（收尾）：① 全仓 **174 处**「给了时长但没写缓动曲线」的 `transition` 子声明补上 `var(--ease-out)`（浏览器默认的 `ease` 不是 token 曲线，同一交互不同属性会各踩一条）；② 4 处循环呼吸动画的裸 `ease-in-out` 换 `var(--ease-inout)`；③ 重复关键帧收敛到各留一份：`wz-fade`/`rsm-fade` → `fade-in`、`ws-pv-in` → `fade-up`、`rsm-pop` → `wz-pop`、`.compact-spin` 并入 `.act-spin`、`.m-live` 复用 `.companion-live`；④ 「减少动态效果」下章节目录的折叠退场不再收缩 margin/padding（framer 的 `reducedMotion` 只覆盖位移类属性），关系图联动居中改直接 `cy.center`；⑤ reduced-motion 熔断块补 `animation-delay: 0s / transition-delay: 0s`（只清时长不够——关闭态靠 `visibility 0s var(--dur-slow)` 的兜底延迟仍会真等 320ms）；⑥ 删死代码 `motion.ts` 的 `T` 与 `EDGE_IN.left`（无消费点），关系图内联表单的遮罩补淡入、正在滑出的视图交还点击、折叠箭头时长与其余 5 处对齐;⑦ 抽屉遮罩(mask)退场的一帧就 `pointer-events: none`(200ms 淡出期间遮罩仍铺满全屏,会吞掉抽屉关闭后紧接着的那一下点击——headless chromium 实测过穿透)。
 - [docs] 新增动效契约 `test/motion.test.ts`：扫全部 CSS 校验 —— ① `DUR`/`EASE` 与 `--dur-*`/`--ease-*` 逐值相等；② `EDGE_SLIDE` 与 `slide-*` 关键帧位移一致；③ 每个被引用的 animation 名都有 `@keyframes`；④ reduced-motion 块同时熔断 animation/transition 时长；⑤ **裸时长白名单只放无限环境循环与 spinner**（`sk-flow 1.4s` 属前者）。一次性时长一律必须走 token，否则测试直接红。
 
+对话流里的重复渲染修掉:provider 把正文放进**第一个分片**时,AI 回复会在流里出现两份。
+
+- [fix] **首帧就带正文的流不再渲染两遍**:vendor 的 `message_start` 是 `{ ...partialMessage }` 浅拷贝,`content` 与流式对象**共享同一个数组** —— provider 把正文放进第一个分片时(部分 OpenAI 兼容网关、非流式代理转流式),reducer 收到 message_start 里已经是全文,而紧随其后的 `text_start`/`text_delta` 又把同一段送一遍,于是正文与思考都出现两份。整段放进首个 chunk 的流必现,多段小 delta 的常规流不触发,所以一直没被发现。修法:末块文本以事件里的 `partial`(该条消息的累积快照)为准 —— **整块覆盖**天然幂等,重复投递 / SSE 重放也不会数错;`*_start` 同样按快照判断「末块就是这一块」,不再多开一个空块。事件不带 `partial` 时退回原来的追加路径,老行为一字不变;水合与 user 消息的 echo 照旧在 message_start 种 content。
+- [test] `test/store.test.ts` 新增 8 例:首帧带全文只出现一遍 / 快照重复投递幂等 / 思考同理 / 一段消息里两段正文不被合并 / 常规流不回归 / 无 `partial` 走老路 / 水合与 user 消息照旧。真机复验(无头 chromium + 单块 delta 的 mock):修前消息流里两个节点各一份,修后只剩一个。
+
 手机端：编辑、伙伴对话、世界书、舞台、设置全部按手机重排 + 一批窄屏缺陷修复。
 
 - [feat] 窄屏与手机端分成两档：≤900px 仍是原来那套（两侧栏变抽屉，平板竖屏照用），≤700px 才换手机端布局——顶栏下线，四个页面各自的页头显示标题、保存状态与字数。

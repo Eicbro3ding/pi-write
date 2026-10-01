@@ -551,3 +551,106 @@ describe("lastUserTurn(报错卡「重试」定位要重放的那一轮)", () =>
 		expect(lastUserTurn([error("502")])).toBeNull();
 	});
 });
+
+/**
+ * 2026-10-03:provider 把正文放进**第一个分片**时,AI 回复在流里渲染两遍。
+ *
+ * 根因不在前端逻辑,而在 vendor 的 `message_start`:`agent-loop.ts` 发的是
+ * `{ ...partialMessage }` 浅拷贝,`content` 与流式对象**共享同一个数组** —— 消费端
+ * 读到这条事件时数组里可能已经有第一个分片的内容,而紧随其后的 `text_start`/
+ * `text_delta` 会把同一段再送一遍。此前 store 只按 delta 追加,于是出现两份。
+ *
+ * 现在的口径:末块文本以事件里的 `partial`(累积快照)为准 —— 整块覆盖,天然幂等;
+ * 事件不带 `partial` 时退回原来的追加路径(老行为一字不变)。
+ */
+describe("首个分片就带正文(message_start 的 content 与流共享数组)", () => {
+	/** 一条 text 块对应的 partial 快照(与 vendor 真帧同形)。 */
+	const snapText = (text: string) => JSON.stringify({ role: "assistant", content: [{ type: "text", text }] });
+	/** 模拟 openai-completions:首个 chunk 即全文,vendor 随后把同一段当 delta 再发一遍。 */
+	function streamAllInFirstChunk(): ChatMessage {
+		let s = initialSessionState();
+		s = processAgentEvent(s, ev(`{"type":"message_start","message":{"role":"assistant","content":[{"type":"text","text":"雨从后半夜开始"}]}}`));
+		s = processAgentEvent(s, ev(`{"type":"message_update","message":{},"assistantMessageEvent":{"type":"text_start","contentIndex":0,"partial":${snapText("雨从后半夜开始")}}}`));
+		s = processAgentEvent(s, ev(`{"type":"message_update","message":{},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"雨从后半夜开始","partial":${snapText("雨从后半夜开始")}}}`));
+		s = processAgentEvent(s, ev(`{"type":"message_update","message":{},"assistantMessageEvent":{"type":"text_end","contentIndex":0,"content":"雨从后半夜开始","partial":${snapText("雨从后半夜开始")}}}`));
+		s = processAgentEvent(s, ev(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"雨从后半夜开始"}]}}`));
+		return s.messages[0]!;
+	}
+
+	it("正文只出现一遍,且只有一个 text 块", () => {
+		const m = streamAllInFirstChunk();
+		expect(blocksText(m.blocks)).toBe("雨从后半夜开始");
+		expect(shape(m)).toEqual(["text"]);
+		expect(m.done).toBe(true);
+	});
+
+	it("快照重复投递(SSE 重放)也只有一个块、一份文本", () => {
+		let s = initialSessionState();
+		s = processAgentEvent(s, ev(`{"type":"message_start","message":{"role":"assistant","content":[{"type":"text","text":"雨"}]}}`));
+		const delta = `{"type":"message_update","message":{},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"雨","partial":${snapText("雨")}}}`;
+		s = processAgentEvent(s, ev(delta));
+		s = processAgentEvent(s, ev(delta));
+		expect(blocksText(s.messages[0]!.blocks)).toBe("雨");
+		expect(shape(s.messages[0]!)).toEqual(["text"]);
+	});
+
+	it("思考块同理:message_start 带了 thinking 也不再被 delta 种第二遍", () => {
+		const snap = JSON.stringify({ role: "assistant", content: [{ type: "thinking", thinking: "先想一句" }, { type: "text", text: "" }] });
+		let s = initialSessionState();
+		s = processAgentEvent(s, ev(`{"type":"message_start","message":{"role":"assistant","content":[{"type":"thinking","thinking":"先想一句"}]}}`));
+		s = processAgentEvent(s, ev(`{"type":"message_update","message":{},"assistantMessageEvent":{"type":"thinking_start","contentIndex":0,"partial":${snap}}}`));
+		s = processAgentEvent(s, ev(`{"type":"message_update","message":{},"assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"先想一句","partial":${snap}}}`));
+		s = processAgentEvent(s, ev(`{"type":"message_update","message":{},"assistantMessageEvent":{"type":"text_start","contentIndex":1,"partial":${snap}}}`));
+		s = processAgentEvent(s, ev(`{"type":"message_update","message":{},"assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"雨从后半夜开始","partial":${JSON.stringify({ role: "assistant", content: [{ type: "thinking", thinking: "先想一句" }, { type: "text", text: "雨从后半夜开始" }] })}}}`));
+		expect(blocksThinking(s.messages[0]!.blocks)).toBe("先想一句");
+		expect(blocksText(s.messages[0]!.blocks)).toBe("雨从后半夜开始");
+		expect(shape(s.messages[0]!)).toEqual(["thinking", "text"]);
+	});
+
+	it("一段消息里两段正文(中间隔着工具调用)不会被快照合并掉", () => {
+		const s1 = JSON.stringify({ role: "assistant", content: [{ type: "text", text: "" }] });
+		const s2 = JSON.stringify({ role: "assistant", content: [{ type: "text", text: "第一段" }] });
+		const s3 = JSON.stringify({ role: "assistant", content: [{ type: "text", text: "第一段" }, { type: "text", text: "" }] });
+		const s4 = JSON.stringify({ role: "assistant", content: [{ type: "text", text: "第一段" }, { type: "text", text: "第二段" }] });
+		let s = initialSessionState();
+		s = processAgentEvent(s, ev(`{"type":"message_start","message":{"role":"assistant","content":[]}}`));
+		s = processAgentEvent(s, ev(`{"type":"message_update","message":{},"assistantMessageEvent":{"type":"text_start","contentIndex":0,"partial":${s1}}}`));
+		s = processAgentEvent(s, ev(`{"type":"message_update","message":{},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"第一段","partial":${s2}}}`));
+		s = processAgentEvent(s, ev(`{"type":"message_update","message":{},"assistantMessageEvent":{"type":"toolcall_start","contentIndex":1,"partial":${s2}}}`));
+		s = processAgentEvent(s, ev(`{"type":"message_update","message":{},"assistantMessageEvent":{"type":"text_start","contentIndex":1,"partial":${s3}}}`));
+		s = processAgentEvent(s, ev(`{"type":"message_update","message":{},"assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"第二段","partial":${s4}}}`));
+		expect(shape(s.messages[0]!)).toEqual(["text", "text"]);
+		expect(s.messages[0]!.blocks.map((b) => (b.kind === "tool" ? "" : b.text))).toEqual(["第一段", "第二段"]);
+	});
+
+	it("常规多段 delta:快照单调增长,仍只拼一遍", () => {
+		let s = initialSessionState();
+		s = processAgentEvent(s, ev(`{"type":"message_start","message":{"role":"assistant","content":[]}}`));
+		s = processAgentEvent(s, ev(`{"type":"message_update","message":{},"assistantMessageEvent":{"type":"text_start","contentIndex":0,"partial":${snapText("")}}}`));
+		s = processAgentEvent(s, ev(`{"type":"message_update","message":{},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"雨从","partial":${snapText("雨从")}}}`));
+		s = processAgentEvent(s, ev(`{"type":"message_update","message":{},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"后半夜开始","partial":${snapText("雨从后半夜开始")}}}`));
+		s = processAgentEvent(s, ev(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"雨从后半夜开始"}]}}`));
+		expect(blocksText(s.messages[0]!.blocks)).toBe("雨从后半夜开始");
+		expect(shape(s.messages[0]!)).toEqual(["text"]);
+	});
+
+	it("事件不带 partial(手写精简帧)时退回追加 —— 老行为一字不变", () => {
+		let s = initialSessionState();
+		s = processAgentEvent(s, ev(`{"type":"message_start","message":{"role":"assistant","content":[{"type":"text","text":""}]}}`));
+		s = processAgentEvent(s, ev(`{"type":"message_update","message":{},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"雨从"}}`));
+		s = processAgentEvent(s, ev(`{"type":"message_update","message":{},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"后半夜开始"}}`));
+		expect(blocksText(s.messages[0]!.blocks)).toBe("雨从后半夜开始");
+	});
+
+	it("水合(没有 delta)照旧在 message_start 种 content", () => {
+		let s = initialSessionState();
+		s = processAgentEvent(s, ev(`{"type":"message_start","entryId":"e1","message":{"role":"assistant","content":[{"type":"text","text":"历史正文"}]}}`));
+		expect(blocksText(s.messages[0]!.blocks)).toBe("历史正文");
+	});
+
+	it("user 消息的 content 照旧种(其他窗口的 echo 要渲染出来)", () => {
+		let s = initialSessionState();
+		s = processAgentEvent(s, ev(`{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"你好"}]}}`));
+		expect(blocksText(s.messages[0]!.blocks)).toBe("你好");
+	});
+});

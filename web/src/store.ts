@@ -127,10 +127,10 @@ export function contentTextOf(content: unknown): string {
  * message.content(有序块数组)→ MessageBlock 序列。**顺序原样保留**。
  *
  * 契约来源是 vendor 的 AssistantMessage.content:`(TextContent | ThinkingContent
- * | ToolCall)[]`,按模型输出顺序排列。实时路径下 message_start 的 content 恒为空
- * (provider 的 output.content 初始化为 [],见 pi-ai 各 api 实现),因此这条路径
- * 实际只服务历史水合与测试;实时路径的块由 *_start/delta 与 tool_execution_start
- * 逐个开出来。
+ * | ToolCall)[]`,按模型输出顺序排列。实时路径的块由 *_start/delta 与
+ * tool_execution_start 逐个开出来,message_start 只负责把首帧已有的内容种下来
+ * (message_start 的 content 与流式对象**共享同一个数组**,首帧可能已带正文 ——
+ * 见 snapshotTextOf 的注释:随后的 delta 用 partial 快照整块覆盖,不会种两遍)。
  *
  * 空文本块跳过(不产出空的可折叠行);工具块用 vendor 的 ToolCall.id 建,
  * 与 tool_execution_start.toolCallId 同源,后续结果按 id 归位。
@@ -215,6 +215,55 @@ function mergeSegment(blocks: MessageBlock[], seg: readonly MessageBlock[]): Mes
 		}
 	}
 	return out;
+}
+
+/**
+ * 事件里 `partial`(该条 assistant 消息的**累积快照**)中,`contentIndex` 那一块的文本。
+ *
+ * 为什么要读快照:vendor 的 agent-loop 把 message_start 发成 `{ ...partialMessage }` ——
+ * 浅拷贝,`content` 与流式对象**共享同一个数组**。provider 把正文放进**第一个分片**里时
+ * (部分 OpenAI 兼容网关、非流式代理转流式),store 收到 message_start 时里面已经是全文,
+ * 而紧随其后的 text_start/text_delta 会把同一段再送一遍:只按 delta 追加就渲染两遍
+ * (2026-10-03 实测:整段正文放首个 chunk 的 mock 必现,多段小 delta 的常规流不触发)。
+ * `partial` 是权威快照,按它**整块覆盖**天然幂等 —— 重复投递、乱序、首帧已种下都不数错。
+ *
+ * 取不到(异构实现不带 partial、或旧测试手写的精简事件)返回 null,调用方退回「追加 delta」,
+ * 老行为一字不变。
+ */
+function snapshotTextOf(ev: { contentIndex?: number; partial?: unknown }, kind: "text" | "thinking"): string | null {
+	const ci = ev.contentIndex;
+	if (typeof ci !== "number" || ci < 0) return null;
+	const content = (ev.partial as { content?: unknown } | undefined)?.content;
+	if (!Array.isArray(content)) return null;
+	const part = content[ci] as { type?: string; text?: string; thinking?: string } | undefined;
+	if (!part) return null;
+	if (kind === "thinking") {
+		if (part.type !== "thinking") return null;
+		return typeof part.thinking === "string" ? part.thinking : typeof part.text === "string" ? part.text : null;
+	}
+	return part.type === "text" && typeof part.text === "string" ? part.text : null;
+}
+
+/**
+ * `*_start`:末块若**就是这一块**(事件快照以它的文本开头)就留着,否则开新块。
+ *
+ * 判定必须靠快照而不是「末块非空」:message_start 已经把首帧内容种下时,末块是非空的
+ * 同一块 —— 按老写法会再开一个空块,随后的 delta 又把它填一遍 = 正文出现两遍。
+ */
+function openOrKeep(blocks: MessageBlock[], kind: "text" | "thinking", snap: string | null): MessageBlock[] {
+	const last = blocks[blocks.length - 1];
+	if (snap !== null && last && last.kind === kind && snap.startsWith(last.text)) return blocks;
+	return openBlock(blocks, kind);
+}
+
+/** `*_delta`:有快照就按快照整块覆盖(幂等),拿不到快照就退回追加。 */
+function appendOrSync(blocks: MessageBlock[], kind: "text" | "thinking", delta: string, snap: string | null): MessageBlock[] {
+	const last = blocks[blocks.length - 1];
+	if (snap !== null && last && last.kind === kind && snap.startsWith(last.text)) {
+		if (snap === last.text) return blocks;
+		return [...blocks.slice(0, -1), { ...last, text: snap }];
+	}
+	return appendDelta(blocks, kind, delta);
 }
 
 /** 按 toolCallId 就地更新工具块(返回值与原数组同身份表示无改动)。 */
@@ -366,11 +415,13 @@ export function processAgentEvent(state: SessionViewState, event: AgentEventDto)
 				const messages = [...state.messages];
 				const cur = messages[i]!;
 				const t = deltaEvent.type;
+				// 末块文本以事件里的 partial 快照为准(text/thinking 才有快照;toolcall_* 不建块)
+				const snap = t.startsWith("thinking") ? snapshotTextOf(deltaEvent, "thinking") : snapshotTextOf(deltaEvent, "text");
 				let blocks: MessageBlock[];
-				if (t === "thinking_start") blocks = openBlock(cur.blocks, "thinking");
-				else if (t === "text_start") blocks = openBlock(cur.blocks, "text");
-				else if (t === "thinking_delta") blocks = appendDelta(cur.blocks, "thinking", deltaEvent.delta ?? "");
-				else if (t === "text_delta") blocks = appendDelta(cur.blocks, "text", deltaEvent.delta ?? "");
+				if (t === "thinking_start") blocks = openOrKeep(cur.blocks, "thinking", snap);
+				else if (t === "text_start") blocks = openOrKeep(cur.blocks, "text", snap);
+				else if (t === "thinking_delta") blocks = appendOrSync(cur.blocks, "thinking", deltaEvent.delta ?? "", snap);
+				else if (t === "text_delta") blocks = appendOrSync(cur.blocks, "text", deltaEvent.delta ?? "", snap);
 				// toolcall_start/delta/end 不建块:工具块由 tool_execution_start 开
 				// (那时才有 toolCallId/toolName/完整 args),位置天然落在本段正文之后、
 				// 下一段思考之前 —— 正是它该在的地方
