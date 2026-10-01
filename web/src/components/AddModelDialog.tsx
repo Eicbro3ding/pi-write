@@ -13,6 +13,8 @@
 import { useState } from "react";
 import type { ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
+import { Select } from "./Select.tsx";
+import { THINKING_FORMATS, thinkingFormatLabel } from "../provider-list-logic.ts";
 import { IconX } from "./Icons.tsx";
 
 /** 模型 id 校验(与后端 /api/models/custom 同款正则)。 */
@@ -29,6 +31,8 @@ export interface EditableModel {
 	input: ("text" | "image")[];
 	/** 是否声明支持思考深度(reasoning);缺省按不支持。 */
 	reasoning?: boolean;
+	/** 显式声明的思考参数协议(compat.thinkingFormat);缺省 = 交给 vendor 自动探测。 */
+	thinkingFormat?: string;
 }
 
 export function AddModelDialog({
@@ -68,6 +72,11 @@ export function AddModelDialog({
 	const [formMaxTokens, setFormMaxTokens] = useState(String(initialModel?.maxTokens ?? 128000));
 	const [formInput, setFormInput] = useState<("text" | "image")[]>(initialModel?.input ?? ["text"]);
 	const [formReasoning, setFormReasoning] = useState(initialModel?.reasoning ?? false);
+	/**
+	 * 思考参数协议(BUG-002):第三方 OpenAI 兼容服务对 reasoning 参数的写法各不相同,
+	 * 空 = 交给 vendor 按 provider 名与 baseUrl 自动探测;只在声明支持思考时才显示。
+	 */
+	const [formThinkingFormat, setFormThinkingFormat] = useState(initialModel?.thinkingFormat ?? "");
 	const [busy, setBusy] = useState(false);
 	const [err, setErr] = useState<string | null>(null);
 
@@ -75,12 +84,22 @@ export function AddModelDialog({
 		setFormInput((prev) => (prev.includes(flag) ? prev.filter((f) => f !== flag) : [...prev, flag]));
 	}
 
-	/** 校验上下文窗口/最大输出;非法时 setErr 并返回 null。 */
+	/**
+	 * 校验上下文窗口/最大输出;非法时 setErr 并返回 null。
+	 *
+	 * 2026-10 审计 BUG-015:与后端 `optionalPositiveInt` 同语义 —— **正整数或未提供**。
+	 * 此前只查 finite + 正数,有限小数(1.5)能提交,后端返回 400,用户看到的是通用
+	 * 「保存失败」而不是字段级提示。这里补 `Number.isInteger`(空串/非数字/0/负数/小数
+	 * 都当场拒绝),后端仍保留最终校验作为安全边界。
+	 */
 	function parseLimits(): { ctx: number; maxTokens: number } | null {
-		const ctx = Number(formCtx);
-		const maxTokens = Number(formMaxTokens);
-		if (!Number.isFinite(ctx) || ctx <= 0 || !Number.isFinite(maxTokens) || maxTokens <= 0) {
-			setErr("上下文窗口与最大输出 Token 必须是正整数");
+		const rawCtx = formCtx.trim();
+		const rawMax = formMaxTokens.trim();
+		const ctx = Number(rawCtx);
+		const maxTokens = Number(rawMax);
+		const bad = (raw: string, n: number) => raw.length === 0 || !Number.isFinite(n) || !Number.isInteger(n) || n <= 0;
+		if (bad(rawCtx, ctx) || bad(rawMax, maxTokens)) {
+			setErr("上下文窗口与最大输出 Token 必须是正整数(不能为 0、负数或小数)");
 			return null;
 		}
 		return { ctx, maxTokens };
@@ -139,6 +158,7 @@ export function AddModelDialog({
 				maxTokens: limits.maxTokens,
 				input: formInput,
 				reasoning: formReasoning,
+				thinkingFormat: formThinkingFormat,
 				name: formModelName.trim().length > 0 ? formModelName.trim() : undefined,
 			});
 			await onSaved();
@@ -234,6 +254,26 @@ export function AddModelDialog({
 							<span className="amd-hint">仅当供应商接受 reasoning 参数时才打开;不确定就关着</span>
 						</div>
 					</div>
+					{/* 思考参数协议:不能只按 provider 名推断(BUG-002)。空 = 自动探测 */}
+					{formReasoning && (
+						<div className="s-field">
+							<label className="s-field-label">思考参数协议</label>
+							<Select
+								className="sel-block"
+								value={formThinkingFormat}
+								options={[
+									{ value: "", label: "自动探测(默认)" },
+									...THINKING_FORMATS.map((f) => ({ value: f, label: thinkingFormatLabel(f) })),
+								]}
+								disabled={busy}
+								ariaLabel="思考参数协议"
+								onChange={(v) => setFormThinkingFormat(v)}
+							/>
+							<div className="amd-hint">
+								该服务按哪种写法接受思考参数。选错可能被忽略或直接报错 —— 不确定先用「自动探测」,再按供应商文档选。
+							</div>
+						</div>
+					)}
 					<div className="amd-note">
 						接口地址与 API Key 属于供应商配置,在供应商详情里改;这里只定义这个模型。
 					</div>

@@ -13,6 +13,8 @@ import {
 	providerCountLabel,
 	providerCounts,
 	providerRowSub,
+	THINKING_FORMATS,
+	thinkingFormatLabel,
 	unconfiguredHint,
 } from "../web/src/provider-list-logic.ts";
 import type { ProviderInfo } from "../web/src/types.ts";
@@ -113,5 +115,26 @@ describe("unconfiguredHint(未配置时右栏该说什么)", () => {
 	});
 	it("ambient 也给说明", () => {
 		expect(unconfiguredHint(p("x", "X", false, "ambient"))).toContain("本机");
+	});
+});
+
+/**
+ * 2026-10 审计 BUG-002:思考参数协议清单有两份 —— `src/custom-models.ts` 的
+ * `THINKING_FORMATS`(服务端白名单,与 vendor 的 OpenAICompletionsCompatSchema 一致)
+ * 与 `web/src/provider-list-logic.ts` 的同名清单(渲染下拉)。两边漂移 = 用户能选到
+ * 服务端会 400 的值(或反过来少了选项),这里逐字同序比对。
+ */
+describe("思考参数协议清单(前后端必须同源)", () => {
+	it("与 src/custom-models.ts 的 THINKING_FORMATS 逐字同序", async () => {
+		const serverSide = await import("../src/custom-models.ts");
+		expect([...THINKING_FORMATS]).toEqual([...serverSide.THINKING_FORMATS]);
+	});
+	it("每个值都有中文说明,且不含空值", () => {
+		for (const f of THINKING_FORMATS) {
+			expect(thinkingFormatLabel(f), f).not.toBe(f);
+			expect(f.length).toBeGreaterThan(0);
+		}
+		// 未知值原样返回,不编文案
+		expect(thinkingFormatLabel("nope")).toBe("nope");
 	});
 });

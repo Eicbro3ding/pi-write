@@ -195,6 +195,26 @@ export interface ChatMessage {
 	endedAt?: number;
 	/** 模型报错内容(仅 role === "error" 有;见 chat-error.ts 的 describeChatError)。 */
 	error?: ChatErrorInfo;
+	/**
+	 * 报错卡的「重试」目标(2026-10 审计 BUG-014):**创建这张卡的那一刻**就绑定的
+	 * 失败回合,而不是点击时再去猜「当前最后一条消息」。
+	 *
+	 * 此前 WritePage 的重试用 `lastUserTurn(messages)` + 全局 `lastSentTextRef` 兜底:
+	 * 旧报错卡在之后已有成功回合时,点它会重发**后续那句成功的提示词**,撤回也可能
+	 * 作用在别的回合上(重复生成/写作数据污染)。现在:
+	 * - `entryId` 有值 → 用户消息已落盘,撤回该 entry 并原样重发(见 retryWriterTurn)
+	 * - 只有 `text`  → 服务端前置检查就抛了(未配置模型/密钥,用户消息从未落盘),直接重发
+	 * - 两者都没有 → 无法确认关联,不给「重试」按钮(提示用户重新发送)
+	 */
+	retry?: ChatRetryTarget;
+}
+
+/** 报错卡绑定的失败回合(见 ChatMessage.retry)。 */
+export interface ChatRetryTarget {
+	/** 失败那一轮用户消息的会话 entry id(已落盘时才有)。 */
+	entryId?: string;
+	/** 失败那一刻发出的原文,用于原样重放(可能只是重新发送,不涉及撤回)。 */
+	text: string;
 }
 
 /**
@@ -365,7 +385,10 @@ export type AgentEventDto =
 	// 发送/生成失败(未配置模型、认证被拒、限流、网络…)。**message 是 provider 的
 	// 原始错误文本**(server.ts 两处广播直接透传 err.message),前端不再用
 	// friendlyError 加工成一句人话,而是照实落成一张报错卡(需求 1,见 chat-error.ts)。
-	| { type: "chat_error"; message: string }
+	// `text` 是失败那一刻发出的用户原文:这条路径上服务端在写用户消息之前就抛了
+	// (未配置模型/密钥),对话里没有可定位的 entry,重试只能靠这份原文原样重放
+	// (2026-10 审计 BUG-014:此前由前端全局 lastSentTextRef 猜,旧报错卡会重发错的那句)。
+	| { type: "chat_error"; message: string; text?: string }
 	| { type: "session_changed"; bookSlug: string | null; chapterFile: string | null }
 	| { type: "world_changed"; slug: string; mtime: number }
 	| { type: "draft_changed"; slug: string | null; file: string; mtime: number }
@@ -760,6 +783,31 @@ export interface ProviderRefreshError {
 	message: string;
 }
 
+/**
+ * POST /api/thinking 的**宿主级结果**(2026-10 审计 BUG-013)。
+ *
+ * 思考档位由模型能力决定(vendor 会按 getSupportedThinkingLevels clamp),而编剧、舞台
+ * 会话可能用不同的模型 —— 只回主会话的值会让用户以为所有窗口都切好了。
+ */
+export interface ThinkingHostResult {
+	/** 宿主名(主会话 / 编剧会话 / 舞台会话)。 */
+	host: string;
+	/** 该宿主是否全部会话都设置成功。 */
+	ok: boolean;
+	/** 处理到的会话数。 */
+	sessions?: number;
+	/** 各会话实际生效的档位(去重;可能被 clamp 到与请求不同的档位)。 */
+	levels: string[];
+	/** 至少一个会话被回落。 */
+	clamped: boolean;
+	/** 舞台**故意**不跟随全局档位的演员数(角色设计,不是失败)。 */
+	actorsOmitted?: number;
+	/** 失败的会话消息(ok=false 时)。 */
+	failed?: string[];
+	/** 整个宿主调用失败时的原因。 */
+	error?: string;
+}
+
 /** 模型条目最小形状(vendor Model 字段子集;来源 /api/providers/:id,不按认证过滤)。 */
 export interface ModelDto {
 	id: string;
@@ -772,6 +820,11 @@ export interface ModelDto {
 	maxTokens: number;
 	/** 该模型在 models.json 里(自定义添加的);只有这些能编辑/删除。 */
 	custom?: boolean;
+	/**
+	 * vendor 兼容开关(原样透传自目录)。`thinkingFormat` 是思考参数协议
+	 * (2026-10 审计 BUG-002:第三方兼容服务不能只按 provider 名推断)。
+	 */
+	compat?: { thinkingFormat?: string; [key: string]: unknown };
 }
 
 /** /api/providers/:id 详情:基本信息 + 该 provider 全量模型列表。 */

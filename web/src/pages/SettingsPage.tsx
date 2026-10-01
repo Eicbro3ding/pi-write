@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { ApiError, type ApiClient } from "../api/client.ts";
-import { friendlyError } from "../errors.ts";
-import { IMAGE_SIZE_PX_TEXT, type ConversationScopeDto, type ImageProviderDto, type ImageSizeDto, type PluginInfoDto, type ResolvedShellDto, type ShellDialectDto, type ShellKindDto, type UserThemeInfo, type WorldDataDto, type WriterSettingsDto } from "../types.ts";
+import { formatProviderRefreshErrors, friendlyError } from "../errors.ts";
+import { IMAGE_SIZE_PX_TEXT, type ConversationScopeDto, type ThinkingHostResult, type ImageProviderDto, type ImageSizeDto, type PluginInfoDto, type ResolvedShellDto, type ShellDialectDto, type ShellKindDto, type UserThemeInfo, type WorldDataDto, type WriterSettingsDto } from "../types.ts";
 import type { EnterBehavior } from "../settings.ts";
 import { buildThemeFamilies, NIGHT_THEME, themeFamilyPick, themeLabelFromCss, themeStarterCss, USER_THEME_PREFIX, userThemeFile, type ThemeId } from "../themes.ts";
 import { applyTheme, currentTheme } from "../theme.ts";
@@ -339,6 +339,13 @@ export function SettingsPage({
 	const [models, setModels] = useState<ModelInfo[] | null>(null);
 	const [current, setCurrent] = useState<string | null>(null);
 	const [thinking, setThinking] = useState<string | null>(null);
+	/**
+	 * 当前模型**实际支持**的思考档位(BUG-012):null = 服务端拿不到,退回全量展示。
+	 * 用它过滤下拉选项,不让用户点到「点了也会被回落」的档位。
+	 */
+	const [thinkingLevels, setThinkingLevels] = useState<string[] | null>(null);
+	/** 最近一次「设置思考档位」的**宿主级**结果(BUG-013);null = 还没设置过 */
+	const [thinkingHosts, setThinkingHosts] = useState<ThinkingHostResult[] | null>(null);
 	/** 上一次请求的思考档位被模型能力回落到别的档位(非 null = 要解释一句)。 */
 	const [thinkingClamped, setThinkingClamped] = useState<string | null>(null);
 	const [temperature, setTemperature] = useState<string>("");
@@ -395,6 +402,7 @@ export function SettingsPage({
 		setModels(models);
 		setCurrent(current);
 		setThinking(thinking);
+		setThinkingLevels(Array.isArray(r.thinkingLevels) && r.thinkingLevels.length > 0 ? r.thinkingLevels : null);
 		setTemperature(temperature === null ? "" : String(temperature));
 		setTopP(topP === null ? "" : String(topP));
 		return { models, current, thinking, temperature, topP };
@@ -720,16 +728,25 @@ export function SettingsPage({
 	 *
 	 * 服务端会回报**实际生效**的档位:vendor 按模型能力 clamp(非推理模型只有 off),
 	 * 请求 high 却落回 off 时必须说清楚 —— 否则用户看到的就是「选了没反应」(2026-10-04)。
+	 *
+	 * 2026-10 审计 BUG-013:响应现在是**分宿主**的(主会话 / 编剧 / 舞台)。各会话用的模型
+	 * 可能不同,clamp 结果也就不同 —— 这里把每个宿主的实际档位摆出来,并点名没设上的。
+	 * 另外只承诺「本地请求档位已设置」,不宣称第三方服务端一定按该档位推理(RISK-002)。
 	 */
 	async function changeThinking(level: string) {
 		if (busy) return;
 		setBusy(true);
 		setActErr(null);
 		setThinkingClamped(null);
+		setThinkingHosts(null);
 		try {
 			const r = await client.setThinking(level);
 			await load();
+			setThinkingHosts(r.hosts ?? null);
 			if (r.thinking && r.thinking !== level) setThinkingClamped(level);
+			if (r.failures && r.failures.length > 0) {
+				setActErr(`思考级别未在所有会话生效: ${r.failures.join("; ")}`);
+			}
 		} catch (e) {
 			setActErr(`思考级别设置失败: ${friendlyError(e)}`);
 		} finally {
@@ -753,21 +770,45 @@ export function SettingsPage({
 		}
 	}
 
-	/** 设置采样参数:温度/top_p 至少填一个(留空=不修改)。 */
+	/**
+	 * 设置采样参数:温度/top_p 至少填一个(留空=不修改)。
+	 *
+	 * 2026-10 审计 BUG-016:此前只验 NaN,越界值( temperature 3 / topP 2 )会发到服务端
+	 * 被拒,用户看到的是通用「设置失败」。这里按后端同一套范围就地校验并给字段级提示
+	 * (temperature 0..2、topP 0..1),后端保留边界校验作为安全边界。
+	 */
 	async function changeSampling() {
 		if (busy) return;
-		const t = temperature.trim() === "" ? undefined : Number(temperature);
-		const p = topP.trim() === "" ? undefined : Number(topP);
-		if ((t === undefined || Number.isNaN(t)) && (p === undefined || Number.isNaN(p))) {
+		const rawT = temperature.trim();
+		const rawP = topP.trim();
+		const parseField = (raw: string): { ok: true; value: number | undefined } | { ok: false; message: string } => {
+			if (raw === "") return { ok: true, value: undefined };
+			const n = Number(raw);
+			if (!Number.isFinite(n)) return { ok: false, message: "必须是数字" };
+			return { ok: true, value: n };
+		};
+		const pt = parseField(rawT);
+		if (!pt.ok) {
+			setActErr(`temperature ${pt.message}`);
+			return;
+		}
+		const pp = parseField(rawP);
+		if (!pp.ok) {
+			setActErr(`topP ${pp.message}`);
+			return;
+		}
+		const t = pt.value;
+		const p = pp.value;
+		if (t === undefined && p === undefined) {
 			setActErr("请至少填写 temperature 或 topP 之一");
 			return;
 		}
-		if (t !== undefined && Number.isNaN(t)) {
-			setActErr("temperature 必须是数字");
+		if (t !== undefined && (t < 0 || t > 2)) {
+			setActErr("temperature 必须在 0..2 之间");
 			return;
 		}
-		if (p !== undefined && Number.isNaN(p)) {
-			setActErr("topP 必须是数字");
+		if (p !== undefined && (p < 0 || p > 1)) {
+			setActErr("topP 必须在 0..1 之间");
 			return;
 		}
 		setBusy(true);
@@ -792,10 +833,18 @@ export function SettingsPage({
 		try {
 			const r = await client.refreshModels();
 			await load();
-			if (r.errors && r.errors.length > 0) {
-				setNotice(`模型列表已刷新，但部分目录更新失败: ${r.errors.join("; ")}`);
+			// BUG-001:errors 是 `{provider, message}` 对象数组,直接 join 只会得到
+			// [object Object];统一格式化 helper 保证用户看得到是哪个供应商、什么错
+			const failed = formatProviderRefreshErrors(r.errors);
+			if (failed.length > 0) {
+				setNotice(`模型列表已刷新，但部分目录更新失败: ${failed}`);
 			} else {
 				setNotice("模型列表已联网刷新");
+			}
+			// BUG-005:刷新同时广播到编剧/舞台宿主,哪里没刷上直接说出来
+			const hostFailures = (r.hosts ?? []).filter((h) => !h.ok);
+			if (hostFailures.length > 0) {
+				setActErr(`部分会话未跟上最新模型目录: ${hostFailures.map((h) => `${h.host}(${h.error ?? "未知错误"})`).join("; ")}`);
 			}
 		} catch (e) {
 			setActErr(`模型列表刷新失败: ${friendlyError(e)}`);
@@ -1335,7 +1384,7 @@ export function SettingsPage({
 										<Select
 											className="sel-block"
 											value={thinking ?? ""}
-											options={THINKING_LEVELS.map((l) => ({ value: l, label: l }))}
+											options={(thinkingLevels ?? [...THINKING_LEVELS]).map((l) => ({ value: l, label: l }))}
 											placeholder={thinking === null ? "未设置" : "请选择"}
 											disabled={busy}
 											ariaLabel="思考强度"
@@ -1347,10 +1396,34 @@ export function SettingsPage({
 									</div>
 									<div className="s-card-desc st-desc-tight">
 										off = 关闭思考；max = 最强思考深度。切换后立即生效（舞台演员的思考档位属于角色设定，不受影响）。{busy && " 设置中…"}
+										{thinkingLevels !== null && (
+											<>
+												{" "}
+												当前模型可用档位：{thinkingLevels.join(" / ")}
+												{thinkingLevels.length === 1 && thinkingLevels[0] === "off" && (
+													<> —— 该模型未声明支持思考；自定义模型可在「编辑模型」里打开「支持思考」。</>
+												)}
+											</>
+										)}
 									</div>
 									{thinkingClamped && (
 										<div className="notice">
 											当前模型不支持「{thinkingClamped}」这一档，已按模型能力回落到「{thinking ?? "off"}」。模型声明支持思考（自定义模型可在「编辑模型」里打开「支持思考」）后才能调深。
+										</div>
+									)}
+									{thinkingHosts && thinkingHosts.length > 0 && (
+										<div className="s-card-desc st-desc-tight">
+											{/* BUG-013:各宿主用的模型可能不同,clamp 结果也就不同 —— 逐个摆出来 */}
+											各会话实际档位：
+											{thinkingHosts
+												.map((h) => {
+													if (!h.ok) return `${h.host}：失败(${h.error ?? (h.failed ?? []).join(",")})`;
+													const level = h.levels.length > 0 ? h.levels.join(" / ") : "无会话";
+													const extra = h.actorsOmitted ? `（${h.actorsOmitted} 个演员按角色设定，不随全局）` : "";
+													return `${h.host}：${level}${extra}`;
+												})
+												.join("；")}
+											。此结果是「本地请求档位」，第三方服务是否按其推理以其响应为准。
 										</div>
 									)}
 								</section>

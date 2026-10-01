@@ -8,9 +8,10 @@
  * 不依赖 message.id。message_start 只追加 user/assistant 消息,role=toolResult
  * 等非气泡角色直接跳过,不渲染为气泡。
  */
-import type { AgentEventDto, ChatMessage, MessageBlock, SessionMessageDto, SessionViewState, ToolCallInfo } from "./types.ts";
+import type { AgentEventDto, ChatMessage, ChatRetryTarget, MessageBlock, SessionMessageDto, SessionViewState, ToolCallInfo } from "./types.ts";
 import { extractCacheHit } from "./context-usage.ts";
 import { describeChatError, providerModelLine } from "./chat-error.ts";
+import { blocksText } from "./blocks.ts";
 
 /** 初始会话视图状态。 */
 export function initialSessionState(): SessionViewState {
@@ -312,20 +313,27 @@ function lastAssistantIndex(messages: ChatMessage[]): number {
 }
 
 /**
- * 找「最后一轮的用户消息」——报错卡的「重试」用它定位要重放的那一轮(纯函数,便于单测)。
+ * 为**即将插入的报错卡**计算重试目标(2026-10 审计 BUG-014:在创建卡片时就绑定失败回合)。
  *
- * 报错消息(`role === "error"`)**直接跳过**:它不是真实 entry,而且总是落在失败
- * 那一轮的用户消息之后,不跳过就永远只看到报错卡,重试按钮等于死的。
+ * 报错消息(`role === "error"`)**直接跳过**:它不是真实 entry,而且总是落在失败那一轮的
+ * 用户消息之后,不跳过就永远只看到报错卡,重试按钮等于死的。
  *
- * 返回 null 的两种情况:对话为空;最后一条真实消息不是 user —— 那一轮已经产出过
- * assistant 输出(报错发生在更早的一轮里),「重放这一问」的语义不再成立,
- * 调用方该退化成「直接再发一次」而不是去撤回。
+ * 返回 null 的两种情况(此时**不画**重试按钮,而不是退化去猜当前最后一条消息):
+ * - 对话为空;
+ * - 最后一条真实消息不是 user —— 那一轮已经产出过 assistant 输出(报错发生在更早的
+ *   一轮里),「重放这一问」的语义不再成立,该由用户重新发送而不是替他用错文本重发。
+ *
+ * 修复前的写法(`lastUserTurn` + 页面全局 `lastSentTextRef`)是在**点击时**取 transcript
+ * 尾部:旧报错卡在之后已有成功回合时,点它会重发后续那句成功的提示词(重复生成/写作污染)。
  */
-export function lastUserTurn(messages: readonly ChatMessage[]): ChatMessage | null {
+export function retryTargetForError(messages: readonly ChatMessage[]): ChatRetryTarget | null {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const m = messages[i]!;
 		if (m.role === "error") continue;
-		return m.role === "user" ? m : null;
+		if (m.role !== "user") return null;
+		const text = blocksText(m.blocks);
+		if (text.length === 0) return null;
+		return { ...(m.entryId !== undefined ? { entryId: m.entryId } : {}), text };
 	}
 	return null;
 }
@@ -334,8 +342,7 @@ export function lastUserTurn(messages: readonly ChatMessage[]): ChatMessage | nu
  * 处理单个 AgentEventDto,返回新状态(不可变更新)。
  * 未知事件类型返回原状态。字段按实际 vendor 形状防御式处理:
  * message.content 可能是 string 或 block 数组;tool 的 args/result 可能是字符串或对象。
- */
-export function processAgentEvent(state: SessionViewState, event: AgentEventDto): SessionViewState {
+ */export function processAgentEvent(state: SessionViewState, event: AgentEventDto): SessionViewState {
 	switch (event.type) {
 		case "message_start": {
 			const m = event.message;
@@ -356,6 +363,8 @@ export function processAgentEvent(state: SessionViewState, event: AgentEventDto)
 			 */
 			const rawError = typeof m.errorMessage === "string" ? m.errorMessage : "";
 			if (m.role === "assistant" && rawError.length > 0) {
+				// 重试目标在此刻绑定(此前是点击时再猜当前尾部,见 retryTargetForError)
+				const retry = retryTargetForError(state.messages);
 				const msg: ChatMessage = {
 					id: event.entryId ?? localId(),
 					...(event.entryId ? { entryId: event.entryId } : {}),
@@ -363,6 +372,7 @@ export function processAgentEvent(state: SessionViewState, event: AgentEventDto)
 					blocks: [],
 					done: true,
 					error: describeChatError(rawError, providerModelLine(m)),
+					...(retry ? { retry } : {}),
 				};
 				return { ...state, messages: [...state.messages, msg] };
 			}
@@ -526,12 +536,21 @@ export function processAgentEvent(state: SessionViewState, event: AgentEventDto)
 		 * 若 sendMessage 在 turn_start 之前就抛(未配置模型),本来也没置起来。
 		 */
 		case "chat_error": {
+			/**
+			 * 这条路径上服务端在**写用户消息之前**就抛了(未配置模型/密钥),transcript 里
+			 * 没有可定位的 entry,所以重试只能靠服务端随事件带来的失败原文(BUG-014:
+			 * 此前由前端全局 lastSentTextRef 猜,旧报错卡会重发后续那句成功的提示词)。
+			 * 事件没带 text(老服务端 / 其他链路)时不绑目标 —— 那张卡不给重试按钮,
+			 * 而不是拿当前最后一条消息顶上。
+			 */
+			const text = typeof (event as { text?: unknown }).text === "string" ? (event as { text: string }).text : "";
 			const msg: ChatMessage = {
 				id: localId(),
 				role: "error",
 				blocks: [],
 				done: true,
 				error: describeChatError(event.message),
+				...(text.length > 0 ? { retry: { text } } : {}),
 			};
 			return { ...state, messages: [...state.messages, msg] };
 		}

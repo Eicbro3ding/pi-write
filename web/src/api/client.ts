@@ -5,7 +5,7 @@
  * 注意:本文件不得在 import 时触碰 DOM 专属 API(EventSource 只在 subscribeEvents 内使用),
  * 以兼容 node 环境的 vitest 单测。
  */
-import type { AgentEventDto, BookDetail, BookFileTextDto, BookFilesDto, BookMeta, ChapterRef, ContextUsageDto, ConversationDto, ConversationScopeDto, ImageProviderDto, ImageSizeDto, McpServerInfo, McpServerStatus, PluginInfoDto, PluginSettingsItemDto, ProviderDetailDto, ProviderInfo, ProviderRefreshError, ResolvedShellDto, SessionState, SessionUsageStatsDto, SessionTreeDto, SetupStateDto, SkillInfoDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, WorldDataDto, ShellKindDto, WriterSettingsDto, WriterStateDto } from "../types.ts";
+import type { AgentEventDto, BookDetail, BookFileTextDto, BookFilesDto, BookMeta, ChapterRef, ContextUsageDto, ConversationDto, ConversationScopeDto, ImageProviderDto, ImageSizeDto, McpServerInfo, McpServerStatus, PluginInfoDto, PluginSettingsItemDto, ProviderDetailDto, ProviderInfo, ProviderRefreshError, ResolvedShellDto, SessionState, SessionUsageStatsDto, SessionTreeDto, SetupStateDto, SkillInfoDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, ThinkingHostResult, WorldDataDto, ShellKindDto, WriterSettingsDto, WriterStateDto } from "../types.ts";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
 
 /** 图片访问 URL(同源相对路径;生产/Electron 同源,vite dev 经代理)。 */
@@ -216,13 +216,51 @@ export class ApiClient {
 	}
 
 	/** 模型列表、当前模型、思考等级与采样参数(vendor 模型元素最小形状见 SettingsPage)。 */
-	async getModels(): Promise<{ models: unknown[]; current: unknown; thinking: unknown; temperature: unknown; topP: unknown }> {
-		return this.request<{ models: unknown[]; current: unknown; thinking: unknown; temperature: unknown; topP: unknown }>("/api/models");
+	async getModels(): Promise<{
+		models: unknown[];
+		current: unknown;
+		thinking: unknown;
+		temperature: unknown;
+		topP: unknown;
+		configWarnings?: string[];
+		/** 当前模型实际支持的思考档位(BUG-012);null/缺省 = 拿不到,前端展示全量。 */
+		thinkingLevels?: string[] | null;
+	}> {
+		return this.request<{
+			models: unknown[];
+			current: unknown;
+			thinking: unknown;
+			temperature: unknown;
+			topP: unknown;
+			configWarnings?: string[];
+			thinkingLevels?: string[] | null;
+		}>("/api/models");
 	}
 
-	/** 联网刷新模型目录(远程 catalog / 动态 provider),返回最新模型与可选刷新错误。 */
-	async refreshModels(): Promise<{ models: unknown[]; current: unknown; thinking: unknown; temperature: unknown; topP: unknown; errors?: ProviderRefreshError[] }> {
-		return this.request<{ models: unknown[]; current: unknown; thinking: unknown; temperature: unknown; topP: unknown; errors?: ProviderRefreshError[] }>("/api/models/refresh", {
+	/**
+	 * 联网刷新模型目录(远程 catalog / 动态 provider),返回最新模型与可选刷新错误。
+	 * `hosts` 是宿主级结果(2026-10 审计 BUG-005):主会话 / 编剧 / 舞台各自是否刷上。
+	 */
+	async refreshModels(): Promise<{
+		models: unknown[];
+		current: unknown;
+		thinking: unknown;
+		temperature: unknown;
+		topP: unknown;
+		errors?: ProviderRefreshError[];
+		hosts?: Array<{ host: string; ok: boolean; error?: string; errors?: ProviderRefreshError[] }>;
+		thinkingLevels?: string[] | null;
+	}> {
+		return this.request<{
+			models: unknown[];
+			current: unknown;
+			thinking: unknown;
+			temperature: unknown;
+			topP: unknown;
+			errors?: ProviderRefreshError[];
+			hosts?: Array<{ host: string; ok: boolean; error?: string; errors?: ProviderRefreshError[] }>;
+			thinkingLevels?: string[] | null;
+		}>("/api/models/refresh", {
 			method: "POST",
 		});
 	}
@@ -254,6 +292,8 @@ export class ApiClient {
 		name?: string;
 		/** 是否支持思考深度(reasoning):决定「思考等级」能不能调深(缺省 false)。 */
 		reasoning?: boolean;
+		/** 思考参数协议(compat.thinkingFormat);空串 = 清除显式声明,交给 vendor 自动探测。 */
+		thinkingFormat?: string;
 	}): Promise<{ ok: boolean; provider: string; model: string }> {
 		return this.request<{ ok: boolean; provider: string; model: string }>("/api/models/custom", {
 			method: "POST",
@@ -275,6 +315,8 @@ export class ApiClient {
 		input?: ("text" | "image")[];
 		/** 是否支持思考深度(reasoning);改这里决定「思考等级」能不能调深。 */
 		reasoning?: boolean;
+		/** 思考参数协议(compat.thinkingFormat);空串 = 清除显式声明,交给 vendor 自动探测。 */
+		thinkingFormat?: string;
 	}): Promise<{ ok: boolean; provider: string; model: string }> {
 		return this.request<{ ok: boolean; provider: string; model: string }>("/api/models/custom", {
 			method: "PUT",
@@ -294,8 +336,25 @@ export class ApiClient {
 	 * 设置思考等级;返回**实际生效**的档位。vendor 会按模型能力 clamp(非推理模型只有
 	 * off),返回值与请求不同 = 被回落了 —— 调用方据此给出解释,别再显示成「已切换」。
 	 */
-	async setThinking(level: string): Promise<{ ok: boolean; thinking?: string }> {
-		return this.request<{ ok: boolean; thinking?: string }>("/api/thinking", { method: "POST", body: JSON.stringify({ level }) });
+	/**
+	 * 切换思考档位。响应**分宿主**回报实际生效的档位(2026-10 审计 BUG-013):
+	 * `thinking` 是主会话的实际档位(向后兼容),`hosts` 给出编剧/舞台各自的结果,
+	 * `failures` 是没设上的宿主。vendor 会按模型能力 clamp,所以实际值可能低于请求值。
+	 */
+	async setThinking(level: string): Promise<{
+		ok: boolean;
+		thinking?: string | null;
+		clamped?: boolean;
+		hosts?: ThinkingHostResult[];
+		failures?: string[];
+	}> {
+		return this.request<{
+			ok: boolean;
+			thinking?: string | null;
+			clamped?: boolean;
+			hosts?: ThinkingHostResult[];
+			failures?: string[];
+		}>("/api/thinking", { method: "POST", body: JSON.stringify({ level }) });
 	}
 
 	/** 设置采样参数(temperature/topP 至少一个;undefined 不更新, null 恢复模型默认)。 */

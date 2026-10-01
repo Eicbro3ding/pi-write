@@ -542,7 +542,10 @@ function Message({
 			<div className="record error">
 				<ChatErrorCard
 					info={m.error}
-					onRetry={onRetry ? () => onRetry(m) : undefined}
+					// 「重试」只在卡片**绑定了失败回合**时才画(2026-10 审计 BUG-014):
+					// m.retry 是创建这张卡时写下的稳定目标。没有它就没有可靠的重放对象,
+					// 画一颗会去猜「当前最后一条消息」的按钮等于给用户埋一个跨回合重发的坑。
+					onRetry={onRetry && m.retry ? () => onRetry(m) : undefined}
 					onOpenSettings={onOpenSettings}
 				/>
 			</div>

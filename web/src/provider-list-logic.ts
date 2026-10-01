@@ -69,3 +69,45 @@ export function unconfiguredHint(provider: ProviderInfo): string | null {
 	if (provider.authKind === "ambient") return "该供应商用本机环境变量或已有凭据,无需在这里配置。";
 	return null;
 }
+
+/**
+ * 思考参数协议选项(2026-10 审计 BUG-002)。**必须与 `src/custom-models.ts` 的
+ * `THINKING_FORMATS` 逐字同序** —— 那份是服务端白名单(与 vendor 的
+ * `OpenAICompletionsCompatSchema.thinkingFormat` 一致),这份只用来渲染下拉;
+ * `test/provider-list-logic.test.ts` 有护栏比对两份清单,漂移即红。
+ *
+ * 为什么让用户选:第三方 OpenAI 兼容服务**不能只按 provider 名推断**思考参数写法 ——
+ * 同一个 `reasoning_effort` 有的服务忽略、有的报错、有的要 `thinking` / `reasoning.effort`
+ * 之类的专有字段。默认(空)= 交给 vendor 按 provider 名与 baseUrl 自动探测。
+ */
+export const THINKING_FORMATS = [
+	"openai",
+	"openrouter",
+	"together",
+	"deepseek",
+	"zai",
+	"qwen",
+	"chat-template",
+	"qwen-chat-template",
+	"string-thinking",
+	"ant-ling",
+] as const;
+
+/** 下拉里的中文说明(值本身仍是协议名,模型侧认的就是它)。 */
+export const THINKING_FORMAT_LABELS: Record<string, string> = {
+	openai: "OpenAI 风格(默认,reasoning_effort)",
+	openrouter: "OpenRouter(reasoning.effort)",
+	together: "Together(reasoning.enabled + reasoning_effort)",
+	deepseek: "DeepSeek(thinking.type + reasoning_effort)",
+	zai: "Z.ai(reasoning_effort)",
+	qwen: "Qwen(enable_thinking + reasoning_effort)",
+	"chat-template": "对话模板(chat_template_kwargs)",
+	"qwen-chat-template": "Qwen 对话模板",
+	"string-thinking": "字符串 thinking 字段",
+	"ant-ling": "Ant Ling(reasoning.effort)",
+};
+
+/** 思考参数协议的中文名;未知值原样返回(不编)。 */
+export function thinkingFormatLabel(value: string): string {
+	return THINKING_FORMAT_LABELS[value] ?? value;
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "../web/src/api/client.ts";
-import { friendlyError } from "../web/src/errors.ts";
+import { formatProviderRefreshErrors, friendlyError } from "../web/src/errors.ts";
 
 describe("friendlyError 技术错误 → 产品语言", () => {
 	it("ApiError 404 → 文件文案", () => {
@@ -39,5 +39,36 @@ describe("friendlyError 技术错误 → 产品语言", () => {
 	});
 	it("insufficient_quota 消息变体 → 模型文案", () => {
 		expect(friendlyError(new Error("insufficient_quota: rate limit"))).toBe("当前模型不可用,请到设置页检查模型与 API key");
+	});
+});
+
+/**
+ * 2026-10 审计 BUG-001:/api/models/refresh 返回 `{provider, message}` 对象数组,
+ * 此前调用方 `join("; ")` 会把每条渲染成 `[object Object]`。
+ */
+describe("formatProviderRefreshErrors(目录刷新错误的统一呈现)", () => {
+	it("单条 / 多条 → `provider: message`,按顺序拼接", () => {
+		expect(formatProviderRefreshErrors([{ provider: "deepseek", message: "401 Authorization Required" }])).toBe(
+			"deepseek: 401 Authorization Required",
+		);
+		expect(
+			formatProviderRefreshErrors([
+				{ provider: "deepseek", message: "401" },
+				{ provider: "openrouter", message: "timeout" },
+			]),
+		).toBe("deepseek: 401; openrouter: timeout");
+	});
+	it("空数组 / 非数组 → 空串(调用方据此判定没有错误)", () => {
+		expect(formatProviderRefreshErrors([])).toBe("");
+		expect(formatProviderRefreshErrors(undefined)).toBe("");
+		expect(formatProviderRefreshErrors(null)).toBe("");
+		expect(formatProviderRefreshErrors("boom")).toBe("");
+	});
+	it("结构不完整也稳定降级,绝不吐 [object Object]", () => {
+		expect(formatProviderRefreshErrors([{}])).toBe("未知供应商: 目录刷新失败(无错误详情)");
+		expect(formatProviderRefreshErrors([{ provider: "x" }])).toBe("x: 目录刷新失败(无错误详情)");
+		expect(formatProviderRefreshErrors([{ message: "boom" }])).toBe("未知供应商: boom");
+		expect(formatProviderRefreshErrors([null, 42])).toBe("");
+		expect(formatProviderRefreshErrors(["已经是字符串"])).toBe("已经是字符串");
 	});
 });

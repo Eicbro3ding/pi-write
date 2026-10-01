@@ -85,6 +85,8 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 				maxTokens: editingModel.maxTokens,
 				input: editingModel.input,
 				reasoning: editingModel.reasoning,
+				// 显式声明的思考参数协议(BUG-002):从目录带回的 compat 里取,编辑时保留原值
+				...(editingModel.compat?.thinkingFormat ? { thinkingFormat: editingModel.compat.thinkingFormat } : {}),
 			},
 		};
 	}
@@ -313,16 +315,18 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 	}
 
 	/**
-	 * 测试连接:联网刷新一次模型目录(POST /api/models/refresh),**按这次刷新报出的错误判定**。
+	 * 「刷新模型目录」:联网刷新一次模型目录(POST /api/models/refresh),**按这次刷新报出的错误判定**。
 	 *
 	 * 2026-09-23 修。此前只看「模型数 > 0」,而模型列表来自 catalog、只按「该 provider 有没有
 	 * 存过凭据」过滤(vendor `model-runtime.ts` 的 `configuredProviders`),与密钥有效性无关 ——
 	 * 实测:已删除的密钥也报「连接正常,该供应商有 3 个模型可用」,而同一把密钥真发消息是 401。
 	 * 现在读 `refreshModels()` 返回的 `errors`(按 provider id 过滤)。
 	 *
-	 * 仍要说清的一点:目录刷新只能对**会联网拉模型目录**的供应商验出鉴权失败(本版只有
-	 * DeepSeek 那种 provider 会发这次请求),目录来自内置清单的供应商这里验不了 key ——
-	 * 所以成功时也只说「目录刷新无误」,不说「凭据有效」。
+	 * 2026-10 审计 RISK-001/RISK-002:这个动作**只是刷新目录,不是生成测试**,按钮与回执文案
+	 * 都已改名(此前叫「测试连接」,很容易被理解成"凭据可用/能生成")。目录刷新只能对
+	 * **会联网拉模型目录**的供应商验出鉴权失败,目录来自内置清单的供应商这里验不了 key ——
+	 * 所以成功时只说「目录刷新无误」,不说「凭据有效、可以生成」。真正的生成探针是另一件事
+	 * (见 docs/logic-bug-audit.md 的 RISK-001)。
 	 */
 	async function testConnection() {
 		if (testBusy) return;
@@ -336,7 +340,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 			const fresh = await reloadDetail();
 			if (fail) {
 				setTestOk(false);
-				setTestMsg(`连接失败: ${fail.message}`);
+				setTestMsg(`目录刷新失败: ${fail.message}`);
 			} else if (!fresh) {
 				// 详情接口本身失败。此前这里会走 count=0 的分支,被写成「连接正常,但未返回模型」
 				setTestOk(false);
@@ -344,11 +348,15 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 			} else {
 				const count = fresh.models?.length ?? 0;
 				setTestOk(count > 0);
-				setTestMsg(count > 0 ? `目录刷新无误,该供应商有 ${count} 个模型可用` : "目录刷新无误,但没有可用模型(检查 Base URL 与 API 格式)");
+				setTestMsg(
+					count > 0
+						? `目录刷新无误,该供应商有 ${count} 个模型可用(不代表凭据一定能生成,本操作不发起生成请求)`
+						: "目录刷新无误,但没有可用模型(检查 Base URL 与 API 格式)",
+				);
 			}
 		} catch (e) {
 			setTestOk(false);
-			setTestMsg(`连接失败: ${friendlyError(e)}`);
+			setTestMsg(`目录刷新失败: ${friendlyError(e)}`);
 		} finally {
 			setTestBusy(false);
 		}
@@ -583,11 +591,19 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 								<span className="pvc-d-title">{detailProvider?.id}</span>
 								{isConfigured ? <span className="pvc-badge-on">已配置</span> : <span className="pvc-badge-off">未配置</span>}
 								<span className="pvc-d-spacer" />
-								{/* 未配置没有凭据可测 —— 隐藏而不是给一个必然"正常"的结论(2026-09-23)。
-								    已配置的走 testConnection,由它读 /api/models/refresh 的 errors 判真假。 */}
+								{/* 未配置没有凭据可刷 —— 隐藏而不是给一个必然"正常"的结论(2026-09-23)。
+								    已配置的走 testConnection(实际是"刷新模型目录"),由它读
+								    /api/models/refresh 的 errors 判真假。2026-10 审计 RISK-001:按钮不再叫
+								    「测试连接」——它不发起生成请求,改名后用户不会误以为"凭据一定能用"。 */}
 								{isConfigured && (
-									<button type="button" className="btn-ghost pvc-head-btn" disabled={testBusy} onClick={() => void testConnection()}>
-										{testBusy ? "测试中…" : "测试连接"}
+									<button
+										type="button"
+										className="btn-ghost pvc-head-btn"
+										disabled={testBusy}
+										title="联网重新拉取该供应商的模型目录,并报告鉴权/网络错误;这不发起生成请求"
+										onClick={() => void testConnection()}
+									>
+										{testBusy ? "刷新中…" : "刷新模型目录"}
 									</button>
 								)}
 								{confirmRemove ? (

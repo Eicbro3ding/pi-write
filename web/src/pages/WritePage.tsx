@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "r
 import { AnimatePresence, motion } from "framer-motion";
 import { bookFileUrl, imageUrl, type ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
-import { initialSessionState, lastUserTurn, messagesToEvents, RESET, sessionReducer } from "../store.ts";
+import { initialSessionState, messagesToEvents, RESET, sessionReducer } from "../store.ts";
 import { blocksText } from "../blocks.ts";
 import type {
 	AgentEventDto,
 	BookDetail,
 	BookFileEntryDto,
 	ChapterRef,
+	ChatMessage,
 	ContextUsageDto,
 	ConversationDto,
 	ConversationScopeDto,
@@ -294,12 +295,11 @@ export function WritePage({
 	const writerCompactingRef = useRef(false);
 	writerCompactingRef.current = writerSession.compacting;
 	/** 编剧会话快照 ref:报错卡的「重试」要从 memo 化的卡片里出发(见 MessageList 的
-	 *  retryRef 说明),只能读 ref 拿「最新一轮用户消息 / 是否仍在流式」——直接闭包
-	 *  writerSession 会在卡片不重渲染时读到旧值。 */
+	 *  retryRef 说明),只能读 ref 拿「是否仍在流式」——直接闭包 writerSession 会在卡片
+	 *  不重渲染时读到旧值。重试**重放哪一句**不再从这里取:它绑在报错卡自己的
+	 *  `retry` 字段上(2026-10 审计 BUG-014,见 retryWriterTurn)。 */
 	const writerSessionRef = useRef(writerSession);
 	writerSessionRef.current = writerSession;
-	/** 最近一次发给编剧的文本(报错卡「重试」在服务端未落用户消息时的留底)。 */
-	const lastSentTextRef = useRef("");
 	/** `/node` 世界书缓存(按 slug;收到 world_changed 失效)。 */
 	const worldCacheRef = useRef<{ slug: string; world: WorldDataDto } | null>(null);
 	const worldLoadingRef = useRef<Promise<WorldDataDto | null> | null>(null);
@@ -360,8 +360,6 @@ export function WritePage({
 		confirmScopeRef.current = null;
 		writerCapture.clear();
 		writerAlignedRef.current = null;
-		// 换书/换章:报错卡的留底一并作废(那是上一章要重发的话,不该落到新章)
-		lastSentTextRef.current = "";
 		// 换书/换章后旧文件预览已不属当前上下文:关掉(避免看的是别书的 notes)
 		setFilePreview(null);
 	}
@@ -1340,10 +1338,6 @@ export function WritePage({
 	function sendWriter(text: string): boolean {
 		const slug = bookDetailRef.current?.slug;
 		if (!slug || writerSession.isStreaming || writerSession.compacting) return false;
-		// 本地留底:服务端在**前置检查**阶段就失败时(未配置模型/密钥,见 vendor 的
-		// prompt:那条路径在写用户消息之前就抛了)对话里一条用户消息都不会有,
-		// 报错卡的「重试」只能靠这份留底把话再说一遍(见 retryWriterTurn)。
-		lastSentTextRef.current = text;
 		const t = writerTargetNow(currentChapterRef.current?.file ?? null);
 		void client
 			.writerChat(slug, text, t.chapterFile, t.conversation)
@@ -1365,28 +1359,31 @@ export function WritePage({
 	}
 
 	/**
-	 * 报错卡的「重试」:把失败那一轮原样重放一次。
+	 * 报错卡的「重试」:把**这张卡绑定的那一轮**原样重放一次(2026-10 审计 BUG-014)。
+	 *
+	 * 重放目标在**创建卡片时**就绑好了(store 的 retryTargetForError / chat_error 的 text),
+	 * 不再是点击时去 transcript 尾部猜「当前最后一条用户消息」——那会让旧报错卡重发后续
+	 * 那句成功的提示词(重复生成、撤回作用在别的回合上),这正是本条要修的缺陷。
 	 *
 	 * 一条路径两种走法,因为**报错的时机不同**:
-	 * - 用户消息已落盘(provider 401/限流/超时,回合在写用户消息之后才炸)→ 走
-	 *   「撤回 + 重发」,即 `writerRetract(entryId, 同文本)`:不在会话里留孤儿用户
-	 *   消息,重试多次也只占一个分支。
-	 * - 对话里根本没有用户消息(未配置模型/密钥,服务端前置检查就抛了,用户消息
-	 *   从未落盘)→ 撤回无从谈起,直接拿**本地留底**把这句话重发一次。
-	 *   没有这份留底,这颗按钮在「没配密钥」这个最常见的场景下是死的。
+	 * - `entryId` 有值(用户消息已落盘,provider 401/限流/超时)→ 走「撤回 + 重发」,
+	 *   即 `writerRetract(entryId, 同文本)`:不在会话里留孤儿用户消息,重试多次也只占一个分支。
+	 *   retract 支持非最新 entry(leaf 回到该消息之前),所以旧卡重试也不会跨回合。
+	 * - 只有 `text`(未配置模型/密钥,服务端前置检查就抛了,用户消息从未落盘)→ 撤回无从
+	 *   谈起,直接把这句重发一次。
+	 * - 两者都没有 → 卡片不给重试按钮(MessageList 只在 m.retry 存在时画),提示重新发送。
 	 *
 	 * 只读 ref:本函数从 memo 化的报错卡触发(见 MessageList 的 retryRef),闭包里的
 	 * state 可能是旧的 —— `writerSessionRef` 每次渲染同步最新会话状态。
 	 */
-	function retryWriterTurn() {
+	function retryWriterTurn(m: ChatMessage) {
 		const slug = bookDetailRef.current?.slug;
 		const cur = writerSessionRef.current;
 		if (!slug || cur.isStreaming || cur.compacting) return;
-		const last = lastUserTurn(cur.messages);
-		const text = last ? blocksText(last.blocks) : lastSentTextRef.current;
-		if (text.length === 0) return;
-		if (last?.entryId !== undefined) void editWriterMessage({ id: last.id, entryId: last.entryId }, text);
-		else sendWriter(text);
+		const target = m.retry;
+		if (!target || target.text.length === 0) return;
+		if (target.entryId !== undefined) void editWriterMessage({ id: m.id, entryId: target.entryId }, target.text);
+		else sendWriter(target.text);
 	}
 
 	/** AI 伙伴栏左缘拖拽调宽:鼠标左移变宽(伙伴栏在右侧,手柄贴左缘),受限于 [300, 520](useDragResize)。 */
@@ -1994,7 +1991,7 @@ export function WritePage({
 								onConfirmCard={confirmCard}
 								onRevertCard={(id) => void revertCard(id)}
 								onEdit={(m, newText) => void editWriterMessage(m, newText)}
-								onRetry={() => retryWriterTurn()}
+								onRetry={(m) => retryWriterTurn(m)}
 								onOpenSettings={onOpenSettings}
 								resolveImage={resolveImage}
 								emptyText={

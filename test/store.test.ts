@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { contentTextOf, initialSessionState, lastUserTurn, messagesToEvents, processAgentEvent, resolveUserMessageEcho } from "../web/src/store.ts";
+import { contentTextOf, initialSessionState, messagesToEvents, processAgentEvent, resolveUserMessageEcho, retryTargetForError } from "../web/src/store.ts";
 import { blocksText, blocksThinking, blocksTools, formatDuration, turnDurationMs } from "../web/src/blocks.ts";
 import type { ChatMessage } from "../web/src/types.ts";
 
@@ -521,9 +521,13 @@ describe("provider 侧报错(stopReason=error,不抛异常也不广播 chat_erro
 	});
 });
 
-describe("lastUserTurn(报错卡「重试」定位要重放的那一轮)", () => {
-	function user(text: string): ChatMessage {
-		return { id: `u-${text}`, role: "user", blocks: [{ kind: "text", text }], done: true };
+/**
+ * 2026-10 审计 BUG-014:重试目标必须在**创建报错卡时**绑定,不能点击时再取 transcript 尾部。
+ * 这里覆盖纯函数 retryTargetForError(创建卡片时调用)+ 两条事件路径上的绑定结果。
+ */
+describe("retryTargetForError(报错卡「重试」在创建时绑定失败回合)", () => {
+	function user(text: string, entryId?: string): ChatMessage {
+		return { id: `u-${text}`, ...(entryId ? { entryId } : {}), role: "user", blocks: [{ kind: "text", text }], done: true };
 	}
 	function assistant(text: string): ChatMessage {
 		return { id: `a-${text}`, role: "assistant", blocks: [{ kind: "text", text }], done: true };
@@ -538,17 +542,55 @@ describe("lastUserTurn(报错卡「重试」定位要重放的那一轮)", () =>
 		};
 	}
 
-	it("跳过报错消息(否则永远只看到报错卡,重试按钮是死的)", () => {
-		expect(lastUserTurn([user("续写"), error("502")])?.id).toBe("u-续写");
-		expect(lastUserTurn([user("续写"), error("502"), error("503")])?.id).toBe("u-续写");
+	it("绑定最后一条用户消息的 entryId 与原文(跳过报错消息)", () => {
+		expect(retryTargetForError([user("续写", "e-1"), error("502")])).toEqual({ entryId: "e-1", text: "续写" });
+		expect(retryTargetForError([user("续写", "e-1"), error("502"), error("503")])).toEqual({ entryId: "e-1", text: "续写" });
 	});
-	it("最后一条真实消息是 assistant 时返回 null(那一轮不是用户问的,撤回语义不成立)", () => {
-		expect(lastUserTurn([user("续写"), assistant("写好了")])).toBeNull();
-		expect(lastUserTurn([user("续写"), assistant("写好了"), error("502")])).toBeNull();
+	it("用户消息还没拿到 entryId 时只绑文本(仍可原样重发)", () => {
+		expect(retryTargetForError([user("续写")])).toEqual({ text: "续写" });
 	});
-	it("空对话返回 null", () => {
-		expect(lastUserTurn([])).toBeNull();
-		expect(lastUserTurn([error("502")])).toBeNull();
+	it("最后一条真实消息是 assistant 时返回 null(那一轮不是用户问的,不给重试)", () => {
+		expect(retryTargetForError([user("续写", "e-1"), assistant("写好了")])).toBeNull();
+		expect(retryTargetForError([user("续写", "e-1"), assistant("写好了"), error("502")])).toBeNull();
+	});
+	it("空对话 / 只有报错卡 / 空文本 → null", () => {
+		expect(retryTargetForError([])).toBeNull();
+		expect(retryTargetForError([error("502")])).toBeNull();
+		expect(retryTargetForError([{ id: "u", role: "user", blocks: [], done: true }])).toBeNull();
+	});
+
+	it("message_start 报错(provider 侧):卡片自带绑好的 entryId 与原文", () => {
+		let s = initialSessionState();
+		s = processAgentEvent(s, { type: "message_start", entryId: "user-1", message: { role: "user", content: "续写第三章" } });
+		s = processAgentEvent(s, { type: "message_end", entryId: "user-1", message: { role: "user", content: "续写第三章" } });
+		s = processAgentEvent(s, {
+			type: "message_start",
+			entryId: "assistant-1",
+			message: { role: "assistant", content: [], stopReason: "error", errorMessage: "401 Unauthorized" },
+		});
+		expect(s.messages.map((m) => m.role)).toEqual(["user", "error"]);
+		expect(s.messages[1]!.retry).toEqual({ entryId: "user-1", text: "续写第三章" });
+	});
+
+	it("旧报错卡不会因为之后又有成功回合而改掉自己的目标", () => {
+		let s = initialSessionState();
+		s = processAgentEvent(s, { type: "message_start", entryId: "u-1", message: { role: "user", content: "第一句" } });
+		s = processAgentEvent(s, { type: "message_end", entryId: "u-1", message: { role: "user", content: "第一句" } });
+		s = processAgentEvent(s, { type: "message_start", entryId: "a-1", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "502" } });
+		// 之后又成功聊了一轮
+		s = processAgentEvent(s, { type: "message_start", entryId: "u-2", message: { role: "user", content: "第二句(成功)" } });
+		s = processAgentEvent(s, { type: "message_end", entryId: "u-2", message: { role: "user", content: "第二句(成功)" } });
+		s = processAgentEvent(s, { type: "message_start", entryId: "a-2", message: { role: "assistant", content: "写好了" } });
+		s = processAgentEvent(s, { type: "message_end", entryId: "a-2", message: { role: "assistant", content: "写好了" } });
+		const card = s.messages.find((m) => m.role === "error")!;
+		expect(card.retry).toEqual({ entryId: "u-1", text: "第一句" });
+	});
+
+	it("chat_error 带 text 时绑定该原文;不带 text 时不绑(卡片不给重试按钮)", () => {
+		let s = processAgentEvent(initialSessionState(), { type: "chat_error", message: "未配置模型", text: "帮我写个开头" });
+		expect(s.messages[0]!.retry).toEqual({ text: "帮我写个开头" });
+		s = processAgentEvent(initialSessionState(), { type: "chat_error", message: "未配置模型" });
+		expect(s.messages[0]!.retry).toBeUndefined();
 	});
 });
 
