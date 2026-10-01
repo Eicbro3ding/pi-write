@@ -588,6 +588,28 @@ export class StageOrchestrator {
 	}
 
 	/**
+	 * models.json 变更后让已建的导演/演员/收幕编剧会话重读模型目录(否则设置页刚加完
+	 * 模型,舞台会话解析不到它,换模型在这几个会话上失效;见 SessionHost.refreshModels)。
+	 *
+	 * 与编剧会话不同,这里**不释放**空壳会话:导演/演员宿主参与状态机(在建幕中途换掉
+	 * 一个宿主,演出状态与字段就对不上了)。单纯刷新已经足够修「选中新模型不生效」。
+	 */
+	async refreshModels(): Promise<void> {
+		const hosts: SessionHost[] = [
+			...(this.director ? [this.director] : []),
+			...(this.writer ? [this.writer] : []),
+			...this.actorHosts.values(),
+		];
+		for (const host of hosts) {
+			try {
+				await host.refreshModels();
+			} catch {
+				/* 单个会话刷新失败不影响其余 */
+			}
+		}
+	}
+
+	/**
 	 * 更新演员编制参数（导演工具 / 用户命令共用）。
 	 *
 	 * 只更新提供的字段；temperature/topP/thinking 会即时应用到已创建的演员会话，

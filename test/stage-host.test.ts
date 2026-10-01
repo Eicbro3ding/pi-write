@@ -85,6 +85,10 @@ class FakeOrchestrator {
 	async setModel(model: string): Promise<void> {
 		this.calls.push(`setModel:${model}`);
 	}
+	/** 模型目录刷新(2026-10-04:models.json 变更后已建编排器的会话也要重读目录)。 */
+	async refreshModels(): Promise<void> {
+		this.calls.push("refreshModels");
+	}
 	async setThinkingLevel(level: string): Promise<void> {
 		this.calls.push(`setThinking:${level}`);
 	}
@@ -305,6 +309,17 @@ describe("StageHost 快照", () => {
 		await host.setThinkingLevel("high");
 		expect(orchs[0].calls).toContain("setModel:openai/gpt-5");
 		expect(orchs[0].calls).toContain("setThinking:high");
+	});
+
+	/**
+	 * 2026-10-04:models.json 变更后,已建编排器的导演/演员/收幕编剧会话也要重读模型目录
+	 * (否则舞台会话解析不到刚加的模型,换模型在它们上失效)。
+	 */
+	it("refreshModels 转发到已建编排器", async () => {
+		const { host, orchs } = makeHost([]);
+		await host.command("b1", "mode", {}); // 触发惰性创建
+		await host.refreshModels();
+		expect(orchs[0].calls).toContain("refreshModels");
 	});
 });
 

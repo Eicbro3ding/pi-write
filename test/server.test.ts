@@ -119,6 +119,8 @@ function fakeHost() {
 		getState: () => state,
 		getRuntime: () => ({ session }),
 		reloadRuntime: async () => {},
+		// 模型目录刷新(models.json 变更后由 reloadModels 调;见 session-host 的同名方法)
+		refreshModels: async () => {},
 		dispose: async () => {},
 	} as never;
 	return { host, listeners, switchCalls, switchGate, state, session, providers, providerCalls, injectCalls, retractCalls, branchCalls, navigateCalls };
@@ -505,6 +507,15 @@ describe("WriterServer", () => {
 		const t = await fetch(`${base}/api/thinking`, { method: "POST", headers: json, body: JSON.stringify({ level: "high" }) });
 		expect(t.status).toBe(200);
 	});
+	/**
+	 * 2026-10-04:思考等级必须回报**实际生效**的档位。vendor 按模型能力 clamp
+	 * (非推理模型只有 off),只回 {ok:true} 时前端把「被回落」显示成「已切换」,
+	 * 用户看到的就是「思考等级菜单点了没反应」。
+	 */
+	it("POST /api/thinking 回报实际生效的档位(fake 会话停在 off)", async () => {
+		const t = await fetch(`${base}/api/thinking`, { method: "POST", headers: json, body: JSON.stringify({ level: "high" }) });
+		expect(await t.json()).toEqual({ ok: true, thinking: "off" });
+	});
 	it("POST /api/sampling 返回 200 并校验范围", async () => {
 		const ok = await fetch(`${base}/api/sampling`, { method: "POST", headers: json, body: JSON.stringify({ temperature: 0.8, topP: 0.9 }) });
 		expect(ok.status).toBe(200);
@@ -684,6 +695,47 @@ describe("WriterServer", () => {
 		expect(res.status).toBe(200);
 		const cfg = JSON.parse(readFileSync(customPath, "utf8")) as { providers: Record<string, { models: Array<Record<string, unknown>> }> };
 		expect(cfg.providers.vision.models[0]).toMatchObject({ id: "vision-1", contextWindow: 1000000, maxTokens: 128000, input: ["text", "image"] });
+	});
+	/**
+	 * 2026-10-04:「思考等级」能不能调深由模型的 reasoning 决定(getSupportedThinkingLevels
+	 * 对非推理模型只给 off)。添加/编辑自定义模型必须能声明它,否则第三方推理模型永远调不深。
+	 */
+	it("POST /api/models/custom 的 reasoning 落盘;缺省 false", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		writeFileSync(customPath, JSON.stringify({ providers: {} }));
+		await fetch(`${base}/api/models/custom`, {
+			method: "POST",
+			headers: json,
+			body: JSON.stringify({ provider: "thinky", model: "t-1", baseUrl: "https://api.example.test/v1", reasoning: true }),
+		});
+		await fetch(`${base}/api/models/custom`, {
+			method: "POST",
+			headers: json,
+			body: JSON.stringify({ provider: "thinky", model: "t-2", baseUrl: "https://api.example.test/v1" }),
+		});
+		const cfg = JSON.parse(readFileSync(customPath, "utf8")) as { providers: Record<string, { models: Array<Record<string, unknown>> }> };
+		expect(cfg.providers.thinky.models.map((m) => ({ id: m.id, reasoning: m.reasoning }))).toEqual([
+			{ id: "t-1", reasoning: true },
+			{ id: "t-2", reasoning: false },
+		]);
+	});
+	it("PUT /api/models/custom 可翻转 reasoning(非布尔 → 400)", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		writeFileSync(customPath, JSON.stringify({ providers: { thinky: { api: "openai-completions", baseUrl: "https://api.example.test/v1", apiKey: "sk-x", models: [{ id: "t-1", reasoning: false }] } } }));
+		const res = await fetch(`${base}/api/models/custom`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ provider: "thinky", model: "t-1", reasoning: true }),
+		});
+		expect(res.status).toBe(200);
+		const cfg = JSON.parse(readFileSync(customPath, "utf8")) as { providers: Record<string, { models: Array<Record<string, unknown>> }> };
+		expect(cfg.providers.thinky.models[0]!.reasoning).toBe(true);
+		const bad = await fetch(`${base}/api/models/custom`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ provider: "thinky", model: "t-1", reasoning: "yes" }),
+		});
+		expect(bad.status).toBe(400);
 	});
 	it("POST /api/providers/custom 只建供应商:models 为空数组,不牵进任何模型", async () => {
 		const customPath = join(getAgentDir(), "models.json");
@@ -2080,6 +2132,8 @@ describe("WriterServer · 换模型/思考等级广播到编剧与舞台会话",
 	/** 三处宿主的调用顺序记录(主会话 → 编剧 → 舞台)。 */
 	const modelCalls: string[] = [];
 	const thinkingCalls: string[] = [];
+	/** 模型目录(models.json)变更后,三处宿主重读目录的记录(2026-10-04)。 */
+	const refreshCalls: string[] = [];
 
 	beforeAll(async () => {
 		const fake = fakeHost();
@@ -2087,6 +2141,7 @@ describe("WriterServer · 换模型/思考等级广播到编剧与舞台会话",
 		const main = fake.host as unknown as {
 			setModel: (model: string) => Promise<void>;
 			setThinkingLevel: (level: string) => void;
+			refreshModels: () => Promise<void>;
 		};
 		main.setModel = async (model: string) => {
 			if (model === "broken/x") throw new Error("主会话炸了");
@@ -2095,9 +2150,16 @@ describe("WriterServer · 换模型/思考等级广播到编剧与舞台会话",
 		main.setThinkingLevel = (level: string) => {
 			thinkingCalls.push(`main:${level}`);
 		};
+		// reloadModels 走 SessionHost.refreshModels(刷新目录 + 重绑模型实例)
+		main.refreshModels = async () => {
+			refreshCalls.push("main");
+		};
 		const writer = {
 			setEventSink: () => {},
 			disposeAll: async () => {},
+			refreshModels: async () => {
+				refreshCalls.push("writer");
+			},
 			setModel: async (model: string) => {
 				modelCalls.push(`writer:${model}`);
 			},
@@ -2108,6 +2170,9 @@ describe("WriterServer · 换模型/思考等级广播到编剧与舞台会话",
 		const stage = {
 			setEventSink: () => {},
 			disposeAll: async () => {},
+			refreshModels: async () => {
+				refreshCalls.push("stage");
+			},
 			setModel: async (model: string) => {
 				if (model === "broken/x") throw new Error("舞台炸了");
 				modelCalls.push(`stage:${model}`);
@@ -2157,5 +2222,33 @@ describe("WriterServer · 换模型/思考等级广播到编剧与舞台会话",
 		expect(body.error.message).toContain("舞台炸了");
 		// 主会话先失败、舞台后失败,夹在中间的编剧仍然被换(逐个尝试而非一炸就停)
 		expect(modelCalls).toEqual(["writer:broken/x"]);
+	});
+
+	/**
+	 * 2026-10-04 修「加完第三方供应商与模型、选中后开聊仍报
+	 * No API key found for the selected model」:models.json 是**每个会话装配时**各读一次的,
+	 * 只刷主会话时,已建编剧/舞台会话解析不到刚加的模型 —— POST /api/model 在它们上报 not found,
+	 * 而设置页读的是主会话的「当前模型」,看着已经切好了。
+	 */
+	it("POST /api/models/custom:三处宿主都重读模型目录(主会话 → 编剧 → 舞台)", async () => {
+		refreshCalls.length = 0;
+		const res = await fetch(`${base}/api/models/custom`, {
+			method: "POST",
+			headers: json,
+			body: JSON.stringify({ provider: "third", model: "third-1", baseUrl: "http://127.0.0.1:1/v1" }),
+		});
+		expect(res.status).toBe(200);
+		expect(refreshCalls).toEqual(["main", "writer", "stage"]);
+	});
+
+	it("POST /api/providers/custom:三处宿主也重读模型目录", async () => {
+		refreshCalls.length = 0;
+		const res = await fetch(`${base}/api/providers/custom`, {
+			method: "POST",
+			headers: json,
+			body: JSON.stringify({ provider: "third2", name: "自建", baseUrl: "http://127.0.0.1:2/v1", apiKey: "sk-third" }),
+		});
+		expect(res.status).toBe(200);
+		expect(refreshCalls).toEqual(["main", "writer", "stage"]);
 	});
 });

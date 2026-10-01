@@ -339,6 +339,8 @@ export function SettingsPage({
 	const [models, setModels] = useState<ModelInfo[] | null>(null);
 	const [current, setCurrent] = useState<string | null>(null);
 	const [thinking, setThinking] = useState<string | null>(null);
+	/** 上一次请求的思考档位被模型能力回落到别的档位(非 null = 要解释一句)。 */
+	const [thinkingClamped, setThinkingClamped] = useState<string | null>(null);
 	const [temperature, setTemperature] = useState<string>("");
 	const [topP, setTopP] = useState<string>("");
 	const [loadErr, setLoadErr] = useState<string | null>(null);
@@ -713,14 +715,21 @@ export function SettingsPage({
 		}
 	}
 
-	/** 设置思考级别:setThinking → 刷新当前值;失败显示错误文案。 */
+	/**
+	 * 设置思考级别:setThinking → 刷新当前值;失败显示错误文案。
+	 *
+	 * 服务端会回报**实际生效**的档位:vendor 按模型能力 clamp(非推理模型只有 off),
+	 * 请求 high 却落回 off 时必须说清楚 —— 否则用户看到的就是「选了没反应」(2026-10-04)。
+	 */
 	async function changeThinking(level: string) {
 		if (busy) return;
 		setBusy(true);
 		setActErr(null);
+		setThinkingClamped(null);
 		try {
-			await client.setThinking(level);
+			const r = await client.setThinking(level);
 			await load();
+			if (r.thinking && r.thinking !== level) setThinkingClamped(level);
 		} catch (e) {
 			setActErr(`思考级别设置失败: ${friendlyError(e)}`);
 		} finally {
@@ -1339,6 +1348,11 @@ export function SettingsPage({
 									<div className="s-card-desc st-desc-tight">
 										off = 关闭思考；max = 最强思考深度。切换后立即生效（舞台演员的思考档位属于角色设定，不受影响）。{busy && " 设置中…"}
 									</div>
+									{thinkingClamped && (
+										<div className="notice">
+											当前模型不支持「{thinkingClamped}」这一档，已按模型能力回落到「{thinking ?? "off"}」。模型声明支持思考（自定义模型可在「编辑模型」里打开「支持思考」）后才能调深。
+										</div>
+									)}
 								</section>
 
 								{/* 模型供应商入口 */}

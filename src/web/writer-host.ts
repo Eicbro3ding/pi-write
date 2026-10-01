@@ -48,6 +48,7 @@ import { createSessionRuntimeFactory } from "../session-factory.ts";
 import { chatTextOfMessage } from "../session-text.ts";
 import {
 	extractMessagesFromManager,
+	refreshModelsOfHosts,
 	type SessionCompactionResult,
 	type SessionContextUsage,
 	type SessionUsageStats,
@@ -404,6 +405,20 @@ export class WriterHost {
 	async setThinkingLevel(level: string): Promise<void> {
 		this.thinkingLevel = level;
 		await this.forEachResidentHost("思考档位", (host) => host.setThinkingLevel(level));
+	}
+
+	/**
+	 * models.json 变更后让已建编剧会话跟上最新模型目录;其中「一个模型都没选到」的
+	 * 空壳会话直接释放(下次对话按最新目录重新装配,见 refreshModelsOfHosts)。
+	 */
+	async refreshModels(): Promise<void> {
+		const stale = await refreshModelsOfHosts(this.hosts);
+		for (const key of stale) {
+			const host = this.hosts.get(key);
+			if (!host) continue;
+			this.hosts.delete(key);
+			await host.dispose().catch(() => undefined);
+		}
 	}
 
 	/** 把一次会话级设置应用到全部已建编剧会话(逐个尝试,收集首个错误后重抛)。 */

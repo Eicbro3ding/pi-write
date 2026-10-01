@@ -27,6 +27,8 @@ export interface EditableModel {
 	contextWindow: number;
 	maxTokens: number;
 	input: ("text" | "image")[];
+	/** 是否声明支持思考深度(reasoning);缺省按不支持。 */
+	reasoning?: boolean;
 }
 
 export function AddModelDialog({
@@ -65,6 +67,7 @@ export function AddModelDialog({
 	const [formCtx, setFormCtx] = useState(String(initialModel?.contextWindow ?? 1000000));
 	const [formMaxTokens, setFormMaxTokens] = useState(String(initialModel?.maxTokens ?? 128000));
 	const [formInput, setFormInput] = useState<("text" | "image")[]>(initialModel?.input ?? ["text"]);
+	const [formReasoning, setFormReasoning] = useState(initialModel?.reasoning ?? false);
 	const [busy, setBusy] = useState(false);
 	const [err, setErr] = useState<string | null>(null);
 
@@ -110,6 +113,7 @@ export function AddModelDialog({
 					contextWindow: limits.ctx,
 					maxTokens: limits.maxTokens,
 					input: formInput,
+					reasoning: formReasoning,
 				});
 				await onSaved();
 				onClose();
@@ -134,6 +138,7 @@ export function AddModelDialog({
 				contextWindow: limits.ctx,
 				maxTokens: limits.maxTokens,
 				input: formInput,
+				reasoning: formReasoning,
 				name: formModelName.trim().length > 0 ? formModelName.trim() : undefined,
 			});
 			await onSaved();
@@ -210,6 +215,23 @@ export function AddModelDialog({
 								图片
 							</button>
 							<span className="amd-hint">输出固定为文本</span>
+						</div>
+					</div>
+					{/* 思考深度:vendor 按 model.reasoning 决定可用档位(非推理模型只有 off),
+					    不声明就永远调不深 —— 且表现为「思考等级菜单点了没反应」,所以这里给开关 */}
+					<div className="s-field">
+						<label className="s-field-label">思考深度</label>
+						<div className="amd-check-row">
+							<button
+								type="button"
+								className={`amd-check${formReasoning ? " on" : ""}`}
+								disabled={busy}
+								aria-pressed={formReasoning}
+								onClick={() => setFormReasoning((v) => !v)}
+							>
+								{formReasoning ? "支持思考" : "不支持思考"}
+							</button>
+							<span className="amd-hint">仅当供应商接受 reasoning 参数时才打开;不确定就关着</span>
 						</div>
 					</div>
 					<div className="amd-note">

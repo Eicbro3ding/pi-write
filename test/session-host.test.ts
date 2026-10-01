@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../vendor/pi-coding-agent/src/index.ts";
-import { extractMessagesFromManager, SessionHost } from "../src/web/session-host.ts";
+import { extractMessagesFromManager, SessionHost, usableModelRef } from "../src/web/session-host.ts";
 
 /** extractMessagesFromManager 只吃 getBranch() 的 entry 形状,给个最小桩即可。 */
 function fakeManager(entries: Array<{ id: string; message: Record<string, unknown> }>) {
@@ -613,5 +613,73 @@ describe("extractMessagesFromManager(会话投影)", () => {
 		expect(out).toHaveLength(2);
 		expect(out[1]!.errorMessage).toBe("500 boom");
 		expect(out[1]!.text).toBe("");
+	});
+});
+
+/**
+ * 2026-10-04 修「加完第三方供应商与模型、选中后开聊仍报
+ * No API key found for the selected model」:每个会话宿主在装配时各读一次 models.json,
+ * 新增模型后只刷主会话 = 已建编剧/舞台会话拿着旧目录,解析不到那个模型。
+ */
+describe("模型目录刷新与「是否已选到模型」", () => {
+	it("usableModelRef:unknown 占位与缺字段归一为 null,真实模型原样返回", () => {
+		// vendor 未解析到模型时给的是 pi-agent-core 的 DEFAULT_MODEL 占位
+		expect(usableModelRef({ provider: "unknown", id: "unknown", api: "unknown" })).toBeNull();
+		expect(usableModelRef(undefined)).toBeNull();
+		expect(usableModelRef({ id: "gpt-5" })).toBeNull();
+		expect(usableModelRef({ provider: "openai", id: "gpt-5", api: "openai-responses" })).toEqual({
+			provider: "openai",
+			id: "gpt-5",
+		});
+	});
+	it("refreshModels 让已建会话重读 models.json(本地刷新,不触发联网目录)", async () => {
+		const refresh = vi.fn(async () => {});
+		const fake = makeFakeRuntime({ refresh });
+		const host = makeHost(fake);
+		await host.start();
+		await host.refreshModels();
+		expect(refresh).toHaveBeenCalledWith({ allowNetwork: false });
+	});
+	it("currentModel 读会话的 model 状态;占位时 null", async () => {
+		const fake = makeFakeRuntime();
+		(fake.session as { state?: unknown }).state = { model: { provider: "openai", id: "gpt-5" } };
+		const host = makeHost(fake);
+		await host.start();
+		expect(host.currentModel()).toEqual({ provider: "openai", id: "gpt-5" });
+
+		(fake.session as { state: unknown }).state = { model: { provider: "unknown", id: "unknown", api: "unknown" } };
+		expect(host.currentModel()).toBeNull();
+	});
+	/**
+	 * 2026-10-04:目录刷新后会话手里还是**旧**的 Model 实例(reasoning 等能力字段跟着它走),
+	 * 不重绑的话「编辑模型 → 打开支持思考」不生效,思考档位照样被按旧能力 clamp 回 off。
+	 */
+	it("refreshModels 能力变化时把会话的 Model 换成目录里的新实例", async () => {
+		const refresh = vi.fn(async () => {});
+		const fresh = { provider: "third", id: "third-1", reasoning: true };
+		const fake = makeFakeRuntime({ refresh, getModel: vi.fn(() => fresh) });
+		(fake.session as { state?: unknown }).state = { model: { provider: "third", id: "third-1", reasoning: false } };
+		const host = makeHost(fake);
+		await host.start();
+		await host.refreshModels();
+		expect(fake.session.setModel).toHaveBeenCalledWith(fresh);
+	});
+	it("refreshModels 能力没变时不重绑(不往会话里多写 model_change)", async () => {
+		const refresh = vi.fn(async () => {});
+		const fake = makeFakeRuntime({ refresh, getModel: vi.fn(() => ({ provider: "third", id: "third-1", reasoning: false })) });
+		(fake.session as { state?: unknown }).state = { model: { provider: "third", id: "third-1", reasoning: false } };
+		const host = makeHost(fake);
+		await host.start();
+		await host.refreshModels();
+		expect(fake.session.setModel).not.toHaveBeenCalled();
+	});
+	it("refreshModels 对占位模型会话不重绑(没有可绑的模型)", async () => {
+		const refresh = vi.fn(async () => {});
+		const fake = makeFakeRuntime({ refresh, getModel: vi.fn(() => ({ provider: "unknown", id: "unknown" })) });
+		(fake.session as { state?: unknown }).state = { model: { provider: "unknown", id: "unknown", api: "unknown" } };
+		const host = makeHost(fake);
+		await host.start();
+		await host.refreshModels();
+		expect(fake.session.setModel).not.toHaveBeenCalled();
 	});
 });

@@ -20,6 +20,9 @@ interface FakeHostLike {
 	abort: ReturnType<typeof vi.fn>;
 	setModel: ReturnType<typeof vi.fn>;
 	setThinkingLevel: ReturnType<typeof vi.fn>;
+	/** 会话当前模型(null = 还没选到,见 usableModelRef)。 */
+	currentModel: ReturnType<typeof vi.fn>;
+	refreshModels: ReturnType<typeof vi.fn>;
 	getState(): { isStreaming: boolean; messages: Array<{ role: string; text: string }> };
 	getContextUsage(): { tokens: number | null; contextWindow: number; percent: number | null } | null;
 	compact: ReturnType<typeof vi.fn>;
@@ -39,6 +42,8 @@ function makeFakeHost(): FakeHostLike & { listeners: Set<(e: unknown) => void> }
 		abort: vi.fn(async () => {}),
 		setModel: vi.fn(async () => {}),
 		setThinkingLevel: vi.fn(() => {}),
+		currentModel: vi.fn(() => ({ provider: "openai", id: "gpt-5" })),
+		refreshModels: vi.fn(async () => {}),
 		getState: () => ({ isStreaming: false, messages: [{ role: "assistant", text: "嗨" }] }),
 		getContextUsage: () => ({ tokens: 800, contextWindow: 4000, percent: 20 }),
 		compact: vi.fn(async () => ({ summary: "已压缩", tokensBefore: 800, estimatedTokensAfter: 300 })),
@@ -165,6 +170,56 @@ describe("WriterHost", () => {
 		await host.chat("fog-harbor", "b", "ch02.jsonl");
 		await expect(host.setModel("openai/gpt-5")).rejects.toThrow("没有对应鉴权");
 		expect(good.setModel).toHaveBeenCalledWith("openai/gpt-5");
+	});
+
+	/**
+	 * 2026-10-04 修「加完第三方供应商与模型、选中后开聊仍报 No API key found for the
+	 * selected model」:models.json 是**每个会话装配时**各读一次的,新增模型后只刷主会话
+	 * 等于已建编剧会话还在旧目录里 —— 选中新模型在编剧会话上解析不到(not found),
+	 * 而对话继续拿 unknown 占位模型发请求。
+	 */
+	it("refreshModels 让已建会话重读模型目录(有模型的会话不释放)", async () => {
+		const fake = makeFakeHost();
+		const host = new WriterHost({ createHost: async () => fake as never });
+		await host.chat("fog-harbor", "hi", "ch01.jsonl");
+		await host.refreshModels();
+		expect(fake.refreshModels).toHaveBeenCalledTimes(1);
+		expect(fake.dispose).not.toHaveBeenCalled();
+	});
+	it("refreshModels 释放「一个模型都没选到」的空壳会话:下次对话按最新目录重新装配", async () => {
+		const made: FakeHostLike[] = [];
+		const host = new WriterHost({
+			createHost: async () => {
+				const fake = makeFakeHost();
+				fake.currentModel.mockReturnValue(null); // 建会话时无可用模型 → vendor 给 unknown 占位
+				made.push(fake);
+				return fake as never;
+			},
+		});
+		await host.chat("fog-harbor", "hi", "ch01.jsonl");
+		await host.refreshModels();
+		expect(made[0]!.refreshModels).not.toHaveBeenCalled();
+		expect(made[0]!.dispose).toHaveBeenCalledTimes(1);
+		// 再说话:重新建宿主(释放掉的空壳不会复活),历史仍从同一份会话文件恢复
+		await host.chat("fog-harbor", "又说一句", "ch01.jsonl");
+		expect(made).toHaveLength(2);
+	});
+	it("refreshModels 单个会话刷新失败不影响其余", async () => {
+		const bad = makeFakeHost();
+		bad.refreshModels.mockRejectedValue(new Error("refresh 炸了"));
+		const good = makeFakeHost();
+		const made: FakeHostLike[] = [];
+		const host = new WriterHost({
+			createHost: async () => {
+				const fake = made.length === 0 ? bad : good;
+				made.push(fake);
+				return fake as never;
+			},
+		});
+		await host.chat("fog-harbor", "a", "ch01.jsonl");
+		await host.chat("fog-harbor", "b", "ch02.jsonl");
+		await expect(host.refreshModels()).resolves.toBeUndefined();
+		expect(good.refreshModels).toHaveBeenCalledTimes(1);
 	});
 });
 

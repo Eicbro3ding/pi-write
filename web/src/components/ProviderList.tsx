@@ -84,6 +84,7 @@ export function ProviderList({ client, onAuthChanged }: { client: ApiClient; onA
 				contextWindow: editingModel.contextWindow,
 				maxTokens: editingModel.maxTokens,
 				input: editingModel.input,
+				reasoning: editingModel.reasoning,
 			},
 		};
 	}

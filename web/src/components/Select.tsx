@@ -232,8 +232,14 @@ export function Select({
 										role="option"
 										aria-selected={row.option.value === value}
 										onMouseEnter={() => !row.option.disabled && setActive(i)}
-										onMouseDown={(e) => {
-											e.preventDefault();
+										// 用 pointerdown 而不是 mousedown:触屏上 mousedown 是「兼容鼠标事件」,
+										// 被手势判定吞掉时整行就点不动(手机端「思考等级菜单点了没反应」,
+										// 2026-10-04);pointerdown 对鼠标 / 触摸 / 笔一视同仁。
+										// 触摸时**不** preventDefault:那会连滚动手势一起掐掉(选项多的列表
+										// 在手机上要能滑);不掐也不会点穿 —— 退场期间弹层仍挂 140ms,
+										// 合成的 click 落在正在退场的弹层上,而它没有 onClick。
+										onPointerDown={(e) => {
+											if (e.pointerType !== "touch") e.preventDefault();
 											commit(i);
 										}}
 									>

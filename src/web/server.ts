@@ -62,7 +62,7 @@ import { MAX_ZIP_BYTES, exportBookZip, readImportZip, type BookZipImport } from 
 import { ensureWorld, newId, readWorldEditRecord, saveWorld, WorldValidationError, type WorldData } from "../world-data.ts";
 import { buildChapterContext, DEFAULT_CONTEXT_BUDGET, trimMemory } from "../world-context.ts";
 import type { SessionHost } from "./session-host.ts";
-import { extractMessagesFromManager } from "./session-host.ts";
+import { extractMessagesFromManager, usableModelRef } from "./session-host.ts";
 import { askUserGate } from "../ask-user.ts";
 import { SessionManager } from "../../vendor/pi-coding-agent/src/index.ts";
 import { ProviderAuthError, sortProviders, type ProviderListItem } from "./provider-auth.ts";
@@ -325,6 +325,14 @@ function optionalString(body: unknown, key: string): string | undefined {
 	const value = (body as Record<string, unknown> | null)?.[key];
 	if (value === undefined) return undefined;
 	if (typeof value !== "string") throw new HttpError(400, "bad_request", `字段 ${key} 必须是字符串`);
+	return value;
+}
+
+/** 取可选布尔字段;缺省返回 undefined,存在但非布尔则 400。 */
+function optionalBoolean(body: unknown, key: string): boolean | undefined {
+	const value = (body as Record<string, unknown> | null)?.[key];
+	if (value === undefined) return undefined;
+	if (typeof value !== "boolean") throw new HttpError(400, "bad_request", `字段 ${key} 必须是布尔值`);
 	return value;
 }
 
@@ -1359,15 +1367,11 @@ export class WriterServer {
 		const models = await runtime.session.modelRuntime.getAvailable();
 		const state = runtime.session.state;
 		// vendor 未选模型时 state.model 是 {provider:"unknown", id:"unknown"} 占位——
-		// 归一为 null,前端据此显示「未设置」而非裸 "unknown"(2026-08 UI 评审)
-		const m = state.model as { provider?: unknown; id?: unknown } | undefined | null;
+		// usableModelRef 归一为 null,前端据此显示「未设置」而非裸 "unknown"(2026-08 UI 评审)
+		const m = usableModelRef(state.model);
 		// 仅当当前模型仍出现在可用列表中才返回;key 移除/失效后前端应显示「未设置」,
 		// 而不是把已不可用的旧模型继续当作当前模型(2026-08 设置页认证状态反馈)
-		const current =
-			m && typeof m.provider === "string" && typeof m.id === "string" && m.provider !== "unknown" && m.id !== "unknown" &&
-			models.some((model) => model.provider === m.provider && model.id === m.id)
-				? m
-				: null;
+		const current = m && models.some((model) => model.provider === m.provider && model.id === m.id) ? m : null;
 		this.send(ctx.res, 200, { models, current, thinking: state.thinkingLevel, temperature: state.temperature, topP: state.topP });
 	}
 
@@ -1377,12 +1381,8 @@ export class WriterServer {
 		const result = await runtime.session.modelRuntime.refresh({ allowNetwork: true, force: true });
 		const models = await runtime.session.modelRuntime.getAvailable();
 		const state = runtime.session.state;
-		const m = state.model as { provider?: unknown; id?: unknown } | undefined | null;
-		const current =
-			m && typeof m.provider === "string" && typeof m.id === "string" && m.provider !== "unknown" && m.id !== "unknown" &&
-			models.some((model) => model.provider === m.provider && model.id === m.id)
-				? m
-				: null;
+		const m = usableModelRef(state.model);
+		const current = m && models.some((model) => model.provider === m.provider && model.id === m.id) ? m : null;
 		this.send(ctx.res, 200, {
 			models,
 			current,
@@ -1461,7 +1461,10 @@ export class WriterServer {
 		const modelEntry = {
 			id: modelId,
 			name: typeof body.name === "string" && body.name.trim().length > 0 ? body.name.trim() : modelId,
-			reasoning: false,
+			// 是否支持思考深度:vendor 按 model.reasoning 决定可用的思考档位
+			// (getSupportedThinkingLevels:非推理模型只有 off)。缺省 false —— 不声明就等于
+			// 不认 reasoning 参数,web 上「思考等级」对这一条会被静默回落(2026-10-04)。
+			reasoning: body.reasoning === true,
 			contextWindow: Number(body.contextWindow ?? 32000),
 			maxTokens: Number(body.maxTokens ?? 4096),
 			...(input.length > 0 ? { input } : {}),
@@ -1521,6 +1524,8 @@ export class WriterServer {
 		if (maxTokens !== undefined) patch.maxTokens = maxTokens;
 		const input = normalizeModelInput(body);
 		if (input !== undefined) patch.input = input;
+		const reasoning = optionalBoolean(body, "reasoning");
+		if (reasoning !== undefined) patch.reasoning = reasoning;
 		if (newModel !== undefined) patch.newId = newModel;
 		updateCustomModel(cfg, providerId, modelId, patch);
 		await writeModelsConfig(cfg);
@@ -1547,10 +1552,20 @@ export class WriterServer {
 	/**
 	 * 热重载模型目录:ModelRuntime.refresh 重读 models.json 并重建 provider
 	 * (本地配置,不触发网络目录刷新;比 reloadRuntime 轻量,不重建整个会话运行时)。
+	 *
+	 * 2026-10-04:必须**三个宿主都刷**。每个会话宿主在装配时各建一份 ModelRuntime
+	 * (models.json 是那一刻读的),只刷主会话时,设置页刚加完的自定义模型在已建编剧/
+	 * 舞台会话上解析不到 —— 症状是「加完供应商与模型、选中、开聊」仍然报
+	 * `No API key found for the selected model`(对话继续用 unknown 占位模型发请求),
+	 * 而设置页显示的当前模型是主会话的、看着已经切好了。
 	 */
 	private async reloadModels(): Promise<void> {
-		const runtime = this.options.sessionHost.getRuntime();
-		await runtime.session.modelRuntime.refresh({ allowNetwork: false });
+		// 主会话走 SessionHost.refreshModels:刷新目录 + 重绑会话手里的 Model 实例
+		// (模型条目改了 reasoning 之类能力字段时,不重绑就还是按旧能力 clamp 思考档位)
+		await this.options.sessionHost.refreshModels();
+		// 编剧会话另有一层:还没选到任何模型的空壳会话会被释放(见 refreshModelsOfHosts)
+		await this.options.writerHost?.refreshModels?.();
+		await this.options.stageHost?.refreshModels?.();
 	}
 
 	/**
@@ -1595,7 +1610,14 @@ export class WriterServer {
 		this.send(ctx.res, 200, { ok: true });
 	}
 
-	/** POST /api/thinking {level}:切换思考等级(同 applyToAllSessions)。 */
+	/**
+	 * POST /api/thinking {level}:切换思考等级(同 applyToAllSessions)。
+	 *
+	 * 回报**实际生效**的档位:vendor 的 setThinkingLevel 会按模型能力 clamp
+	 * (getSupportedThinkingLevels —— 非推理模型只有 off),只回 {ok:true} 的话
+	 * 前端会把「被模型回落到 off」显示成「已切换成 high」,用户看到的就是
+	 * 「思考等级菜单点了没反应」(2026-10-04 实测根因)。
+	 */
 	private async handlePostThinking(ctx: RouteContext): Promise<void> {
 		const body = await readJsonBody(ctx.req);
 		const level = requireString(body, "level");
@@ -1604,7 +1626,7 @@ export class WriterServer {
 			["编剧会话", () => this.options.writerHost?.setThinkingLevel(level)],
 			["舞台会话", () => this.options.stageHost?.setThinkingLevel(level)],
 		]);
-		this.send(ctx.res, 200, { ok: true });
+		this.send(ctx.res, 200, { ok: true, thinking: this.options.sessionHost.getRuntime().session.state.thinkingLevel });
 	}
 
 	/** POST /api/sampling {temperature?, topP?}:切换采样参数;null 表示恢复模型默认。 */

@@ -252,6 +252,8 @@ export class ApiClient {
 		input?: ("text" | "image")[];
 		/** 模型显示名(缺省取模型 id)。 */
 		name?: string;
+		/** 是否支持思考深度(reasoning):决定「思考等级」能不能调深(缺省 false)。 */
+		reasoning?: boolean;
 	}): Promise<{ ok: boolean; provider: string; model: string }> {
 		return this.request<{ ok: boolean; provider: string; model: string }>("/api/models/custom", {
 			method: "POST",
@@ -271,6 +273,8 @@ export class ApiClient {
 		contextWindow?: number;
 		maxTokens?: number;
 		input?: ("text" | "image")[];
+		/** 是否支持思考深度(reasoning);改这里决定「思考等级」能不能调深。 */
+		reasoning?: boolean;
 	}): Promise<{ ok: boolean; provider: string; model: string }> {
 		return this.request<{ ok: boolean; provider: string; model: string }>("/api/models/custom", {
 			method: "PUT",
@@ -286,9 +290,12 @@ export class ApiClient {
 		);
 	}
 
-	/** 设置思考等级。 */
-	async setThinking(level: string): Promise<void> {
-		await this.request<{ ok: boolean }>("/api/thinking", { method: "POST", body: JSON.stringify({ level }) });
+	/**
+	 * 设置思考等级;返回**实际生效**的档位。vendor 会按模型能力 clamp(非推理模型只有
+	 * off),返回值与请求不同 = 被回落了 —— 调用方据此给出解释,别再显示成「已切换」。
+	 */
+	async setThinking(level: string): Promise<{ ok: boolean; thinking?: string }> {
+		return this.request<{ ok: boolean; thinking?: string }>("/api/thinking", { method: "POST", body: JSON.stringify({ level }) });
 	}
 
 	/** 设置采样参数(temperature/topP 至少一个;undefined 不更新, null 恢复模型默认)。 */

@@ -591,10 +591,11 @@ describe("StageOrchestrator · 换模型与思考档位", () => {
 		rmSync(tmp, { recursive: true, force: true });
 	});
 
-	/** 假角色会话(只关心换模型/换档位这两个动作)。 */
+	/** 假角色会话(只关心换模型/换档位/重读模型目录这几个动作)。 */
 	const fakeHost = () => ({
 		setModel: vi.fn(async () => {}),
 		setThinkingLevel: vi.fn(() => {}),
+		refreshModels: vi.fn(async () => {}),
 	});
 
 	/** 造一个未 start 的编排器,并把导演/收幕编剧/演员会话换成假宿主。 */
@@ -647,5 +648,26 @@ describe("StageOrchestrator · 换模型与思考档位", () => {
 		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
 		await expect(orch.setModel("openai/gpt-5")).resolves.toBeUndefined();
 		await expect(orch.setThinkingLevel("high")).resolves.toBeUndefined();
+	});
+
+	/**
+	 * 2026-10-04:models.json 变更后已建会话要重读模型目录(否则设置页刚加的模型在
+	 * 舞台会话上解析不到,换模型失效)。演员级 model 覆盖与目录刷新无关,一并刷。
+	 */
+	it("重读模型目录:导演/收幕编剧/演员会话都刷", async () => {
+		const { orch, director, writer, plain, pinned } = orchWithHosts();
+		await orch.refreshModels();
+		expect(director.refreshModels).toHaveBeenCalledTimes(1);
+		expect(writer.refreshModels).toHaveBeenCalledTimes(1);
+		expect(plain.refreshModels).toHaveBeenCalledTimes(1);
+		expect(pinned.refreshModels).toHaveBeenCalledTimes(1);
+	});
+
+	it("重读模型目录:单个会话失败不影响其余(也不抛出)", async () => {
+		const { orch, director, writer, plain } = orchWithHosts();
+		director.refreshModels.mockRejectedValue(new Error("刷新炸了"));
+		await expect(orch.refreshModels()).resolves.toBeUndefined();
+		expect(writer.refreshModels).toHaveBeenCalledTimes(1);
+		expect(plain.refreshModels).toHaveBeenCalledTimes(1);
 	});
 });

@@ -248,6 +248,17 @@ export class StageHost {
 		await Promise.all([...this.orchestrators.values()].map((orch) => orch.setThinkingLevel(level)));
 	}
 
+	/** models.json 变更后让已建编排器的会话重读模型目录(见 SessionHost.refreshModels)。 */
+	async refreshModels(): Promise<void> {
+		for (const orch of this.orchestrators.values()) {
+			try {
+				await orch.refreshModels();
+			} catch {
+				/* 单个编排器失败不影响其余 */
+			}
+		}
+	}
+
 	/** 编排器键:书 + 章节(舞台按章节隔离——每章一幕独立对话/演出,切章不串,2026-08-10)。 */
 	private static key(slug: string, chapterFile: string | null | undefined): string {
 		return `${slug}:${chapterFile ?? "default"}`;

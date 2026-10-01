@@ -41,6 +41,8 @@ export interface CustomModelPatch {
 	contextWindow?: number;
 	maxTokens?: number;
 	input?: Array<"text" | "image">;
+	/** 是否声明该模型支持思考深度(reasoning)。 */
+	reasoning?: boolean;
 	newId?: string;
 }
 
@@ -97,6 +99,7 @@ export function updateCustomModel(cfg: ModelsConfig, providerId: string, modelId
 	if (patch.contextWindow !== undefined) next.contextWindow = patch.contextWindow;
 	if (patch.maxTokens !== undefined) next.maxTokens = patch.maxTokens;
 	if (patch.input !== undefined) next.input = patch.input;
+	if (patch.reasoning !== undefined) next.reasoning = patch.reasoning;
 	if (typeof patch.newId === "string" && patch.newId.length > 0 && patch.newId !== modelId) next.id = patch.newId;
 	list[index] = next;
 	return true;

@@ -371,6 +371,56 @@ export class SessionHost {
 		if (resolved.warning) process.stderr.write(`${resolved.warning}\n`);
 		if (resolved.model) await rt.session.setModel(resolved.model);
 	}
+	/** 本会话当前可用的模型(null = 还没选到,见 usableModelRef)。 */
+	currentModel(): { provider: string; id: string } | null {
+		return usableModelRef(this.runtime?.session.state.model);
+	}
+	/**
+	 * 重读 models.json,让**已经建好的会话**看到新加/新删的自定义供应商与模型。
+	 *
+	 * 每个会话宿主在装配时各建一份 ModelRuntime(models.json 是那一刻读的),所以只在
+	 * 主会话上刷新等于别处全是旧目录:设置页刚加完模型并选中时,已建编剧/舞台会话解析
+	 * 不到那个模型(POST /api/model 报 not found),而对话继续拿 unknown 占位模型发请求,
+	 * 报「No API key found for the selected model」(2026-10-04 实测根因)。
+	 *
+	 * 刷新后还要把会话手里的 Model 换成目录里的新实例(见 resyncModelCapabilities)。
+	 */
+	async refreshModels(): Promise<void> {
+		const rt = this.requireRuntime();
+		await rt.services.modelRuntime.refresh({ allowNetwork: false });
+		await this.resyncModelCapabilities(rt);
+	}
+
+	/**
+	 * 把 `agent.state.model` 换成目录里的**新实例**。
+	 *
+	 * `state.model` 是装配那一刻的对象,`reasoning` / `thinkingLevelMap` 这些能力字段跟着
+	 * 它走:`setThinkingLevel` 就是拿它算可用档位。所以「编辑模型 → 打开支持思考」之后
+	 * 只刷目录不重绑,思考档位照样按旧能力被 clamp 回 off —— 用户在设置页看到的就是
+	 * 「思考等级选了没反应」。只在能力真的变了时重设,免得每次刷新都多写一条 model_change。
+	 */
+	private async resyncModelCapabilities(rt: AgentSessionRuntime): Promise<void> {
+		// 取 state 用可选链:测试里的最小 fake session 没有 state(真会话恒有)
+		const live = (rt.session as { state?: { model?: unknown } }).state?.model as
+			| { provider?: unknown; id?: unknown; reasoning?: unknown; thinkingLevelMap?: unknown }
+			| null
+			| undefined;
+		if (!live || typeof live.provider !== "string" || typeof live.id !== "string") return;
+		if (live.provider === "unknown" || live.id === "unknown") return; // 占位:没有可重绑的模型
+		const fresh = rt.services.modelRuntime.getModel(live.provider, live.id);
+		if (!fresh) return;
+		if (
+			fresh.reasoning === live.reasoning &&
+			JSON.stringify(fresh.thinkingLevelMap ?? null) === JSON.stringify(live.thinkingLevelMap ?? null)
+		) {
+			return;
+		}
+		try {
+			await rt.session.setModel(fresh);
+		} catch {
+			/* 该 provider 此刻没鉴权等:保留旧实例,不影响对话(下次选模型会重绑) */
+		}
+	}
 	async setThinkingLevel(level: string): Promise<void> {
 		// ThinkingLevel 是字符串字面量联合,由调用方保证传入合法值
 		this.requireRuntime().session.setThinkingLevel(level as ThinkingLevel);
@@ -595,6 +645,48 @@ export class SessionHost {
 		await this.runtime?.dispose();
 		this.runtime = undefined;
 	}
+}
+
+/**
+ * vendor 未解析到模型时给的是 `{provider:"unknown", id:"unknown", api:"unknown"}` 占位
+ * (pi-agent-core 的 DEFAULT_MODEL)—— 归一为 null:前端据此显示「未设置」,模型目录
+ * 变更时据此判定「这个会话还没有模型」。唯一实现,别在各处再写一遍 provider !== "unknown"。
+ */
+export function usableModelRef(model: unknown): { provider: string; id: string } | null {
+	const m = model as { provider?: unknown; id?: unknown } | null | undefined;
+	if (!m || typeof m.provider !== "string" || typeof m.id !== "string") return null;
+	return m.provider === "unknown" || m.id === "unknown" ? null : { provider: m.provider, id: m.id };
+}
+
+/**
+ * 模型目录(models.json)变更后,让一批已建会话跟上最新目录;返回**该被释放的会话键**。
+ *
+ * 分两种情况(2026-10-04):
+ *  - 会话有模型 → 重读 models.json。不刷新的话,「设置页刚加完模型并选中」在已建会话上
+ *    解析不到该模型(POST /api/model 报 not found),对话继续拿 unknown 占位模型发请求。
+ *  - 会话还是 unknown 占位(建会话时一个可用模型都没有,比如首启没配模型就聊过一句)
+ *    → 报为 stale,由调用方**释放**:vendor 只在**创建**会话时解析初始模型
+ *    (findInitialModel),空壳留着永远修不好,用户加完模型不手动重选就一直是那句
+ *    No API key found;释放后下次对话按最新目录重新装配并自动选中可用模型。
+ *
+ * 逐个尝试、失败不抛:目录刷新不是用户那次写盘操作的成败条件。
+ */
+export async function refreshModelsOfHosts(
+	entries: Iterable<readonly [string, SessionHost]>,
+): Promise<string[]> {
+	const stale: string[] = [];
+	for (const [key, host] of entries) {
+		try {
+			if (host.currentModel() === null) {
+				stale.push(key);
+				continue;
+			}
+			await host.refreshModels();
+		} catch {
+			/* 单个会话刷新失败不影响其余(它下次装配仍会读最新 models.json) */
+		}
+	}
+	return stale;
 }
 
 /**
