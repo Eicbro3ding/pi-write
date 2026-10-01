@@ -25,13 +25,19 @@ const PLATFORMS = [
 	{ dir: "darwin-arm64", name: "pi-writer" },
 ];
 
-/** 顶层附加文件(skills/theme/README 等),随每个平台包一起打进 zip。 */
+/** 顶层附加文件(skills/theme/README 等),随每个平台包一起打进 zip。
+ *  许可声明必须在内:zip 里的可执行文件内联了 vendor 的 pi 内核与全部 npm 依赖,
+ *  MIT 要求版权声明 + 许可全文随每一份拷贝分发(release/ 下这些文件由 npm run bundle 拷入)。 */
 const EXTRA = [
 	"skills",
 	"theme",
 	"README.md",
 	"CHANGELOG.md",
 	"package.json",
+	"LICENSE",
+	"THIRD-PARTY.md",
+	"LICENSE-pi.txt",
+	"NOTICE.md",
 ];
 
 /** Windows 包附带启动器:默认以 --web 模式启动(常驻本地服务并自动打开浏览器)。 */

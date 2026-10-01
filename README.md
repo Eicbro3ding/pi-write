@@ -42,8 +42,8 @@ pi-writer 探索的是:**Agent 如何在一个持续存在的创作世界里工�
 - **上下文激活引擎**:只注入「当前相关」的内容——关键词命中 + 强关联展开,预算内按优先级排序,保持前缀稳定以降低成本;
 - **常驻记忆**:跨章记忆(约 1500 token),Agent 章节收尾自主维护;
 - **世界书变更预览**:Agent 更新世界时,前端弹出 diff 预览卡,作者确认后再归档;
-- **舞台区(实验)**:导演 / 演员 / 编剧多 Agent 共演——导演维护世界书、提交剧本**经作者卡片确认**后开演,演员在共享舞台即兴共演,编剧收幕成文。（特色的特色，绝对有意思！！！你一定要试试）
-- **经典模式(单 Agent)**:不想分角色时,设置页一键去掉舞台(导演 / 演员 / 旁白那套),编辑页的 AI 换成带全套工具的写作 agent(读写 / 字数 / 世界书维护 / MCP),直接改稿不绕弯;世界书页照常。首启向导里也能选。
+- **经典模式(单 Agent,默认)**:只有一个对话口,编辑页的 AI 带全套工具(读写 / 字数 / 世界书维护 / MCP)直接改稿,不绕角色分工的弯;世界书页照常。不想分角色的人用它起步最省心。
+- **舞台区(实验,进阶)**:导演 / 演员 / 编剧多 Agent 共演——导演维护世界书、提交剧本**经作者卡片确认**后开演,演员在共享舞台即兴共演,编剧收幕成文。（特色的特色，绝对有意思！！！你一定要试试）想要它就在首启向导的「创作方式」步里选「多 Agent 协作」,或随时在设置里一键互切。
 - **工作区面板**:编辑页左栏「章节 | 工作区」切换——AI 收集的资料、笔记片段与各章草稿按语义分组列在一处,点开即只读预览(文本走 md 渲染,图片直接看),不用去翻磁盘目录。
 
 ## 能力一览
@@ -55,9 +55,9 @@ pi-writer 探索的是:**Agent 如何在一个持续存在的创作世界里工�
 | 上下文激活引擎 | 关键词命中 + 关联激活(深度内多源 BFS、强关联优先),预算内注入 |
 | 内置编辑器 | TUI 全屏编辑器(vim 可选)+ Web CodeMirror 6(正文常驻 + 右栏对话) |
 | 关系图 | 人物 / 世界关系图,布局与视口持久化,可标记强关联 |
-| 写作技能 | `outline` / `critique` / `revise` / `stage-scripting` |
+| 写作技能 | `onboarding`(上手引导:讲清心智模型、动笔前把风格定下来、按卡点讲功能)/ `craft`(网文创作方法论文库:结构 / 人物 / 情绪 / 爽点 / 钩子 / 反转 / 对话 / 去 AI 味 / 32 张题材卡,76 份原样收录的第三方方法论)/ `outline` / `critique` / `revise` / `stage-scripting` |
 | 分支会话 | 章节会话支持撤回、编辑重发、分支切换 |
-| 经典模式(单 Agent) | 去掉舞台,编辑页的 AI 换成带全量工具直接写的写作 agent;与舞台多 Agent 形态在设置 / 向导里一键互切 |
+| 经典模式(单 Agent,默认) | 去掉舞台,编辑页的 AI 换成带全量工具直接写的写作 agent;与舞台多 Agent 形态在设置「高级 → Agent 形态」/ 首启向导「创作方式」步一键互切 |
 | 工作区面板 | AI 产出的中间产物(资料 / 笔记 / 草稿 / 图片)按语义分组列出 + 只读预览;`outline.md` 这类世界书导出镜像不进清单,权威视图仍在世界书页 |
 | 外部命令(可选) | 默认关闭;开启后 agent 可执行 shell 命令,**命令与输出实时显示在对话里**。方言可选 bash 或 PowerShell:Windows 上不必装 Git Bash 也能用 |
 | MCP 扩展 | 通过 Model Context Protocol 接入外部工具(stdio / http / sse) |
@@ -120,4 +120,10 @@ npm run build:web && npm run electron
 
 MIT License,Copyright (c) 2026 Eicbro3ding。
 
-基于 [Pi](https://pi.dev) 构建。部分组件衍生自 Pi,保留其原始许可证。
+基于 [Pi](https://pi.dev) 构建。部分组件衍生自 Pi,保留其原始许可证:`vendor/` 下的 pi 核心包来自
+[earendil-works/pi](https://github.com/earendil-works/pi)(MIT,Copyright (c) 2025 Mario Zechner),
+许可全文见 [`vendor/LICENSE-pi.txt`](vendor/LICENSE-pi.txt),来源与「本副本有修改」的说明见
+[`vendor/NOTICE.md`](vendor/NOTICE.md)。**第三方组件的完整清单、以及各发行物必须携带哪些声明,
+见 [`THIRD-PARTY.md`](THIRD-PARTY.md)。**
+
+`skills/craft` 的创作方法论文库收录自 [oh-story-claudecode](https://github.com/zenstory-ai/oh-story-claudecode)(MIT License,Copyright (c) 2025-2026 oh-story-claudecode),原文逐字节保留、未做改写。许可证全文随副本存放在收录目录内(见 [`skills/craft/references/`](skills/craft/references/)),来源 commit、收录与排除范围、以及再同步上游的步骤见同目录的 [`ATTRIBUTION.md`](skills/craft/references/ATTRIBUTION.md)。
