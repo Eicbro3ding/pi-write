@@ -36,16 +36,23 @@ import {
 	customModelIds,
 	deleteCustomModel,
 	deleteCustomProvider,
+	duplicateModelIds,
 	hasCustomProvider,
 	hasModel,
+	isThinkingFormat,
 	parseModelsConfig,
+	parseModelsConfigStrict,
 	serializeModelsConfig,
+	setThinkingFormat,
+	THINKING_FORMATS,
 	updateCustomModel,
 	upsertCustomProvider,
 	type CustomModelEntry,
 	type CustomModelPatch,
+	type ThinkingFormat,
 	type ModelsConfig,
 } from "../custom-models.ts";
+import { WriteQueue } from "../write-queue.ts";
 import {
 	SETUP_VERSION,
 	defaultSetupState,
@@ -62,12 +69,12 @@ import { MAX_ZIP_BYTES, exportBookZip, readImportZip, type BookZipImport } from 
 import { ensureWorld, newId, readWorldEditRecord, saveWorld, WorldValidationError, type WorldData } from "../world-data.ts";
 import { buildChapterContext, DEFAULT_CONTEXT_BUDGET, trimMemory } from "../world-context.ts";
 import type { SessionHost } from "./session-host.ts";
-import { extractMessagesFromManager, usableModelRef } from "./session-host.ts";
+import { extractMessagesFromManager, usableModelRef, type ThinkingSummary } from "./session-host.ts";
 import { askUserGate } from "../ask-user.ts";
 import { SessionManager } from "../../vendor/pi-coding-agent/src/index.ts";
 import { ProviderAuthError, sortProviders, type ProviderListItem } from "./provider-auth.ts";
 import type { McpManager, McpServerStatus } from "../mcp/manager.ts";
-import { getMcpConfigPath, saveRawMcpConfig, type McpServerConfig } from "../mcp/config.ts";
+import { getMcpConfigPath, type McpServerConfig } from "../mcp/config.ts";
 import { WorldWatcher } from "./file-watcher.ts";
 import { StageCommandError, type StageHost } from "./stage-host.ts";
 import { WriterHost, isSafeSessionId } from "./writer-host.ts";
@@ -352,7 +359,7 @@ function modelsConfigPath(): string {
 	return join(getAgentDir(), "models.json");
 }
 
-/** 读 models.json(不存在/损坏 → 空配置)。 */
+/** 读 models.json(**只读展示路径**:不存在/损坏 → 空配置,不抛)。 */
 async function readModelsConfig(): Promise<ModelsConfig> {
 	try {
 		return parseModelsConfig(await readFile(modelsConfigPath(), "utf8"));
@@ -361,15 +368,102 @@ async function readModelsConfig(): Promise<ModelsConfig> {
 	}
 }
 
+/**
+ * models.json 不可安全改写时抛出。
+ *
+ * 2026-10 审计 BUG-010:写入路径不能再把「读不懂」当「空配置」,否则原文件会被
+ * 空快照覆盖(用户已有 provider/model 与未知字段静默丢失)。
+ * - `invalid`:JSON 语法坏 / 顶层不是对象 / providers 形状不对 → 409,让用户先去修文件
+ * - `io`:权限、IO 错误 → 500(与「没有配置」区分开)
+ */
+class ModelsConfigError extends Error {
+	readonly reason: "invalid" | "io";
+	readonly file: string;
+	constructor(reason: "invalid" | "io", file: string, message: string) {
+		super(message);
+		this.name = "ModelsConfigError";
+		this.reason = reason;
+		this.file = file;
+	}
+}
+
+/**
+ * 读 models.json 供**写入**使用:区分「文件不存在(可初始化空配置)」与
+ * 「存在但损坏/不可读(必须拒绝写入)」。文件不存在是唯一允许的初始化路径。
+ */
+async function readModelsConfigForWrite(): Promise<ModelsConfig> {
+	const file = modelsConfigPath();
+	let text: string;
+	try {
+		text = await readFile(file, "utf8");
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return {};
+		throw new ModelsConfigError("io", file, `读取 ${file} 失败:${err instanceof Error ? err.message : String(err)}`);
+	}
+	const parsed = parseModelsConfigStrict(text);
+	if (!parsed.ok) {
+		throw new ModelsConfigError("invalid", file, `${file} 无法解析(${parsed.message});已保留原文件,请先修复或删除它`);
+	}
+	return parsed.cfg;
+}
+
 /** 写 models.json(原子写)。 */
 async function writeModelsConfig(cfg: ModelsConfig): Promise<void> {
 	await atomicWriteFile(modelsConfigPath(), serializeModelsConfig(cfg));
+}
+
+/** ModelsConfigError → HTTP 响应(invalid 409 / io 500);错误文案不泄露任何 apiKey。 */
+function modelsConfigHttpError(err: unknown): never {
+	if (err instanceof ModelsConfigError) {
+		throw new HttpError(err.reason === "io" ? 500 : 409, "config_error", err.message);
+	}
+	throw err;
+}
+
+/**
+ * models.json 的只读诊断(2026-10 审计 BUG-010 / BUG-017):
+ * - 文件存在但读不懂 → 一条「请修复」提示(写入路径会拒绝写入,UI 该提前说)
+ * - 历史重复的模型条目 → 逐条列出(vendor 只认第一条,不静默删除用户数据)
+ * 只读路径容错:任何异常都退化成空数组,不因为诊断失败而让 GET 失败。
+ */
+async function modelsConfigWarnings(): Promise<string[]> {
+	let text: string;
+	try {
+		text = await readFile(modelsConfigPath(), "utf8");
+	} catch {
+		return []; // 不存在 / 不可读:不在此处报错(写入路径会给出明确错误)
+	}
+	const parsed = parseModelsConfigStrict(text);
+	if (!parsed.ok) return [`models.json 无法解析(${parsed.message});在修复前无法保存供应商与模型设置`];
+	return duplicateModelIds(parsed.cfg).map(
+		(d) => `models.json:供应商 ${d.provider} 下模型 ${d.model} 重复 ${d.count} 次,运行时只认第一条`,
+	);
+}
+
+/**
+ * 读取可选的思考参数协议字段(BUG-002)。
+ * - 缺省 / `null` / 空串 → 不声明(`undefined`,由 vendor 按 provider 名与 baseUrl 自动探测)
+ * - 合法值 → 该协议;非法值 → 400(与 models.json schema 的白名单同源)
+ */
+function readThinkingFormat(body: unknown): ThinkingFormat | null | undefined {
+	const raw = (body as Record<string, unknown> | null)?.["thinkingFormat"];
+	if (raw === undefined) return undefined;
+	if (raw === null || raw === "") return null;
+	if (!isThinkingFormat(raw)) {
+		throw new HttpError(400, "bad_request", `thinkingFormat 只支持 ${THINKING_FORMATS.join(" / ")}`);
+	}
+	return raw;
 }
 
 /** 取可选正整数(上下文窗口 / 最大输出 Token);缺省 undefined,非法 400。 */
 function optionalPositiveInt(body: unknown, key: string): number | undefined {
 	const value = (body as Record<string, unknown> | null)?.[key];
 	if (value === undefined || value === null) return undefined;
+	// 只接受数字与数字字符串(2026-10 审计 BUG-018:布尔/数组/对象经 Number() 会被
+	// 悄悄换算成 1 / NaN,属于「用户填错了」,必须当场拒绝而不是落盘成非法配置)
+	if (typeof value !== "number" && typeof value !== "string") {
+		throw new HttpError(400, "bad_request", `字段 ${key} 必须是正整数`);
+	}
 	const n = typeof value === "number" ? value : Number(value);
 	if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
 		throw new HttpError(400, "bad_request", `字段 ${key} 必须是正整数`);
@@ -478,6 +572,13 @@ export class WriterServer {
 	 * 避免多浏览器并发切章时交错(最终会话章节与 book.json 不一致、背景包注入错章节)。
 	 */
 	private switchQueue: Promise<void> = Promise.resolve();
+	/**
+	 * models.json 读-改-写串行队列(2026-10 审计 BUG-011):并发新增/编辑/删除
+	 * 自定义 provider/model 时,各自「读旧快照 → 改 → 原子写」会互相覆盖。
+	 * 同一文件的操作排成一条链,锁内**重新读取**最新文件再变更。
+	 * 只覆盖单进程;多进程竞争需文件锁/CAS,见 WriteQueue 注释。
+	 */
+	private readonly modelsQueue = new WriteQueue();
 	/**
 	 * 世界书/草稿外部变更监听:AI(工具/TUI)或外部编辑器直接改文件时,
 	 * 轮询发现变更并广播(无缝同步;服务端自己的写入经 noteWritten 登记不重复广播)。
@@ -843,13 +944,22 @@ export class WriterServer {
 		this.broadcast({ type: "session_changed", bookSlug: state.bookSlug, chapterFile: state.chapterFile });
 	}
 
-	/** 校验 MCP 服务器配置体(name/type/command/url 等),返回规范化配置。 */
+	/**
+	 * 校验 MCP 服务器配置体(name/type/command/url 等),返回规范化配置。
+	 *
+	 * 2026-10 审计 BUG-019:`type` 此前只接受 stdio / sse,而共享 schema
+	 * (src/mcp/config.ts 的 ServerSchema)、McpManager 连接层与前端选项都支持
+	 * `http`(streamable HTTP,现行标准)—— 前端选 http 保存必然 400,功能不可用。
+	 * 三种类型统一走这里:stdio 要 command;sse / http 要合法 URL。
+	 */
 	private readMcpServerBody(body: unknown): McpServerConfig {
 		const record = body as Record<string, unknown> | null;
 		if (!record || typeof record !== "object") throw new HttpError(400, "bad_request", "缺少服务器配置");
 		const name = requireString(body, "name");
 		const type = requireString(body, "type");
-		if (type !== "stdio" && type !== "sse") throw new HttpError(400, "bad_request", "type 必须是 stdio 或 sse");
+		if (type !== "stdio" && type !== "sse" && type !== "http") {
+			throw new HttpError(400, "bad_request", "type 必须是 stdio、sse 或 http");
+		}
 		const server: McpServerConfig = { name: name.trim(), type };
 		const command = optionalString(body, "command");
 		if (command !== undefined) server.command = command;
@@ -869,8 +979,12 @@ export class WriterServer {
 		}
 		const url = optionalString(body, "url");
 		if (url !== undefined) server.url = url;
+		// 必填项按类型校验(与 src/mcp/config.ts 的 validateMcpConfig 同一套语义)
 		if (type === "stdio" && !server.command?.trim()) throw new HttpError(400, "bad_request", "stdio 类型必须提供 command");
-		if (type === "sse" && !server.url?.trim()) throw new HttpError(400, "bad_request", "sse 类型必须提供 url");
+		if (type !== "stdio" && !server.url?.trim()) throw new HttpError(400, "bad_request", `${type} 类型必须提供 url`);
+		if (type !== "stdio" && !/^https?:\/\//.test(server.url!.trim())) {
+			throw new HttpError(400, "bad_request", "url 必须是 http(s) 地址");
+		}
 		return server;
 	}
 
@@ -1266,7 +1380,9 @@ export class WriterServer {
 			// 广播 chat_error,前端据此显示友好提示与快捷重试,而不是静默无回复
 			const message = err instanceof Error ? err.message : String(err);
 			process.stderr.write(`[server] chat 发送失败: ${message}\n`);
-			this.broadcast({ type: "chat_error", message });
+			// text:这条路径多在**写用户消息之前**失败,transcript 里没有可定位的 entry;
+			// 报错卡的「重试」只能靠这份原文原样重放(2026-10 审计 BUG-014)
+			this.broadcast({ type: "chat_error", message, text });
 		});
 		this.send(ctx.res, 202, { ok: true });
 	}
@@ -1372,10 +1488,27 @@ export class WriterServer {
 		// 仅当当前模型仍出现在可用列表中才返回;key 移除/失效后前端应显示「未设置」,
 		// 而不是把已不可用的旧模型继续当作当前模型(2026-08 设置页认证状态反馈)
 		const current = m && models.some((model) => model.provider === m.provider && model.id === m.id) ? m : null;
-		this.send(ctx.res, 200, { models, current, thinking: state.thinkingLevel, temperature: state.temperature, topP: state.topP });
+		this.send(ctx.res, 200, {
+			models,
+			current,
+			thinking: state.thinkingLevel,
+			temperature: state.temperature,
+			topP: state.topP,
+			// 2026-10 审计 BUG-017:历史 models.json 里的重复模型条目只**报告**不静默删除
+			// (vendor 合成目录按首项替换,第二条是隐藏/歧义配置)。前端可选择提示。
+			configWarnings: await modelsConfigWarnings(),
+			// 2026-10 审计 BUG-012:当前模型**实际支持**的思考档位(null = 拿不到,前端展示全量)
+			thinkingLevels: this.options.sessionHost.thinkingLevels?.() ?? null,
+		});
 	}
 
-	/** POST /api/models/refresh:联网刷新模型目录(远程 catalog / 动态 provider),返回最新模型列表。 */
+	/**
+	 * POST /api/models/refresh:联网刷新模型目录(远程 catalog / 动态 provider),返回最新模型列表。
+	 *
+	 * 2026-10 审计 BUG-005:不能只刷主会话。每个会话宿主在装配时各建一份 ModelRuntime,
+	 * 只刷主会话时设置页/主会话看得见新模型,而已建的编剧、舞台会话仍解析不到它。
+	 * 现在三处宿主都刷,并按宿主回报结果(部分失败不再伪装成全成功)。
+	 */
 	private async handlePostModelsRefresh(ctx: RouteContext): Promise<void> {
 		const runtime = this.options.sessionHost.getRuntime();
 		const result = await runtime.session.modelRuntime.refresh({ allowNetwork: true, force: true });
@@ -1383,6 +1516,8 @@ export class WriterServer {
 		const state = runtime.session.state;
 		const m = usableModelRef(state.model);
 		const current = m && models.some((model) => model.provider === m.provider && model.id === m.id) ? m : null;
+		// 编剧 / 舞台宿主也联网重拉一次(主会话上面已经拉过,这里只补另外两处)
+		const hosts = await this.refreshModelCatalog({ allowNetwork: true, skipMain: true });
 		this.send(ctx.res, 200, {
 			models,
 			current,
@@ -1393,8 +1528,75 @@ export class WriterServer {
 			// 之前只有一句拼好的字符串(`DeepSeek models request failed: 401 …`),
 			// 只能靠包含匹配 provider 名,脆且容易错判。map 的 key 是 provider id
 			// (pi-ai 的 ModelsRefreshResult.errors: ReadonlyMap<string, Error>)。
-			errors: [...result.errors.entries()].map(([provider, e]) => ({ provider, message: e.message })),
+			errors: [...(result?.errors ?? new Map<string, Error>()).entries()].map(([provider, e]) => ({ provider, message: e.message })),
+			// 宿主级结果:谁的目录刷上了、谁报错(设置页可据此区分「主会话成功」与「全会话成功」)
+			hosts,
+			// 当前模型实际支持的思考档位(BUG-012:前端只展示/启用这些档位)
+			thinkingLevels: this.options.sessionHost.thinkingLevels?.() ?? null,
 		});
+	}
+
+	/**
+	 * 模型目录刷新协调器(2026-10 审计 BUG-005):主会话 + 常驻编剧 + 舞台三处宿主逐个刷新。
+	 *
+	 * 返回每个宿主的结果与错误,不把部分成功说成全成功。某个宿主失败/未装配不阻塞其余
+	 * (它下次新建会话时本来就会读最新目录)。
+	 */
+	private async refreshModelCatalog(options: { allowNetwork: boolean; skipMain?: boolean }): Promise<
+		Array<{ host: string; ok: boolean; sessions?: number; errors?: Array<{ provider: string; message: string }>; error?: string }>
+	> {
+		const out: Array<{ host: string; ok: boolean; sessions?: number; errors?: Array<{ provider: string; message: string }>; error?: string }> = [];
+		const jobs: Array<[string, () => Promise<{ errors: Array<{ provider: string; message: string }>; sessions?: number }>]> = [];
+		if (!options.skipMain) {
+			jobs.push([
+				"主会话",
+				async () => {
+					const summary = await this.options.sessionHost.refreshModels({ allowNetwork: options.allowNetwork });
+					return { errors: summary?.errors ?? [], sessions: 1 };
+				},
+			]);
+		}
+		if (this.options.writerHost) jobs.push(["编剧会话", () => this.options.writerHost!.refreshModels({ allowNetwork: options.allowNetwork })]);
+		if (this.options.stageHost) jobs.push(["舞台会话", () => this.options.stageHost!.refreshModels({ allowNetwork: options.allowNetwork })]);
+		for (const [host, run] of jobs) {
+			try {
+				const summary = await run();
+				const errors = summary?.errors ?? [];
+				out.push({ host, ok: true, ...(summary?.sessions !== undefined ? { sessions: summary.sessions } : {}), ...(errors.length > 0 ? { errors } : {}) });
+			} catch (err) {
+				out.push({ host, ok: false, error: err instanceof Error ? err.message : String(err) });
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * models.json 的**唯一读-改-写入口**(2026-10 审计 BUG-010 / BUG-011)。
+	 *
+	 * 锁内重新读取最新文件 → 纯函数变更(mutate)→ 原子写 → 热重载模型目录。
+	 * 三件事都在同一队列任务里,因此:
+	 * - 并发请求各自看到前一个请求写下的结果,不会用旧快照互相覆盖(BUG-011);
+	 * - 损坏/不可读的配置在写入前就抛错,**不会**被空快照覆盖(BUG-010);
+	 * - reloadModels 读到的必然是刚写下的那份文件。
+	 *
+	 * `action` 只用于错误文案;mutate 抛出的 HttpError(如 400/404)原样上抛,不写盘。
+	 * mutate 返回 `false` 表示**本次没有实际变更**,跳过写盘与热重载(幂等删除:条目本来
+	 * 就不在 models.json 里时不该白白重排一次文件)。
+	 */
+	private async updateModelsConfig<T>(action: string, mutate: (cfg: ModelsConfig) => T | Promise<T>): Promise<T> {
+		try {
+			return await this.modelsQueue.run(modelsConfigPath(), async () => {
+				const cfg = await readModelsConfigForWrite();
+				const value = await mutate(cfg);
+				if ((value as unknown) === false) return value;
+				await writeModelsConfig(cfg);
+				await this.reloadModels();
+				return value;
+			});
+		} catch (err) {
+			if (err instanceof HttpError) throw err;
+			modelsConfigHttpError(err);
+		}
 	}
 
 	/**
@@ -1416,22 +1618,21 @@ export class WriterServer {
 		if (!/^https?:\/\//.test(baseUrl)) {
 			throw new HttpError(400, "bad_request", "baseUrl 必须是 http(s) 地址(如 http://127.0.0.1:8787/v1)");
 		}
-		const cfg = await readModelsConfig();
-		// 内置供应商的 id 归内置清单所有:在它下面写 models.json 整条会改掉它的地址与协议,
-		// 而「添加供应商」的本意是加一个新的。已在 models.json 里的 id 则允许改写(就是编辑)。
-		if (!hasCustomProvider(cfg, providerId)) {
-			const known = await this.options.sessionHost.listProviders();
-			if (known.some((p) => p.id === providerId)) {
-				throw new HttpError(400, "bad_request", `供应商 id「${providerId}」已被内置供应商占用,请换一个 id,或直接在列表里选它`);
+		await this.updateModelsConfig("添加供应商", async (cfg) => {
+			// 内置供应商的 id 归内置清单所有:在它下面写 models.json 整条会改掉它的地址与协议,
+			// 而「添加供应商」的本意是加一个新的。已在 models.json 里的 id 则允许改写(就是编辑)。
+			if (!hasCustomProvider(cfg, providerId)) {
+				const known = await this.options.sessionHost.listProviders();
+				if (known.some((p) => p.id === providerId)) {
+					throw new HttpError(400, "bad_request", `供应商 id「${providerId}」已被内置供应商占用,请换一个 id,或直接在列表里选它`);
+				}
 			}
-		}
-		upsertCustomProvider(cfg, providerId, {
-			baseUrl,
-			name: optionalString(body, "name"),
-			apiKey: optionalString(body, "apiKey"),
+			upsertCustomProvider(cfg, providerId, {
+				baseUrl,
+				name: optionalString(body, "name"),
+				apiKey: optionalString(body, "apiKey"),
+			});
 		});
-		await writeModelsConfig(cfg);
-		await this.reloadModels();
 		this.send(ctx.res, 200, { ok: true, provider: providerId });
 	}
 
@@ -1454,44 +1655,58 @@ export class WriterServer {
 		if (!/^https?:\/\//.test(baseUrl)) {
 			throw new HttpError(400, "bad_request", "baseUrl 必须是 http(s) 地址(如 http://127.0.0.1:8787/v1)");
 		}
-		const cfg = await readModelsConfig();
-		// input 只接受 text/image(vendor models.json schema 合法值,无视频/PDF 语义)
-		const rawInput = Array.isArray(body.input) ? body.input : [];
-		const input = rawInput.filter((v): v is "text" | "image" => v === "text" || v === "image");
-		const modelEntry = {
-			id: modelId,
-			name: typeof body.name === "string" && body.name.trim().length > 0 ? body.name.trim() : modelId,
-			// 是否支持思考深度:vendor 按 model.reasoning 决定可用的思考档位
-			// (getSupportedThinkingLevels:非推理模型只有 off)。缺省 false —— 不声明就等于
-			// 不认 reasoning 参数,web 上「思考等级」对这一条会被静默回落(2026-10-04)。
-			reasoning: body.reasoning === true,
-			contextWindow: Number(body.contextWindow ?? 32000),
-			maxTokens: Number(body.maxTokens ?? 4096),
-			...(input.length > 0 ? { input } : {}),
-		};
-		// 同 provider 已有自定义条目(models.json 里)时合并 models 数组——否则
-		// 第二次添加会整体覆盖 provider,丢掉之前添加的模型(保留原 apiKey/baseUrl)
-		const existing = cfg.providers?.[providerId];
-		const existingModels: CustomModelEntry[] = (existing as { models?: CustomModelEntry[] } | undefined)?.models ?? [];
-		const provider = {
-			...(typeof existing === "object" && existing !== null ? (existing as Record<string, unknown>) : {}),
-			// api 只在**新建** models.json 条目时写死 openai-completions(自定义供应商走这条)。
-			// 已有条目(含内置供应商)不能覆盖:内置的 Anthropic / Google 等协议不同,强行写成
-			// openai-completions 会让新加的模型用错协议(2026-09)。
-			...(existing === undefined ? { api: "openai-completions" } : {}),
-			baseUrl,
-			// vendor 把无 apiKey 的 provider 视为未配置并跳过列表——本地 mock 等
-			// 无需鉴权的服务也须有占位 key(实测 provider-composer 跳过无 key provider);
-			// 已有条目时保留原有 apiKey,避免 body 未传时覆盖成占位值
-			apiKey:
-				typeof body.apiKey === "string" && body.apiKey.length > 0
-					? body.apiKey
-					: (existing as { apiKey?: string } | undefined)?.apiKey ?? "sk-custom",
-			models: [...existingModels, modelEntry],
-		};
-		cfg.providers = { ...(cfg.providers ?? {}), [providerId]: provider };
-		await writeModelsConfig(cfg);
-		await this.reloadModels();
+		// 正整数校验与 PUT 共用(2026-10 审计 BUG-018):此前后端各写一套,POST 直接
+		// `Number(...)` 收下 0/负数/小数/非数字字符串,NaN 经 JSON.stringify 落盘成 null,
+		// vendor schema 拒绝后模型从目录里消失。缺省值只在**未提供**时兜底。
+		const contextWindow = optionalPositiveInt(body, "contextWindow") ?? 32000;
+		const maxTokens = optionalPositiveInt(body, "maxTokens") ?? 4096;
+		await this.updateModelsConfig("添加模型", async (cfg) => {
+			// 同 provider 同 id 重复必须拒绝(2026-10 审计 BUG-017):此前后直接追加,
+			// vendor 合成目录时同 provider 同 id 按首项替换,第二条成为隐藏/歧义配置,
+			// 后续编辑删除也只命中首条 —— 界面与磁盘内容对不上。
+			if (hasModel(cfg, providerId, modelId)) {
+				throw new HttpError(400, "bad_request", `模型 id ${providerId}/${modelId} 已存在,如需修改请用编辑`);
+			}
+			// input 只接受 text/image(vendor models.json schema 合法值,无视频/PDF 语义)
+			const rawInput = Array.isArray(body.input) ? body.input : [];
+			const input = rawInput.filter((v): v is "text" | "image" => v === "text" || v === "image");
+			const modelEntry: CustomModelEntry = {
+				id: modelId,
+				name: typeof body.name === "string" && body.name.trim().length > 0 ? body.name.trim() : modelId,
+				// 是否支持思考深度:vendor 按 model.reasoning 决定可用的思考档位
+				// (getSupportedThinkingLevels:非推理模型只有 off)。缺省 false —— 不声明就等于
+				// 不认 reasoning 参数,web 上「思考等级」对这一条会被静默回落(2026-10-04)。
+				reasoning: body.reasoning === true,
+				contextWindow,
+				maxTokens,
+				...(input.length > 0 ? { input } : {}),
+			};
+			// 思考参数协议(BUG-002):只按 provider 名推断格式会误判第三方兼容服务
+			// (同样的 reasoning_effort,有的忽略、有的报错、有的要专有字段)。
+			const fmt = readThinkingFormat(body);
+			if (fmt !== undefined) setThinkingFormat(modelEntry, fmt);
+			// 同 provider 已有自定义条目(models.json 里)时合并 models 数组——否则
+			// 第二次添加会整体覆盖 provider,丢掉之前添加的模型(保留原 apiKey/baseUrl)
+			const existing = cfg.providers?.[providerId];
+			const existingModels: CustomModelEntry[] = (existing as { models?: CustomModelEntry[] } | undefined)?.models ?? [];
+			const provider = {
+				...(typeof existing === "object" && existing !== null ? (existing as Record<string, unknown>) : {}),
+				// api 只在**新建** models.json 条目时写死 openai-completions(自定义供应商走这条)。
+				// 已有条目(含内置供应商)不能覆盖:内置的 Anthropic / Google 等协议不同,强行写成
+				// openai-completions 会让新加的模型用错协议(2026-09)。
+				...(existing === undefined ? { api: "openai-completions" } : {}),
+				baseUrl,
+				// vendor 把无 apiKey 的 provider 视为未配置并跳过列表——本地 mock 等
+				// 无需鉴权的服务也须有占位 key(实测 provider-composer 跳过无 key provider);
+				// 已有条目时保留原有 apiKey,避免 body 未传时覆盖成占位值
+				apiKey:
+					typeof body.apiKey === "string" && body.apiKey.length > 0
+						? body.apiKey
+						: (existing as { apiKey?: string } | undefined)?.apiKey ?? "sk-custom",
+				models: [...existingModels, modelEntry],
+			};
+			cfg.providers = { ...(cfg.providers ?? {}), [providerId]: provider };
+		});
 		this.send(ctx.res, 200, { ok: true, provider: providerId, model: `${providerId}/${modelId}` });
 	}
 
@@ -1508,28 +1723,30 @@ export class WriterServer {
 		if (newModel !== undefined && !CUSTOM_MODEL_ID_RE.test(newModel)) {
 			throw new HttpError(400, "bad_request", "模型 id 只允许字母/数字/连字符/点/下划线(如 mock-1)");
 		}
-		const cfg = await readModelsConfig();
-		if (!hasModel(cfg, providerId, modelId)) {
-			throw new HttpError(404, "not_found", `models.json 里没有模型 ${providerId}/${modelId}`);
-		}
-		if (newModel !== undefined && newModel !== modelId && hasModel(cfg, providerId, newModel)) {
-			throw new HttpError(400, "bad_request", `模型 id ${newModel} 已存在`);
-		}
-		const patch: CustomModelPatch = {};
-		const name = optionalString(body, "name");
-		if (name !== undefined) patch.name = name;
-		const contextWindow = optionalPositiveInt(body, "contextWindow");
-		if (contextWindow !== undefined) patch.contextWindow = contextWindow;
-		const maxTokens = optionalPositiveInt(body, "maxTokens");
-		if (maxTokens !== undefined) patch.maxTokens = maxTokens;
-		const input = normalizeModelInput(body);
-		if (input !== undefined) patch.input = input;
-		const reasoning = optionalBoolean(body, "reasoning");
-		if (reasoning !== undefined) patch.reasoning = reasoning;
-		if (newModel !== undefined) patch.newId = newModel;
-		updateCustomModel(cfg, providerId, modelId, patch);
-		await writeModelsConfig(cfg);
-		await this.reloadModels();
+		await this.updateModelsConfig("编辑模型", (cfg) => {
+			if (!hasModel(cfg, providerId, modelId)) {
+				throw new HttpError(404, "not_found", `models.json 里没有模型 ${providerId}/${modelId}`);
+			}
+			if (newModel !== undefined && newModel !== modelId && hasModel(cfg, providerId, newModel)) {
+				throw new HttpError(400, "bad_request", `模型 id ${newModel} 已存在`);
+			}
+			const patch: CustomModelPatch = {};
+			const name = optionalString(body, "name");
+			if (name !== undefined) patch.name = name;
+			const contextWindow = optionalPositiveInt(body, "contextWindow");
+			if (contextWindow !== undefined) patch.contextWindow = contextWindow;
+			const maxTokens = optionalPositiveInt(body, "maxTokens");
+			if (maxTokens !== undefined) patch.maxTokens = maxTokens;
+			const input = normalizeModelInput(body);
+			if (input !== undefined) patch.input = input;
+			const reasoning = optionalBoolean(body, "reasoning");
+			if (reasoning !== undefined) patch.reasoning = reasoning;
+			// 思考参数协议:null / 空串 = 清除显式声明(BUG-002)
+			const thinkingFormat = readThinkingFormat(body);
+			if (thinkingFormat !== undefined) patch.thinkingFormat = thinkingFormat;
+			if (newModel !== undefined) patch.newId = newModel;
+			updateCustomModel(cfg, providerId, modelId, patch);
+		});
 		this.send(ctx.res, 200, { ok: true, provider: providerId, model: newModel ?? modelId });
 	}
 
@@ -1540,12 +1757,11 @@ export class WriterServer {
 		if (providerId.length === 0 || modelId.length === 0) {
 			throw new HttpError(400, "bad_request", "缺少 provider 或 model 查询参数");
 		}
-		const cfg = await readModelsConfig();
-		if (!deleteCustomModel(cfg, providerId, modelId)) {
-			throw new HttpError(404, "not_found", `models.json 里没有模型 ${providerId}/${modelId}`);
-		}
-		await writeModelsConfig(cfg);
-		await this.reloadModels();
+		await this.updateModelsConfig("删除模型", (cfg) => {
+			if (!deleteCustomModel(cfg, providerId, modelId)) {
+				throw new HttpError(404, "not_found", `models.json 里没有模型 ${providerId}/${modelId}`);
+			}
+		});
 		this.send(ctx.res, 200, { ok: true });
 	}
 
@@ -1560,12 +1776,12 @@ export class WriterServer {
 	 * 而设置页显示的当前模型是主会话的、看着已经切好了。
 	 */
 	private async reloadModels(): Promise<void> {
-		// 主会话走 SessionHost.refreshModels:刷新目录 + 重绑会话手里的 Model 实例
-		// (模型条目改了 reasoning 之类能力字段时,不重绑就还是按旧能力 clamp 思考档位)
-		await this.options.sessionHost.refreshModels();
-		// 编剧会话另有一层:还没选到任何模型的空壳会话会被释放(见 refreshModelsOfHosts)
-		await this.options.writerHost?.refreshModels?.();
-		await this.options.stageHost?.refreshModels?.();
+		// 统一走宿主级协调器(主会话 + 编剧 + 舞台),本地重读,不发网络请求。
+		// 剧宿主结果只记诊断:某个宿主临时不可用不该让用户那次写盘操作失败。
+		const results = await this.refreshModelCatalog({ allowNetwork: false });
+		for (const r of results) {
+			if (!r.ok) process.stderr.write(`[server] 模型目录刷新失败(${r.host}): ${r.error}\n`);
+		}
 	}
 
 	/**
@@ -1611,25 +1827,74 @@ export class WriterServer {
 	}
 
 	/**
-	 * POST /api/thinking {level}:切换思考等级(同 applyToAllSessions)。
+	 * POST /api/thinking {level}:切换思考等级,并**分宿主**回报实际生效的档位。
 	 *
-	 * 回报**实际生效**的档位:vendor 的 setThinkingLevel 会按模型能力 clamp
-	 * (getSupportedThinkingLevels —— 非推理模型只有 off),只回 {ok:true} 的话
-	 * 前端会把「被模型回落到 off」显示成「已切换成 high」,用户看到的就是
-	 * 「思考等级菜单点了没反应」(2026-10-04 实测根因)。
+	 * 两件事必须说清楚,否则用户看到的就是「思考等级菜单点了没反应」:
+	 * 1. vendor 的 setThinkingLevel 按模型能力 clamp(getSupportedThinkingLevels 对
+	 *    `reasoning:false` 的模型只给 off)—— 只回 {ok:true} 会把「被回落到 off」显示成
+	 *    「已切换成 high」(2026-10-04);
+	 * 2. 2026-10 审计 BUG-013:此前响应只回**主会话**的档位,而编剧/舞台会话的模型能力
+	 *    可能不同,各自 clamp 到别的档位 —— 前端据此提示「已切换」等于骗人。现在逐个宿主
+	 *    回报实际档位、是否被回落、谁失败了;舞台演员的档位**故意**不跟随(角色设计),
+	 *    以 `actorsOmitted` 明示。
 	 */
 	private async handlePostThinking(ctx: RouteContext): Promise<void> {
 		const body = await readJsonBody(ctx.req);
 		const level = requireString(body, "level");
-		await this.applyToAllSessions("切换思考等级", [
-			["主会话", () => this.options.sessionHost.setThinkingLevel(level)],
-			["编剧会话", () => this.options.writerHost?.setThinkingLevel(level)],
-			["舞台会话", () => this.options.stageHost?.setThinkingLevel(level)],
-		]);
-		this.send(ctx.res, 200, { ok: true, thinking: this.options.sessionHost.getRuntime().session.state.thinkingLevel });
+		const hosts: Array<Record<string, unknown>> = [];
+		const failures: string[] = [];
+		// 主会话的实际档位:前端的 `thinking` 字段沿用这一条(向后兼容)
+		let mainLevel: string | null = null;
+		let mainClamped = false;
+		const record = async (
+			host: string,
+			run: () => ThinkingSummary | Promise<ThinkingSummary> | void | Promise<void>,
+		) => {
+			try {
+				// 防御式:最小 fake 宿主可能什么都不返回(真宿主恒返回摘要)
+				const s = ((await run()) ?? { levels: [], clamped: false, failed: [] }) as ThinkingSummary;
+				const failed = s.failed ?? [];
+				hosts.push({
+					host,
+					ok: failed.length === 0,
+					...(s.sessions !== undefined ? { sessions: s.sessions } : {}),
+					levels: s.levels ?? [],
+					clamped: s.clamped === true,
+					...(s.actorsOmitted !== undefined ? { actorsOmitted: s.actorsOmitted } : {}),
+					...(failed.length > 0 ? { failed } : {}),
+				});
+				for (const f of failed) failures.push(`${host}: ${f}`);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				hosts.push({ host, ok: false, levels: [], clamped: false, error: message });
+				failures.push(`${host}: ${message}`);
+			}
+		};
+		await record("主会话", async () => {
+			// 防御式读取:最小 fake 宿主可能返回 void(真 SessionHost 恒返回结果对象)
+			const r = (await this.options.sessionHost.setThinkingLevel(level)) as { level?: string | null; clamped?: boolean } | undefined;
+			const actual = typeof r?.level === "string" ? r.level : null;
+			mainLevel = actual;
+			mainClamped = r?.clamped === true;
+			return { sessions: 1, levels: actual ? [actual] : [], clamped: mainClamped, failed: [] };
+		});		if (this.options.writerHost) await record("编剧会话", () => this.options.writerHost!.setThinkingLevel(level));
+		if (this.options.stageHost) await record("舞台会话", () => this.options.stageHost!.setThinkingLevel(level));
+		this.send(ctx.res, 200, {
+			ok: failures.length === 0,
+			thinking: mainLevel,
+			clamped: mainClamped,
+			hosts,
+			...(failures.length > 0 ? { failures } : {}),
+		});
 	}
 
-	/** POST /api/sampling {temperature?, topP?}:切换采样参数;null 表示恢复模型默认。 */
+	/**
+	 * POST /api/sampling {temperature?, topP?}:切换采样参数;null 表示恢复模型默认。
+	 *
+	 * 2026-10 审计 BUG-007:此前按主会话 → 编剧 → 舞台顺序直接调用,任一前置宿主抛错会
+	 * 中断后面所有宿主(已经改了的保持新值、没轮到的保持旧值,响应还只说"失败")。
+	 * 现在走 applyToAllSessions 的逐宿主容错:全部尝试,失败项统一报出。
+	 */
 	private async handlePostSampling(ctx: RouteContext): Promise<void> {
 		const body = await readJsonBody(ctx.req);
 		const temperature = optionalNumberOrNull(body, "temperature");
@@ -1643,9 +1908,11 @@ export class WriterServer {
 		if (topP !== null && topP !== undefined && (topP < 0 || topP > 1)) {
 			throw new HttpError(400, "bad_request", "topP 必须在 0..1 之间");
 		}
-		this.options.sessionHost.setSamplingParameters(temperature, topP);
-		this.options.writerHost?.setSamplingParameters(temperature, topP);
-		await this.options.stageHost?.setSamplingParameters(temperature, topP);
+		await this.applyToAllSessions("切换采样参数", [
+			["主会话", () => this.options.sessionHost.setSamplingParameters(temperature, topP)],
+			["编剧会话", () => this.options.writerHost?.setSamplingParameters(temperature, topP)],
+			["舞台会话", () => this.options.stageHost?.setSamplingParameters(temperature, topP)],
+		]);
 		this.send(ctx.res, 200, { ok: true });
 	}
 
@@ -1731,11 +1998,9 @@ export class WriterServer {
 		}
 		await this.options.sessionHost.removeProvider(id);
 		if (provider.source === "models_json_key" || provider.source === "models_json_command") {
-			const cfg = await readModelsConfig();
-			if (deleteCustomProvider(cfg, id)) {
-				await writeModelsConfig(cfg);
-				await this.reloadModels();
-			}
+			// 走统一读-改-写队列(BUG-011):删除凭据与并发的模型新增不能互相覆盖。
+			// 条目本来就不在 models.json 里时返 false,不白写一次文件。
+			await this.updateModelsConfig("移除凭据", (cfg) => deleteCustomProvider(cfg, id));
 		}
 		this.send(ctx.res, 200, { ok: true });
 	}
@@ -1884,11 +2149,13 @@ export class WriterServer {
 		if (!mgr) throw new HttpError(404, "not_found", "MCP 未启用");
 		const body = await readJsonBody(ctx.req);
 		const server = this.readMcpServerBody(body);
-		const config = await mgr.listConfig();
-		if (config.servers.some((s) => s.name === server.name)) {
-			throw new HttpError(400, "bad_request", `MCP 服务器重名: ${server.name}`);
+		// 重名判定在 manager 的写队列内做(BUG-020):此前先 listConfig 再 upsert,
+		// 两个并发同名新增都能通过检查
+		try {
+			await mgr.upsertServer(server, "create");
+		} catch (err) {
+			throw new HttpError(400, "bad_request", err instanceof Error ? err.message : String(err));
 		}
-		await mgr.upsertServer(server);
 		await this.handleMcpReload();
 		this.send(ctx.res, 200, { servers: (await mgr.listConfig()).servers, status: mgr.getStatus() });
 	}
@@ -1913,11 +2180,11 @@ export class WriterServer {
 		const body = await readJsonBody(ctx.req);
 		const text = requireString(body, "text");
 		try {
-			await saveRawMcpConfig(mgr.getAgentDir(), text);
+			// 与结构化编辑共用 manager 的写队列(BUG-020):并发 raw 保存不会互相覆盖
+			await mgr.saveRawConfig(text);
 		} catch (err) {
 			throw new HttpError(400, "bad_request", err instanceof Error ? err.message : String(err));
 		}
-		await mgr.reload();
 		await this.handleMcpReload();
 		this.send(ctx.res, 200, { servers: (await mgr.listConfig()).servers, status: mgr.getStatus() });
 	}
@@ -1930,11 +2197,11 @@ export class WriterServer {
 		const body = await readJsonBody(ctx.req);
 		const server = this.readMcpServerBody(body);
 		if (server.name !== name) throw new HttpError(400, "bad_request", "名称不可在编辑时修改(请先删除再新增)");
-		const config = await mgr.listConfig();
-		if (!config.servers.some((s) => s.name === name)) {
-			throw new HttpError(404, "not_found", `MCP 服务器不存在: ${name}`);
+		try {
+			await mgr.upsertServer(server, "update");
+		} catch (err) {
+			throw new HttpError(404, "not_found", err instanceof Error ? err.message : String(err));
 		}
-		await mgr.upsertServer(server);
 		await this.handleMcpReload();
 		this.send(ctx.res, 200, { servers: (await mgr.listConfig()).servers, status: mgr.getStatus() });
 	}
@@ -2243,8 +2510,10 @@ export class WriterServer {
 		this.send(ctx.res, 202, { ok: true });
 		void writer.chat(ctx.params.slug!, text, ref.chapterFile, ref.conversation).catch((err) => {
 			const message = err instanceof Error ? err.message : String(err);
-			// 与事件转发同款帧构造:book 模式的会话要带 conversation,前端才知道是哪段对话出错
-			this.broadcastWriterEvent(ctx.params.slug!, ref.chapterFile ?? null, { type: "chat_error", message }, ref.conversation);
+			// 与事件转发同款帧构造:book 模式的会话要带 conversation,前端才知道是哪段对话出错。
+			// text 一并带上(2026-10 审计 BUG-014):这条路径在写用户消息之前就抛了,
+			// 报错卡要能原样重放这句,而不是让前端拿「当前最后一条消息」去猜。
+			this.broadcastWriterEvent(ctx.params.slug!, ref.chapterFile ?? null, { type: "chat_error", message, text }, ref.conversation);
 		});
 	}
 

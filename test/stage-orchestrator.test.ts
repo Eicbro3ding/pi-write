@@ -647,7 +647,8 @@ describe("StageOrchestrator · 换模型与思考档位", () => {
 	it("未创建的会话跳过(不抛错);无 cast.json 时也不抛", async () => {
 		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
 		await expect(orch.setModel("openai/gpt-5")).resolves.toBeUndefined();
-		await expect(orch.setThinkingLevel("high")).resolves.toBeUndefined();
+		// 没有会话时返回空摘要(宿主级结果,见 BUG-013),不是 undefined
+		await expect(orch.setThinkingLevel("high")).resolves.toMatchObject({ sessions: 0, levels: [], failed: [] });
 	});
 
 	/**
@@ -666,7 +667,8 @@ describe("StageOrchestrator · 换模型与思考档位", () => {
 	it("重读模型目录:单个会话失败不影响其余(也不抛出)", async () => {
 		const { orch, director, writer, plain } = orchWithHosts();
 		director.refreshModels.mockRejectedValue(new Error("刷新炸了"));
-		await expect(orch.refreshModels()).resolves.toBeUndefined();
+		// 单个失败被吞掉,返回值里给出处理过的会话数(宿主级结果,BUG-005)
+		await expect(orch.refreshModels()).resolves.toMatchObject({ sessions: 4 });
 		expect(writer.refreshModels).toHaveBeenCalledTimes(1);
 		expect(plain.refreshModels).toHaveBeenCalledTimes(1);
 	});

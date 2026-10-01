@@ -17,7 +17,37 @@ export interface CustomModelEntry {
 	contextWindow?: number;
 	maxTokens?: number;
 	input?: string[];
+	/** vendor 兼容开关(思考参数协议 `thinkingFormat` 写在这里,见 setThinkingFormat)。 */
+	compat?: Record<string, unknown>;
 	[key: string]: unknown;
+}
+
+/**
+ * vendor 支持的思考参数协议(2026-10 审计 BUG-002)。
+ *
+ * 与 `vendor/pi-coding-agent/src/core/model-config.ts` 的 `OpenAICompletionsCompatSchema.thinkingFormat`
+ * 白名单逐字一致 —— 两边不一致会让 models.json 校验失败。第三方向 OpenAI 兼容服务
+ * **不能只按 provider 名推断**:同一个 `reasoning_effort` 有的服务忽略、有的报错、
+ * 有的要 `thinking.type` / `reasoning.effort` 之类的专有字段,所以这里显式选。
+ */
+export const THINKING_FORMATS = [
+	"openai",
+	"openrouter",
+	"together",
+	"deepseek",
+	"zai",
+	"qwen",
+	"chat-template",
+	"qwen-chat-template",
+	"string-thinking",
+	"ant-ling",
+] as const;
+
+export type ThinkingFormat = (typeof THINKING_FORMATS)[number];
+
+/** 判断是否为本仓库支持的思考参数协议(server 用它做 400 校验;UI 用它渲染选项)。 */
+export function isThinkingFormat(value: unknown): value is ThinkingFormat {
+	return typeof value === "string" && (THINKING_FORMATS as readonly string[]).includes(value);
 }
 
 /** 一个自定义 provider 条目(vendor models.json 的 provider 形状子集)。 */
@@ -43,7 +73,26 @@ export interface CustomModelPatch {
 	input?: Array<"text" | "image">;
 	/** 是否声明该模型支持思考深度(reasoning)。 */
 	reasoning?: boolean;
+	/**
+	 * 思考参数协议(`compat.thinkingFormat`);`null` = 清掉显式声明,回到 vendor 的自动探测
+	 * (2026-10 审计 BUG-002:第三方兼容服务不能只凭 provider 名推断)。
+	 */
+	thinkingFormat?: ThinkingFormat | null;
 	newId?: string;
+}
+
+/**
+ * 把思考参数协议写进模型条目的 `compat.thinkingFormat`(vendor 原生位置)。
+ * `null` 表示清除该键(其余 compat 开关原样保留)。
+ */
+export function setThinkingFormat(entry: CustomModelEntry, format: ThinkingFormat | null): void {
+	const prev = entry.compat && typeof entry.compat === "object" && !Array.isArray(entry.compat) ? (entry.compat as Record<string, unknown>) : {};
+	const next: Record<string, unknown> = { ...prev };
+	if (format === null) delete next.thinkingFormat;
+	else next.thinkingFormat = format;
+	// 空 compat 不留空对象,保持 models.json 干净
+	if (Object.keys(next).length === 0) delete entry.compat;
+	else entry.compat = next;
 }
 
 /** 解析 models.json 文本;损坏 / 非对象一律当空配置(与 server 原有的容错一致)。 */
@@ -54,6 +103,84 @@ export function parseModelsConfig(text: string): ModelsConfig {
 	} catch {
 		return {};
 	}
+}
+
+/** 严格解析结果:合法配置与「损坏/形状不对」分开(见 writeModelsConfig 的拒绝写入路径)。 */
+export type ModelsConfigParse = { ok: true; cfg: ModelsConfig } | { ok: false; message: string };
+
+/**
+ * 校验 models.json 的**形状**(不看语义字段值,只保证结构可安全读改写)。
+ *
+ * 2026-10 审计 BUG-010:此前 `parseModelsConfig` 把「解析失败」和「顶层不是对象」
+ * 一起吞成 `{}`,后续读-改-写就会用空配置覆盖掉用户原来的 provider/model。
+ * 写入路径必须能区分「文件不存在(可初始化)」和「文件存在但读不懂(拒绝写入)」。
+ *
+ * @returns 合法返回 null;否则返回人话错误(可带路径片段定位)。
+ */
+export function checkModelsConfigShape(value: unknown): string | null {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return "顶层必须是 JSON 对象";
+	}
+	const providers = (value as { providers?: unknown }).providers;
+	if (providers === undefined) return null;
+	if (typeof providers !== "object" || providers === null || Array.isArray(providers)) {
+		return "providers 必须是对象";
+	}
+	for (const [id, entry] of Object.entries(providers as Record<string, unknown>)) {
+		if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+			return `providers.${id} 必须是对象`;
+		}
+		const models = (entry as { models?: unknown }).models;
+		if (models === undefined) continue;
+		if (!Array.isArray(models)) return `providers.${id}.models 必须是数组`;
+		for (let i = 0; i < models.length; i++) {
+			const m = models[i];
+			if (typeof m !== "object" || m === null || Array.isArray(m)) return `providers.${id}.models[${i}] 必须是对象`;
+			if (typeof (m as { id?: unknown }).id !== "string" || (m as { id: string }).id.length === 0) {
+				return `providers.${id}.models[${i}].id 必须是非空字符串`;
+			}
+		}
+	}
+	return null;
+}
+
+/**
+ * 严格解析 models.json 文本:JSON 语法错误或形状不合法都返回 `{ ok: false }`。
+ * 写入路径用它;只读展示路径继续用容错的 `parseModelsConfig`。
+ */
+export function parseModelsConfigStrict(text: string): ModelsConfigParse {
+	let value: unknown;
+	try {
+		value = JSON.parse(text);
+	} catch (err) {
+		return { ok: false, message: `JSON 解析失败:${err instanceof Error ? err.message : String(err)}` };
+	}
+	const shape = checkModelsConfigShape(value);
+	if (shape !== null) return { ok: false, message: `配置结构不合法:${shape}` };
+	return { ok: true, cfg: value as ModelsConfig };
+}
+
+/**
+ * 同一 provider 下重复的模型 id 清单(历史数据诊断用)。
+ *
+ * 2026-10 审计 BUG-017:POST 曾允许同 provider 重复 id 落盘,vendor 合成目录时按首项
+ * 替换,后续编辑/删除也按首个命中项操作 —— 第二条成了隐藏/歧义配置。这里只**报告**,
+ * 不静默删除用户数据(迁移策略见审计台账)。
+ */
+export function duplicateModelIds(cfg: ModelsConfig): Array<{ provider: string; model: string; count: number }> {
+	const out: Array<{ provider: string; model: string; count: number }> = [];
+	for (const [provider, entry] of Object.entries(cfg.providers ?? {})) {
+		const list = entry?.models;
+		if (!Array.isArray(list)) continue;
+		const counts = new Map<string, number>();
+		for (const m of list) {
+			if (m && typeof m.id === "string") counts.set(m.id, (counts.get(m.id) ?? 0) + 1);
+		}
+		for (const [model, count] of counts) {
+			if (count > 1) out.push({ provider, model, count });
+		}
+	}
+	return out;
 }
 
 /** 序列化为 models.json 文本(2 空格缩进 + 末尾换行,与原写入格式一致)。 */
@@ -100,6 +227,7 @@ export function updateCustomModel(cfg: ModelsConfig, providerId: string, modelId
 	if (patch.maxTokens !== undefined) next.maxTokens = patch.maxTokens;
 	if (patch.input !== undefined) next.input = patch.input;
 	if (patch.reasoning !== undefined) next.reasoning = patch.reasoning;
+	if (patch.thinkingFormat !== undefined) setThinkingFormat(next, patch.thinkingFormat);
 	if (typeof patch.newId === "string" && patch.newId.length > 0 && patch.newId !== modelId) next.id = patch.newId;
 	list[index] = next;
 	return true;

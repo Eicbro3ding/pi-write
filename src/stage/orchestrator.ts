@@ -3,7 +3,7 @@ import { basename, join } from "node:path";
 import { getBookSessionsDir, initChapterFile } from "../book-manager.ts";
 import { resolveSkillReadOnlyDirs, resolveSkillsDir } from "../config.ts";
 import { createSessionRuntimeFactory } from "../session-factory.ts";
-import { SessionHost, type SessionContextUsage } from "../web/session-host.ts";
+import { collectThinkingSummary, SessionHost, type ModelRefreshSummary, type SessionContextUsage, type ThinkingSummary } from "../web/session-host.ts";
 import type { WriterHost } from "../web/writer-host.ts";
 import {
 	type CreateAgentSessionRuntimeFactory,
@@ -577,14 +577,19 @@ export class StageOrchestrator {
 	}
 
 	/**
-	 * 换全局思考档位：同上,但**不动演员** —— 演员的思考档位是角色设计的一部分
+	 * 换全局思考档位:同上,但**不动演员** —— 演员的思考档位是角色设计的一部分
 	 * (第一人称思考默认 low 控成本,§10.6;叙述者跟随全局),要改某个演员走
 	 * updateActorSpec 的 thinking 覆盖。
+	 *
+	 * 返回宿主级结果(2026-10 审计 BUG-013):演员**故意**不跟随全局档位,响应里要能
+	 * 区分「这里没被改」与「改失败了」。
 	 */
-	async setThinkingLevel(level: string): Promise<void> {
+	async setThinkingLevel(level: string): Promise<ThinkingSummary & { actorsOmitted: number }> {
 		this.thinkingLevel = level;
-		this.director?.setThinkingLevel(level);
-		this.writer?.setThinkingLevel(level);
+		const hosts: SessionHost[] = [...(this.director ? [this.director] : []), ...(this.writer ? [this.writer] : [])];
+		const summary = collectThinkingSummary(hosts, level);
+		// 演员档位是角色设计,不随全局档位变化 —— 明确报出条数,别让调用方以为漏刷了
+		return { ...summary, actorsOmitted: this.actorHosts.size };
 	}
 
 	/**
@@ -593,20 +598,27 @@ export class StageOrchestrator {
 	 *
 	 * 与编剧会话不同,这里**不释放**空壳会话:导演/演员宿主参与状态机(在建幕中途换掉
 	 * 一个宿主,演出状态与字段就对不上了)。单纯刷新已经足够修「选中新模型不生效」。
+	 *
+	 * `allowNetwork` 透传(2026-10 审计 BUG-005:联网刷新此前只打主会话)。
 	 */
-	async refreshModels(): Promise<void> {
+	async refreshModels(options?: { allowNetwork?: boolean }): Promise<ModelRefreshSummary> {
 		const hosts: SessionHost[] = [
 			...(this.director ? [this.director] : []),
 			...(this.writer ? [this.writer] : []),
 			...this.actorHosts.values(),
 		];
+		const errors: Array<{ provider: string; message: string }> = [];
+		let sessions = 0;
 		for (const host of hosts) {
+			sessions++;
 			try {
-				await host.refreshModels();
+				const summary = await host.refreshModels(options);
+				if (summary?.errors) errors.push(...summary.errors);
 			} catch {
 				/* 单个会话刷新失败不影响其余 */
 			}
 		}
+		return { errors, modelCount: null, sessions, released: [] };
 	}
 
 	/**

@@ -17,7 +17,8 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { ToolDefinition } from "../../vendor/pi-coding-agent/src/index.ts";
 import { VERSION } from "../config.ts";
-import { loadMcpConfig, saveMcpConfig, type McpConfig, type McpServerConfig } from "./config.ts";
+import { WriteQueue } from "../write-queue.ts";
+import { loadMcpConfig, saveMcpConfig, saveRawMcpConfig, type McpConfig, type McpServerConfig } from "./config.ts";
 import { mcpToolToDefinition, type McpCallResult, type McpToolInfo } from "./tools.ts";
 
 /** 连接与工具列表超时(ms):本地 stdio 快,远端 http/sse 可能慢。 */
@@ -153,6 +154,13 @@ export class McpManager {
 	private closed = false;
 	/** 世代计数:reload/close 递增,旧连接/旧重连循环看到世代不匹配即放弃。 */
 	private generation = 0;
+	/**
+	 * mcp.json 读-改-写串行队列(2026-10 审计 BUG-020):并发新增/编辑/删除/raw 保存
+	 * 若各自基于旧快照写回,后完成的那份会覆盖先完成的服务器变更。锁内重新读最新文件。
+	 */
+	private readonly configQueue = new WriteQueue();
+	/** reload 自身的串行链(2026-10 审计 RISK-005):两次 reload 交错会让旧代连接写进新代状态。 */
+	private reloadChain: Promise<void> = Promise.resolve();
 	/** watchdog 重连成功后的回调(服务端借此重建会话让新工具生效)。 */
 	onReconnect?: (name: string) => void;
 
@@ -178,35 +186,78 @@ export class McpManager {
 		return loadMcpConfig(this.agentDir);
 	}
 
-	/** 新增/更新服务器配置并重连;name 冲突(新增时)抛中文 Error。 */
-	async upsertServer(server: McpServerConfig): Promise<McpConfig> {
-		const config = await loadMcpConfig(this.agentDir);
-		const idx = config.servers.findIndex((s) => s.name === server.name);
-		if (idx === -1) {
-			config.servers.push(server);
-		} else {
-			config.servers[idx] = server;
-		}
-		await saveMcpConfig(this.agentDir, config);
-		await this.reload();
-		return config;
+	/**
+	 * mcp.json 的**唯一读-改-写入口**(BUG-020):锁内重新读取最新文件 → 变更 →
+	 * 校验并原子写 → reload。四步在同一个队列任务里,因此并发请求不会互相覆盖,
+	 * reload 读到的也必然是刚写下的那份配置。
+	 *
+	 * 注意:reload 走的是另一条 `reloadChain`,不会与本次的 configQueue 互锁。
+	 */
+	private async mutateConfig<T>(mutate: (config: McpConfig) => T | Promise<T>): Promise<T> {
+		return this.configQueue.run("mcp-config", async () => {
+			const config = await loadMcpConfig(this.agentDir);
+			const value = await mutate(config);
+			await saveMcpConfig(this.agentDir, config);
+			await this.reload();
+			return value;
+		});
 	}
 
-	/** 删除服务器配置并重连;不存在抛中文 Error。 */
+	/**
+	 * 新增/更新服务器配置并重连。
+	 *
+	 * `mode` 把「重名/不存在」的判定挪进队列内(BUG-020 的 TOCTOU:此前路由先 listConfig
+	 * 检查再 upsert,两个并发新增同名服务器都能通过检查):
+	 * - `create`:name 已存在 → 抛中文 Error(路由映射 400)
+	 * - `update`:name 不存在 → 抛中文 Error(路由映射 404)
+	 * - 缺省 `any`:存在则覆盖,不存在则追加
+	 */
+	async upsertServer(server: McpServerConfig, mode: "create" | "update" | "any" = "any"): Promise<McpConfig> {
+		return this.mutateConfig((config) => {
+			const idx = config.servers.findIndex((s) => s.name === server.name);
+			if (mode === "create" && idx !== -1) throw new Error(`MCP 服务器重名: ${server.name}`);
+			if (mode === "update" && idx === -1) throw new Error(`MCP 服务器不存在: ${server.name}`);
+			if (idx === -1) config.servers.push(server);
+			else config.servers[idx] = server;
+			return config;
+		});
+	}
+
+	/** 删除服务器配置并重连;不存在抛中文 Error。判定同样在队列内。 */
 	async removeServer(name: string): Promise<McpConfig> {
-		const config = await loadMcpConfig(this.agentDir);
-		const next = config.servers.filter((s) => s.name !== name);
-		if (next.length === config.servers.length) throw new Error(`MCP 服务器不存在: ${name}`);
-		await saveMcpConfig(this.agentDir, { servers: next });
-		await this.reload();
-		return { servers: next };
+		return this.mutateConfig((config) => {
+			const next = config.servers.filter((s) => s.name !== name);
+			if (next.length === config.servers.length) throw new Error(`MCP 服务器不存在: ${name}`);
+			config.servers = next;
+			return config;
+		});
 	}
 
-	/** 按当前 connections 重建 tools 与 status(跨服务器工具重名:后者跳过,保持工具名唯一)。 */
+	/**
+	 * 原样保存 mcp.json 原始文本(「直接编辑文件」入口)并重连。
+	 * 与 upsert/remove 共用同一写队列:并发保存不会互相覆盖,也不会与结构化编辑交错。
+	 */
+	async saveRawConfig(rawText: string): Promise<McpConfig> {
+		return this.configQueue.run("mcp-config", async () => {
+			await saveRawMcpConfig(this.agentDir, rawText);
+			await this.reload();
+			return loadMcpConfig(this.agentDir);
+		});
+	}
+
+	/**
+	 * 按当前 connections 重建 tools 与 status(跨服务器工具重名:后者跳过,保持工具名唯一)。
+	 *
+	 * 2026-10:重建时**保留连接失败的条目**。此前这里是 `this.status = status`(只由
+	 * connections 生成),把 reload 循环里刚 push 的失败原因整片擦掉 —— 「坏 server
+	 * 记入 status」实际上永远看不到,设置页只会看到一台服务器凭空消失。重连成功后
+	 * 该名字已在 connections 中,失败条目自然被丢弃(按 name 去重,不产生重复行)。
+	 */
 	private rebuild(): void {
 		const claimed = new Set<string>();
 		const tools: ToolDefinition[] = [];
 		const status: McpServerStatus[] = [];
+		const connected = new Set<string>();
 		for (const conn of this.connections) {
 			let skipped = 0;
 			for (const tool of conn.tools) {
@@ -217,7 +268,11 @@ export class McpManager {
 				claimed.add(tool.name);
 				tools.push(tool);
 			}
+			connected.add(conn.config.name);
 			status.push({ name: conn.config.name, type: conn.config.type, ok: true, tools: conn.tools.length - skipped });
+		}
+		for (const s of this.status) {
+			if (!s.ok && !connected.has(s.name)) status.push(s);
 		}
 		this.tools = tools;
 		this.status = status;
@@ -259,11 +314,33 @@ export class McpManager {
 		}
 	}
 
-	/** 关闭旧连接并重连(配置变更/服务启动时调用)。失败隔离:坏 server 记入 status,不中断其他。 */
+	/**
+	 * 关闭旧连接并重连(配置变更/服务启动时调用)。失败隔离:坏 server 记入 status,不中断其他。
+	 *
+	 * 2026-10 审计 RISK-005:reload 自身必须串行 + 每段 await 后检查世代,否则两次 reload
+	 * 交错时旧调用会在新调用清空/建立连接之后继续写 `connections/tools/status`,最终状态
+	 * 可能属于旧配置。这里排成一条链(不与 configQueue 互锁),并在关闭、读配置、
+	 * 逐个连接前后都做世代检查;`close()` 之后迟到的结果一律丢弃。
+	 */
 	async reload(): Promise<void> {
-		this.generation++;
-		const gen = this.generation;
+		const run = this.reloadChain.then(
+			() => this.reloadOnce(),
+			() => this.reloadOnce(),
+		);
+		this.reloadChain = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		return run;
+	}
+
+	private async reloadOnce(): Promise<void> {
+		if (this.closed) return;
+		const gen = ++this.generation;
+		/** 世代已过期(有更新的 reload 或已 close):本调用不得再写任何共享状态。 */
+		const stale = () => this.closed || this.generation !== gen;
 		await Promise.allSettled(this.connections.map((c) => c.close()));
+		if (stale()) return;
 		this.connections = [];
 		this.tools = [];
 		this.status = [];
@@ -271,6 +348,7 @@ export class McpManager {
 		try {
 			config = await loadMcpConfig(this.agentDir);
 		} catch (err) {
+			if (stale()) return;
 			this.status = [
 				{
 					name: "(配置)",
@@ -282,13 +360,20 @@ export class McpManager {
 			];
 			return;
 		}
+		if (stale()) return;
 		if (config.servers.length === 0) return;
 		for (const server of config.servers) {
 			try {
 				const conn = await connectServer(server, (c) => this.armWatchdog(c, gen));
+				// 连接期间世代变了(新的 reload 或 close):丢弃刚建立的连接,不写进连接表
+				if (stale()) {
+					await conn.close();
+					return;
+				}
 				conn.slot = this.connections.length;
 				this.connections.push(conn);
 			} catch (err) {
+				if (stale()) return;
 				this.status.push({
 					name: server.name,
 					type: server.type,
@@ -298,6 +383,7 @@ export class McpManager {
 				});
 			}
 		}
+		if (stale()) return;
 		this.rebuild();
 	}
 

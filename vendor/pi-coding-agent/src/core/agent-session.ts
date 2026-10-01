@@ -1603,6 +1603,30 @@ export class AgentSession {
 	}
 
 	/**
+	 * Internal model-instance rebind (capability hot-reload only).
+	 *
+	 * Differs from {@link setModel}: no auth check, **no global default change, no
+	 * `model_change` entry, no `model_select` event**. It exists for the case where the
+	 * model catalog is reloaded and the same `provider/id` now carries different
+	 * request-affecting fields (`reasoning`, `thinkingLevelMap`, `contextWindow`,
+	 * `maxTokens`, `input`, `baseUrl`, `headers`, `compat`…): the session still holds the
+	 * old object, so requests would keep using stale capabilities. Swapping the object is
+	 * maintenance, not a user-initiated model switch, and must not be recorded as one.
+	 *
+	 * The thinking level is re-clamped in place against the new model's capabilities
+	 * (same semantics as `setModel`), and the effective level is returned so callers can
+	 * report a silent clamp instead of pretending nothing happened.
+	 */
+	resyncModelInstance(model: Model<any>): ThinkingLevel {
+		this.agent.state.model = model;
+		const availableLevels = this.getAvailableThinkingLevels();
+		const current = this.agent.state.thinkingLevel;
+		const effective = availableLevels.includes(current) ? current : this._clampThinkingLevel(current, availableLevels);
+		this.agent.state.thinkingLevel = effective;
+		return effective;
+	}
+
+	/**
 	 * Cycle to next/previous model.
 	 * Uses scoped models (from --models flag) if available, otherwise all available models.
 	 * @param direction - "forward" (default) or "backward"

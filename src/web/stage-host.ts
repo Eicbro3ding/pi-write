@@ -17,7 +17,7 @@ import { StageOrchestrator, type StageEvent } from "../stage/orchestrator.ts";
 import type { CastConfig, DirectorMode, ScenePhase, SceneScript, ScriptPatch, StageEntry, StageStatus } from "../stage/types.ts";
 import type { ToolDefinition } from "../../vendor/pi-coding-agent/src/index.ts";
 import { ensureWorld } from "../world-data.ts";
-import type { SessionContextUsage } from "./session-host.ts";
+import type { ModelRefreshSummary, SessionContextUsage, ThinkingSummary } from "./session-host.ts";
 import type { WriterHost } from "./writer-host.ts";
 import type { AgentSessionEvent } from "../../vendor/pi-coding-agent/src/index.ts";
 
@@ -242,21 +242,48 @@ export class StageHost {
 		await Promise.all([...this.orchestrators.values()].map((orch) => orch.setModel(model)));
 	}
 
-	/** 换思考档位:同上(编排器里只动导演与收幕编剧,演员的档位属于角色设计)。 */
-	async setThinkingLevel(level: string): Promise<void> {
+	/**
+	 * 换思考档位:编排器里只动导演与收幕编剧,演员档位属于角色设计。
+	 * 返回宿主级结果(2026-10 审计 BUG-013),并报出**故意跳过**的演员数。
+	 */
+	async setThinkingLevel(level: string): Promise<ThinkingSummary & { actorsOmitted: number }> {
 		this.thinkingLevel = level;
-		await Promise.all([...this.orchestrators.values()].map((orch) => orch.setThinkingLevel(level)));
-	}
-
-	/** models.json 变更后让已建编排器的会话重读模型目录(见 SessionHost.refreshModels)。 */
-	async refreshModels(): Promise<void> {
+		const levels: string[] = [];
+		const failed: string[] = [];
+		let sessions = 0;
+		let actorsOmitted = 0;
 		for (const orch of this.orchestrators.values()) {
 			try {
-				await orch.refreshModels();
+				const summary = await orch.setThinkingLevel(level);
+				sessions += summary.sessions;
+				actorsOmitted += summary.actorsOmitted;
+				for (const l of summary.levels) if (!levels.includes(l)) levels.push(l);
+				failed.push(...summary.failed);
+			} catch (err) {
+				failed.push(err instanceof Error ? err.message : String(err));
+			}
+		}
+		return { sessions, levels, clamped: levels.some((l) => l !== level), failed, actorsOmitted };
+	}
+
+	/**
+	 * models.json 变更后让已建编排器的会话重读模型目录(见 SessionHost.refreshModels)。
+	 * `allowNetwork` 透传:设置页「刷新模型列表」必须让舞台会话也真去拉一次远程目录
+	 * (2026-10 审计 BUG-005)。
+	 */
+	async refreshModels(options?: { allowNetwork?: boolean }): Promise<ModelRefreshSummary> {
+		const errors: Array<{ provider: string; message: string }> = [];
+		let sessions = 0;
+		for (const orch of this.orchestrators.values()) {
+			try {
+				const summary = await orch.refreshModels(options);
+				sessions += summary.sessions;
+				errors.push(...summary.errors);
 			} catch {
 				/* 单个编排器失败不影响其余 */
 			}
 		}
+		return { errors, modelCount: null, sessions, released: [] };
 	}
 
 	/** 编排器键:书 + 章节(舞台按章节隔离——每章一幕独立对话/演出,切章不串,2026-08-10)。 */

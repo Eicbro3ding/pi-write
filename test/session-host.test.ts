@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../vendor/pi-coding-agent/src/index.ts";
-import { extractMessagesFromManager, SessionHost, usableModelRef } from "../src/web/session-host.ts";
+import { extractMessagesFromManager, modelCapabilitiesDiffer, SessionHost, usableModelRef } from "../src/web/session-host.ts";
 
 /** extractMessagesFromManager 只吃 getBranch() 的 entry 形状,给个最小桩即可。 */
 function fakeManager(entries: Array<{ id: string; message: Record<string, unknown> }>) {
@@ -28,6 +28,11 @@ function makeFakeRuntime(modelRuntime: Record<string, unknown> = {}) {
 			tokensBefore: 1000,
 			estimatedTokensAfter: 400,
 		})),
+		// runtime 的 dispose() 会先发 session_shutdown(有 handler 才发)、再调 session.dispose()
+		extensionRunner: { hasHandlers: () => false, emit: vi.fn(async () => {}) },
+		dispose: vi.fn(() => {}),
+		// reloadRuntime() 会读会话文件/leaf/cwd 并在重建后恢复 leaf
+		sessionManager: { getSessionFile: () => undefined, getLeafId: () => null, getCwd: () => "/tmp", branch: () => {} },
 		isStreaming: false,
 	};
 	return {
@@ -356,6 +361,56 @@ describe("SessionHost retractMessage", () => {
 		expect(end?.entryId).toBe(id);
 	});
 
+	/**
+	 * 2026-10 审计 RISK-003:vendor 先 emit 后 append,emit 时文本在 branch 里还找不到,
+	 * 于是走 setTimeout(0) 的延迟补发。旧实现的延迟回退**只按 role 反查** —— 期间只要有
+	 * 同角色的另一条消息落盘,entryId 就会绑到那条上,前端后续撤回/编辑会作用在错对象上。
+	 * 现在必须同时比文本,且唯一命中才补发。
+	 */
+	it("延迟补发只认 role + 文本唯一次匹配(同角色另一条消息先落盘时不绑错)", async () => {
+		const sm = makeRealSm();
+		const fake = makeFakeRuntime();
+		wireRealSm(fake, sm);
+		const host = makeHost(fake);
+		await host.start();
+		const seen: Array<Record<string, unknown>> = [];
+		host.subscribe((e) => seen.push(e as Record<string, unknown>));
+
+		// emit:此时 branch 里还没有这条消息(文本匹配不上 → 进入延迟路径)
+		fake.listeners.forEach((l) =>
+			l({ type: "message_end", message: { role: "user", content: [{ type: "text", text: "正文 A" }] } }),
+		);
+		// append 之前,同角色的**另一条**消息先落盘
+		const other = pushMessage(sm, "user", "正文 B");
+		await new Promise((r) => setTimeout(r, 5));
+		const late = seen.filter((e) => e.type === "message_end");
+		// 唯一剩余一条 message_end,且**没有**被绑上 B 的 entryId
+		expect(late).toHaveLength(1);
+		expect(late[0]!.entryId).toBeUndefined();
+		expect(other).toBeDefined();
+	});
+
+	it("延迟补发在文本唯一命中时仍然补上 entryId(vendor 先 emit 后 append 的正常时序)", async () => {
+		const sm = makeRealSm();
+		const fake = makeFakeRuntime();
+		wireRealSm(fake, sm);
+		const host = makeHost(fake);
+		await host.start();
+		const seen: Array<Record<string, unknown>> = [];
+		host.subscribe((e) => seen.push(e as Record<string, unknown>));
+
+		fake.listeners.forEach((l) =>
+			l({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "迟到的回复" }] } }),
+		);
+		// 模拟 vendor:emit 之后**同步** append(定时器(0)在其后才跑)
+		const id = pushMessage(sm, "assistant", "迟到的回复");
+		await new Promise((r) => setTimeout(r, 5));
+		// 首帧(无 id)+ 补发帧(带 id):补发命中唯一同角色同文本的新 entry
+		const withId = seen.filter((e) => e.type === "message_end" && (e as { entryId?: string }).entryId !== undefined);
+		expect(withId).toHaveLength(1);
+		expect((withId[0] as { entryId?: string }).entryId).toBe(id);
+	});
+
 	it("extractMessages 按轮分组合并:同轮多段 assistant 合并为一条气泡", async () => {
 		const sm = makeRealSm();
 		const fake = makeFakeRuntime();
@@ -681,5 +736,202 @@ describe("模型目录刷新与「是否已选到模型」", () => {
 		await host.start();
 		await host.refreshModels();
 		expect(fake.session.setModel).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * 2026-10 审计 BUG-006:此前只比 reasoning / thinkingLevelMap —— 改上下文窗口、最大
+	 * 输出、输入类型、baseUrl、headers、compat 之后目录刷了、会话手里的实例没换,
+	 * 「设置页显示新配置、实际请求用旧配置」。
+	 */
+	it("modelCapabilitiesDiffer:任何影响请求的字段变了都算差异", () => {
+		const base = { provider: "p", id: "m", api: "openai-completions", baseUrl: "https://a.test", reasoning: false, contextWindow: 1000, maxTokens: 100, input: ["text"], headers: { "x-a": "1" }, compat: { a: true } };
+		expect(modelCapabilitiesDiffer(base, { ...base })).toBe(false);
+		for (const patch of [
+			{ api: "anthropic-messages" },
+			{ baseUrl: "https://b.test" },
+			{ reasoning: true },
+			{ thinkingLevelMap: { high: "high" } },
+			{ contextWindow: 2000 },
+			{ maxTokens: 200 },
+			{ input: ["text", "image"] },
+			{ headers: { "x-a": "2" } },
+			{ compat: { a: false } },
+		]) {
+			expect(modelCapabilitiesDiffer(base, { ...base, ...patch }), JSON.stringify(patch)).toBe(true);
+		}
+		// 与请求无关的字段变化不算差异(避免每次刷新都动一次会话)
+		expect(modelCapabilitiesDiffer(base, { ...base, name: "改个显示名" })).toBe(false);
+		// 空/非对象一律视为无差异(防御式,不误触发重绑)
+		expect(modelCapabilitiesDiffer(null, base)).toBe(false);
+	});
+	it("refreshModels 改了 contextWindow(不只 reasoning)也会重绑", async () => {
+		const fresh = { provider: "third", id: "third-1", reasoning: false, contextWindow: 200000 };
+		const resync = vi.fn();
+		const refresh = vi.fn(async () => {});
+		const fake = makeFakeRuntime({ refresh, getModel: vi.fn(() => fresh) });
+		(fake.session as Record<string, unknown>).state = { model: { provider: "third", id: "third-1", reasoning: false, contextWindow: 32000 }, thinkingLevel: "off" };
+		(fake.session as Record<string, unknown>).resyncModelInstance = resync;
+		const host = makeHost(fake);
+		await host.start();
+		await host.refreshModels();
+		expect(resync).toHaveBeenCalledWith(fresh);
+	});
+	/**
+	 * 2026-10 审计 BUG-008:能力重绑是内部维护动作 —— 不能走普通 setModel(它会
+	 * setDefaultModelAndProvider 改写全局默认模型,并追加一条 model_change 记录,
+	 * 把目录热更新伪装成用户主动切换)。
+	 */
+	it("能力重绑走内部 resyncModelInstance,不调用普通 setModel", async () => {
+		const fresh = { provider: "third", id: "third-1", reasoning: true };
+		const resync = vi.fn(() => "off");
+		const fake = makeFakeRuntime({ refresh: vi.fn(async () => {}), getModel: vi.fn(() => fresh) });
+		(fake.session as Record<string, unknown>).state = { model: { provider: "third", id: "third-1", reasoning: false }, thinkingLevel: "high" };
+		(fake.session as Record<string, unknown>).resyncModelInstance = resync;
+		const host = makeHost(fake);
+		await host.start();
+		await host.refreshModels();
+		expect(resync).toHaveBeenCalledWith(fresh);
+		expect(fake.session.setModel).not.toHaveBeenCalled();
+	});
+	it("能力没变时不重绑(连内部重绑也不调用)", async () => {
+		const resync = vi.fn();
+		const fresh = { provider: "third", id: "third-1", reasoning: false, contextWindow: 1000 };
+		const fake = makeFakeRuntime({ refresh: vi.fn(async () => {}), getModel: vi.fn(() => fresh) });
+		(fake.session as Record<string, unknown>).state = { model: { provider: "third", id: "third-1", reasoning: false, contextWindow: 1000 } };
+		(fake.session as Record<string, unknown>).resyncModelInstance = resync;
+		const host = makeHost(fake);
+		await host.start();
+		await host.refreshModels();
+		expect(resync).not.toHaveBeenCalled();
+	});
+	it("allowNetwork 透传(设置页「刷新模型列表」要真的联网)", async () => {
+		const refresh = vi.fn(async () => {});
+		const fake = makeFakeRuntime({ refresh });
+		const host = makeHost(fake);
+		await host.start();
+		await host.refreshModels({ allowNetwork: true });
+		expect(refresh).toHaveBeenCalledWith({ allowNetwork: true, force: true });
+	});
+	it("refreshModels 把目录刷新错误结构化返回(provider + 原文)", async () => {
+		const refresh = vi.fn(async () => ({ errors: new Map([["deepseek", new Error("401 Authorization Required")]]) }));
+		const fake = makeFakeRuntime({ refresh, getAvailable: vi.fn(async () => [{ id: "a" }, { id: "b" }]) });
+		const host = makeHost(fake);
+		await host.start();
+		await expect(host.refreshModels({ allowNetwork: true })).resolves.toEqual({
+			errors: [{ provider: "deepseek", message: "401 Authorization Required" }],
+			modelCount: 2,
+		});
+	});
+
+	/**
+	 * 2026-10 审计 BUG-009:装配工厂的 model/thinkingLevel 来自**启动参数**
+	 * (`--model A` / `--thinking`),runtime 重建(MCP 配置变更走 reloadRuntime)时会把
+	 * API 已经切换过的值盖回去。重建前抓当前设置、重建后恢复。
+	 */
+	it("reloadRuntime 后保留 API 切过的模型/思考档位/采样参数(不退启动参数)", async () => {
+		const resync = vi.fn();
+		const fake = makeFakeRuntime({ getModel: vi.fn((provider: string, id: string) => ({ provider, id })) });
+		(fake.session as Record<string, unknown>).resyncModelInstance = resync;
+		(fake.session as Record<string, unknown>).state = {
+			model: { provider: "openai", id: "gpt-5" },
+			thinkingLevel: "high",
+			temperature: 0.7,
+			topP: 0.9,
+		};
+		const host = makeHost(fake);
+		await host.start();
+		// 首次 start 没有可恢复的历史设置:不该凭空重绑
+		expect(resync).not.toHaveBeenCalled();
+		await host.reloadRuntime();
+		expect(resync).toHaveBeenCalledWith({ provider: "openai", id: "gpt-5" });
+		expect(fake.session.setThinkingLevel).toHaveBeenCalledWith("high");
+		expect(fake.session.setSamplingParameters).toHaveBeenCalledWith(0.7, 0.9, false);
+	});
+	it("reloadRuntime 对占位模型/未设置档位的会话是空操作", async () => {
+		const resync = vi.fn();
+		const fake = makeFakeRuntime();
+		(fake.session as Record<string, unknown>).resyncModelInstance = resync;
+		(fake.session as Record<string, unknown>).state = { model: { provider: "unknown", id: "unknown", api: "unknown" } };
+		const host = makeHost(fake);
+		await host.start();
+		await host.reloadRuntime();
+		expect(resync).not.toHaveBeenCalled();
+		expect(fake.session.setThinkingLevel).not.toHaveBeenCalled();
+		expect(fake.session.setSamplingParameters).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * 2026-10 审计 RISK-004:runtime 生命周期与并发请求的串行化不足 —— 尤其
+ * `dispose()` 此前在 `await runtime.dispose()` **之后**才摘掉引用,关闭期间到达的请求会
+ * 握着正在释放的 session 去写。这里固化修复后的顺序与诊断语义。
+ */
+describe("SessionHost 生命周期与并发请求(RISK-004)", () => {
+	it("dispose 后请求拿到明确的「会话已释放」,不会写进已释放的 session", async () => {
+		const sm = makeRealSm();
+		const fake = makeFakeRuntime();
+		wireRealSm(fake, sm);
+		const host = makeHost(fake);
+		await host.start();
+		await host.dispose();
+		await expect(host.sendMessage("hi")).rejects.toThrow("会话已释放");
+		await expect(host.compact()).rejects.toThrow("会话已释放");
+		// 旧 session 的 prompt 没被调用过(请求没有落到正在释放/已释放的运行时上)
+		expect(fake.session.prompt).not.toHaveBeenCalled();
+	});
+	it("从未 start 的宿主报「尚未 start」,与「已释放」区分开", async () => {
+		const fake = makeFakeRuntime();
+		const host = makeHost(fake);
+		await expect(host.sendMessage("hi")).rejects.toThrow("尚未 start");
+	});
+	it("dispose 先摘引用再关旧 runtime:关闭期间进入的请求不会写旧 session", async () => {
+		const sm = makeRealSm();
+		const fake = makeFakeRuntime();
+		wireRealSm(fake, sm);
+		let releaseDispose: () => void = () => {};
+		const disposeGate = new Promise<void>((r) => (releaseDispose = r));
+		(fake.session as Record<string, unknown>).dispose = vi.fn(async () => {
+			await disposeGate;
+		});
+		const host = makeHost(fake);
+		await host.start();
+		const disposing = host.dispose();
+		// 关闭尚未完成:此请求必须立刻失败,而不是排队写进正在释放的 session
+		await expect(host.sendMessage("during-dispose")).rejects.toThrow("会话已释放");
+		expect(fake.session.prompt).not.toHaveBeenCalled();
+		releaseDispose();
+		await disposing;
+	});
+	it("dispose 解除旧会话订阅:旧 runtime 之后的事件不再广播", async () => {
+		const sm = makeRealSm();
+		const fake = makeFakeRuntime();
+		wireRealSm(fake, sm);
+		const host = makeHost(fake);
+		await host.start();
+		const seen: unknown[] = [];
+		host.subscribe((e) => seen.push(e));
+		await host.dispose();
+		// 即便旧 session 仍握有监听句柄,也不该再有人收到
+		fake.listeners.forEach((l) => l({ type: "turn_start" }));
+		expect(seen).toHaveLength(0);
+	});
+	it("重建后旧 runtime 的延迟补发不落到新 runtime(不发生跨代事件)", async () => {
+		const sm = makeRealSm();
+		const fake = makeFakeRuntime();
+		wireRealSm(fake, sm);
+		const host = makeHost(fake);
+		await host.start();
+		const seen: Array<Record<string, unknown>> = [];
+		host.subscribe((e) => seen.push(e as Record<string, unknown>));
+		// 文本匹配不上 → 进入延迟路径(setTimeout(0))
+		fake.listeners.forEach((l) =>
+			l({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "旧代消息" }] } }),
+		);
+		// 定时器跑之前先重建 runtime
+		await host.reloadRuntime();
+		// 新 runtime 上落下同文本消息(旧代的补发也不该把它当成自己的)
+		pushMessage(sm, "assistant", "旧代消息");
+		await new Promise((r) => setTimeout(r, 5));
+		expect(seen.filter((e) => (e as { entryId?: string }).entryId !== undefined)).toHaveLength(0);
 	});
 });

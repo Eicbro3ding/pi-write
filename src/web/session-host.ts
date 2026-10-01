@@ -126,6 +126,13 @@ export class SessionHost {
 	 * runtime 时会以「当前会话文件」重新 open(保留切章后的会话位置)。
 	 */
 	private sessionManager: SessionManager;
+	/**
+	 * runtime 重建时要恢复的会话级设置(2026-10 审计 BUG-009):
+	 * API 切过的模型/思考档位/采样参数,不能被启动参数在重建后盖回去。
+	 */
+	private runtimeDefaults: RuntimeDefaults = { model: null, thinkingLevel: null, temperature: null, topP: null };
+	/** dispose() 之后置位:把「已释放」与「尚未 start」区分开(RISK-004 的诊断语义)。 */
+	private released = false;
 
 	constructor(options: SessionHostOptions) {
 		this.options = options;
@@ -148,7 +155,59 @@ export class SessionHost {
 			sessionManager: this.sessionManager,
 			sessionStartEvent: undefined,
 		});
+		this.markStarted();
 		this.bindSession();
+		// 重建后把 API 切过的会话级设置重新套上(见 reloadRuntime 的说明/BUG-009)
+		await this.applyRuntimeDefaults();
+	}
+
+	/**
+	 * 抓一份「当前会话级设置」,用于 runtime 重建后恢复(2026-10 审计 BUG-009)。
+	 *
+	 * 背景:装配工厂的 `model` / `thinkingLevel` 来自**启动参数**(web.ts 传 opts.model /
+	 * opts.thinking),重建时它们会盖回 API 已经切换过的值 —— 用户切了模型 B、改过思考档位,
+	 * 一次 MCP 配置变更(reloadRuntime)就静默退回 `--model A` / 启动档位。
+	 */
+	private captureRuntimeDefaults(rt: AgentSessionRuntime | undefined): RuntimeDefaults {
+		const state = (rt?.session as { state?: { model?: unknown; thinkingLevel?: unknown; temperature?: unknown; topP?: unknown } } | undefined)?.state;
+		const model = usableModelRef(state?.model);
+		return {
+			model,
+			thinkingLevel: typeof state?.thinkingLevel === "string" ? state.thinkingLevel : null,
+			temperature: typeof state?.temperature === "number" ? state.temperature : null,
+			topP: typeof state?.topP === "number" ? state.topP : null,
+		};
+	}
+
+	/**
+	 * 把 {@link captureRuntimeDefaults} 抓到的设置套到**当前** runtime 上。
+	 * 只在尚未显式设置过一次以后才需要恢复;首次 start 时 defaults 为空,是空操作。
+	 *
+	 * 模型走 vendor 的内部重绑(`resyncModelInstance`):这是「恢复用户已有选择」而不是
+	 * 「用户主动换模型」,不该追加 model_change / 改写全局默认(BUG-008 同一原则)。
+	 * 鉴权在发请求时再校验,重建过程不因为某个 provider 掉 key 而失败。
+	 */
+	private async applyRuntimeDefaults(): Promise<void> {
+		const rt = this.runtime;
+		if (!rt) return;
+		const d = this.runtimeDefaults;
+		if (d.model) {
+			const fresh = rt.services.modelRuntime.getModel(d.model.provider, d.model.id);
+			const session = rt.session as { resyncModelInstance?: (model: unknown) => unknown };
+			if (fresh && typeof session.resyncModelInstance === "function") session.resyncModelInstance(fresh);
+			else if (fresh) await rt.session.setModel(fresh).catch(() => undefined);
+		}
+		if (d.thinkingLevel) {
+			(rt.session as { setThinkingLevel?: (level: string) => unknown }).setThinkingLevel?.(d.thinkingLevel);
+		}
+		if (d.temperature !== null || d.topP !== null) {
+			// persist=false:这是恢复会话状态,不改全局默认(与演员级覆盖同款语义)
+			(rt.session as { setSamplingParameters?: (t?: number | null, p?: number | null, persist?: boolean) => unknown }).setSamplingParameters?.(
+				d.temperature,
+				d.topP,
+				false,
+			);
+		}
 	}
 
 	/**
@@ -164,6 +223,9 @@ export class SessionHost {
 		const sessionFile = rt?.session.sessionManager.getSessionFile() ?? null;
 		const prevLeafId = rt?.session.sessionManager.getLeafId() ?? null;
 		const prevCwd = rt?.session.sessionManager.getCwd() ?? this.options.cwd;
+		// 重建前抓当前会话级设置(BUG-009):装配工厂只认启动参数,不抓就会在重建后
+		// 把 API 切换过的模型/思考档位静默退回 --model / --thinking
+		this.runtimeDefaults = this.captureRuntimeDefaults(rt);
 		await this.dispose();
 		if (sessionFile) {
 			// 会话文件在 sessions/<slug>/<file>.jsonl:父目录即 sessionsDir,cwd 保持不变
@@ -211,18 +273,34 @@ export class SessionHost {
 				}
 				if (!matched) {
 					const rt = runtime;
+					// 事件时刻的分支长度:延迟补发只看**之后新追加**的 entry,
+					// 否则会命中早先那条同角色的旧消息(RISK-003 的另一半)
+					const beforeLen = runtime.session.sessionManager.getBranch().length;
 					setTimeout(() => {
 						// runtime 可能已被切书/重建(switchSession/reloadRuntime):放弃补发
 						if (this.runtime !== rt) return;
+						// 2026-10 审计 RISK-003:延迟回退此前**只按 role 反查**,同角色消息在
+						// append 之前插进来就会把 entryId 绑到另一条消息上(前端撤回/编辑随后作用
+						// 在错的对象上)。现在必须同时比较 role 与文本,且只认**唯一**命中:
+						// 文本对不上或命中不唯一就**不补发** —— 宁可这条消息暂时没有稳定 id
+						// (前端不给撤回按钮),也不能绑错。
+						if (eventText === undefined) return;
 						const branch2 = rt.session.sessionManager.getBranch();
-						for (let i = branch2.length - 1; i >= 0; i--) {
+						if (branch2.length <= beforeLen) return; // append 还没发生:放弃
+						let hitId: string | undefined;
+						let hits = 0;
+						for (let i = beforeLen; i < branch2.length; i++) {
 							const entry = branch2[i]!;
-							if (entry.type === "message" && (entry as { message?: { role?: string } }).message?.role === role) {
-								const late = { ...event, entryId: entry.id } as AgentSessionEvent & { entryId?: string };
-								for (const l of this.listeners) l(late);
-								break;
-							}
+							if (entry.type !== "message") continue;
+							const message = (entry as { message?: { role?: string; content?: unknown } }).message;
+							if (message?.role !== role) continue;
+							if (chatTextOfMessage(message) !== eventText) continue;
+							hits++;
+							hitId = entry.id;
 						}
+						if (hits !== 1 || hitId === undefined) return;
+						const late = { ...event, entryId: hitId } as AgentSessionEvent & { entryId?: string };
+						for (const l of this.listeners) l(late);
 					}, 0);
 				}
 			}
@@ -236,7 +314,9 @@ export class SessionHost {
 	}
 
 	private requireRuntime(): AgentSessionRuntime {
-		if (!this.runtime) throw new Error("SessionHost 尚未 start");
+		// 释放与「从未启动」区分开:前者是生命周期竞态(调用方该重试/换宿主),
+		// 后者是装配顺序错误(2026-10 审计 RISK-004)
+		if (!this.runtime) throw new Error(this.released ? "会话已释放" : "SessionHost 尚未 start");
 		return this.runtime;
 	}
 
@@ -371,6 +451,25 @@ export class SessionHost {
 		if (resolved.warning) process.stderr.write(`${resolved.warning}\n`);
 		if (resolved.model) await rt.session.setModel(resolved.model);
 	}
+	/**
+	 * 当前模型**实际支持**的思考档位(2026-10 审计 BUG-012)。
+	 *
+	 * vendor 的 `getSupportedThinkingLevels()` 按模型能力给集合(非推理模型只有 off;
+	 * 静态 DeepSeek 映射另有 thinkingLevelMap)。前端此前固定展示 off..max 七档,
+	 * 用户选到不支持的档位只会被静默 clamp —— 现在把这组值发给前端,只展示可用档位。
+	 * 拿不到(fake/旧会话)返回 null,前端退回展示全量。
+	 */
+	thinkingLevels(): string[] | null {
+		const session = this.runtime?.session as { getAvailableThinkingLevels?: () => unknown } | undefined;
+		if (!session || typeof session.getAvailableThinkingLevels !== "function") return null;
+		try {
+			const levels = session.getAvailableThinkingLevels();
+			return Array.isArray(levels) ? levels.filter((l): l is string => typeof l === "string") : null;
+		} catch {
+			return null;
+		}
+	}
+
 	/** 本会话当前可用的模型(null = 还没选到,见 usableModelRef)。 */
 	currentModel(): { provider: string; id: string } | null {
 		return usableModelRef(this.runtime?.session.state.model);
@@ -384,35 +483,58 @@ export class SessionHost {
 	 * 报「No API key found for the selected model」(2026-10-04 实测根因)。
 	 *
 	 * 刷新后还要把会话手里的 Model 换成目录里的新实例(见 resyncModelCapabilities)。
+	 *
+	 * `allowNetwork` 为 true 时同时联网刷新远程目录(设置页「刷新模型列表 / 测试连接」);
+	 * 缺省只重读本地 models.json(配置变更后的热重载,不发任何请求)。
 	 */
-	async refreshModels(): Promise<void> {
+	async refreshModels(options?: { allowNetwork?: boolean }): Promise<{ errors: Array<{ provider: string; message: string }>; modelCount: number }> {
 		const rt = this.requireRuntime();
-		await rt.services.modelRuntime.refresh({ allowNetwork: false });
+		// 联网刷新必须 force(远程目录有缓存);本地热重载保持原来的最小参数形态
+		const result = await rt.services.modelRuntime.refresh(
+			options?.allowNetwork === true ? { allowNetwork: true, force: true } : { allowNetwork: false },
+		);
 		await this.resyncModelCapabilities(rt);
+		// 目录统计是旁支信息:最小 fake runtime 没有 getAvailable,不该让刷新整体失败
+		let modelCount = 0;
+		try {
+			modelCount = (await rt.services.modelRuntime.getAvailable()).length;
+		} catch {
+			modelCount = 0;
+		}
+		return {
+			// pi-ai 的 ModelsRefreshResult.errors 是 ReadonlyMap<providerId, Error>
+			errors: [...(result?.errors ?? new Map<string, Error>()).entries()].map(([provider, e]) => ({ provider, message: e.message })),
+			modelCount,
+		};
 	}
 
 	/**
 	 * 把 `agent.state.model` 换成目录里的**新实例**。
 	 *
-	 * `state.model` 是装配那一刻的对象,`reasoning` / `thinkingLevelMap` 这些能力字段跟着
-	 * 它走:`setThinkingLevel` 就是拿它算可用档位。所以「编辑模型 → 打开支持思考」之后
-	 * 只刷目录不重绑,思考档位照样按旧能力被 clamp 回 off —— 用户在设置页看到的就是
-	 * 「思考等级选了没反应」。只在能力真的变了时重设,免得每次刷新都多写一条 model_change。
+	 * `state.model` 是装配那一刻的对象,`reasoning` / `thinkingLevelMap` / `contextWindow` /
+	 * `maxTokens` / `input` / `baseUrl` / `headers` / `compat` 这些字段跟着它走。所以
+	 * 「编辑模型 → 打开支持思考 / 改上下文窗口 / 换地址」之后只刷目录不重绑,已建会话就
+	 * 继续按旧能力发请求(用户在设置页看到的是新配置,实际请求用的是旧的)。
+	 *
+	 * 2026-10 审计 BUG-006:此前只比 `reasoning` 与 `thinkingLevelMap`,其它字段变化被
+	 * 整个漏掉;现在用 MODEL_CAPABILITY_FIELDS 全量比较。
+	 *
+	 * 2026-10 审计 BUG-008:重绑走 vendor 的 `resyncModelInstance`(内部维护动作)——
+	 * 普通 `setModel` 会顺手 `setDefaultModelAndProvider`(改写全局默认模型)并追加
+	 * `model_change`(伪造一次用户主动切换),把目录热更新记成用户的模型选择。
+	 * 极小的 fake session 没有该方法时退回旧路径,只为了让既有单测桩继续可用。
 	 */
 	private async resyncModelCapabilities(rt: AgentSessionRuntime): Promise<void> {
 		// 取 state 用可选链:测试里的最小 fake session 没有 state(真会话恒有)
-		const live = (rt.session as { state?: { model?: unknown } }).state?.model as
-			| { provider?: unknown; id?: unknown; reasoning?: unknown; thinkingLevelMap?: unknown }
-			| null
-			| undefined;
+		const live = (rt.session as { state?: { model?: unknown } }).state?.model as { provider?: unknown; id?: unknown } | null | undefined;
 		if (!live || typeof live.provider !== "string" || typeof live.id !== "string") return;
 		if (live.provider === "unknown" || live.id === "unknown") return; // 占位:没有可重绑的模型
 		const fresh = rt.services.modelRuntime.getModel(live.provider, live.id);
 		if (!fresh) return;
-		if (
-			fresh.reasoning === live.reasoning &&
-			JSON.stringify(fresh.thinkingLevelMap ?? null) === JSON.stringify(live.thinkingLevelMap ?? null)
-		) {
+		if (!modelCapabilitiesDiffer(live, fresh)) return;
+		const session = rt.session as { resyncModelInstance?: (model: unknown) => unknown };
+		if (typeof session.resyncModelInstance === "function") {
+			session.resyncModelInstance(fresh);
 			return;
 		}
 		try {
@@ -421,9 +543,15 @@ export class SessionHost {
 			/* 该 provider 此刻没鉴权等:保留旧实例,不影响对话(下次选模型会重绑) */
 		}
 	}
-	async setThinkingLevel(level: string): Promise<void> {
+	setThinkingLevel(level: string): ThinkingLevelResult {
 		// ThinkingLevel 是字符串字面量联合,由调用方保证传入合法值
-		this.requireRuntime().session.setThinkingLevel(level as ThinkingLevel);
+		const session = this.requireRuntime().session;
+		session.setThinkingLevel(level as ThinkingLevel);
+		// vendor 的 getSupportedThinkingLevels 会按模型能力把档位 clamp 回去
+		// (非推理模型只有 off)。回报**实际**档位,别把回落说成设置成功(2026-10 审计 BUG-013)。
+		const state = (session as { state?: { thinkingLevel?: unknown } }).state;
+		const actual = typeof state?.thinkingLevel === "string" ? state.thinkingLevel : null;
+		return { level: actual, clamped: actual !== null && actual !== level };
 	}
 	/** 设置采样参数(temperature/topP);undefined 保持当前值, null 恢复模型默认。persist=false 时不写全局默认(演员级覆盖用)。 */
 	setSamplingParameters(temperature?: number | null, topP?: number | null, persist = true): void {
@@ -642,8 +770,19 @@ export class SessionHost {
 	async dispose(): Promise<void> {
 		this.unsubscribeSession?.();
 		this.unsubscribeSession = undefined;
-		await this.runtime?.dispose();
+		// 2026-10 审计 RISK-004:**先摘掉 runtime 再 await 关闭**。此前是
+		// `await runtime.dispose()` 之后才置 undefined,关闭期间到达的请求(并发 prompt /
+		// compact / 设置写入)会握着正在释放的 session 去写 —— 结果未定义。现在这些请求
+		// 会拿到明确的「会话已释放」错误,由调用方重试或走新 runtime。
+		const rt = this.runtime;
 		this.runtime = undefined;
+		this.released = true;
+		await rt?.dispose();
+	}
+
+	/** 释放后再 start() 视为重新装配,复位释放标记(会话状态由调用方负责重建)。 */
+	private markStarted(): void {
+		this.released = false;
 	}
 }
 
@@ -659,6 +798,127 @@ export function usableModelRef(model: unknown): { provider: string; id: string }
 }
 
 /**
+ * 影响请求的模型字段清单(2026-10 审计 BUG-006)。
+ *
+ * 会话手里的 `Model` 实例是装配那一刻从目录取的;**目录里同 provider/id 的条目改了
+ * 这些字段中的任何一个**,已建会话都必须换成新实例,否则「设置页显示新配置、实际请求
+ * 用旧配置」。修复前只比 `reasoning` 与 `thinkingLevelMap`,于是改上下文窗口 / 最大输出 /
+ * 输入类型 / 地址 / 鉴权头 / 兼容开关全都不生效。
+ */
+export const MODEL_CAPABILITY_FIELDS = [
+	"api",
+	"baseUrl",
+	"reasoning",
+	"thinkingLevelMap",
+	"contextWindow",
+	"maxTokens",
+	"input",
+	"headers",
+	"compat",
+] as const;
+
+/** 两个模型字段是否等价(函数值按引用比 —— headers 之类可以是函数)。 */
+function sameCapabilityField(a: unknown, b: unknown): boolean {
+	if (typeof a === "function" || typeof b === "function") return a === b;
+	return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+/**
+ * 判断目录里的新实例是否与会话手里的旧实例**在影响请求的字段上有差异**。
+ * 无差异时调用方不该重绑(免得每次刷新都动一次会话)。
+ */
+export function modelCapabilitiesDiffer(live: unknown, fresh: unknown): boolean {
+	if (typeof live !== "object" || live === null || typeof fresh !== "object" || fresh === null) return false;
+	for (const key of MODEL_CAPABILITY_FIELDS) {
+		const a = (live as Record<string, unknown>)[key];
+		const b = (fresh as Record<string, unknown>)[key];
+		if (!sameCapabilityField(a, b)) return true;
+	}
+	return false;
+}
+
+/**
+ * 把「在一批会话上设置思考档位」的结果聚合成宿主级摘要(2026-10 审计 BUG-013)。
+ *
+ * 逐个尝试、失败不抛:某个会话临时没有 runtime 不该让其余的也跟着不动,但失败**必须**
+ * 出现在 `failed` 里(调用方据此在响应里点名是哪个宿主没设上,而不是一律回 ok)。
+ */
+export function collectThinkingSummary(entries: Iterable<SessionHost>, level: string): ThinkingSummary {
+	const levels: string[] = [];
+	const failed: string[] = [];
+	let sessions = 0;
+	for (const host of entries) {
+		sessions++;
+		try {
+			const r = host.setThinkingLevel(level);
+			if (r?.level && !levels.includes(r.level)) levels.push(r.level);
+		} catch (err) {
+			failed.push(err instanceof Error ? err.message : String(err));
+		}
+	}
+	return { sessions, levels, clamped: levels.some((l) => l !== level), failed };
+}
+
+/**
+ * runtime 重建时要恢复的会话级设置(2026-10 审计 BUG-009,见 SessionHost.reloadRuntime)。
+ */
+interface RuntimeDefaults {
+	model: { provider: string; id: string } | null;
+	thinkingLevel: string | null;
+	temperature: number | null;
+	topP: number | null;
+}
+
+/**
+ * 在**单个会话**上设置思考档位的结果(2026-10 审计 BUG-013)。
+ */
+export interface ThinkingLevelResult {
+	/** 实际生效的档位(null = 该会话拿不到状态,如最小 fake)。 */
+	level: string | null;
+	/** 实际档位 ≠ 请求档位 —— 被模型能力回落(clamp)。 */
+	clamped: boolean;
+}
+
+/**
+ * **宿主级**思考档位设置结果:一个宿主可能带多个会话(编剧按对话、舞台按角色),
+ * 每个会话的模型能力不同,可能被 clamp 到**不同**档位。逐个回报,不拿主会话的值
+ * 冒充所有窗口(2026-10 审计 BUG-013)。
+ */
+export interface ThinkingSummary {
+	/** 处理到的会话数。 */
+	sessions: number;
+	/** 各会话实际生效的档位(去重、保序)。 */
+	levels: string[];
+	/** 至少一个会话被回落。 */
+	clamped: boolean;
+	/** 失败的会话(消息原文;不抛错,由调用方分宿主报告)。 */
+	failed: string[];
+	/**
+	 * **故意**没跟随全局档位的会话数(舞台演员:思考档位属于角色设计,§10.6)。
+	 * 用来把「这里本来就该跳过」与「改失败了」分开,免得调用方以为漏刷了。
+	 */
+	actorsOmitted?: number;
+}
+
+/**
+ * 模型目录刷新的**宿主级结果**(2026-10 审计 BUG-005)。
+ *
+ * 「刷新模型列表」现在要覆盖主会话 + 常驻编剧 + 舞台三处宿主:每个会话宿主在装配时
+ * 各建一份 ModelRuntime,只刷主会话时已建的编剧/舞台会话仍是旧目录。逐个宿主收集
+ * 结果,是为了让部分成功**不被伪装成**全成功(响应里能列出到底谁没刷上)。
+ */
+export interface ModelRefreshSummary {
+	/** 目录刷新期间 provider 报出的错误(provider id → 原文;主会话的联网刷新才有)。 */
+	errors: Array<{ provider: string; message: string }>;
+	/** 目录里可用的模型数(null = 该宿主拿不到目录统计)。 */
+	modelCount: number | null;
+	/** 本宿主处理的已建会话数。 */
+	sessions: number;
+	/** 因「还没选到模型」被释放的会话键(下次装配按最新目录重新解析)。 */
+	released: string[];
+}
+
+/**
  * 模型目录(models.json)变更后,让一批已建会话跟上最新目录;返回**该被释放的会话键**。
  *
  * 分两种情况(2026-10-04):
@@ -670,23 +930,29 @@ export function usableModelRef(model: unknown): { provider: string; id: string }
  *    No API key found;释放后下次对话按最新目录重新装配并自动选中可用模型。
  *
  * 逐个尝试、失败不抛:目录刷新不是用户那次写盘操作的成败条件。
+ * `allowNetwork` 透传给会话宿主(设置页「刷新模型列表」要真的联网拉远程目录)。
  */
 export async function refreshModelsOfHosts(
 	entries: Iterable<readonly [string, SessionHost]>,
-): Promise<string[]> {
+	options?: { allowNetwork?: boolean },
+): Promise<{ stale: string[]; sessions: number; errors: Array<{ provider: string; message: string }> }> {
 	const stale: string[] = [];
+	const errors: Array<{ provider: string; message: string }> = [];
+	let sessions = 0;
 	for (const [key, host] of entries) {
+		sessions++;
 		try {
 			if (host.currentModel() === null) {
 				stale.push(key);
 				continue;
 			}
-			await host.refreshModels();
+			const summary = await host.refreshModels(options);
+			if (summary?.errors) errors.push(...summary.errors);
 		} catch {
 			/* 单个会话刷新失败不影响其余(它下次装配仍会读最新 models.json) */
 		}
 	}
-	return stale;
+	return { stale, sessions, errors };
 }
 
 /**

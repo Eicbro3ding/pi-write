@@ -47,11 +47,14 @@ import { getAgentDir, getBookDir, resolveSkillReadOnlyDirs } from "../config.ts"
 import { createSessionRuntimeFactory } from "../session-factory.ts";
 import { chatTextOfMessage } from "../session-text.ts";
 import {
+	collectThinkingSummary,
 	extractMessagesFromManager,
 	refreshModelsOfHosts,
+	type ModelRefreshSummary,
 	type SessionCompactionResult,
 	type SessionContextUsage,
 	type SessionUsageStats,
+	type ThinkingSummary,
 } from "./session-host.ts";
 import type { AgentMessage, ThinkingLevel } from "../../vendor/pi-agent-core/src/index.ts";
 import type { ToolDefinition } from "../../vendor/pi-coding-agent/src/index.ts";
@@ -258,6 +261,21 @@ export class WriterHost {
 	/** 会话键 = `${slug}:${对话键}`(章节模式下对话键就是章节文件;book 模式是不透明 id)。
 	 *  编剧对话按会话键隔离——切章/切对话后各段独立历史与上下文(2026-08-10 起按章)。 */
 	private readonly hosts = new Map<string, SessionHost>();
+	/**
+	 * 创建中的会话(hostKey → Promise);2026-10 审计 BUG-021。
+	 *
+	 * 此前 getOrCreate 在 map miss 后先 `await createHost`、完成后才 `hosts.set`,于是同一
+	 * (书, 对话) 的并发首条请求会各自创建并各自 `SessionManager.open` 同一个
+	 * `writer-<id>.jsonl` —— 两个 SessionManager 同时写同一份 append-only JSONL 会交错/覆盖。
+	 * 现在同一 hostKey 的创建合并成一个 Promise,所有调用拿到同一个实例。
+	 */
+	private readonly creating = new Map<string, Promise<SessionHost>>();
+	/**
+	 * 每 hostKey 的世代号:dispose / 切模式 / 删对话时递增。
+	 * 创建跨越多个 await,期间宿主可能已被释放;创建完成后比对世代,不一致就自我释放、
+	 * 不写回 hosts(否则「释放后迟到的创建」会把已删会话重新登记)。
+	 */
+	private readonly hostEpoch = new Map<string, number>();
 	/** 每书最近一次对话声明的章节文件(chapter 模式:章节即会话;端点缺省兜底定位)。 */
 	private readonly currentChapter = new Map<string, string | null>();
 	/** 每书「当前对话」(book 模式:列表 isCurrent / 端点缺省定位;chapter 模式也记账,
@@ -401,24 +419,37 @@ export class WriterHost {
 		await this.forEachResidentHost("模型", (host) => host.setModel(model));
 	}
 
-	/** 换思考档位：同上(未来会话按新值装配 + 已建会话即时生效)。 */
-	async setThinkingLevel(level: string): Promise<void> {
+	/**
+	 * 换思考档位：未来会话按新值装配 + 已建会话即时生效。
+	 *
+	 * 返回**宿主级结果**(每个会话实际生效的档位):各会话的模型能力不同,可能被 clamp 到
+	 * 不同档位,不能拿主会话的值冒充所有窗口(2026-10 审计 BUG-013)。单个会话失败记进
+	 * `failed` 而不是抛错,由调用方分宿主报告。
+	 */
+	async setThinkingLevel(level: string): Promise<ThinkingSummary> {
 		this.thinkingLevel = level;
-		await this.forEachResidentHost("思考档位", (host) => host.setThinkingLevel(level));
+		return collectThinkingSummary(this.hosts.values(), level);
 	}
 
 	/**
 	 * models.json 变更后让已建编剧会话跟上最新模型目录;其中「一个模型都没选到」的
 	 * 空壳会话直接释放(下次对话按最新目录重新装配,见 refreshModelsOfHosts)。
+	 *
+	 * `allowNetwork` 透传:设置页「刷新模型列表 / 测试连接」必须让编剧会话也真去拉一次
+	 * 远程目录(2026-10 审计 BUG-005:此前联网刷新只打主会话)。
 	 */
-	async refreshModels(): Promise<void> {
-		const stale = await refreshModelsOfHosts(this.hosts);
+	async refreshModels(options?: { allowNetwork?: boolean }): Promise<ModelRefreshSummary> {
+		const { stale, sessions, errors } = await refreshModelsOfHosts(this.hosts, options);
+		const released: string[] = [];
 		for (const key of stale) {
+			this.bumpEpoch(key);
 			const host = this.hosts.get(key);
 			if (!host) continue;
 			this.hosts.delete(key);
 			await host.dispose().catch(() => undefined);
+			released.push(key);
 		}
+		return { errors, modelCount: null, sessions, released };
 	}
 
 	/** 把一次会话级设置应用到全部已建编剧会话(逐个尝试,收集首个错误后重抛)。 */
@@ -497,17 +528,63 @@ export class WriterHost {
 		return { key, chapter: key.endsWith(".jsonl") ? key : null };
 	}
 
-	/** 取(或惰性创建并启动)某书某段对话的常驻编剧会话。 */
+	/**
+	 * 取(或惰性创建并启动)某书某段对话的常驻编剧会话。
+	 *
+	 * 互斥(BUG-021):同 hostKey 的并发调用共享同一个创建 Promise;只有创建成功、
+	 * 订阅完成且世代未变时,实例才发布到 hosts。创建失败会清掉 in-flight,下次可重试。
+	 */
 	private async getOrCreate(slug: string, key: string, chapter: string | null): Promise<SessionHost> {
 		const hostKey = WriterHost.key(slug, key);
 		const existing = this.hosts.get(hostKey);
 		if (existing) return existing;
-		const host = this.options.createHost
-			? await this.options.createHost(`${hostKey}`)
-			: await this.createHost(slug, key, chapter);
+		// 创建中的同一个会话:复用同一个 Promise,不再开第二个 SessionManager
+		const inflight = this.creating.get(hostKey);
+		if (inflight) return inflight;
+		const task = this.createAndPublish(hostKey, slug, key, chapter);
+		this.creating.set(hostKey, task);
+		try {
+			return await task;
+		} finally {
+			// 只清理自己那一条:期间若有更新的创建顶上来,不要误删
+			if (this.creating.get(hostKey) === task) this.creating.delete(hostKey);
+		}
+	}
+
+	/** 创建宿主 → 订阅事件 → 世代校验后发布到 hosts(失败不登记,交由调用方重试)。 */
+	private async createAndPublish(hostKey: string, slug: string, key: string, chapter: string | null): Promise<SessionHost> {
+		const epoch = this.epochOf(hostKey);
+		const host = this.options.createHost ? await this.options.createHost(`${hostKey}`) : await this.createHost(slug, key, chapter);
 		host.subscribe((event) => this.eventSink(slug, this.eventChapterFile(key), event, this.eventConversation(key)));
+		// 创建期间被 dispose / 切模式 / 删对话:这个实例已经不属于当前世代,自我释放并报错
+		if (this.epochOf(hostKey) !== epoch) {
+			await host.dispose().catch(() => undefined);
+			throw new Error(`会话已释放(创建期间被关闭): ${hostKey}`);
+		}
+		// 已有实例(理论上不会,双保险):不覆盖别人,释放自己
+		const raced = this.hosts.get(hostKey);
+		if (raced && raced !== host) {
+			await host.dispose().catch(() => undefined);
+			return raced;
+		}
 		this.hosts.set(hostKey, host);
 		return host;
+	}
+
+	/** 取 hostKey 当前世代号(缺省 0)。 */
+	private epochOf(hostKey: string): number {
+		return this.hostEpoch.get(hostKey) ?? 0;
+	}
+
+	/** 使某 hostKey 的在建创建失效(dispose / 切模式 / 删对话时调用)。 */
+	private bumpEpoch(hostKey: string): void {
+		this.hostEpoch.set(hostKey, this.epochOf(hostKey) + 1);
+	}
+
+	/** 等待某 hostKey 的在建创建结束(可能已被上面 bumpEpoch 判废)。 */
+	private async settleCreating(hostKey: string): Promise<void> {
+		const inflight = this.creating.get(hostKey);
+		if (inflight) await inflight.catch(() => undefined);
 	}
 
 	/** 事件负载里的 chapterFile:chapter 模式的会话仍是章节名;book 模式的会话不绑章节(传 null)。 */
@@ -1000,6 +1077,10 @@ export class WriterHost {
 		const safeId = normalizeId(id, "对话 id");
 		if (safeId === null) throw new Error("缺少对话 id");
 		const key = WriterHost.key(slug, safeId);
+		// 先判废并等在建创建结束(BUG-021):否则「创建中的宿主」会在我们删掉 JSONL
+		// 之后才登记回来,文件被复活、实例与磁盘不一致
+		this.bumpEpoch(key);
+		await this.settleCreating(key);
 		const host = this.hosts.get(key);
 		if (host) {
 			this.hosts.delete(key);
@@ -1020,6 +1101,8 @@ export class WriterHost {
 
 	/** 全部会话释放(server stop 时调用)。 */
 	async disposeAll(): Promise<void> {
+		// 判废所有在建创建(BUG-021):它们完成后自我释放,不会把已清空的 hosts 重新填上
+		for (const key of this.creating.keys()) this.bumpEpoch(key);
 		const all = [...this.hosts.values()];
 		this.hosts.clear();
 		this.currentChapter.clear();
@@ -1029,12 +1112,16 @@ export class WriterHost {
 	/** 释放某本书的全部对话编剧会话(删除书前调用;无会话时静默)。
 	 *  不释放则删除后会话仍在内存,AI 继续写 draft/writer 文件,文件复活。 */
 	async dispose(slug: string): Promise<void> {
+		const prefix = `${slug}:`;
+		for (const key of this.creating.keys()) {
+			if (key.startsWith(prefix)) this.bumpEpoch(key);
+		}
 		const all: SessionHost[] = [];
 		for (const [key, host] of this.hosts) {
-			if (key.startsWith(`${slug}:`)) all.push(host);
+			if (key.startsWith(prefix)) all.push(host);
 		}
 		for (const key of [...this.hosts.keys()]) {
-			if (key.startsWith(`${slug}:`)) this.hosts.delete(key);
+			if (key.startsWith(prefix)) this.hosts.delete(key);
 		}
 		this.currentChapter.delete(slug);
 		this.currentConversation.delete(slug);

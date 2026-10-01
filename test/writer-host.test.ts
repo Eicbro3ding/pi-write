@@ -218,8 +218,81 @@ describe("WriterHost", () => {
 		});
 		await host.chat("fog-harbor", "a", "ch01.jsonl");
 		await host.chat("fog-harbor", "b", "ch02.jsonl");
-		await expect(host.refreshModels()).resolves.toBeUndefined();
+		// 单个会话刷新失败不影响其余:不抛出,结果里记录处理过的会话数
+		await expect(host.refreshModels()).resolves.toMatchObject({ sessions: 2 });
 		expect(good.refreshModels).toHaveBeenCalledTimes(1);
+	});
+
+	/**
+	 * 2026-10 审计 BUG-021:同一 (书, 对话) 的并发首次请求会各自 createHost 并各自
+	 * SessionManager.open 同一个 writer-<id>.jsonl —— 双写会交错/覆盖。现在同 key
+	 * 的创建合并成一个 Promise。
+	 */
+	it("同 key 并发 10 次只创建一次,所有调用拿到同一实例", async () => {
+		const fake = makeFakeHost();
+		const createHost = vi.fn(async () => {
+			await new Promise((r) => setTimeout(r, 5)); // 拉长创建窗口,放大并发
+			return fake as never;
+		});
+		const host = new WriterHost({ createHost: createHost as never });
+		await Promise.all(Array.from({ length: 10 }, (_, i) => host.chat("fog-harbor", `m${i}`, "ch01.jsonl")));
+		expect(createHost).toHaveBeenCalledTimes(1);
+		expect(fake.sendMessage).toHaveBeenCalledTimes(10);
+	});
+	it("创建失败清掉 in-flight:下一次调用可重新创建,不在 map 里留坏 Promise", async () => {
+		let attempt = 0;
+		const host = new WriterHost({
+			createHost: async () => {
+				attempt++;
+				if (attempt === 1) throw new Error("装配失败");
+				return makeFakeHost() as never;
+			},
+		});
+		await expect(host.chat("fog-harbor", "第一次", "ch01.jsonl")).rejects.toThrow("装配失败");
+		await expect(host.chat("fog-harbor", "第二次", "ch01.jsonl")).resolves.toBeUndefined();
+		expect(attempt).toBe(2);
+	});
+	it("创建中 disposeAll:迟到的创建自我释放,不写回 hosts", async () => {
+		let release: () => void = () => {};
+		const gate = new Promise<void>((r) => (release = r));
+		const fake = makeFakeHost();
+		const createHost = vi.fn(async () => {
+			await gate;
+			return fake as never;
+		});
+		const host = new WriterHost({ createHost: createHost as never });
+		const pending = host.chat("fog-harbor", "hi", "ch01.jsonl");
+		await host.disposeAll();
+		release();
+		// 迟到的创建被判废:自我释放,请求以明确错误结束(不会「释放后又登记回来」)
+		await expect(pending).rejects.toThrow("会话已释放");
+		expect(fake.dispose).toHaveBeenCalledTimes(1);
+		expect(fake.sendMessage).not.toHaveBeenCalled();
+		// 下一次请求是新世代,可正常创建
+		createHost.mockImplementation(async () => makeFakeHost() as never);
+		await expect(host.chat("fog-harbor", "again", "ch01.jsonl")).resolves.toBeUndefined();
+		expect(createHost).toHaveBeenCalledTimes(2);
+	});
+	it("按书 dispose 同样判废在建创建,不误伤别的书", async () => {
+		let release: () => void = () => {};
+		const gate = new Promise<void>((r) => (release = r));
+		const late = makeFakeHost();
+		const other = makeFakeHost();
+		const createHost = vi.fn(async (hostKey: string) => {
+			if (hostKey.startsWith("fog-harbor:")) {
+				await gate;
+				return late as never;
+			}
+			return other as never;
+		});
+		const host = new WriterHost({ createHost: createHost as never });
+		const pending = host.chat("fog-harbor", "hi", "ch01.jsonl");
+		const safe = host.chat("sunny-bay", "hi", "ch01.jsonl");
+		await host.dispose("fog-harbor");
+		release();
+		await expect(pending).rejects.toThrow("会话已释放");
+		await expect(safe).resolves.toBeUndefined();
+		expect(other.sendMessage).toHaveBeenCalledTimes(1);
 	});
 });
 

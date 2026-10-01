@@ -5,15 +5,22 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+	checkModelsConfigShape,
 	customModelIds,
 	deleteCustomModel,
 	deleteCustomProvider,
+	duplicateModelIds,
 	hasCustomProvider,
 	hasModel,
+	isThinkingFormat,
 	parseModelsConfig,
+	parseModelsConfigStrict,
 	serializeModelsConfig,
+	setThinkingFormat,
+	THINKING_FORMATS,
 	updateCustomModel,
 	upsertCustomProvider,
+	type CustomModelEntry,
 	type ModelsConfig,
 } from "../src/custom-models.ts";
 
@@ -47,6 +54,71 @@ describe("parseModelsConfig / serializeModelsConfig", () => {
 		const text = serializeModelsConfig({ imports: ["claude-code"], providers: { a: { apiKey: "x" } } });
 		expect(text.endsWith("\n")).toBe(true);
 		expect(JSON.parse(text)).toEqual({ imports: ["claude-code"], providers: { a: { apiKey: "x" } } });
+	});
+});
+
+/**
+ * 2026-10 审计 BUG-010:写入路径必须能把「读不懂」和「空配置」分开,否则损坏的
+ * models.json 会被空快照覆盖。这里覆盖严格解析与形状校验(server 用它决定是否拒绝写入)。
+ */
+describe("parseModelsConfigStrict / checkModelsConfigShape", () => {
+	it("合法配置 → ok;并与容错解析同值", () => {
+		const text = '{"imports":["claude-code"],"providers":{"a":{"models":[{"id":"a-1"}]}}}';
+		const parsed = parseModelsConfigStrict(text);
+		expect(parsed.ok).toBe(true);
+		if (parsed.ok) expect(parsed.cfg).toEqual(parseModelsConfig(text));
+	});
+	it("空对象 / 没有 providers 也合法", () => {
+		expect(parseModelsConfigStrict("{}").ok).toBe(true);
+		expect(parseModelsConfigStrict('{"imports":[]}').ok).toBe(true);
+	});
+	it("JSON 语法坏 → ok:false 且带原因", () => {
+		const parsed = parseModelsConfigStrict("{ 坏");
+		expect(parsed.ok).toBe(false);
+		if (!parsed.ok) expect(parsed.message).toContain("JSON 解析失败");
+	});
+	it("顶层不是对象 → ok:false", () => {
+		for (const text of ["[]", "null", '"x"', "42", "true"]) {
+			const parsed = parseModelsConfigStrict(text);
+			expect(parsed.ok).toBe(false);
+			if (!parsed.ok) expect(parsed.message).toContain("顶层必须是 JSON 对象");
+		}
+	});
+	it("providers 形状不对 / 条目非对象 / models 非数组 / 模型缺 id 都拒绝", () => {
+		const cases: Array<[unknown, string]> = [
+			[{ providers: [] }, "providers 必须是对象"],
+			[{ providers: "x" }, "providers 必须是对象"],
+			[{ providers: { a: [] } }, "providers.a 必须是对象"],
+			[{ providers: { a: { models: {} } } }, "providers.a.models 必须是数组"],
+			[{ providers: { a: { models: ["x"] } } }, "providers.a.models[0] 必须是对象"],
+			[{ providers: { a: { models: [{}] } } }, "providers.a.models[0].id 必须是非空字符串"],
+			[{ providers: { a: { models: [{ id: "" }] } } }, "providers.a.models[0].id 必须是非空字符串"],
+		];
+		for (const [value, message] of cases) {
+			expect(checkModelsConfigShape(value)).toBe(message);
+		}
+	});
+	it("合法形状返回 null(含空 providers 与多模型)", () => {
+		expect(checkModelsConfigShape({ providers: {} })).toBeNull();
+		expect(checkModelsConfigShape({ providers: { a: { models: [{ id: "x" }, { id: "y" }] } } })).toBeNull();
+	});
+});
+
+/** BUG-017:历史重复条目只报告、不静默删除(迁移策略见审计台账)。 */
+describe("duplicateModelIds", () => {
+	it("报出同 provider 下的重复 id 与次数;不重复的不报", () => {
+		const cfg: ModelsConfig = {
+			providers: {
+				a: { models: [{ id: "x" }, { id: "x" }, { id: "y" }] },
+				b: { models: [{ id: "z" }] },
+				c: {},
+			},
+		};
+		expect(duplicateModelIds(cfg)).toEqual([{ provider: "a", model: "x", count: 2 }]);
+	});
+	it("没有重复 / 空配置 → 空数组", () => {
+		expect(duplicateModelIds({ providers: {} })).toEqual([]);
+		expect(duplicateModelIds({})).toEqual([]);
 	});
 });
 
@@ -149,5 +221,43 @@ describe("upsertCustomProvider / hasCustomProvider", () => {
 		const c = cfg();
 		expect(hasCustomProvider(c, "mock")).toBe(true);
 		expect(hasCustomProvider(c, "openai")).toBe(false);
+	});
+});
+
+/**
+ * 2026-10 审计 BUG-002:思考参数协议写进模型条目的 `compat.thinkingFormat`
+ * (vendor 原生位置),清除时不留空 compat 对象、不动其它 compat 开关。
+ */
+describe("setThinkingFormat / isThinkingFormat", () => {
+	it("写入与覆盖:保留同一 compat 里的其它开关", () => {
+		const entry: CustomModelEntry = { id: "m", compat: { supportsStore: false } };
+		setThinkingFormat(entry, "deepseek");
+		expect(entry.compat).toEqual({ supportsStore: false, thinkingFormat: "deepseek" });
+		setThinkingFormat(entry, "openrouter");
+		expect(entry.compat).toEqual({ supportsStore: false, thinkingFormat: "openrouter" });
+	});
+	it("传 null 清除 thinkingFormat;compat 变空则整个删掉", () => {
+		const only: CustomModelEntry = { id: "m", compat: { thinkingFormat: "zai" } };
+		setThinkingFormat(only, null);
+		expect(only.compat).toBeUndefined();
+		const mixed: CustomModelEntry = { id: "m", compat: { thinkingFormat: "zai", supportsStore: true } };
+		setThinkingFormat(mixed, null);
+		expect(mixed.compat).toEqual({ supportsStore: true });
+	});
+	it("原有 compat 非对象时也能安全写入", () => {
+		const entry = { id: "m", compat: "坏值" } as unknown as CustomModelEntry;
+		setThinkingFormat(entry, "qwen");
+		expect(entry.compat).toEqual({ thinkingFormat: "qwen" });
+	});
+	it("isThinkingFormat 白名单与 THINKING_FORMATS 一致;未知值拒绝", () => {
+		for (const f of THINKING_FORMATS) expect(isThinkingFormat(f)).toBe(true);
+		expect(isThinkingFormat("nope")).toBe(false);
+		expect(isThinkingFormat(42)).toBe(false);
+		expect(isThinkingFormat(null)).toBe(false);
+	});
+	it("updateCustomModel 走 patch.thinkingFormat(与 server 的 PUT 同路)", () => {
+		const cfg: ModelsConfig = { providers: { p: { models: [{ id: "m", reasoning: true }] } } };
+		expect(updateCustomModel(cfg, "p", "m", { thinkingFormat: "deepseek" })).toBe(true);
+		expect(cfg.providers!.p!.models![0]!.compat).toEqual({ thinkingFormat: "deepseek" });
 	});
 });

@@ -90,7 +90,8 @@ function fakeHost() {
 			injectCalls.push(text);
 		},
 		setModel: async () => {},
-		setThinkingLevel: async () => {},
+		// 实际档位由模型能力决定(vendor 会 clamp);fake 直接回报一个档位对象
+		setThinkingLevel: async () => ({ level: "off", clamped: false }),
 		setSamplingParameters: () => {},
 		listProviders: async () => providers,
 		getProviderDetail: async (id: string) => {
@@ -514,7 +515,10 @@ describe("WriterServer", () => {
 	 */
 	it("POST /api/thinking 回报实际生效的档位(fake 会话停在 off)", async () => {
 		const t = await fetch(`${base}/api/thinking`, { method: "POST", headers: json, body: JSON.stringify({ level: "high" }) });
-		expect(await t.json()).toEqual({ ok: true, thinking: "off" });
+		const body = (await t.json()) as { ok: boolean; thinking: string; clamped: boolean; hosts: Array<{ host: string; levels: string[] }> };
+		expect(body).toMatchObject({ ok: true, thinking: "off", clamped: false });
+		// 分宿主回报(BUG-013):主会话的实际档位就在 hosts 里,不再只回一个全局值
+		expect(body.hosts[0]).toMatchObject({ host: "主会话", levels: ["off"] });
 	});
 	it("POST /api/sampling 返回 200 并校验范围", async () => {
 		const ok = await fetch(`${base}/api/sampling`, { method: "POST", headers: json, body: JSON.stringify({ temperature: 0.8, topP: 0.9 }) });
@@ -834,6 +838,191 @@ describe("WriterServer", () => {
 		const cfg = JSON.parse(readFileSync(customPath, "utf8")) as { providers: Record<string, { api?: string }> };
 		expect(cfg.providers.anthropic.api).toBe("anthropic-messages");
 	});
+	// ---- models.json 写入安全(2026-10 审计 BUG-010 / 011 / 017 / 018)----
+
+	/**
+	 * BUG-010:损坏 / 形状不对的 models.json 必须**拒绝写入**,原文件逐字节保留。
+	 * 修复前 readModelsConfig 把「读不懂」吞成 {},后续读-改-写用空快照覆盖原文件。
+	 */
+	it("models.json 损坏时写路由 409 且原文件不被改写(语法坏 / 顶层数组 / providers 形状不对)", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		const broken = ['{ 坏', "[]", '{"providers":[]}', '{"providers":{"a":{"models":{}}}}'];
+		for (const text of broken) {
+			writeFileSync(customPath, text);
+			const post = await fetch(`${base}/api/models/custom`, {
+				method: "POST",
+				headers: json,
+				body: JSON.stringify({ provider: "mock", model: "m-1", baseUrl: "http://127.0.0.1:8787/v1" }),
+			});
+			expect(post.status).toBe(409);
+			const body = (await post.json()) as { error: { code: string; message: string } };
+			expect(body.error.code).toBe("config_error");
+			// 原文件逐字节不变,且错误文案里没有 apiKey 泄露面(models.json 内容本身)
+			expect(readFileSync(customPath, "utf8")).toBe(text);
+			// 编辑 / 删除 / 建供应商同样拒绝
+			const put = await fetch(`${base}/api/models/custom`, {
+				method: "PUT",
+				headers: json,
+				body: JSON.stringify({ provider: "mock", model: "m-1", name: "x" }),
+			});
+			expect(put.status).toBe(409);
+			const del = await fetch(`${base}/api/models/custom?provider=mock&model=m-1`, { method: "DELETE" });
+			expect(del.status).toBe(409);
+			const provider = await fetch(`${base}/api/providers/custom`, {
+				method: "POST",
+				headers: json,
+				body: JSON.stringify({ provider: "mock", baseUrl: "http://127.0.0.1:8787/v1" }),
+			});
+			expect(provider.status).toBe(409);
+			expect(readFileSync(customPath, "utf8")).toBe(text);
+		}
+	});
+	it("models.json 不存在时仍可新增第一个 provider(model 缺省值来自未提供,不是解析失败)", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		rmSync(customPath, { force: true });
+		const res = await fetch(`${base}/api/models/custom`, {
+			method: "POST",
+			headers: json,
+			body: JSON.stringify({ provider: "first", model: "f-1", baseUrl: "http://127.0.0.1:8787/v1" }),
+		});
+		expect(res.status).toBe(200);
+		const cfg = JSON.parse(readFileSync(customPath, "utf8")) as { providers: Record<string, { models: Array<Record<string, unknown>> }> };
+		expect(cfg.providers.first.models[0]).toMatchObject({ id: "f-1", contextWindow: 32000, maxTokens: 4096 });
+	});
+
+	/**
+	 * BUG-011:同一进程内并发读-改-写会互相覆盖(各自基于旧快照整份写回)。
+	 * 修复后写路由走统一队列,锁内重新读最新文件。
+	 */
+	it("并发新增两个模型:两份新增都保留(不是后写覆盖先写)", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		writeFileSync(customPath, JSON.stringify({ providers: {} }));
+		const add = (model: string) =>
+			fetch(`${base}/api/models/custom`, {
+				method: "POST",
+				headers: json,
+				body: JSON.stringify({ provider: "concurrent", model, baseUrl: "http://127.0.0.1:8787/v1" }),
+			});
+		const [r1, r2, r3] = await Promise.all([add("c-1"), add("c-2"), add("c-3")]);
+		expect([r1.status, r2.status, r3.status]).toEqual([200, 200, 200]);
+		const cfg = JSON.parse(readFileSync(customPath, "utf8")) as { providers: Record<string, { models: Array<{ id: string }> }> };
+		expect(cfg.providers.concurrent.models.map((m) => m.id).sort()).toEqual(["c-1", "c-2", "c-3"]);
+	});
+	it("并发建供应商 + 新增模型:两类变更都保留", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		writeFileSync(customPath, JSON.stringify({ providers: {} }));
+		const [p, m] = await Promise.all([
+			fetch(`${base}/api/providers/custom`, {
+				method: "POST",
+				headers: json,
+				body: JSON.stringify({ provider: "cc-prov", baseUrl: "https://api.cc.test/v1", apiKey: "sk-cc" }),
+			}),
+			fetch(`${base}/api/models/custom`, {
+				method: "POST",
+				headers: json,
+				body: JSON.stringify({ provider: "cc-other", model: "cc-1", baseUrl: "https://api.cc2.test/v1" }),
+			}),
+		]);
+		expect([p.status, m.status]).toEqual([200, 200]);
+		const cfg = JSON.parse(readFileSync(customPath, "utf8")) as { providers: Record<string, { apiKey?: string; models?: Array<{ id: string }> }> };
+		expect(cfg.providers["cc-prov"]).toMatchObject({ apiKey: "sk-cc" });
+		expect(cfg.providers["cc-other"]!.models!.map((x) => x.id)).toEqual(["cc-1"]);
+	});
+
+	/**
+	 * 2026-10 审计 BUG-002:第三方 OpenAI 兼容服务对思考参数的写法各不相同,不能只按
+	 * provider 名推断 —— 模型条目可显式声明 `compat.thinkingFormat`。
+	 */
+	it("POST/PUT /api/models/custom 的 thinkingFormat 写进 compat;非法值 400;空串 = 清除", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		writeFileSync(customPath, JSON.stringify({ providers: {} }));
+		const created = await fetch(`${base}/api/models/custom`, {
+			method: "POST",
+			headers: json,
+			body: JSON.stringify({ provider: "thirdparty", model: "tp-1", baseUrl: "https://api.tp.test/v1", reasoning: true, thinkingFormat: "deepseek" }),
+		});
+		expect(created.status).toBe(200);
+		type Cfg = { providers: Record<string, { models: Array<Record<string, unknown>> }> };
+		let cfg = JSON.parse(readFileSync(customPath, "utf8")) as Cfg;
+		expect(cfg.providers.thirdparty.models[0]!.compat).toEqual({ thinkingFormat: "deepseek" });
+
+		const bad = await fetch(`${base}/api/models/custom`, {
+			method: "POST",
+			headers: json,
+			body: JSON.stringify({ provider: "thirdparty", model: "tp-2", baseUrl: "https://api.tp.test/v1", thinkingFormat: "not-a-format" }),
+		});
+		expect(bad.status).toBe(400);
+		// 非法值不落盘
+		cfg = JSON.parse(readFileSync(customPath, "utf8")) as Cfg;
+		expect(cfg.providers.thirdparty.models.map((m) => m.id)).toEqual(["tp-1"]);
+
+		// 编辑改成 openrouter
+		const put = await fetch(`${base}/api/models/custom`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ provider: "thirdparty", model: "tp-1", thinkingFormat: "openrouter" }),
+		});
+		expect(put.status).toBe(200);
+		cfg = JSON.parse(readFileSync(customPath, "utf8")) as Cfg;
+		expect(cfg.providers.thirdparty.models[0]!.compat).toEqual({ thinkingFormat: "openrouter" });
+
+		// 空串 = 清除显式声明(回到自动探测),compat 空对象不留残余
+		const cleared = await fetch(`${base}/api/models/custom`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ provider: "thirdparty", model: "tp-1", thinkingFormat: "" }),
+		});
+		expect(cleared.status).toBe(200);
+		cfg = JSON.parse(readFileSync(customPath, "utf8")) as Cfg;
+		expect(cfg.providers.thirdparty.models[0]!.compat).toBeUndefined();
+	});
+
+	/** BUG-017:同 provider 重复 POST 同 id 必须 400,不能落盘成隐藏的第二条。 */	it("POST /api/models/custom 重复模型 id → 400,磁盘不产生重复条目", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		writeFileSync(customPath, JSON.stringify({ providers: { dup: { api: "openai-completions", baseUrl: "http://127.0.0.1:1/v1", apiKey: "sk-x", models: [{ id: "d-1" }] } } }));
+		const res = await fetch(`${base}/api/models/custom`, {
+			method: "POST",
+			headers: json,
+			body: JSON.stringify({ provider: "dup", model: "d-1", baseUrl: "http://127.0.0.1:1/v1" }),
+		});
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { error: { message: string } };
+		expect(body.error.message).toContain("已存在");
+		const cfg = JSON.parse(readFileSync(customPath, "utf8")) as { providers: Record<string, { models: Array<{ id: string }> }> };
+		expect(cfg.providers.dup.models.map((m) => m.id)).toEqual(["d-1"]);
+	});
+
+	/** BUG-018:POST 必须复用 PUT 的正整数校验,不能把 0/负数/小数/非数字写成 null 或非法值。 */
+	it("POST /api/models/custom 的 contextWindow/maxTokens 非正整数 → 400(不落盘)", async () => {
+		const customPath = join(getAgentDir(), "models.json");
+		for (const bad of [0, -1, 1.5, "abc", "", true, [], {}]) {
+			writeFileSync(customPath, JSON.stringify({ providers: {} }));
+			const res = await fetch(`${base}/api/models/custom`, {
+				method: "POST",
+				headers: json,
+				body: JSON.stringify({ provider: "num", model: "n-1", baseUrl: "https://api.num.test/v1", contextWindow: bad }),
+			});
+			expect(res.status, `contextWindow=${String(bad)}`).toBe(400);
+			expect(readFileSync(customPath, "utf8")).toBe(JSON.stringify({ providers: {} }));
+			const res2 = await fetch(`${base}/api/models/custom`, {
+				method: "POST",
+				headers: json,
+				body: JSON.stringify({ provider: "num", model: "n-2", baseUrl: "https://api.num.test/v1", maxTokens: bad }),
+			});
+			expect(res2.status, `maxTokens=${String(bad)}`).toBe(400);
+		}
+		// 合法边界与科学计数法(数字或数字字符串形态)通过
+		writeFileSync(customPath, JSON.stringify({ providers: {} }));
+		const ok = await fetch(`${base}/api/models/custom`, {
+			method: "POST",
+			headers: json,
+			body: JSON.stringify({ provider: "num", model: "n-3", baseUrl: "https://api.num.test/v1", contextWindow: 1, maxTokens: "1e3" }),
+		});
+		expect(ok.status).toBe(200);
+		const cfg = JSON.parse(readFileSync(customPath, "utf8")) as { providers: Record<string, { models: Array<Record<string, unknown>> }> };
+		expect(cfg.providers.num.models[0]).toMatchObject({ contextWindow: 1, maxTokens: 1000 });
+	});
+
 	it("GET /api/plugins 返回插件列表(空目录 = 空数组)", async () => {
 		const res = await fetch(`${base}/api/plugins`);
 		expect(res.status).toBe(200);
@@ -2134,6 +2323,8 @@ describe("WriterServer · 换模型/思考等级广播到编剧与舞台会话",
 	const thinkingCalls: string[] = [];
 	/** 模型目录(models.json)变更后,三处宿主重读目录的记录(2026-10-04)。 */
 	const refreshCalls: string[] = [];
+	/** 采样参数逐宿主下发的记录(2026-10 审计 BUG-007)。 */
+	const samplingCalls: string[] = [];
 
 	beforeAll(async () => {
 		const fake = fakeHost();
@@ -2149,6 +2340,7 @@ describe("WriterServer · 换模型/思考等级广播到编剧与舞台会话",
 		};
 		main.setThinkingLevel = (level: string) => {
 			thinkingCalls.push(`main:${level}`);
+			return { level: "off", clamped: level !== "off" };
 		};
 		// reloadModels 走 SessionHost.refreshModels(刷新目录 + 重绑模型实例)
 		main.refreshModels = async () => {
@@ -2163,8 +2355,13 @@ describe("WriterServer · 换模型/思考等级广播到编剧与舞台会话",
 			setModel: async (model: string) => {
 				modelCalls.push(`writer:${model}`);
 			},
+			// 编剧会话的模型是非推理模型:请求 high 会被 clamp 回 off(BUG-013 的场景)
 			setThinkingLevel: async (level: string) => {
 				thinkingCalls.push(`writer:${level}`);
+				return { sessions: 1, levels: ["off"], clamped: level !== "off", failed: [] };
+			},
+			setSamplingParameters: (temperature?: number | null, topP?: number | null) => {
+				samplingCalls.push(`writer:${String(temperature)}/${String(topP)}`);
 			},
 		};
 		const stage = {
@@ -2179,6 +2376,11 @@ describe("WriterServer · 换模型/思考等级广播到编剧与舞台会话",
 			},
 			setThinkingLevel: async (level: string) => {
 				thinkingCalls.push(`stage:${level}`);
+				// 演员档位属于角色设计,故意不跟随(报出跳过条数)
+				return { sessions: 2, levels: [level], clamped: false, failed: [], actorsOmitted: 3 };
+			},
+			setSamplingParameters: (temperature?: number | null, topP?: number | null) => {
+				samplingCalls.push(`stage:${String(temperature)}/${String(topP)}`);
 			},
 		};
 		server = new WriterServer({
@@ -2225,6 +2427,86 @@ describe("WriterServer · 换模型/思考等级广播到编剧与舞台会话",
 	});
 
 	/**
+	 * 2026-10 审计 BUG-013:思考档位此前只回主会话的值。编剧/舞台会话的模型能力不同,
+	 * 可能被各自 clamp 到别的档位 —— 前端据此提示「已切换」等于骗人。现在分宿主回报。
+	 */
+	it("POST /api/thinking:分宿主回报实际档位与 clamp(不再只回主会话值)", async () => {
+		thinkingCalls.length = 0;
+		const res = await fetch(`${base}/api/thinking`, { method: "POST", headers: json, body: JSON.stringify({ level: "high" }) });
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			ok: boolean;
+			thinking: string | null;
+			clamped: boolean;
+			hosts: Array<{ host: string; ok: boolean; levels: string[]; clamped: boolean; actorsOmitted?: number }>;
+		};
+		expect(thinkingCalls).toEqual(["main:high", "writer:high", "stage:high"]);
+		expect(body.hosts.map((h) => h.host)).toEqual(["主会话", "编剧会话", "舞台会话"]);
+		// 编剧/舞台 stub 被模型能力回落到 off(档位不同),主会话停在 off
+		expect(body.hosts.find((h) => h.host === "编剧会话")).toMatchObject({ levels: ["off"], clamped: true });
+		expect(body.hosts.find((h) => h.host === "舞台会话")).toMatchObject({ levels: ["high"], actorsOmitted: 3 });
+		expect(body.thinking).toBe("off");
+	});
+
+	it("POST /api/thinking:某个宿主失败不挡其余,响应点名失败项", async () => {
+		// 舞台宿主在这个用例里抛错
+		const stage = (server as unknown as { options: { stageHost: { setThinkingLevel: unknown } } }).options.stageHost;
+		const original = stage.setThinkingLevel;
+		stage.setThinkingLevel = async () => {
+			throw new Error("舞台炸了");
+		};
+		try {
+			thinkingCalls.length = 0;
+			const res = await fetch(`${base}/api/thinking`, { method: "POST", headers: json, body: JSON.stringify({ level: "high" }) });
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as { ok: boolean; failures?: string[]; hosts: Array<{ host: string; ok: boolean; error?: string }> };
+			expect(body.ok).toBe(false);
+			expect(body.failures?.join(" ")).toContain("舞台炸了");
+			// 主会话与编剧仍然被设置(逐个尝试而非一炸就停)
+			expect(thinkingCalls).toEqual(["main:high", "writer:high"]);
+			expect(body.hosts.find((h) => h.host === "舞台会话")).toMatchObject({ ok: false });
+		} finally {
+			stage.setThinkingLevel = original;
+		}
+	});
+
+	/**
+	 * 2026-10 审计 BUG-007:采样参数此前按宿主顺序直接调用,前置宿主抛错会中断后面所有宿主
+	 * (已改的保持新值、没轮到的保持旧值,响应还只说"失败")。现在逐宿主容错 + 统一报错。
+	 */
+	it("POST /api/sampling:三个宿主都下发;某个宿主抛错不中断其余(BUG-007)", async () => {
+		samplingCalls.length = 0;
+		const ok = await fetch(`${base}/api/sampling`, { method: "POST", headers: json, body: JSON.stringify({ temperature: 0.5 }) });
+		expect(ok.status).toBe(200);
+		expect(samplingCalls).toEqual(["writer:0.5/undefined", "stage:0.5/undefined"]);
+
+		const writer = (server as unknown as { options: { writerHost: { setSamplingParameters: unknown } } }).options.writerHost;
+		const original = writer.setSamplingParameters;
+		const reached: string[] = [];
+		writer.setSamplingParameters = () => {
+			reached.push("writer");
+			throw new Error("编剧炸了");
+		};
+		const stage = (server as unknown as { options: { stageHost: { setSamplingParameters: unknown } } }).options.stageHost;
+		const originalStage = stage.setSamplingParameters;
+		stage.setSamplingParameters = () => {
+			reached.push("stage");
+		};
+		try {
+			const res = await fetch(`${base}/api/sampling`, { method: "POST", headers: json, body: JSON.stringify({ temperature: 0.5 }) });
+			expect(res.status).toBe(400);
+			const body = (await res.json()) as { error: { message: string } };
+			expect(body.error.message).toContain("编剧会话");
+			expect(body.error.message).toContain("编剧炸了");
+			// 编剧失败后,后面的舞台仍然被调用(此前实现会在这里停住)
+			expect(reached).toEqual(["writer", "stage"]);
+		} finally {
+			writer.setSamplingParameters = original;
+			stage.setSamplingParameters = originalStage;
+		}
+	});
+
+	/**
 	 * 2026-10-04 修「加完第三方供应商与模型、选中后开聊仍报
 	 * No API key found for the selected model」:models.json 是**每个会话装配时**各读一次的,
 	 * 只刷主会话时,已建编剧/舞台会话解析不到刚加的模型 —— POST /api/model 在它们上报 not found,
@@ -2250,5 +2532,20 @@ describe("WriterServer · 换模型/思考等级广播到编剧与舞台会话",
 		});
 		expect(res.status).toBe(200);
 		expect(refreshCalls).toEqual(["main", "writer", "stage"]);
+	});
+
+	/**
+	 * 2026-10 审计 BUG-005:联网刷新模型目录此前只打主会话(`modelRuntime.refresh`),
+	 * 已建的编剧/舞台宿主仍拿旧目录 —— 新模型在设置页可见却解析不到。
+	 */
+	it("POST /api/models/refresh:联网刷新也广播到编剧与舞台宿主,并按宿主回报结果", async () => {
+		refreshCalls.length = 0;
+		const res = await fetch(`${base}/api/models/refresh`, { method: "POST" });
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { hosts: Array<{ host: string; ok: boolean }> };
+		// 主会话在这条路由里自己先刷过一次,协调器补编剧与舞台
+		expect(refreshCalls).toEqual(["writer", "stage"]);
+		expect(body.hosts.map((h) => h.host)).toEqual(["编剧会话", "舞台会话"]);
+		expect(body.hosts.every((h) => h.ok)).toBe(true);
 	});
 });
