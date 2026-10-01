@@ -1,6 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.1] - 2026-10-03
+
+本版三条主线:① **新装默认就是单 Agent**(经典模式)—— 第一眼是编辑页与一个写作 agent,不必先弄懂导演 / 演员 / 编剧的分工;② **对话与章节解耦** —— 对话可自由新建 / 切换 / 删除,切章节不再切对话,对话里的 AI 能编辑任意章节,想回到「一章一段对话」也只需设置里一行;③ **技能改按需使用**,并补上 `/skill` 点名入口 —— 此前技能是「用户不问就不许用」的死库存。
+
+其余:首启向导 6 → 8 步(「对话范围」「执行命令」各自成页)、编剧拿到「只写写作风格」的窄通道 `style_update`、舞台把写作约束与文风采样送到真正落笔的地方、会话级设置(模型 / 思考级别)真正换得动、第三方许可声明补齐、动效与 UI 房收尾。手机端那一整套重排(原先记在 0.1.1 名下、2026-09-27 落地)也随本版一并发布。
+
+**升级影响**:从没写过 `~/.pi/writer/settings.json` 的安装会跟着新默认切到单 Agent(表现为舞台入口消失、编辑页的 AI 换成带全量工具的写作 agent);已经存过设置的安装不受影响 —— 文件里 `classicMode` 是显式值。
 
 首启向导从 6 步加到 8 步,并把「两选一卡片」收敛成一份实现。
 
@@ -121,8 +127,6 @@
 
 - [fix] 动效审查的剩余机械收敛（收尾）：① 全仓 **174 处**「给了时长但没写缓动曲线」的 `transition` 子声明补上 `var(--ease-out)`（浏览器默认的 `ease` 不是 token 曲线，同一交互不同属性会各踩一条）；② 4 处循环呼吸动画的裸 `ease-in-out` 换 `var(--ease-inout)`；③ 重复关键帧收敛到各留一份：`wz-fade`/`rsm-fade` → `fade-in`、`ws-pv-in` → `fade-up`、`rsm-pop` → `wz-pop`、`.compact-spin` 并入 `.act-spin`、`.m-live` 复用 `.companion-live`；④ 「减少动态效果」下章节目录的折叠退场不再收缩 margin/padding（framer 的 `reducedMotion` 只覆盖位移类属性），关系图联动居中改直接 `cy.center`；⑤ reduced-motion 熔断块补 `animation-delay: 0s / transition-delay: 0s`（只清时长不够——关闭态靠 `visibility 0s var(--dur-slow)` 的兜底延迟仍会真等 320ms）；⑥ 删死代码 `motion.ts` 的 `T` 与 `EDGE_IN.left`（无消费点），关系图内联表单的遮罩补淡入、正在滑出的视图交还点击、折叠箭头时长与其余 5 处对齐;⑦ 抽屉遮罩(mask)退场的一帧就 `pointer-events: none`(200ms 淡出期间遮罩仍铺满全屏,会吞掉抽屉关闭后紧接着的那一下点击——headless chromium 实测过穿透)。
 - [docs] 新增动效契约 `test/motion.test.ts`：扫全部 CSS 校验 —— ① `DUR`/`EASE` 与 `--dur-*`/`--ease-*` 逐值相等；② `EDGE_SLIDE` 与 `slide-*` 关键帧位移一致；③ 每个被引用的 animation 名都有 `@keyframes`；④ reduced-motion 块同时熔断 animation/transition 时长；⑤ **裸时长白名单只放无限环境循环与 spinner**（`sk-flow 1.4s` 属前者）。一次性时长一律必须走 token，否则测试直接红。
-
-## [0.1.1] - 2026-09-27
 
 手机端：编辑、伙伴对话、世界书、舞台、设置全部按手机重排 + 一批窄屏缺陷修复。
 
