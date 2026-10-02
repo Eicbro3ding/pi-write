@@ -11,11 +11,13 @@ Copyright (c) 2026 Eicbro3ding。
 | 组件 | 位置 | 来源 | 许可 | 许可全文 |
 |---|---|---|---|---|
 | pi 核心包(6 个) | `vendor/pi-*` | [earendil-works/pi](https://github.com/earendil-works/pi) | MIT,Copyright (c) 2025 Mario Zechner | [`vendor/LICENSE-pi.txt`](vendor/LICENSE-pi.txt) |
-| 网文创作方法论文库(76 份) | `skills/craft/references/` | [zenstory-ai/oh-story-claudecode](https://github.com/zenstory-ai/oh-story-claudecode)(收录 commit 见 ATTRIBUTION) | MIT,Copyright (c) 2025-2026 oh-story-claudecode | [`skills/craft/references/LICENSE-oh-story-claudecode.txt`](skills/craft/references/LICENSE-oh-story-claudecode.txt) |
+| 网文创作方法论文库(76 份) | `skills/craft-outline/references/`、`craft-prose/`、`craft-deslop/`、`craft-review/`(按阶段拆 4 个技能,每个目录各带一份许可与来源说明) | [zenstory-ai/oh-story-claudecode](https://github.com/zenstory-ai/oh-story-claudecode)(收录 commit 见 ATTRIBUTION) | MIT,Copyright (c) 2025-2026 oh-story-claudecode | [`skills/craft-outline/references/LICENSE-oh-story-claudecode.txt`](skills/craft-outline/references/LICENSE-oh-story-claudecode.txt)(4 份内容相同) |
 | npm 依赖(生产,含传递依赖) | `node_modules` → 内联进 `dist/` | npm registry | 全部为宽松许可(MIT / ISC / Apache-2.0 / BSD 等),**无 GPL / AGPL / LGPL** | 各包自带的 LICENSE 文件 |
 
 `vendor/` 与技能库的详细来源、修改说明见 [`vendor/NOTICE.md`](vendor/NOTICE.md) 与
-[`skills/craft/references/ATTRIBUTION.md`](skills/craft/references/ATTRIBUTION.md)。
+[`skills/craft-outline/references/ATTRIBUTION.md`](skills/craft-outline/references/ATTRIBUTION.md)
+（4 个技能目录下各一份、内容相同；`test/skill-references.test.ts` 会断言它们逐字节一致，
+改一处要四处同步）。
 
 ## 发行物:必须携带的声明
 

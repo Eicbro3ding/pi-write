@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appendStageEntry, makeStageEntry } from "../src/stage/stage-store.ts";
 import { getBookDir } from "../src/config.ts";
 import { ensureWorld, saveWorld } from "../src/world-data.ts";
-import { latestStageTranscript, stableFingerprint, WriterHost, writerToolset } from "../src/web/writer-host.ts";
+import { hostPromptScope, latestStageTranscript, stableFingerprint, WriterHost, writerToolset } from "../src/web/writer-host.ts";
 
 interface FakeHostLike {
 	subscribe(l: (e: unknown) => void): () => void;
@@ -458,5 +458,31 @@ describe("writerToolset（编剧 / 写作 agent 的权限边界）", () => {
 		const mcp = [{ name: "mcp_echo" }] as never;
 		expect(names(writerToolset({ classicMode: false, mcpTools: mcp }))).toContain("mcp_echo");
 		expect(names(writerToolset({ classicMode: true, mcpTools: mcp }))).toContain("mcp_echo");
+	});
+});
+
+/**
+ * 提示词的对话范围判据(2026-10-03):分离模式下同一个 WriterHost 里既有自由对话
+ * (不绑章节)也有收幕成文(按章节键建宿主),系统提示不能共用一套措辞。
+ */
+describe("hostPromptScope（该按哪一套对话范围叙述提示词）", () => {
+	it("绑定章节模式:章节键与兜底键都按绑定章节叙述", () => {
+		expect(hostPromptScope("chapter", "ch01.jsonl")).toBe("chapter");
+		expect(hostPromptScope("chapter", "default")).toBe("chapter");
+	});
+
+	it("分离模式:自由对话(不透明 id / default)按分离叙述", () => {
+		expect(hostPromptScope("book", "c-abc123")).toBe("book");
+		expect(hostPromptScope("book", "default")).toBe("book");
+	});
+
+	it("分离模式:收幕成文按章节键建宿主,仍按绑定章节叙述", () => {
+		// chatAndWait 永远按章节键取宿主(收幕成文天然要落某一章正文)——
+		// 若这里判成 book,提示词会告诉它「正文不锁在某一章」
+		expect(hostPromptScope("book", "ch04.jsonl")).toBe("chapter");
+	});
+
+	it("章节模式里遗留的自由对话 id(book→chapter 切回):按分离叙述,不再谎称绑章", () => {
+		expect(hostPromptScope("chapter", "c-abc123")).toBe("book");
 	});
 });

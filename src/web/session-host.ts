@@ -22,6 +22,7 @@ import type { AuthInteraction } from "../../vendor/pi-ai/src/index.ts";
 import { getUsageCostBreakdown } from "../../vendor/pi-coding-agent/src/core/usage-totals.ts";
 import { settleDanglingAsks } from "../ask-user.ts";
 import { getBooksDir } from "../config.ts";
+import { buildSessionTree, type SessionTreeInfo } from "../session-tree.ts";
 import { dedupePaths, skillDirsOf, toolGuardContext } from "../tool-guard.ts";
 import {
 	chatContentOfMessage,
@@ -67,6 +68,16 @@ export interface SessionStateSnapshot {
 		startedAt?: number;
 		endedAt?: number;
 		id?: string;
+		/**
+		 * assistant 组的**首段** entry id(user 消息不设,它的 id 就是首段)。
+		 *
+		 * 为什么要单独给:一个 assistant 气泡是多段输出合并的,`id` 取组内**最后**
+		 * 一段(历史口径),而「这条消息的版本位置」在树上是**首段**决定的
+		 * —— `src/session-tree.ts` 的版本地图按首段 entry 建键。前端用
+		 * `firstEntryId ?? entryId` 就能在「水合」与「实时」两条路径上取到同一个键
+		 * (实时路径 assistant 组的 entryId 本来就被 message_end 落在首段上)。
+		 */
+		firstEntryId?: string;
 		/**
 		 * provider 侧报错的原文(vendor 不抛异常,而是给 assistant 消息落
 		 * `stopReason: "error"` + `errorMessage`,content 为空)。
@@ -619,62 +630,16 @@ export class SessionHost {
 	}
 
 	/**
-	 * 会话树概览(分支栏数据):枚举全部叶子分支,每个分支给出
-	 * 起点摘要(路径上第一条 user 消息)、结尾摘要与消息数;currentLeafId 标记当前分支。
+	 * 会话树概览(分支 UI 数据):分支概览(起点/结尾摘要、消息数、当前标记)+
+	 * 每条消息的版本视图(「‹ 2/2 ›」就地切换的数据来源)。
+	 *
+	 * 构造逻辑收敛在 `src/session-tree.ts`(与磁盘只读恢复路径同一份实现)——
+	 * 这里只负责取运行时。
 	 */
-	async getSessionTree(): Promise<{
-		currentLeafId: string | null;
-		branches: Array<{
-			leafId: string;
-			isCurrent: boolean;
-			count: number;
-			summary: string;
-			tail: string;
-		}>;
-	}> {
+	async getSessionTree(): Promise<SessionTreeInfo> {
 		const rt = this.runtime;
-		if (!rt) return { currentLeafId: null, branches: [] };
-		const sm = rt.session.sessionManager;
-		const roots = sm.getTree() as unknown as Array<{
-			entry: { id: string };
-			children: unknown[];
-		}>;
-		const leaves: string[] = [];
-		const walk = (nodes: Array<{ entry: { id: string }; children: unknown[] }>): void => {
-			for (const n of nodes) {
-				if (n.children.length === 0) leaves.push(n.entry.id);
-				else walk(n.children as never);
-			}
-		};
-		walk(roots);
-		const currentLeafId = sm.getLeafId();
-		// 分支候选 = 树叶子 ∪ 当前 leaf 指针(branch 后 leaf 可能指向非叶子节点,
-		// 该节点的子树仍在树里——它也是合法的分支终点)
-		const candidates = new Set<string>(leaves);
-		if (currentLeafId) candidates.add(currentLeafId);
-		const branches = [...candidates].map((leafId) => {
-			const path = sm.getBranch(leafId);
-			const texts: string[] = [];
-			let summary = "";
-			for (const e of path) {
-				if (e.type !== "message") continue;
-				const msg = (e as { message?: { role?: string; content?: unknown } }).message;
-				const text = msg ? chatTextOfMessage(msg) : undefined;
-				if (!text) continue;
-				// 摘要取「路径上最后一条 user 消息」:分支后各分支共享前缀,
-				// 取第一条会得到相同摘要(看起来像串对话);最后一条提问最能区分分支
-				if (msg?.role === "user") summary = text;
-				texts.push(text);
-			}
-			return {
-				leafId,
-				isCurrent: leafId === currentLeafId,
-				count: texts.length,
-				summary: summary.slice(0, 24) || "开始",
-				tail: (texts[texts.length - 1] ?? "").slice(0, 24),
-			};
-		});
-		return { currentLeafId, branches };
+		if (!rt) return { currentLeafId: null, branches: [], versions: {} };
+		return buildSessionTree(rt.session.sessionManager);
 	}
 
 	getRuntime(): AgentSessionRuntime {
@@ -1076,6 +1041,8 @@ export function extractMessagesFromManager(sm: SessionManager): SessionStateSnap
 				// id 取组内**最后一条** entry(与改造前一致;撤回只作用于 user 消息,
 				// user 的 id 是组起点、不受合并影响)
 				id: entry.id,
+				// 首段 entry 是这条气泡在树上的「位置」:版本切换按它建键(见 firstEntryId)
+				...(last.firstEntryId !== undefined ? { firstEntryId: last.firstEntryId } : {}),
 				...(last.startedAt !== undefined ? { startedAt: last.startedAt } : {}),
 				...(at !== undefined ? { endedAt: at } : {}),
 				timestamp,
@@ -1094,6 +1061,8 @@ export function extractMessagesFromManager(sm: SessionManager): SessionStateSnap
 			...(at !== undefined ? { startedAt: at, endedAt: at } : {}),
 			timestamp,
 			id: entry.id,
+			// 组首段 = 这个位置本身(多段合并后 id 会推进到最后一段,首段要留住)
+			firstEntryId: entry.id,
 		});
 	}
 	return out;

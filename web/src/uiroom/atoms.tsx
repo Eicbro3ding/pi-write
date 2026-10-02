@@ -20,14 +20,14 @@ import { ToggleSwitch } from "../components/ToggleSwitch.tsx";
 import { Select } from "../components/Select.tsx";
 import { MobileHeader } from "../components/MobileHeader.tsx";
 import { StageAvatar, characterColor } from "../components/StageAvatar.tsx";
-import { BranchBar } from "../components/BranchBar.tsx";
+import { MessagePager } from "../components/MessagePager.tsx";
 import { FoldablePre } from "../components/FoldablePre.tsx";
 import { FilePreview } from "../components/FilePreview.tsx";
 import { ThemeCards, ThemeCardsFromManifest, type ThemeAsset } from "../components/ThemeCards.tsx";
 import { buildThemeFamilies } from "../themes.ts";
 import type { SelectOption } from "../select-logic.ts";
 import type { ToolIcon as ToolIconKind } from "../tool-status.ts";
-import type { BookFileEntryDto, SessionBranchInfo } from "../types.ts";
+import type { BookFileEntryDto } from "../types.ts";
 import { useUIRoomRuntime } from "../uiroom-runtime.tsx";
 import type { UIRoomEntry, UIRoomSection } from "../uiroom-types.ts";
 
@@ -100,13 +100,13 @@ export const ATOMS_ENTRIES: readonly UIRoomEntry[] = [
 		variants: ["三类角色", "尺寸梯度", "世界书主图", "取色函数"],
 	},
 	{
-		id: "branch-bar",
+		id: "msg-pager",
 		group: "atoms",
-		title: "分支栏",
-		module: "components/BranchBar.tsx",
-		symbols: ["BranchBar"],
-		note: "单分支时整条不渲染(这一档就是留白对照) / 多分支 / 流式中禁用。",
-		variants: ["单分支", "多分支", "流式中"],
+		title: "消息版本切换器",
+		module: "components/MessagePager.tsx",
+		symbols: ["MessagePager"],
+		note: "气泡下缘的「‹ 1 / 3 ›」:同一条消息有几个版本(编辑重发 / 重新生成)时就地切换;单版本整块不渲染,两端箭头到底各自禁用。",
+		variants: ["单版本", "多版本", "首版", "流式中禁用"],
 	},
 	{
 		id: "foldable-pre",
@@ -579,45 +579,44 @@ function AvatarColors() {
 }
 
 /* ════════════════════════════════════════════════════════════════
-   branch-bar —— 分支栏
+   msg-pager —— 消息版本切换器(气泡下缘的「‹ 2 / 2 ›」)
    ════════════════════════════════════════════════════════════════ */
 
-const BRANCHES: SessionBranchInfo[] = [
-	{ leafId: "b1", isCurrent: false, count: 12, summary: "第一章开头重写", tail: "林砚推门进渡口" },
-	{ leafId: "b2", isCurrent: true, count: 9, summary: "改成雨夜相遇", tail: "灯芯爆了一下" },
-	{ leafId: "b3", isCurrent: false, count: 21, summary: "保留原开头续写", tail: "他听见远处的潮声" },
-	{ leafId: "b4", isCurrent: false, count: 4, summary: "对话密度实验", tail: "「你迟到了。」" },
-];
-
-function BranchSingle() {
+function PagerSingle() {
 	return (
 		<DemoRow>
-			<span style={{ fontSize: 12, color: "var(--faint)" }}>只有一条分支时组件返回 null(这一格是留白对照)：</span>
-			<BranchBar
-				branches={[{ leafId: "only", isCurrent: true, count: 6, summary: "唯一分支", tail: "雨落在瓦上" }]}
-				currentLeafId="only"
-				onNavigate={() => {}}
-				streaming={false}
-			/>
+			<span style={{ fontSize: 12, color: "var(--faint)" }}>只有一个版本时组件返回 null(这一格是留白对照)：</span>
+			<MessagePager index={0} total={1} onSelect={() => {}} />
 			<span style={{ fontSize: 12, color: "var(--faint)" }}>← 这里什么都没渲染</span>
 		</DemoRow>
 	);
 }
 
-function BranchMany() {
+function PagerMany() {
 	return (
 		<DemoPanel>
-			<BranchBar branches={BRANCHES} currentLeafId="b2" onNavigate={() => {}} streaming={false} />
+			<MessagePager index={1} total={3} onSelect={() => {}} />
 		</DemoPanel>
 	);
 }
 
-function BranchStreaming() {
+function PagerFirst() {
 	return (
 		<div>
-			<DemoNote>streaming=true 时下拉禁用(服务端拒绝切换)。</DemoNote>
+			<DemoNote>第一个版本:左箭头禁用(没有更早的版本可回)。</DemoNote>
 			<DemoPanel>
-				<BranchBar branches={BRANCHES} currentLeafId="b3" onNavigate={() => {}} streaming />
+				<MessagePager index={0} total={4} onSelect={() => {}} />
+			</DemoPanel>
+		</div>
+	);
+}
+
+function PagerDisabled() {
+	return (
+		<div>
+			<DemoNote>流式中 / 消息还没结束时禁用(服务端此刻拒绝 navigate)。</DemoNote>
+			<DemoPanel>
+				<MessagePager index={0} total={2} disabled onSelect={() => {}} />
 			</DemoPanel>
 		</div>
 	);
@@ -874,10 +873,11 @@ export const ATOMS_SECTION: UIRoomSection = {
 		{ label: "世界书主图", note: "img 通路 + 主图缺失", render: AvatarImage },
 		{ label: "取色函数", note: "characterColor 的色板", render: AvatarColors },
 	],
-	"branch-bar": [
-		{ label: "单分支", note: "组件返回 null 的对照", render: BranchSingle },
-		{ label: "多分支", note: "四条分支、当前项高亮", render: BranchMany },
-		{ label: "流式中", note: "streaming=true → 下拉禁用", render: BranchStreaming },
+	"msg-pager": [
+		{ label: "单版本", note: "total=1 → 组件返回 null 的对照", render: PagerSingle },
+		{ label: "多版本", note: "第 2 / 共 3 版:两头都可点", render: PagerMany },
+		{ label: "首版", note: "左箭头禁用", render: PagerFirst },
+		{ label: "流式中禁用", note: "disabled → 两颗箭头都点不动", render: PagerDisabled },
 	],
 	"foldable-pre": [
 		{ label: "短文本", note: "3 行:不折叠", render: FoldShort },

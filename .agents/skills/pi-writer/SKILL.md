@@ -27,7 +27,7 @@ description: pi-writer 写作 agent 项目(独立仓库, vendor 化 pi 核心包
 | `src/session-text.ts` | **会话消息文本提取唯一实现**(chatTextOfMessage/chatThinkingOfMessage);TUI extension 与 web session-host 共用 |
 | `src/extension.ts` | TUI 内联扩展:`pi.registerTool`(word_count/world_update/world_find)+ 全部 `/` 命令 |
 | `src/prompt.ts` | `WRITER_SYSTEM_PROMPT` 写作系统提示词(工具约束/场景节奏/世界维护/**开场纪律**:新书没定风格时提一次并把长期偏好落盘) |
-| `prompts/` | 角色提示词本体:`writer-main.md`(写作 agent,TUI/经典模式/主会话,**2026-10-02 起 web 默认落地页**)/`writer-editor.md`(常驻编剧,**只有 world_find**)/`director.md`(导演,有 world_update,仅多 Agent 形态可达)。三份都带开场纪律,但落盘能力不同:写作 agent 与导演能写世界书,编剧只能写 `advice.md` 转交。`director.md` 的 `{STYLE_SETUP_PATH}` 由 `stage-extension.ts` 渲染成 onboarding 剧本绝对路径(舞台角色 `packagedSkills:false`,拿不到 `<available_skills>`) |
+| `prompts/` | 角色提示词本体:`writer-main.md`(写作 agent,TUI/经典模式/主会话,**2026-10-02 起 web 默认落地页**)/`writer-editor.md`(常驻编剧,**只有 world_find**)/`director.md`(导演,有 world_update,仅多 Agent 形态可达)。三份都带开场纪律,但落盘能力不同:写作 agent 与导演能写世界书,编剧只能写 `advice.md` 转交。`director.md` 的 `{STYLE_SETUP_PATH}` 由 `stage-extension.ts` 渲染成 onboarding 剧本绝对路径(舞台角色 `packagedSkills:false`,拿不到 `<available_skills>`)。**`writer-main.md` / `writer-editor.md` 还按 `conversationScope` 渲染**(`{SCOPE_SECTION}` 等占位,值在 `src/prompt.ts` 的 `SCOPE_VARS`):chapter 一列是解耦前原话(`SCOPE_SECTION` = 空串 → 默认模式提示词逐字节不变),book 一列换成「对话不隶属于任何章节 + 当前章节 = 用户正在看的那一章 + 正文白名单不设」。该用哪套由 `hostPromptScope(conversationScope, key)`(`writer-host.ts`)判定:key 是 `<id>.jsonl` 才按绑章叙述——**收幕成文(chatAndWait)在分离模式下仍按章节键建宿主,所以它必须拿绑章那套** |
 | `src/tools.ts` | 自定义工具:word_count(手写词扫描,不依赖 `\p{L}`)、world_update、world_find、**style_update**(编剧窄通道:只写写作约束/文风采样/世界观概述,`applyStyleUpdate` 复用 `applyWorldUpdate` 引擎,约束强制 target=writer 且按**名字** upsert/删除;不写 `stage/last-world-edit.json` 记录——那只归舞台页消费)(defineTool + typebox) |
 | `src/tool-guard.ts` | `installToolPathGuard` 工具路径守卫(书目录内读写 + skills 只读) |
 | `src/mcp/` | MCP 配置(config.ts typebox 校验)/连接管理(manager.ts SDK 封装)/工具适配(tools.ts JSON Schema→typebox) |
@@ -37,7 +37,7 @@ description: pi-writer 写作 agent 项目(独立仓库, vendor 化 pi 核心包
 | `electron/` | Electron 壳:main.ts(进程内起服务 + 窗口)、preload.ts |
 | `dist/web/server.cjs` | 服务端 esbuild 单文件产物(全部依赖内联);**必须 .cjs 后缀**(包根 type:module) |
 | `test/` | vitest 测试(globals:true,只测纯逻辑,不碰真实 provider) |
-| `skills/` | 打包的写作技能:outline/critique/revise/stage-scripting(SKILL.md)+ `craft`(**网文创作方法论文库**:76 份原样 vendor 的第三方 references,来源与 commit 见 `skills/craft/references/ATTRIBUTION.md`;SKILL.md 只做路由,不含流程)+ `onboarding`(**上手引导**:环境心智模型 / 风格引导剧本 / 功能教程备料三份 references;补首启向导不覆盖的「写作风格与题材风格」,三条铁律=没问不讲、不泄内部名、一次只讲一条) |
+| `skills/` | 打包的写作技能:outline/critique/revise/stage-scripting(SKILL.md)+ **网文方法论按阶段拆四个**:`craft-outline`(选题结构/大纲/32 张题材卡,50 份)/ `craft-prose`(正文技法/人物,17 份)/ `craft-deslop`(去 AI 味/文风,7 份)/ `craft-review`(审稿标准,2 份)—— 共 76 份原样 vendor 的第三方 references,来源与 commit 见 `skills/craft-outline/references/ATTRIBUTION.md`(**四份副本内容相同**,`test/skill-references.test.ts` 断言逐字节一致),SKILL.md 只做路由、不含流程 + `onboarding`(**上手引导**:环境心智模型 / 风格引导剧本 / 功能教程备料三份 references;补首启向导不覆盖的「写作风格与题材风格」) |
 
 ## Web 前端架构(深夜书房,2026-08-07 重设计)
 
@@ -103,6 +103,7 @@ description: pi-writer 写作 agent 项目(独立仓库, vendor 化 pi 核心包
 | `src/world-data.ts` `WORLD_FILES`/`WORLD_FILE_TITLES` | 世界书文件布局表 | 曾有 5 处散落映射,加文件类型要改五处 |
 | `web/src/nav.ts` `navItems` | 页面导航条目与可见性规则(经典模式去掉舞台、调试模式追加 UI 房) | 手机抽屉 / 顶栏 / UI 房三处各写一份清单,必然漂移成「手机点得到、桌面没有」 |
 | `web/src/use-exit-presence.ts` `useExitPresence` + `web/src/styles/presence.css` | **条件挂载弹层/浮层的退场动画唯一实现** | React 一卸载就没有元素可动画,纯 CSS 做不到退场;每处各写一份 `setTimeout` + 反向 keyframes 必然漂移(2026-09-30 审计:全仓 15+ 处弹层「进场有、退场硬切」) |
+| `src/prompt.ts` `SCOPE_VARS` | **「对话与章节的关系」在两份提示词里的叙述唯一实现**(`writer-main.md` / `writer-editor.md` 的 `{SCOPE_SECTION}` `{SESSION_SCOPE_LINE}` `{DRAFT_MIRROR_LINE}` `{EDITOR_SCOPE_LINE}` `{EDITOR_DRAFT_RULE}` 占位) | 解耦(2026-10-03)后提示词里曾同时存在「会话对应一章」与「可改任意章节」两套事实;谁敢在 md 里写死绑定口径,分离模式就又把活推回去(2026-10-03 修) |
 
 **手写边界(允许手写,不引框架)**:
 - HTTP 路由表(`server.ts` 的 `Route` 表 + `matchRoute`,~30 行;加端点 = 表加一行 + 一个 handler,handler 按域分组)。**路由表顺序敏感**:同方法同段数的条目中,静态段(如 `mcp/raw`)必须排在参数段(`mcp/:name`)之前。
@@ -176,6 +177,8 @@ env PI_WRITER_DIR="C:/.../tmp" node dist/web/server.cjs --no-browser --port 8899
     - 语义边界:舞台**演员**在 `cast.json` 里单独写了 `model` 的保留覆盖(与 temperature/topP 同款:角色级优先);思考档位不动演员(第一人称默认 low 是角色设计,§10.6),要改走 `updateActorSpec`。
 
 24. **「模型看得见技能文件却不知道有技能」= 技能目录清单漏加载**:vendor 只把 `loadSkills` 拿到的技能列进系统提示词的 `<available_skills>`(`buildSystemPrompt` 在「活跃工具含 `read`」时追加),而**能读**是路径守卫那一层(`readOnlyDirs` 放行 `skills/`)—— 两层不同源,所以会出现「模型能 `read skills/<name>/SKILL.md`,提示词里却没有它」。技能目录只认 `src/session-factory.ts` 的 `sessionSkillDirs()`(自带 `skills/` 恒加载 + `additionalSkillPaths` + `~/.agents/skills`,同时喂 `skillPaths` 与 `readOnlyDirs`);新增装配点若自行拼装目录就会漏(2026-10-01 的 `writer-host` 就是这么漏的:编辑页对话只列了全局技能)。舞台角色是唯一的显式例外(`packagedSkills: false`)。
+
+25. **提示词里不许写死「会话 = 一章」**:对话与章节解耦(2026-10-03)之后,`prompts/*.md` 里那句「每个 pi-writer *会话*对应书的一章」和「正文文件固定由当前章节决定」在分离模式下与事实相反(白名单不设、可改任意章),模型会据此自我收窄——用户让它改别的章节,它把活推回去。规则:凡随 `conversationScope` 变的事实一律写成 `{占位}`,值只放在 `src/prompt.ts` 的 `SCOPE_VARS`;渲染入口是 `buildWriterSystemPrompt(tools, shell, scope)` 与 `buildEditorSystemPrompt(scope)`,**哪个宿主用哪套**走 `hostPromptScope(conversationScope, key)`(判据:key `<id>.jsonl` = 绑章;分离模式下收幕成文 `chatAndWait` 也走章节键,所以它拿到的是绑章那套)。chapter 一列的文本是解耦前原话、`SCOPE_SECTION` 是空串 —— 写作 agent(`writer-main.md`)在绑定章节下的系统提示必须**逐字节不变**(`test/prompt.test.ts` 有护栏:chapter 的句子在、`# 对话范围` 整节不在、两种范围都不许残留 `{占位}`)。
 
 ## 需要深入时读 references/
 

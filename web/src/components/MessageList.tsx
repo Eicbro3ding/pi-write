@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import type { ChatErrorInfo, ChatMessage, ToolCallInfo } from "../types.ts";
+import type { ChatErrorInfo, ChatMessage, SessionVersionInfo, ToolCallInfo } from "../types.ts";
 import { DUR, EASE, EDGE_IN, STAGGER } from "../motion.ts";
 import { renderMarkdown } from "../markdown.ts";
 import { blocksText, formatDuration, turnDurationMs } from "../blocks.ts";
@@ -11,6 +11,7 @@ import { AskUserRecord } from "./AskUserCard.tsx";
 import { ConfirmCard, type ConfirmCardItem } from "./ConfirmCard.tsx";
 import { FoldablePre } from "./FoldablePre.tsx";
 import { Lu } from "./Lu.tsx";
+import { MessagePager } from "./MessagePager.tsx";
 import { PreviewCard } from "./PreviewCard.tsx";
 import { ToolIcon } from "./ToolIcon.tsx";
 import { toolActionRow, toolIcon, toolRenderForm } from "../tool-status.ts";
@@ -536,6 +537,8 @@ function Message({
 	debug,
 	streaming,
 	cards,
+	version,
+	onSwitchVersion,
 	onEdit,
 	onRetry,
 	onOpenSettings,
@@ -548,6 +551,13 @@ function Message({
 	streaming: boolean;
 	/** 工具块卡片槽(由 MessageList 用 useMemo 构造:引用稳定,可作 memo 比较依据)。 */
 	cards?: ToolCardSlots;
+	/**
+	 * 这条消息的版本视图(同位置有 ≥2 个版本时由 MessageList 从版本地图里取,
+	 * 键 = firstEntryId ?? entryId);缺省/单版本不画切换器。
+	 */
+	version?: SessionVersionInfo;
+	/** 切到某个版本(参数是分支终点 leafId);由 MessageList 转成稳定身份传下来。 */
+	onSwitchVersion?: (leafId: string) => void;
 	onEdit?: (m: ChatMessage, newText: string) => void;
 	/** 报错卡的「重试」(重放失败那一轮;由页面决定怎么重放)。 */
 	onRetry?: (m: ChatMessage) => void;
@@ -710,6 +720,23 @@ function Message({
 							/>
 						);
 					})}
+					{/* 版本切换器(「‹ 2 / 2 ›」):编辑重发 / 重新生成留下的同位置多版本,
+					    点箭头就地切分支。流式中不画 —— 服务端此刻拒绝 navigate,画一颗点了
+					    没反应的按钮比不画更坏。
+					    **`done` 只对 assistant 有意义**:store 的 done 只由 message_end 落在
+					    「最后一条未 done 的 assistant」上(user 消息被显式忽略,恒为 false),
+					    所以这里不能拿它当 user 气泡的门槛 —— 否则 user 那条的切换器永远不出现
+					    (2026-10-02 无头 chromium 走查抓到的真 bug,见 .e2e/version-pager.mjs)。 */}
+					{version && version.ids.length > 1 && !streaming && (m.role === "user" || m.done) && onSwitchVersion && (
+						<MessagePager
+							index={version.index}
+							total={version.ids.length}
+							onSelect={(i) => {
+								const leafId = version.leaves[i];
+								if (leafId !== undefined) onSwitchVersion(leafId);
+							}}
+						/>
+					)}
 				</>
 			)}
 		</div>
@@ -737,8 +764,22 @@ function Message({
  * 比较器返回 true = 跳过重渲染。
  */
 function messagePropsEqual(
-	prev: { m: ChatMessage; debug: boolean; streaming: boolean; cards?: ToolCardSlots; resolveImage?: (src: string) => string },
-	next: { m: ChatMessage; debug: boolean; streaming: boolean; cards?: ToolCardSlots; resolveImage?: (src: string) => string },
+	prev: {
+		m: ChatMessage;
+		debug: boolean;
+		streaming: boolean;
+		cards?: ToolCardSlots;
+		version?: SessionVersionInfo;
+		resolveImage?: (src: string) => string;
+	},
+	next: {
+		m: ChatMessage;
+		debug: boolean;
+		streaming: boolean;
+		cards?: ToolCardSlots;
+		version?: SessionVersionInfo;
+		resolveImage?: (src: string) => string;
+	},
 ): boolean {
 	if (prev.debug !== next.debug || prev.streaming !== next.streaming) return false;
 	// resolveImage 由页面 useCallback 稳定(它依赖当前书 slug);变了必须重渲染,
@@ -746,6 +787,8 @@ function messagePropsEqual(
 	if (prev.resolveImage !== next.resolveImage) return false;
 	// cards 由 MessageList 的 useMemo 构造(toolCallId 映射),引用稳定;变异则整表重建
 	if (prev.cards !== next.cards) return false;
+	// 版本视图同理由 MessageList 从服务端树里取(同一 object 引用);树一刷新就换新对象
+	if (prev.version !== next.version) return false;
 	const a = prev.m;
 	const b = next.m;
 	if (a === b) return true;
@@ -817,11 +860,13 @@ export function MessageList({
 	debug,
 	confirmCards,
 	previewCards,
+	versions,
 	onConfirmCard,
 	onRevertCard,
 	onEdit,
 	onRetry,
 	onOpenSettings,
+	onSwitchVersion,
 	emptyText = "向 pi 发一句话,开始今晚的写作",
 	resolveImage,
 }: {
@@ -835,6 +880,11 @@ export function MessageList({
 	confirmCards?: ReadonlyArray<ConfirmCardItem>;
 	/** 只读预览卡(舞台世界树 / 剧本确认),同样按 toolCallId 挂到工具块上。 */
 	previewCards?: ReadonlyMap<string, PreviewCardSlot>;
+	/**
+	 * 消息版本地图(键 = firstEntryId ?? entryId,见 src/session-tree.ts)。
+	 * 有 ≥2 个版本的 assistant/user 消息会在气泡下缘画「‹ n / N ›」。
+	 */
+	versions?: ReadonlyMap<string, SessionVersionInfo>;
 	/** 确认编剧编辑(归档删卡;文件已落盘)。 */
 	onConfirmCard?: (id: string) => void;
 	/** 回退编剧编辑(写回编辑前状态)。 */
@@ -845,6 +895,8 @@ export function MessageList({
 	onRetry?: (m: ChatMessage) => void;
 	/** 报错卡的「去设置模型 ›」;缺省不画这个入口。 */
 	onOpenSettings?: () => void;
+	/** 版本切换:参数是分支终点 leafId(服务端 navigate 后广播对齐);缺省不画切换器。 */
+	onSwitchVersion?: (leafId: string) => void;
 	/** 空态文案(编剧等复用场景传入专属文案;缺省为写作 agent 提示)。 */
 	emptyText?: string;
 	/**
@@ -868,6 +920,13 @@ export function MessageList({
 	settingsRef.current = onOpenSettings;
 	const retryStable = useCallback((m: ChatMessage) => retryRef.current?.(m), []);
 	const openSettingsStable = useCallback(() => settingsRef.current?.(), []);
+	/**
+	 * 版本切换同理走 ref 转发:Message 是 memo 的,而页面每次渲染都会给一个新的
+	 * 闭包。身份稳定 + 行为永远最新。
+	 */
+	const switchRef = useRef(onSwitchVersion);
+	switchRef.current = onSwitchVersion;
+	const switchStable = useCallback((leafId: string) => switchRef.current?.(leafId), []);
 	/**
 	 * 卡片槽(按 toolCallId 索引)。**必须是 memo 化的稳定引用**:Message 的 memo
 	 * 比较器按引用比 cards,每渲染重建 Map 会让整列表失去 memo(流式 delta 全量重渲)。
@@ -932,6 +991,10 @@ export function MessageList({
 					<div className="chat-inner">
 						{messages.map((m, i) => {
 							const idx = newIds.indexOf(m.id);
+							// 版本键 = 可见消息的首段 entry(user 消息就是它自己;assistant 组历史
+							// 水合时 id 落在末段上,首段另给 firstEntryId;实时路径 entryId 即首段)
+							const vkey = m.role === "assistant" ? (m.firstEntryId ?? m.entryId) : m.entryId;
+							const version = vkey ? versions?.get(vkey) : undefined;
 						// 仅新增消息带入场动画(右缘列:从右侧水平滑入,40ms 交错,上限 8 条)
 						return (
 							<motion.div
@@ -949,6 +1012,8 @@ export function MessageList({
 									debug={debug}
 									streaming={streaming}
 									cards={cards}
+									version={version}
+									onSwitchVersion={onSwitchVersion ? switchStable : undefined}
 									onEdit={onEdit}
 									onRetry={onRetry ? retryStable : undefined}
 									onOpenSettings={onOpenSettings ? openSettingsStable : undefined}

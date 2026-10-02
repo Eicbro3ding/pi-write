@@ -69,3 +69,18 @@ WritePage 的 SSE 订阅里,拦截事件(如 agent_settled)后**必须 dispatch(
 - user 消息开新组;同轮(同一 user 之后)多条 assistant 合并为一条气泡(text 空行拼接、thinking 拼接、工具卡片顺序保留)。
 - 服务端 `extractMessages` 按 getBranch() 提取(撤回后旧分支自然消失),id 取组内最后一条 entry 的 id。
 - 分支栏摘要:summary 取路径上**最后一条 user 消息**(分支共享前缀时第一条相同,无法区分),tail 取最后一条消息。
+
+## 11. 解耦只做了「会话身份」,提示词没跟上(2026-10-03 修)
+
+**现象**:设置里切成「对话与章节分离」(或首启向导「对话范围」选分离)后,AI 仍然按「一段对话绑一章」行事 —— 用户让它改第二章,它说这属于另一章的对话 / 只肯写当前章。
+
+**根因**:`2b4ab48`(对话与章节解耦)改了 `writer-host` 的会话身份、`writerDraftFile` 的正文白名单、`createConversation`,**没动 `prompts/`**。于是:
+- `writer-main.md` 仍写「每个 pi-writer *会话*对应书的一章」「散文只有一个落点:当前章节的 `draft/<章节id>.md`」;
+- `writer-editor.md` 仍写「正文文件**固定**为 `draft/<章节id>.md`,**由当前章节决定**……写其他路径会被工具拒绝」—— 而分离模式下 `writerDraftFile()` 返回 `undefined`,白名单根本没设,这是一句**与事实相反**的假约束。
+
+**修法**(三处同源):
+1. `prompts/writer-main.md` / `writer-editor.md` 里凡随 `conversationScope` 变的事实一律写成 `{SCOPE_SECTION}` / `{SESSION_SCOPE_LINE}` / `{DRAFT_MIRROR_LINE}` / `{EDITOR_SCOPE_LINE}` / `{EDITOR_DRAFT_RULE}` 占位;
+2. 值只放 `src/prompt.ts` 的 `SCOPE_VARS`(唯一实现);渲染入口 `buildWriterSystemPrompt(tools, shell, scope)`、`buildEditorSystemPrompt(scope)`;
+3. **哪个宿主用哪套**由 `web/writer-host.ts` 的 `hostPromptScope(conversationScope, key)` 定:key 是 `<id>.jsonl` 才算绑章。分离模式下自由对话(`c-xxxx` / `default`)走分离叙述,而**收幕成文**(`chatAndWait` 永远按章节键取宿主)拿的必须是绑章那套 —— 它这次就是要落某一章的正文。
+
+**不可回退的契约**:chapter 一列的文本是解耦前原话,`SCOPE_SECTION` 在 chapter 下渲染成空串 —— 默认模式的系统提示**逐字节不变**(`test/prompt.test.ts` 钉住:绑定原话在、《对话范围》整节不在、两种范围都不残留 `{占位}`)。改提示词时同时看 `test/prompts.test.ts` 的中间产物护栏(`散文只有一个落点` / `draft/<章节id>.md` 必须还在)。

@@ -35,7 +35,7 @@ pi-writer 探索的是:**Agent 如何在一个持续存在的创作世界里工�
 
 ### 2. 章节即会话(Chapter-based Agent)
 
-每一章 = 一个独立的 Agent 会话 + 一份草稿文件。上下文按章节隔离:本章草稿、相关世界设定、跨章记忆按预算注入;切章即切换工作现场,各章历史互不串扰。会话支持撤回、编辑重发与分支切换。
+默认每一章 = 一个独立的 Agent 会话 + 一份草稿文件。上下文按章节隔离:本章草稿、相关世界设定、跨章记忆按预算注入;切章即切换工作现场,各章历史互不串扰。会话支持撤回、编辑重发与分支切换。设置里可以把「对话与章节」切成**分离**:对话自由新建 / 切换 / 删除,切章节不切对话,对话里的 Agent 可以编辑任意章节。
 
 ### 3. 创作工作流(Creative Workflow)（这是特色，重点看！）
 
@@ -55,7 +55,7 @@ pi-writer 探索的是:**Agent 如何在一个持续存在的创作世界里工�
 | 上下文激活引擎 | 关键词命中 + 关联激活(深度内多源 BFS、强关联优先),预算内注入 |
 | 内置编辑器 | TUI 全屏编辑器(vim 可选)+ Web CodeMirror 6(正文常驻 + 右栏对话) |
 | 关系图 | 人物 / 世界关系图,布局与视口持久化,可标记强关联 |
-| 写作技能 | `onboarding`(上手引导:讲清心智模型、动笔前把风格定下来、按卡点讲功能)/ `craft`(网文创作方法论文库:结构 / 人物 / 情绪 / 爽点 / 钩子 / 反转 / 对话 / 去 AI 味 / 32 张题材卡,76 份原样收录的第三方方法论)/ `outline` / `critique` / `revise` / `stage-scripting` |
+| 写作技能 | `onboarding`(上手引导:讲清心智模型、动笔前把风格定下来、按卡点讲功能)/ 网文方法论按阶段拆四个:`craft-outline`(选题结构/大纲/32 张题材卡)/ `craft-prose`(正文技法/人物)/ `craft-deslop`(去 AI 味/文风)/ `craft-review`(审稿清单与平台评分)—— 76 份原样收录的第三方方法论,每个技能自带路由表 / `outline` / `critique` / `revise` / `stage-scripting` |
 | 分支会话 | 章节会话支持撤回、编辑重发、分支切换 |
 | 经典模式(单 Agent,默认) | 去掉舞台,编辑页的 AI 换成带全量工具直接写的写作 agent;与舞台多 Agent 形态在设置「高级 → Agent 形态」/ 首启向导「创作方式」步一键互切 |
 | 工作区面板 | AI 产出的中间产物(资料 / 笔记 / 草稿 / 图片)按语义分组列出 + 只读预览;`outline.md` 这类世界书导出镜像不进清单,权威视图仍在世界书页 |
@@ -126,4 +126,4 @@ MIT License,Copyright (c) 2026 Eicbro3ding。
 [`vendor/NOTICE.md`](vendor/NOTICE.md)。**第三方组件的完整清单、以及各发行物必须携带哪些声明,
 见 [`THIRD-PARTY.md`](THIRD-PARTY.md)。**
 
-`skills/craft` 的创作方法论文库收录自 [oh-story-claudecode](https://github.com/zenstory-ai/oh-story-claudecode)(MIT License,Copyright (c) 2025-2026 oh-story-claudecode),原文逐字节保留、未做改写。许可证全文随副本存放在收录目录内(见 [`skills/craft/references/`](skills/craft/references/)),来源 commit、收录与排除范围、以及再同步上游的步骤见同目录的 [`ATTRIBUTION.md`](skills/craft/references/ATTRIBUTION.md)。
+四个 `craft-*` 技能(`craft-outline` / `craft-prose` / `craft-deslop` / `craft-review`)的创作方法论文库收录自 [oh-story-claudecode](https://github.com/zenstory-ai/oh-story-claudecode)(MIT License,Copyright (c) 2025-2026 oh-story-claudecode),原文逐字节保留、未做改写。MIT 的许可证全文随每份副本走——**四个技能目录各带一份**(见 [`skills/craft-outline/references/`](skills/craft-outline/references/)),来源 commit、收录与排除范围、以及再同步上游的步骤见同目录的 [`ATTRIBUTION.md`](skills/craft-outline/references/ATTRIBUTION.md)(四份内容相同,测试会断言一致)。

@@ -34,6 +34,7 @@ import type {
 	ConversationDto,
 	ContextUsageDto,
 	SessionUsageStatsDto,
+	SessionVersionInfo,
 	StageScriptDto,
 	StyleSampleDto,
 	ToolCallInfo,
@@ -102,6 +103,8 @@ function messageStream(props: {
 	debug?: boolean;
 	confirmCards?: ReadonlyArray<ConfirmCardItem>;
 	previewCards?: ReadonlyMap<string, PreviewCardSlot>;
+	/** 消息版本地图(「‹ n / N ›」);只在专门那一档给,其余档保持原样。 */
+	versions?: ReadonlyMap<string, SessionVersionInfo>;
 }): ReactNode {
 	return (
 		<MessageList
@@ -111,11 +114,13 @@ function messageStream(props: {
 			debug={props.debug ?? false}
 			confirmCards={props.confirmCards}
 			previewCards={props.previewCards}
+			versions={props.versions}
 			onConfirmCard={noop}
 			onRevertCard={noop}
 			onEdit={noopEdit}
 			onRetry={noopRetry}
 			onOpenSettings={noop}
+			onSwitchVersion={noop}
 		/>
 	);
 }
@@ -766,8 +771,8 @@ export const CHAT_ENTRIES: readonly UIRoomEntry[] = [
 		title: "消息流",
 		module: "components/MessageList.tsx",
 		symbols: ["MessageList"],
-		note: "一个真实回合的完整形态:思考胶囊 + 动作行 + 摊开几十行输出的工具卡 + 预览卡 + 确认卡 + 问答记录 + markdown 正文;另有流式、空态、压缩、报错、调试原始卡。",
-		variants: ["对话", "流式中", "空态", "压缩中", "报错卡", "调试原始卡"],
+		note: "一个真实回合的完整形态:思考胶囊 + 动作行 + 摊开几十行输出的工具卡 + 预览卡 + 确认卡 + 问答记录 + markdown 正文;另有流式、空态、压缩、报错、调试原始卡,以及气泡下缘的消息版本切换器(「‹ n / N ›」)。",
+		variants: ["对话", "流式中", "空态", "压缩中", "报错卡", "调试原始卡", "多版本"],
 	},
 	{
 		id: "preview-card",
@@ -926,6 +931,41 @@ function StreamCompacting() {
 
 function StreamError() {
 	return messageStream({ messages: ERROR_MESSAGES, streaming: false });
+}
+
+/**
+ * 版本切换(「‹ n / N ›」):编辑重发后的两版开头 —— user 气泡停在「改过的开头」(2/2),
+ * assistant 气泡停在「改过的回复」(2/2)。键 = firstEntryId ?? entryId(见 session-tree)。
+ *
+ * user 那条特意写 `done: false`(store 的真形状:done 只由 message_end 落在
+ * 「最后一条未 done 的 assistant」上,user 消息恒为 false)—— 切换器的可见性不许
+ * 依赖 user 的 done,这条数据就是那个约束的陈列。
+ */
+const VERSION_MESSAGES: ChatMessage[] = [
+	{
+		id: "v-u2",
+		entryId: "v-u2",
+		role: "user",
+		done: false,
+		blocks: [{ kind: "text", text: "改过的开头:守塔人先别开口。" }],
+	},
+	{
+		id: "v-a2",
+		entryId: "v-a2",
+		firstEntryId: "v-a2",
+		role: "assistant",
+		done: true,
+		blocks: [{ kind: "text", text: "改过的回复:灯语替他说完了这一场。" }],
+	},
+];
+
+const VERSION_MAP: ReadonlyMap<string, SessionVersionInfo> = new Map([
+	["v-u2", { ids: ["v-u1", "v-u2"], leaves: ["v-a1", "v-a2"], index: 1 }],
+	["v-a2", { ids: ["v-a1", "v-a2"], leaves: ["v-a1", "v-a2"], index: 1 }],
+]);
+
+function StreamVersions() {
+	return messageStream({ messages: VERSION_MESSAGES, streaming: false, versions: VERSION_MAP });
 }
 
 function StreamDebugRaw() {
@@ -1226,6 +1266,7 @@ export const CHAT_SECTION: UIRoomSection = {
 		{ label: "压缩中", note: "compacting → 压缩提示卡", render: StreamCompacting },
 		{ label: "报错卡", note: "失败工具行 + 模型报错原文卡", render: StreamError },
 		{ label: "调试原始卡", note: "debug=true:全部退回原始卡(名称 + 参数 + 完整结果)", render: StreamDebugRaw },
+		{ label: "多版本", note: "气泡下缘「‹ 2 / 2 ›」:编辑重发留下的两版开头", render: StreamVersions },
 	],
 	"preview-card": [
 		{ label: "小改", note: "9 行 diff → 权重 < 60,默认展开", render: PreviewSmall },

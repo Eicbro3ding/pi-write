@@ -1137,18 +1137,23 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .inputbar.compact .btn-send { width: 24px; height: 24px; }
 .inputbar.compact .btn-abort { padding: 6px 12px; font-size: 12px; }
 
-/* 分支栏 */
-.branch-bar {
-  flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 16px 4px;
-  font-size: 12px; color: var(--muted);
+/* 消息版本切换器(气泡下缘的「‹ 2 / 2 ›」;MessagePager)——
+   与顶部「分支栏」的分工:分支栏管整段对话有哪几条分支,这里管**某一条消息**
+   有哪几个版本(编辑重发 / 重新生成留下的同位置兄弟)。右对齐贴着消息下缘,
+   与微信多版本消息同一套语言。 */
+.msg-pager {
+  display: flex; align-items: center; justify-content: flex-end; gap: 2px;
+  margin-top: 6px; color: var(--faint); font-size: var(--fs-12);
 }
-.branch-label { letter-spacing: 0.1em; color: var(--amber); flex: none; font-size: 11px; }
-.branch-select {
-  font-size: 12px; color: var(--ink); background: var(--bg-elev); border: 1px solid var(--line);
-  border-radius: var(--r-sm); outline: none; max-width: 220px; padding: 4px 8px;
+.pager-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: var(--r-full); color: inherit;
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
-.branch-select:focus { border-color: var(--amber); }
-.branch-select:disabled { color: var(--faint); }
+.pager-btn:hover:not(:disabled) { color: var(--amber); background: var(--hover-tint); }
+.pager-btn:disabled { opacity: 0.35; cursor: default; }
+/* 等宽数字 + 固定最小宽度:1/12 与 10/12 切换时不左右横跳 */
+.pager-count { min-width: 36px; text-align: center; font-variant-numeric: tabular-nums; letter-spacing: 0.06em; }
 
 /* 提示条 */
 .notice { font-size: 12px; padding: 8px 12px; border-radius: var(--r-md); line-height: 1.6; display: flex; align-items: center; gap: 10px; animation: fade-up var(--dur-base) var(--ease-out); }
@@ -3027,13 +3032,11 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 
 /* ════════════════════════════════════════════════════════════════
    入场补齐(2026-09-30 动效覆盖度审计)
-   原先这些状态是硬切:保存态文字(内联 transition 空转)、分支栏出现、
+   原先这些状态是硬切:保存态文字(内联 transition 空转)、
    空态↔消息列表互换、新建书名输入行。
    ════════════════════════════════════════════════════════════════ */
 /* 顶栏保存态文案:App 用 key={header.save} 重挂载,这里播淡入 */
 .stat-text { animation: fade-in var(--dur-fast) var(--ease-out); }
-/* 分支栏(存在多条分支时才渲染):出现时淡入上移,而不是「啪」地插进来 */
-.branch-bar { animation: fade-up var(--dur-base) var(--ease-out); }
 /* 消息列表容器:空态→有水合结果/首条消息时淡入 */
 .chat-inner { animation: fade-in var(--dur-base) var(--ease-out); }
 /* 书库栏「新建书」→ 书名输入行 */

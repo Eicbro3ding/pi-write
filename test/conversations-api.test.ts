@@ -279,7 +279,8 @@ describe("WriterServer · writer 端点的 conversation 参数", () => {
 		// tree/context/stats 也接受两个参数(空会话返回空树/空占用/空统计)
 		const tree = await fetch(`${base}/api/writer/${encodeURIComponent(slug)}/tree?chapterFile=ch01.jsonl&conversation=ch01.jsonl`);
 		expect(tree.status).toBe(200);
-		expect(await tree.json()).toEqual({ currentLeafId: null, branches: [] });
+		// versions = 消息版本视图(「‹ 2/2 ›」的数据源);空会话时为空对象
+		expect(await tree.json()).toEqual({ currentLeafId: null, branches: [], versions: {} });
 		const ctx = await fetch(`${base}/api/writer/${encodeURIComponent(slug)}/context?conversation=ch01.jsonl`);
 		expect(ctx.status).toBe(200);
 		expect(await ctx.json()).toEqual({ usage: null });

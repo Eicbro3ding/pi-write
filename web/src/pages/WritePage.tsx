@@ -37,7 +37,6 @@ import {
 	type SlashCommand,
 	type SlashContext,
 } from "../slash-commands.ts";
-import { BranchBar } from "../components/BranchBar.tsx";
 import { ChapterSidebar } from "../components/ChapterSidebar.tsx";
 import { ConversationSwitcher } from "../components/ConversationSwitcher.tsx";
 import { IconEdit } from "../components/Icons.tsx";
@@ -745,6 +744,10 @@ export function WritePage({
 					writerDispatch(ev);
 					// 回合结束 / 压缩结束后刷新上下文占用,「建议 /compact」提示才有依据
 					if (ev.type === "agent_settled" || ev.type === "compaction_end") refreshWriterUsage();
+					// 回合结束后会话树也会变(编辑重发落下新分支;运行时追加的配置 entry
+					// 还会让 leaf 前移)—— 分支栏与消息版本地图(「‹ n / N ›」)据此刷新,
+					// 否则新产生的版本要等到下次对齐才出现
+					if (ev.type === "agent_settled") refreshWriterTree();
 					// 回合结束后对话标题/时间会变(标题取自第一条用户消息):重拉清单,
 					// 切换器里的「新对话」才会变成用户真正说的那句话
 					if (ev.type === "agent_settled") void loadConversations();
@@ -1494,6 +1497,15 @@ export function WritePage({
 		return ask && !settledAskIds.has(ask.toolCallId) ? ask : null;
 	}, [writerSession.messages, settledAskIds]);
 	/**
+	 * 消息版本地图(消息气泡下缘的「‹ n / N ›」用):服务端会话树按**首段 entry id**
+	 * 建键,这里转成 Map 供 MessageList 逐条查。树一刷新(编辑重发/切分支/对齐)就换新
+	 * 对象 —— Message 的 memo 比较器按引用比它,所以只在树变化时重渲染。
+	 */
+	const writerVersions = useMemo(
+		() => new Map(Object.entries(writerTree?.versions ?? {})),
+		[writerTree],
+	);
+	/**
 	 * 右栏标签切换方向(与舞台右栏同一套约定:切到更靠后的标签 = 内容自右滑入,
 	 * 往回切 = 自左滑入)。原先 chat→memo 是硬切、memo→chat 才有一条单向动画 ——
 	 * 现在两个方向都走 .companion-body[data-memo-dir] 的滑入。
@@ -1999,24 +2011,21 @@ export function WritePage({
 							{/* 编剧(常驻编辑 agent)对话:会话状态经 processAgentEvent 维护,
 							   MessageList/InputBar 原样复用;确认卡锚定在触发编辑的 assistant 消息下;
 							   选中正文会自动预填选区上下文(见 handleSelectionChange)。
-							   分支栏:编辑重发产生新分支后在此切换旧分支(重发即分支)。 */}
-							<BranchBar
-								branches={writerTree?.branches ?? []}
-								currentLeafId={writerTree?.currentLeafId ?? null}
-								streaming={writerSession.isStreaming}
-								onNavigate={(leafId) => void navigateWriter(leafId)}
-							/>
+							   分支切换收在消息气泡下缘的「‹ n / N ›」(MessagePager)——编辑重发
+							   后想换回旧版就点箭头,不再有顶部的分支下拉栏。 */}
 							<MessageList
 								messages={writerSession.messages}
 								streaming={writerSession.isStreaming}
 								compacting={writerSession.compacting}
 								debug={debug}
 								confirmCards={confirmCards}
+								versions={writerVersions}
 								onConfirmCard={confirmCard}
 								onRevertCard={(id) => void revertCard(id)}
 								onEdit={(m, newText) => void editWriterMessage(m, newText)}
 								onRetry={(m) => retryWriterTurn(m)}
 								onOpenSettings={onOpenSettings}
+								onSwitchVersion={(leafId) => void navigateWriter(leafId)}
 								resolveImage={resolveImage}
 								emptyText={
 									classicMode

@@ -1,10 +1,27 @@
 # Changelog
 
+## [Unreleased]
+
+把 `craft` 一个技能拆成按阶段的四个：路由回到**描述层**，用户也能点名。
+
+- [refactor] `craft`（一个技能、76 份方法论、123 行路由表）拆成 `craft-outline`（选题结构/大纲/32 张题材卡，50 份）、`craft-prose`（正文技法/人物，17 份）、`craft-deslop`（去 AI 味/文风，7 份）、`craft-review`（审稿标准，2 份）。**触发时整份读的 SKILL.md 从 8.6KB 降到 2.7–5.4KB**（只有相关内容的那一份进上下文），且四条互不重叠的 description 让模型在「要不要打开这个技能」这一步就能分流——这正是上游用 13 个技能做的事，但上游那 13 条中文触发词互相重叠（都写着「写大纲」「修改第X章」「去AI味」），全塞进 `<available_skills>` 反而会让模型选错；四个按阶段切的则不会。用户也能 `/skill:craft-deslop` 直接点名。
+- [refactor] 文件按类物理拆开（`craft-outline/references/` 下扁平放 12 结构 + 6 题材，题材卡进 `cards/` 子目录；其余三个各自扁平），**没有留跨技能的转发路径**——转发只存在于 `outline` / `critique` / `revise` 三个流程技能指向 `craft-*`，那三处路径已同步改写。
+- [fix] **许可声明跟着副本走**：`ATTRIBUTION.md` 与 `LICENSE-oh-story-claudecode.txt` 在四个技能目录下**各一份、内容相同**（MIT 要求版权声明与许可全文随每一份拷贝分发；拆开后每个技能自包含）。四份必须逐字节一致，`test/skill-references.test.ts` 直接断言——改一处忘同步即红。
+- [test] `test/skill-references.test.ts` 的 craft 专属断言从「单个 craft」改成「四个 craft-* 通用」（16 例）：就这 4 个技能、每类份数与合计 76、frontmatter 合法、`磁盘↔路由表`双向一致、`SKILL.md` 里每个 ASCII `*.md` 记号都能在本技能找到（拼错即红，CJK 题材卡走反方向）、纯净性标记、许可与 commit、四份副本一致。另修 `test/skills-index.test.ts` 里写死的 `craft` 技能名。
+- [docs] `README` 写作技能行、`.agents/skills/pi-writer` 知识地图、`THIRD-PARTY.md`、`onboarding` 技能里的技能清单与路径全部跟上；`web/src/skill-invocation.ts` 注释里「craft 约 8.6KB」的举例更新为拆分后的真实体积。
+
 ## [0.1.2] - 2026-10-01
 
-四处收尾(均在 0.1.1 定稿之后):手机端输入条随文本长高并不再溢出、`/skill:<name>` 在对话里收成一枚可展开的芯片、写作 agent 起笔前先确认设定与约束不是空的、世界书工具的参数 schema 压平以配合受限解码的模型。
+五处收尾(均在 0.1.1 定稿之后):手机端输入条随文本长高并不再溢出、`/skill:<name>` 在对话里收成一枚可展开的芯片、写作 agent 起笔前先确认设定与约束不是空的、世界书工具的参数 schema 压平以配合受限解码的模型、**分支切换从顶部的下拉栏收进消息本身**;另补一处解耦漏网 —— **对话范围的提示词**。
 
-**升级影响**:无。不涉及数据格式、默认值或会话内容——技能消息仍是同一份展开文本落盘,只是界面折起来显示;工具参数 schema 只改变对模型暴露的形态,落盘数据与工具行为不变。
+**升级影响**:无。不涉及数据格式、默认值或会话内容——技能消息仍是同一份展开文本落盘,只是界面折起来显示;工具参数 schema 只改变对模型暴露的形态,落盘数据与工具行为不变。提示词这处只换**分离模式**下的措辞:「绑定章节」(默认)下写作 agent 的系统提示与解耦前逐字节一致(编剧那份只多一条「对话范围」说明,正文路径规则语义不变);`test/prompt.test.ts` 钉住。分支切换只改呈现:会话文件、leaf 语义、撤回/编辑行为都没动(`/tree` 多了一个只读的 `versions` 字段,会话状态里的消息多了一个 `firstEntryId`)。
+
+提示词里「会话 = 一章」这处漏网(2026-10-03):对话与章节解耦(0.1.1)只动了会话身份与白名单,`prompts/*.md` 没跟上。
+
+- [fix] **对话范围进提示词**(`prompts/writer-main.md` / `prompts/writer-editor.md` / `src/prompt.ts`):提示词此前无条件写着「每个 pi-writer *会话*对应书的一章」「散文落点是当前章节草稿」「正文文件固定由当前章节决定……写其他路径会被工具拒绝」——分离模式下模型据此自我收窄(用户让它改别的章节时把活推回去),编剧那句更是**与事实相反**:分离模式不设正文白名单(`writerDraftFile` 返回 `undefined`)。现在这些句子全部走 `{SCOPE_SECTION}` / `{SESSION_SCOPE_LINE}` / `{DRAFT_MIRROR_LINE}` / `{EDITOR_SCOPE_LINE}` / `{EDITOR_DRAFT_RULE}` 占位,值只写在 `src/prompt.ts` 的 `SCOPE_VARS`(**唯一实现**,`chapter` 列是解耦前原话、`# 对话范围` 整节在 chapter 下渲染为空串);渲染入口 `buildWriterSystemPrompt(tools, shell, scope)` 与新的 `buildEditorSystemPrompt(scope)`(编剧装配从 `writer-host` 搬进 `prompt.ts`,shell 行仍由调用方追加)。分离模式新增《对话范围》一节:**对话不隶属于任何章节、可编辑任意一章,且下文所有「当前章节 / 本章」一律指用户此刻正在看的那一章**(没在看就问他,别自己挑)。
+- [fix] **该用哪套由宿主身份定**(`src/web/writer-host.ts` 新纯函数 `hostPromptScope`):判据与会话身份同源 —— key 是 `<id>.jsonl` 才算「绑在一章上」。分离模式下同一个 `WriterHost` 里既有自由对话(`c-xxxx` / `default`,按分离叙述)也有**收幕成文**(`chatAndWait` 永远按章节键取宿主,它就是要落某一章正文,必须按绑章叙述)。
+- [docs] 跟着改的还有单一绑定口径的几处:`skills/onboarding/references/environment.md`(三句话版本 / 「一章一个现场」→「现场不串」/ 落点纪律 / 新增「对话与章节的关系」一节)、`feature-tour.md` 的「章节即会话」小节、`README.md` 的「章节即会话」段。
+- [test] `test/prompt.test.ts` 钉五条:缺省与显式 `chapter` 同文且**不出现《对话范围》整节**、chapter 的绑定原话与落点硬规则照旧、book 不出现绑定口径且把「当前章节」定义成用户正在看的那一章、编剧两种范围的正文路径规则(book 不许再说「写其他路径会被工具拒绝」)、两种范围都不残留占位符;`test/writer-host.test.ts` 钉 `hostPromptScope` 的四种组合(含收幕成文)。
 
 手机端输入条:胶囊此前写死高度,多行文本从胶囊上下两侧穿出去(2026-10-01 手机端截图)。
 
@@ -29,6 +46,14 @@
 
 - [fix] **`world_update` / `style_update` 的参数 schema 压平**(`src/tools.ts`):此前把「以 `op` 区分的判别联合」直接当工具参数暴露,JSON Schema 是一段约 7.4KB 的 `anyOf`(首个分支 required 是 `upsert_entry` 的 `type`/`title`)。受限解码 / 只读首分支的 provider 会把它塌成那一支,`set_world_summary`、`upsert_relation` 这类非首分支操作发不出来(2026-10-02 实机反馈:「op 常量与字段不符」「关系操作被 title/type 卡住」)。现在 `flattenOpUnion` 把联合压成单一对象(`op` 收成 enum、其余字段 optional,约 1.4KB),必填性由 `normalizeWorldUpdate` / `normalizeStyleUpdate` 按 op 在运行时兜底——缺字段 / 未知 op 抛中文可读报错回灌给模型,而不是写坏数据或静默无操作(未知 op 此前会静默跳过)。`word_count` 的 `modes` 同步由 `anyOf` 常量改为 `string + enum`。
 - [test] `test/tools.test.ts`:钉住「无 anyOf / 只有 op 必填 / 关系字段可见 / op 枚举齐全」、`normalize*` 的缺字段与未知 op 报错,以及 `upsert_relation` + `set_world_summary` 端到端落盘。
+
+分支切换:此前是对话视图顶部的一条下拉栏,下拉里是各分支的起点/结尾摘要,切的是**整条对话的 leaf** —— 想「换回上一版那句话」得先弄懂「分支」是什么,而且**每条消息属于哪一版在界面上完全看不出来**(编辑重发留下的旧版本,只能靠下拉里的摘要文字猜)。
+
+- [feat] **分支切换收进消息本身**(`web/src/components/MessagePager.tsx` 新增 + `MessageList.tsx` / `WritePage.tsx` / `web/src/types.ts` / `web/src/store.ts`):同一条消息存在多个版本时(编辑重发产生新的 user 兄弟、重新生成产生新的 assistant 兄弟),在气泡下缘右对齐画一排「‹ 2 / 2 ›」,点箭头就地切到上/下一版 —— 与微信多版本消息同一套语言,不必先理解「分支」。流式中不画(服务端此刻拒绝 navigate,画一颗点不动的按钮比不画更坏)。UI 房同步加两处陈列(原子控件「消息版本切换器」+ 消息流「多版本」档)。
+- [refactor] **版本视图落到服务端唯一实现**(`src/session-tree.ts` 新增):`buildSessionTree(sm)` 一次算出「分支概览 + 每条消息的版本」(版本 = 同一父 entry 下的同角色消息),`SessionHost.getSessionTree` 与 `writer-host` 服务重启后从磁盘恢复的那份 walk 都改成调它 —— 此前同一段「叶子遍历 + 摘要」有两份拷贝(0.1.2 审计),再加版本视图必然抄出第三份。版本地图的键是**可见消息的首段 entry**:assistant 气泡是多段输出(思考/工具/正文)合并成的,`id` 按历史口径取组内**最后**一段,所以 `SessionMessageDto` 新增 `firstEntryId`,前端一律按 `firstEntryId ?? entryId` 取键(实时路径的 entryId 本来就落在首段上,两条路径因此取到同一个键)。切某一版时去的分支终点取「离当前位置最近」的那一条(先比与当前路径的公共后缀,再比路径长度)——换版本时对话尽量停在原处,而不是跳到别的分支尾巴上。
+- [fix] **切换器的可见性不许拿 `done` 当 user 消息的门槛**:store 的 `done` 只由 `message_end` 落在「最后一条未 done 的 assistant」上,user / toolResult 消息被显式忽略、**恒为 false**,而编辑重发产生的版本**恰恰全在 user 消息上** —— 门槛一加就成了「assistant 的能显示、user 的永远不显示」,功能等于没生效。无头 chromium 走查真机时抓到(SSR 自检里我把 user 数据写成 `done: true`,等于把 bug 一起 mock 掉了),现在门槛是 `!streaming && (user || done)`。
+- [refactor] **顶部的分支下拉栏删除**(`web/src/components/BranchBar.tsx` 删除 + `WritePage.tsx` 去掉引用 + `styles.css` 去掉 `.branch-bar/.branch-label/.branch-select` 与它的入场动画 + `uiroom/atoms.tsx` 去掉展项):两个入口表达同一件事,只会让人猜哪个更「官方」;版本切换器就长在消息上,不要求用户先理解分支。`/tree` 的 `branches` 字段保留(只读,测试与将来的分支总览还用得上),前端不再消费。
+- [test] `test/session-tree.test.ts`(8 例:内存 fake 树 + **真实 jsonl 落盘解析**)钉住:线性会话没有版本、编辑重发产生 user 版本且 `leaves` 指向各自分支终点、重新生成产生 assistant 版本、非消息兄弟(模型切换等)不参与、同版本落在多条分支上时的选择口径、leaf 停在非叶子节点(branch 之后)也算候选终点、空会话;`test/session-host.test.ts` 加两例走真 `SessionManager`(retract 后重发确实产生兄弟;多段 assistant 气泡的 `firstEntryId` 是首段而 `id` 是末段);`test/message-pager.test.ts` 用 SSR 钉可见性五条(user `done:false` 必须画、assistant 未结束不画、流式中不画、单版本/无版本不画、assistant 组按 `firstEntryId` 取键)。另用无头 chromium + CDP(`.e2e/version-pager.mjs`,不入库)拿一份真实的三版本会话走查:10/10 通过 —— 「3 / 3」出现在那条 user 气泡下缘、点 ‹ 变「2 / 3」且正文整段换成那一版、点 › 切回,页面上已无 `.branch-bar`。
 
 ## [0.1.1] - 2026-10-03
 

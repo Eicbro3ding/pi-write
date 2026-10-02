@@ -86,6 +86,9 @@ export function messagesToEvents(messages: readonly SessionMessageDto[]): Array<
 				...(m.model !== undefined ? { model: m.model } : {}),
 			},
 			...(m.id ? { entryId: m.id } : {}),
+			// assistant 组的首段 entry id:版本切换按它取键(组内后续段的 id 是 `id`,
+			// 不能当位置代表),见 SessionMessageDto.firstEntryId
+			...(m.firstEntryId !== undefined ? { firstEntryId: m.firstEntryId } : {}),
 			...(m.startedAt !== undefined ? { startedAt: m.startedAt } : {}),
 			...(m.endedAt !== undefined ? { endedAt: m.endedAt } : {}),
 		});
@@ -398,6 +401,8 @@ export function retryTargetForError(messages: readonly ChatMessage[]): ChatRetry
 						blocks: mergeSegment(last.blocks, seg),
 						// 上一条的 message_end 已置 done,合并后继续流式,等本段 message_end 再置 done
 						done: false,
+						// 组首段 entry id 随组保留(版本切换取键用)
+						...(last.firstEntryId !== undefined ? { firstEntryId: last.firstEntryId } : {}),
 						// 水合:组的终点随最后一段推进(实时路径该字段由 agent_settled 落)
 						...(event.endedAt !== undefined ? { endedAt: event.endedAt } : {}),
 					};
@@ -409,6 +414,8 @@ export function retryTargetForError(messages: readonly ChatMessage[]): ChatRetry
 				// message_end 到达时替换成真 id(entryId)
 				id: event.entryId ?? localId(),
 				...(event.entryId ? { entryId: event.entryId } : {}),
+				// 历史水合:assistant 组的首段 entry id(实时路径没有,那时 entryId 就是首段)
+				...(event.firstEntryId !== undefined ? { firstEntryId: event.firstEntryId } : {}),
 				role: m.role,
 				blocks: seg,
 				done: false,

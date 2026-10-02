@@ -1,21 +1,22 @@
 /**
- * craft 技能（网文方法论文库）契约测试。
+ * craft-* 技能（网文方法论文库）契约测试。
  *
- * 这批文档是**原样 vendor** 进来的第三方内容（来源与 commit 见
- * `skills/craft/references/ATTRIBUTION.md`），不是手写代码，所以测试守的是
- * 「目录、路由、来源三者不会悄悄漂移」，共四件事：
+ * 这批文档是**原样 vendor** 进来的第三方内容（来源与 commit 见各技能的
+ * `references/ATTRIBUTION.md`），不是手写代码，所以测试守的是「目录、路由、来源
+ * 三者不会悄悄漂移」。四条 craft 专属不变量：
  *
- * 1. **索引 → 磁盘**：`craft/SKILL.md` 与三个兄弟技能里写到的每个方法论文档都真的存在
- *    （模型照着路由表去 read 却读到不存在的文件，是最难查的一类故障——它只会表现为
- *    「agent 说找不到方法」）。
- * 2. **磁盘 → 索引**：`references/` 下每份文档都被 `craft/SKILL.md` 索引到
- *    （同步上游时挑进来一份新文件却忘了登记 → 红；这是「搬了没人知道它存在」）。
- * 3. **纯净性**：收录文件里不含上游的流程/宿主耦合标记 —— 判据见 ATTRIBUTION.md
- *    「收的是什么」。同步上游时把 workflow/脚本类夹带进来 → 红。
- * 4. **断链登记**：收录文件之间残留的交叉引用（指向未收录文件）必须逐个在
- *    ATTRIBUTION.md 里登记。上游改了引用、或同步时漏掉一份被引用的文件 → 红。
+ * 1. **规模与分布**：就这 4 个技能、各自装哪一类、合计 76 份 —— 从「一个 craft 技能」
+ *    拆成四个时，最容易把某个文件漏在某个目录里而没人发现。
+ * 2. **路由表 ↔ 磁盘双向一致**：SKILL.md 提到的文档都在本技能里、本技能里的文档都被
+ *    SKILL.md 提到。「表里指向不存在的文件」与「搬了没人知道它存在」是一类静默故障。
+ * 3. **纯净性**：收录文件不含上游的流程/宿主耦合标记（判据见 ATTRIBUTION.md「收的是什么」）。
+ * 4. **来源与许可**：四份副本逐字节一致（同一批上游内容，许可声明跟着每份副本走）、
+ *    许可证随副本保留、收录 commit 记在案。
  *
- * 注意：**不做**「与上游逐字节比对」——那需要网络，测试必须是离线可跑的。
+ * 文件末尾还有一组「所有技能」通用护栏：显式 `references/xxx.md` 引用不悬空且跨技能
+ * 不歧义、每个技能都能被 vendor 真实加载进 `<available_skills>`、frontmatter 合法。
+ *
+ * 注意：**不做**「与上游逐字节比对」——那需要网络，测试必须离线可跑。
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -23,10 +24,6 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const CRAFT = path.join(ROOT, "skills", "craft");
-const SKILL_MD = path.join(CRAFT, "SKILL.md");
-const REFS = path.join(CRAFT, "references");
-const ATTRIBUTION = path.join(REFS, "ATTRIBUTION.md");
 /** 兄弟技能：它们各自把一部分方法论接了过去（单一真相源，不复制副本）。 */
 const SIBLING_SKILLS = ["outline", "critique", "revise", "stage-scripting"];
 /** 打包自带的全部技能（有 SKILL.md 的目录名，按名排序）。 */
@@ -34,98 +31,147 @@ const SKILL_NAMES = readdirSync(path.join(ROOT, "skills"), { withFileTypes: true
 	.filter((e) => e.isDirectory() && existsSync(path.join(ROOT, "skills", e.name, "SKILL.md")))
 	.map((e) => e.name)
 	.sort();
+/** 4 个 craft-* 技能（按阶段拆；不含 ATTRIBUTION.md 的方法论文档份数）。 */
+const CRAFT_SKILLS = ["craft-outline", "craft-prose", "craft-deslop", "craft-review"] as const;
+const CRAFT_DOC_COUNT: Record<string, number> = {
+	"craft-outline": 50, // 12 结构 + 6 题材 + 32 张题材卡
+	"craft-prose": 17, // 13 正文 + 4 人物
+	"craft-deslop": 7,
+	"craft-review": 2,
+};
+/**
+ * SKILL.md 里合法出现、但**不是**本技能方法论文档的 `.md` 记号：
+ * - `X.md`：`设定/角色/X.md` 这类上游路径占位（用来说明「别照着它写文件」）；
+ * - `outline.md`：pi-write 自己的派生视图（用来说明「直写会被覆盖」）。
+ * 其余任何 `*.md` 记号都必须能在本技能 `references/` 里找到——拼错一个字母就会红。
+ */
+const NON_DOC_MENTIONS = new Set(["X.md", "outline.md"]);
 
 const read = (p: string): string => readFileSync(p, "utf8");
 const toPosix = (p: string): string => p.split(path.sep).join("/");
+const skillDir = (skill: string): string => path.join(ROOT, "skills", skill);
+const refsDir = (skill: string): string => path.join(skillDir(skill), "references");
 
-/** references/ 下真实存在的方法论文档（相对 references/ 的 posix 路径，排除 ATTRIBUTION）。 */
-function vendoredDocs(): string[] {
+/** 某技能 references/ 下的方法论文档（相对 references/ 的 posix 路径；排除 ATTRIBUTION.md）。 */
+function vendoredDocsOf(skill: string): string[] {
+	const dir = refsDir(skill);
 	const out: string[] = [];
-	const walk = (dir: string): void => {
-		for (const entry of readdirSync(dir, { withFileTypes: true })) {
-			const full = path.join(dir, entry.name);
+	const walk = (d: string): void => {
+		for (const entry of readdirSync(d, { withFileTypes: true })) {
+			const full = path.join(d, entry.name);
 			if (entry.isDirectory()) {
 				walk(full);
 				continue;
 			}
-			if (entry.name.endsWith(".md") && full !== ATTRIBUTION) out.push(toPosix(path.relative(REFS, full)));
+			if (entry.name.endsWith(".md") && entry.name !== "ATTRIBUTION.md") out.push(toPosix(path.relative(dir, full)));
 		}
 	};
-	walk(REFS);
+	walk(dir);
 	return out.sort();
 }
 
 /**
- * 从一段技能文本里取出它引用的方法论文档路径（相对 references/）。
+ * SKILL.md 里提到的本技能文档（按 basename 匹配，裸名与 `references/` 前缀两种写法都认）。
  *
- * 两种写法都要认：`craft/SKILL.md` 里直接写 `structure/xxx.md`，
- * 兄弟技能里写 `references/structure/xxx.md`。
+ * 这里用**宽**模式（允许 CJK）：32 张题材卡的文件名是中文（`cards/悬疑灵异.md`），
+ * ASCII 模式一个都匹配不到。方向是「磁盘 → 索引」，宽松一点不会误报。
  */
-function referencedDocs(text: string): string[] {
+function mentionedDocs(text: string, files: string[]): string[] {
+	const byBase = new Map(files.map((f) => [path.basename(f), f]));
 	const found = new Set<string>();
-	const re = /(?:references\/)?((?:structure|character|prose|deslop|genre|review)\/[^\s`）)、，。；:：]+?\.md)/g;
-	let m: RegExpExecArray | null;
-	while ((m = re.exec(text)) !== null) found.add(m[1]);
+	for (const m of text.matchAll(/([^\s`）)、，。；:：/]+\.md)/g)) {
+		const hit = byBase.get(m[1]!);
+		if (hit) found.add(hit);
+	}
 	return [...found].sort();
 }
 
-const SKILL_TEXT = read(SKILL_MD);
-const VENDORED = vendoredDocs();
+/**
+ * 「索引 → 磁盘」方向用**窄**模式（ASCII 名字）：CJK 记号一个都不查，但任何 ASCII 文件名
+ * 写错一个字母都会被抓住。两个方向用不同模式是刻意的——宽模式会把 `workflow-*.md`
+ * 这类说明性提及也当成文件名，窄模式正好放过它。
+ */
+const ASCII_MD_TOKEN = /([A-Za-z0-9][A-Za-z0-9_-]*\.md)/g;
 
-describe("craft 技能：技能定义本身", () => {
-	it("SKILL.md 存在，frontmatter 的 name 与目录名一致", () => {
-		expect(existsSync(SKILL_MD)).toBe(true);
-		const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(SKILL_TEXT);
-		expect(fm, "SKILL.md 缺少 frontmatter").not.toBeNull();
-		expect(/^name:\s*craft\s*$/m.test(fm![1])).toBe(true);
+describe("craft-* 技能：定义与规模", () => {
+	it("正好这 4 个技能（拆分后不该还有旧的 craft）", () => {
+		expect(SKILL_NAMES.filter((n) => n.startsWith("craft"))).toEqual([...CRAFT_SKILLS].sort());
 	});
 
-	it("description 非空且不超过 vendor 的 1024 字符上限", () => {
-		// vendor 侧 MAX_DESCRIPTION_LENGTH = 1024（超了技能会被记诊断并可能不加载）
-		const desc = /^description:\s*(.+)$/m.exec(SKILL_TEXT)?.[1] ?? "";
-		expect(desc.length).toBeGreaterThan(20);
-		expect(desc.length).toBeLessThanOrEqual(1024);
+	it("每个技能：frontmatter 的 name 与目录名一致、description 合法", () => {
+		for (const skill of CRAFT_SKILLS) {
+			const text = read(path.join(skillDir(skill), "SKILL.md"));
+			const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+			expect(fm, `${skill}/SKILL.md 缺少 frontmatter`).not.toBeNull();
+			expect(new RegExp(`^name:\\s*${skill}\\s*$`, "m").test(fm![1]), `${skill} 的 name 与目录名不一致`).toBe(true);
+			// vendor 侧 MAX_DESCRIPTION_LENGTH = 1024
+			const desc = /^description:\s*(.+)$/m.exec(fm![1])?.[1] ?? "";
+			expect(desc.length, `${skill} 的 description 为空`).toBeGreaterThan(20);
+			expect(desc.length, `${skill} 的 description 超长（${desc.length}）`).toBeLessThanOrEqual(1024);
+		}
 	});
 
-	it("收录规模符合预期（防止递归扫描误把别的目录卷进来）", () => {
-		expect(VENDORED.length).toBeGreaterThan(60);
-		// 只可能有分类目录 + genre/cards 两层
-		for (const rel of VENDORED) expect(rel.split("/").length).toBeLessThanOrEqual(3);
-	});
-});
-
-describe("craft 技能：路由表与磁盘一致", () => {
-	it("craft/SKILL.md 索引的每份文档都在磁盘上（无断链）", () => {
-		const missing = referencedDocs(SKILL_TEXT).filter((rel) => !existsSync(path.join(REFS, rel)));
-		expect(missing, `路由表指向了不存在的文件：${missing.join(", ")}`).toEqual([]);
+	it("每类的份数符合预期，合计 76（拆分时漏掉文件会在这里暴露）", () => {
+		let total = 0;
+		for (const skill of CRAFT_SKILLS) {
+			const n = vendoredDocsOf(skill).length;
+			expect(n, `${skill} 的方法论文档份数`).toBe(CRAFT_DOC_COUNT[skill]);
+			total += n;
+		}
+		expect(total, "四个技能合计").toBe(76);
 	});
 
-	it("兄弟技能里的转发引用也都在磁盘上", () => {
-		const missing: string[] = [];
-		for (const skill of SIBLING_SKILLS) {
-			const file = path.join(ROOT, "skills", skill, "SKILL.md");
-			if (!existsSync(file)) continue;
-			for (const rel of referencedDocs(read(file))) {
-				if (!existsSync(path.join(REFS, rel))) missing.push(`${skill} -> ${rel}`);
+	it("目录层级只有一层（题材卡多一层 cards/）", () => {
+		for (const skill of CRAFT_SKILLS) {
+			for (const rel of vendoredDocsOf(skill)) {
+				expect(rel.split("/").length, `${skill}: ${rel}`).toBeLessThanOrEqual(2);
 			}
 		}
-		expect(missing, `兄弟技能的转发引用断链：${missing.join(", ")}`).toEqual([]);
-	});
-
-	it("references/ 下每份文档都被 craft/SKILL.md 索引到（没有「搬了没人知道」的）", () => {
-		const indexed = new Set(referencedDocs(SKILL_TEXT));
-		const unindexed = VENDORED.filter((rel) => !indexed.has(rel));
-		expect(unindexed, `未被路由表索引：${unindexed.join(", ")}`).toEqual([]);
-	});
-
-	it("路由表没有索引到不存在的分类目录", () => {
-		const dirs = new Set(VENDORED.map((rel) => rel.split("/")[0]));
-		const indexed = new Set(referencedDocs(SKILL_TEXT).map((rel) => rel.split("/")[0]));
-		expect([...indexed].filter((d) => !dirs.has(d))).toEqual([]);
 	});
 });
 
-describe("craft 技能：收录内容的纯净性", () => {
+describe("craft-* 技能：路由表与磁盘双向一致", () => {
+	it("磁盘上每份文档都被本技能的 SKILL.md 提到（没有「搬了没人知道」的）", () => {
+		const bad: string[] = [];
+		for (const skill of CRAFT_SKILLS) {
+			const files = vendoredDocsOf(skill);
+			const mentioned = new Set(mentionedDocs(read(path.join(skillDir(skill), "SKILL.md")), files));
+			for (const rel of files) if (!mentioned.has(rel)) bad.push(`${skill}: ${rel}`);
+		}
+		expect(bad, `未被路由表索引：${bad.join(", ")}`).toEqual([]);
+	});
+
+	it("SKILL.md 里的每个 *.md 记号都能在本技能 references/ 里找到（拼错即红）", () => {
+		const bad: string[] = [];
+		for (const skill of CRAFT_SKILLS) {
+			const files = vendoredDocsOf(skill);
+			const known = new Set(files.map((f) => path.basename(f)));
+			known.add("ATTRIBUTION.md");
+			const text = read(path.join(skillDir(skill), "SKILL.md"));
+			for (const m of text.matchAll(ASCII_MD_TOKEN)) {
+				if (known.has(m[1]) || NON_DOC_MENTIONS.has(m[1])) continue;
+				bad.push(`${skill}: ${m[1]}`);
+			}
+		}
+		expect(bad, `SKILL.md 提到了本技能没有的文件：${[...new Set(bad)].join(", ")}`).toEqual([]);
+	});
+
+	it("兄弟技能转发到 craft-* 的路径都解析得到", () => {
+		const bad: string[] = [];
+		for (const skill of SIBLING_SKILLS) {
+			const file = path.join(skillDir(skill), "SKILL.md");
+			if (!existsSync(file)) continue;
+			for (const m of read(file).matchAll(/references\/([A-Za-z0-9][A-Za-z0-9_/-]*\.md)/g)) {
+				const rel = m[1]!;
+				const hit = CRAFT_SKILLS.some((c) => existsSync(path.join(refsDir(c), rel)));
+				if (!hit) bad.push(`${skill} -> references/${rel}`);
+			}
+		}
+		expect(bad, `兄弟技能的转发引用断链：${bad.join(", ")}`).toEqual([]);
+	});
+});
+
+describe("craft-* 技能：收录内容的纯净性", () => {
 	// 上游的流程/宿主耦合标记：出现即说明收进来的是流程而非方法（判据见 ATTRIBUTION.md）
 	const FORBIDDEN = [
 		"拆文库",
@@ -141,36 +187,46 @@ describe("craft 技能：收录内容的纯净性", () => {
 
 	it("不含上游流程/宿主耦合标记", () => {
 		const dirty: string[] = [];
-		for (const rel of VENDORED) {
-			const text = read(path.join(REFS, rel));
-			for (const marker of FORBIDDEN) {
-				if (text.includes(marker)) dirty.push(`${rel} 命中 ${marker}`);
+		for (const skill of CRAFT_SKILLS) {
+			for (const rel of vendoredDocsOf(skill)) {
+				const text = read(path.join(refsDir(skill), rel));
+				for (const marker of FORBIDDEN) {
+					if (text.includes(marker)) dirty.push(`${skill}/${rel} 命中 ${marker}`);
+				}
 			}
 		}
 		expect(dirty, `收录了流程类文档：${dirty.join("; ")}`).toEqual([]);
 	});
 
 	it("每份文档非空且带一级标题", () => {
-		const bad = VENDORED.filter((rel) => {
-			const text = read(path.join(REFS, rel));
-			return text.trim().length < 200 || !/^#\s+\S/m.test(text);
-		});
+		const bad: string[] = [];
+		for (const skill of CRAFT_SKILLS) {
+			for (const rel of vendoredDocsOf(skill)) {
+				const text = read(path.join(refsDir(skill), rel));
+				if (text.trim().length < 200 || !/^#\s+\S/m.test(text)) bad.push(`${skill}/${rel}`);
+			}
+		}
 		expect(bad, `疑似空文件或缺标题：${bad.join(", ")}`).toEqual([]);
 	});
 
 	it("残留的跨文件引用都已在 ATTRIBUTION.md 登记（同步上游的护栏）", () => {
-		const names = new Set(VENDORED.map((rel) => path.basename(rel, ".md")));
-		names.add("ATTRIBUTION");
+		// 四份 ATTRIBUTION 内容相同，用第一份做登记表
+		const attributionText = read(path.join(refsDir(CRAFT_SKILLS[0]), "ATTRIBUTION.md"));
+		const allNames = new Set<string>();
+		for (const skill of CRAFT_SKILLS) {
+			for (const rel of vendoredDocsOf(skill)) allNames.add(path.basename(rel, ".md"));
+		}
+		allNames.add("ATTRIBUTION");
 		const dangling = new Set<string>();
-		for (const rel of VENDORED) {
-			const text = read(path.join(REFS, rel));
-			// 只看形如 foo.md 的引用；CJK 文件名与锚点不在此列
-			for (const m of text.matchAll(/([A-Za-z0-9][A-Za-z0-9_-]*\.md)/g)) {
-				const name = m[1].replace(/\.md$/, "");
-				if (!names.has(name)) dangling.add(m[1]);
+		for (const skill of CRAFT_SKILLS) {
+			for (const rel of vendoredDocsOf(skill)) {
+				const text = read(path.join(refsDir(skill), rel));
+				// 只看形如 foo.md 的引用；CJK 文件名（题材卡）与锚点不在此列
+				for (const m of text.matchAll(ASCII_MD_TOKEN)) {
+					if (!allNames.has(m[1].replace(/\.md$/, ""))) dangling.add(m[1]);
+				}
 			}
 		}
-		const attributionText = read(ATTRIBUTION);
 		const unregistered = [...dangling].filter((f) => !attributionText.includes(f));
 		expect(
 			unregistered,
@@ -178,11 +234,25 @@ describe("craft 技能：收录内容的纯净性", () => {
 		).toEqual([]);
 	});
 
-	it("MIT 许可证随副本保留（上游要求）", () => {
-		const license = path.join(REFS, "LICENSE-oh-story-claudecode.txt");
-		expect(existsSync(license)).toBe(true);
-		expect(read(license)).toMatch(/MIT License/);
-		expect(read(ATTRIBUTION)).toMatch(/dab9e18d8f59ae6c8761a3b63aa71fd4b34d92e6/);
+	it("MIT 许可证随副本保留，收录 commit 记在案", () => {
+		const attributionText = read(path.join(refsDir(CRAFT_SKILLS[0]), "ATTRIBUTION.md"));
+		expect(attributionText).toMatch(/dab9e18d8f59ae6c8761a3b63aa71fd4b34d92e6/);
+		for (const skill of CRAFT_SKILLS) {
+			const license = path.join(refsDir(skill), "LICENSE-oh-story-claudecode.txt");
+			expect(existsSync(license), `${skill} 缺许可证副本`).toBe(true);
+			expect(read(license), `${skill} 的许可证不是 MIT 全文`).toMatch(/MIT License/);
+			expect(read(license), `${skill} 的许可证缺著作权声明`).toMatch(/Copyright \(c\) 2025-2026 oh-story-claudecode/);
+		}
+	});
+
+	it("四份 ATTRIBUTION 与四份 LICENSE 逐字节一致（同一批内容，改一处要四处同步）", () => {
+		const first = CRAFT_SKILLS[0];
+		const attribution = read(path.join(refsDir(first), "ATTRIBUTION.md"));
+		const license = read(path.join(refsDir(first), "LICENSE-oh-story-claudecode.txt"));
+		for (const skill of CRAFT_SKILLS.slice(1)) {
+			expect(read(path.join(refsDir(skill), "ATTRIBUTION.md")), `${skill} 的 ATTRIBUTION 与 ${first} 不一致`).toBe(attribution);
+			expect(read(path.join(refsDir(skill), "LICENSE-oh-story-claudecode.txt")), `${skill} 的 LICENSE 与 ${first} 不一致`).toBe(license);
+		}
 	});
 });
 

@@ -45,7 +45,7 @@ import { join } from "node:path";
 import { getBookSessionsDir, initChapterFile, loadBook } from "../book-manager.ts";
 import { getAgentDir, getBookDir, resolveSkillReadOnlyDirs } from "../config.ts";
 import { createSessionRuntimeFactory } from "../session-factory.ts";
-import { chatTextOfMessage } from "../session-text.ts";
+import { buildSessionTree, type SessionBranchInfo, type SessionTreeInfo, type SessionVersionInfo } from "../session-tree.ts";
 import {
 	collectThinkingSummary,
 	extractMessagesFromManager,
@@ -53,6 +53,7 @@ import {
 	type ModelRefreshSummary,
 	type SessionCompactionResult,
 	type SessionContextUsage,
+	type SessionStateSnapshot,
 	type SessionUsageStats,
 	type ThinkingSummary,
 } from "./session-host.ts";
@@ -67,8 +68,7 @@ import {
 } from "../../vendor/pi-coding-agent/src/index.ts";
 import { ensureWorld, newId } from "../world-data.ts";
 import { buildStorylineView, constraintTargetMatches, NOTICE_INJECT_LIMIT } from "../world-context.ts";
-import { loadPromptText } from "../prompts.ts";
-import { buildWriterSystemPrompt, writerShellLine } from "../prompt.ts";
+import { buildEditorSystemPrompt, buildWriterSystemPrompt, writerShellLine } from "../prompt.ts";
 import type { ShellDialect } from "../shell-kind.ts";
 import type { ConversationScope } from "../writer-settings.ts";
 import { styleUpdateTool, wordCountTool, worldFindTool, worldUpdateTool } from "../tools.ts";
@@ -102,8 +102,22 @@ import { formatStageLines } from "../stage/assembler.ts";
 import { countStage } from "../stage/counters.ts";
 import { readStage } from "../stage/stage-store.ts";
 
-/** 常驻编剧系统提示(外置 prompts/writer-editor.md):讨论为主、修改为辅,改动说明意图;收幕委托为正式写作任务。 */
-const EDITOR_PROMPT = loadPromptText("writer-editor.md");
+/**
+ * 某个 writer 宿主该按哪一套「对话范围」叙述提示词 —— **纯函数,单测钉住**。
+ *
+ * 判据与会话身份同源(见 resolveRef):key 是章节文件名形态(`<id>.jsonl`)才算
+ * 「绑在一章上」。
+ * - chapter 模式:key 即章节名;兜底键 `default`(还没声明章节)沿用绑定章节的
+ *   叙述 —— 与解耦前逐字一致。
+ * - 分离模式:自由对话的键是不透明 id(`c-xxxx`)或 `default` → 按分离叙述;唯一
+ *   按章节键建宿主的是**收幕成文**(chatAndWait 永远按章节键取宿主),那一次就是要
+ *   把舞台记录落成某一章的正文,必须按绑定章节叙述,否则提示词会告诉它「正文不锁
+ *   在某一章」。
+ */
+export function hostPromptScope(conversationScope: ConversationScope, key: string): ConversationScope {
+	if (conversationScope === "chapter" && key === DEFAULT_CONVERSATION_ID) return "chapter";
+	return key.endsWith(".jsonl") ? "chapter" : "book";
+}
 
 /** 经典模式(单 agent)的内置工具:web 无 bash,其余全量(与 webActiveTools 同集)。 */
 const CLASSIC_ACTIVE_TOOLS = ["read", "write", "edit", "grep", "find", "ls"];
@@ -215,7 +229,12 @@ export interface WriterState {
 	/** 会话文件是否已创建(未对话过的书无会话)。 */
 	exists: boolean;
 	isStreaming: boolean;
-	messages: Array<{ role: "user" | "assistant"; text: string; thinking?: string; timestamp?: string; id?: string }>;
+	/**
+	 * 沿 leaf 链的消息(与 SessionStateSnapshot 同一形状:content 有序块、
+	 * firstEntryId 组首段 entry —— 前端水合与版本切换都要用,别在这里写窄类型
+	 * 把它抹掉)。
+	 */
+	messages: SessionStateSnapshot["messages"];
 }
 
 /**
@@ -626,13 +645,15 @@ export class WriterHost {
 	}
 
 	/**
-	 * 常驻编剧的系统提示。编剧提示词是固定角色文本(prompts/writer-editor.md,无占位符),
-	 * 但放开外部命令后编剧**也**拿得到 shell 工具——不说清方言它会写 bash 语法。
+	 * 常驻编剧的系统提示:prompts/writer-editor.md 按**对话范围**渲染(见
+	 * buildEditorSystemPrompt / hostPromptScope),因为正文落点规则两种范围下不同。
+	 * 放开外部命令后编剧**也**拿得到 shell 工具——不说清方言它会写 bash 语法,
 	 * 所以启用了 shell 就在文末追加同一行方言说明(与写作 agent 用的是同一份文案)。
 	 */
-	private editorSystemPrompt(): string {
-		if (!this.shellEnabled || this.shellDialect === "none") return EDITOR_PROMPT;
-		return `${EDITOR_PROMPT}\n\n# 外部命令\n\n${writerShellLine(this.shellDialect)}`;
+	private editorSystemPrompt(scope: ConversationScope): string {
+		const base = buildEditorSystemPrompt(scope);
+		if (!this.shellEnabled || this.shellDialect === "none") return base;
+		return `${base}\n\n# 外部命令\n\n${writerShellLine(this.shellDialect)}`;
 	}
 
 	/** 会话装配工厂(与 stage 角色同款样板;context 钩子注入本会话章节/世界书/文风采样)。
@@ -650,6 +671,9 @@ export class WriterHost {
 		// 固定进闭包,换模型后重建会话又退回旧值(2026-10-01)。
 		const self = this;
 		const bookScope = this.conversationScope === "book";
+		// 系统提示按这个宿主**是否绑在一章上**叙述(分离模式下自由对话与收幕成文
+		// 落在同一个 WriterHost 里,两者不能共用一套措辞;判据见 hostPromptScope)。
+		const promptScope = hostPromptScope(this.conversationScope, key);
 		// book 模式的章节是**易变上下文**(用户正在看哪一章),必须在调用时现读 ——
 		// 闭包捕获创建时的章节会让「切换正在看的章节」对已建会话失效。
 		const inject = (messages: AgentMessage[]): Promise<AgentMessage[] | undefined> =>
@@ -668,8 +692,9 @@ export class WriterHost {
 						buildWriterSystemPrompt(
 							mcpTools.map((t) => ({ name: t.name, description: t.description })),
 							this.shellEnabled ? this.shellDialect : "none",
+							promptScope,
 						)
-				: () => this.editorSystemPrompt(),
+				: () => this.editorSystemPrompt(promptScope),
 			extensionFactories: [
 				{
 					name: `writer-resident-${slug}-${writerSessionFile(key)}`,
@@ -973,13 +998,15 @@ export class WriterHost {
 		}
 	}
 
-	/** 编剧会话分支树(切换 UI 数据):纯读,无会话时从磁盘恢复(不创建运行时)。 */
-	async getSessionTree(slug: string, chapterFile?: string | null, conversation?: string | null): Promise<{ currentLeafId: string | null; branches: Array<{ leafId: string; isCurrent: boolean; count: number; summary: string; tail: string }> }> {
+	/** 编剧会话分支树(分支栏 + 消息版本;切换 UI 数据):纯读,无会话时从磁盘恢复(不创建运行时)。 */
+	async getSessionTree(slug: string, chapterFile?: string | null, conversation?: string | null): Promise<SessionTreeInfo> {
 		const { key } = this.resolveRef(slug, chapterFile, conversation);
 		const host = this.hosts.get(WriterHost.key(slug, key));
 		if (!host) {
 			const fromDisk = readSessionFromDisk(slug, key);
-			return fromDisk ? { currentLeafId: fromDisk.currentLeafId, branches: fromDisk.branches } : { currentLeafId: null, branches: [] };
+			return fromDisk
+				? { currentLeafId: fromDisk.currentLeafId, branches: fromDisk.branches, versions: fromDisk.versions }
+				: { currentLeafId: null, branches: [], versions: {} };
 		}
 		return host.getSessionTree();
 	}
@@ -1140,7 +1167,8 @@ export class WriterHost {
 function readSessionFromDisk(slug: string, conversationId: string | null): {
 	messages: WriterState["messages"];
 	currentLeafId: string | null;
-	branches: Array<{ leafId: string; isCurrent: boolean; count: number; summary: string; tail: string }>;
+	branches: SessionBranchInfo[];
+	versions: Record<string, SessionVersionInfo>;
 } | null {
 	try {
 		const sessionsDir = getBookSessionsDir(slug);
@@ -1151,40 +1179,9 @@ function readSessionFromDisk(slug: string, conversationId: string | null): {
 		// 纯读路径没有运行时:上一进程留下的未答提问永远等不到回答,标成「未回答」,
 		// 避免前端水合后弹出一张点不动的死卡(写盘那条走 SessionHost 构造里的清扫)。
 		settleDanglingAskParts(messages);
-		// 分支树:与 SessionHost.getSessionTree 同款 walk(叶子 + 当前 leaf 指针为候选)
-		const roots = sm.getTree() as unknown as Array<{ entry: { id: string }; children: unknown[] }>;
-		const leaves: string[] = [];
-		const walk = (nodes: Array<{ entry: { id: string }; children: unknown[] }>): void => {
-			for (const n of nodes) {
-				if (n.children.length === 0) leaves.push(n.entry.id);
-				else walk(n.children as never);
-			}
-		};
-		walk(roots);
-		const currentLeafId = sm.getLeafId();
-		const candidates = new Set<string>(leaves);
-		if (currentLeafId) candidates.add(currentLeafId);
-		const branches = [...candidates].map((leafId) => {
-			const path = sm.getBranch(leafId);
-			const texts: string[] = [];
-			let summary = "";
-			for (const e of path) {
-				if (e.type !== "message") continue;
-				const msg = (e as { message?: { role?: string; content?: unknown } }).message;
-				const text = msg ? chatTextOfMessage(msg) : undefined;
-				if (!text) continue;
-				if (msg?.role === "user") summary = text;
-				texts.push(text);
-			}
-			return {
-				leafId,
-				isCurrent: leafId === currentLeafId,
-				count: texts.length,
-				summary: summary.slice(0, 24) || "开始",
-				tail: (texts[texts.length - 1] ?? "").slice(0, 24),
-			};
-		});
-		return { messages, currentLeafId, branches };
+		// 分支视图(分支栏 + 消息版本):与 SessionHost.getSessionTree 同一份实现
+		const tree = buildSessionTree(sm);
+		return { messages, currentLeafId: tree.currentLeafId, branches: tree.branches, versions: tree.versions };
 	} catch {
 		return null;
 	}

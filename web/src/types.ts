@@ -58,6 +58,15 @@ export interface SessionMessageDto {
 	endedAt?: number;
 	id?: string;
 	/**
+	 * assistant 组的**首段** entry id(user 消息不带,它的 id 就是首段)。
+	 *
+	 * 一个 assistant 气泡是多段输出合并的:历史水合时 `id` 取组内**最后**一段,
+	 * 而「这条消息的版本位置」在树上是**首段**决定的(版本地图按首段 entry 建键,
+	 * 见 src/session-tree.ts)。前端取键一律 `firstEntryId ?? entryId` —— 实时路径
+	 * assistant 组的 entryId 本来就落在首段上,两条路径因此取到同一个键。
+	 */
+	firstEntryId?: string;
+	/**
 	 * provider 侧报错原文(与 server 的 SessionStateSnapshot 对齐)。
 	 * 与实时事件同一份数据:vendor 把错误挂在 assistant 消息上,不抛异常(见 session-host)。
 	 */
@@ -92,9 +101,25 @@ export interface SessionBranchInfo {
 	tail: string;
 }
 
+/**
+ * 一条消息的版本视图(与 src/session-tree.ts 的 SessionVersionInfo 对齐)——
+ * 对话流里「‹ 2/2 ›」的就地切换数据。键 = 可见消息的首个 entry id
+ * (`SessionMessageDto.firstEntryId ?? id`)。
+ */
+export interface SessionVersionInfo {
+	/** 全部版本(entry id),按追加顺序:第 1 个是最早的(通常是原文)。 */
+	ids: string[];
+	/** 与 `ids` 一一对应的分支终点;点击第 i 个版本就 navigate 到 leaves[i]。 */
+	leaves: string[];
+	/** 当前分支上的版本下标(0 起)。 */
+	index: number;
+}
+
 export interface SessionTreeDto {
 	currentLeafId: string | null;
 	branches: SessionBranchInfo[];
+	/** entry id(可见消息首段)→ 版本视图;只有 ≥2 个版本的消息才出现。 */
+	versions: Record<string, SessionVersionInfo>;
 }
 
 /** 世界书节点(后端 WorldNode)。 */
@@ -176,6 +201,11 @@ export interface ChatMessage {
 	id: string;
 	/** 会话 entry 稳定 id(服务端下发的编辑/分支定位依据;实时消息在 message_end 时补上)。 */
 	entryId?: string;
+	/**
+	 * assistant 气泡的**首段** entry id(历史水合时才有;user 消息不带)。
+	 * 版本切换取键 `firstEntryId ?? entryId`,见 SessionMessageDto.firstEntryId。
+	 */
+	firstEntryId?: string;
 	/**
 	 * `error` = 模型报错卡(需求 1「错误原文照实显示」):不是会话里的真实 entry
 	 * (服务端只广播 chat_error,不落盘),只是**对话流里的一个位置**——让报错留在
@@ -366,6 +396,10 @@ export type AgentEventDto =
 				model?: string;
 			};
 			entryId?: string;
+			/** 仅历史水合合成的事件携带:assistant 组的首段 entry id(版本切换取键用,
+			 *  见 SessionMessageDto.firstEntryId)。实时 SSE 不带 —— 那条路径的 entryId
+			 *  本来就被 message_end 落在首段上。 */
+			firstEntryId?: string;
 			/** 仅历史水合合成的事件携带(实时 SSE 无此字段):组内首末 entry 时间(ms),
 			 *  供 reducer 给气泡落 startedAt/endedAt,「已工作 X 分 Y 秒」刷新后仍在。 */
 			startedAt?: number;

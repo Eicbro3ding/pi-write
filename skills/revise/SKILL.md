@@ -31,20 +31,21 @@ Activates when the user wants real, surgical edits applied to a draft file — n
 - Do not introduce new names, beats, or plot. Revise *execution*, not *content*.
 - Quoting convention: when you report a change, show the **old** → **new** for just the changed fragment.
 
-## 深度方法论（craft 技能）
+## 深度方法论（craft-deslop / craft-prose 技能）
 
-改稿手法在 `craft` 技能里（`<location>` 见系统提示词的 `<available_skills>`，方法论文档在
-`references/` 下）。按这一轮要解决的问题选**一份** read，整份读：
+改稿手法在几个 `craft-*` 技能里（各自的 `<location>` 见系统提示词的 `<available_skills>`，
+方法论文档在各自 `references/` 下）。按这一轮要解决的问题选**一份** read，整份读：
 
-| 要改什么 | 读 |
-|---|---|
-| 去 AI 味（指纹、模式检测、改写顺序、范例库） | `references/deslop/anti-ai-writing.md` |
-| 去 AI 味的判定与放行标准 | `references/deslop/deslop-gates.md` |
-| 禁用词与句式速查（对照着改） | `references/deslop/banned-words.md` |
-| 文笔：镜头式写作、白描、视角、毒点 | `references/deslop/style-craft.md` |
-| 装逼打脸写得不够爽 | `references/deslop/style-combat-face.md` |
-| 文风取值顺序（当前请求/本书文风/作者偏好冲突时） | `references/deslop/style-resolution.md` |
-| 正文密度与场景写法 | `references/prose/writing-craft.md` |
+| 要改什么 | 读 | 在哪个技能 |
+|---|---|---|
+| 去 AI 味（指纹、模式检测、改写顺序、范例库） | `references/anti-ai-writing.md` | `craft-deslop` |
+| 去 AI 味的判定与放行标准 | `references/deslop-gates.md` | `craft-deslop` |
+| 禁用词与句式速查（对照着改） | `references/banned-words.md` | `craft-deslop` |
+| 文笔：镜头式写作、白描、视角、毒点 | `references/style-craft.md` | `craft-deslop` |
+| 装逼打脸写得不够爽 | `references/style-combat-face.md` | `craft-deslop` |
+| 文风取值顺序（当前请求/本书文风/作者偏好冲突时） | `references/style-resolution.md` | `craft-deslop` |
+| 正文密度与场景写法 | `references/writing-craft.md` | `craft-prose` |
+| 情绪/节奏/钩子不到位 | `references/emotion-on-page.md`、`references/long-chapter-hooks.md` | `craft-prose` |
 
 改稿仍受本技能的编辑规则约束：**只改执行，不改内容**；保留用户自己的句子形状；
 不做整章重写。去 AI 味的目标是读感，不要为了过检测器而牺牲人物声音与场景任务。

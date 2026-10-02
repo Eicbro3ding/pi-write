@@ -634,6 +634,10 @@
   /* 技能芯片(可点的按钮):行内小控件,撑到 44 会把气泡首行顶开一条缝 ——
      它的热区由整枚芯片(≥22px 高 + 左右内边距)提供 */
   .skill-chip.clickable { min-height: 0; }
+  /* 消息版本切换器(「‹ 2 / 2 ›」):行内小控件,同理由 44px 兜底会撑出一大块空白;
+     触屏要的是热区,把按钮放到 32px 并关掉兜底高度 */
+  .msg-pager { margin-top: 4px; }
+  .msg-pager .pager-btn { width: 32px; height: 32px; min-height: 0; }
   .entry-card { width: 100%; max-height: none; }
 }
 

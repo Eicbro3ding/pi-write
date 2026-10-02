@@ -6,7 +6,7 @@
  * 模型看到的都是
  * `<skill name="…" location="…">\n…正文…\n</skill>\n\n帮我看看`。
  * 聊天区此前把这条用户消息**原样**渲染,于是一整份方法论灌进气泡(critique 约 3.5KB、
- * craft 约 8.6KB),连带「复制」拷全文、「编辑」把全文预填进输入框。
+ * craft-outline 约 5.4KB、stage-scripting 约 5.4KB),连带「复制」拷全文、「编辑」把全文预填进输入框。
  *
  * 这里把它解析回「技能名 + 技能正文 + 你自己说的话」,由 MessageList 渲染成一枚芯片
  * (与 TUI 的 `[skill] name`、HTML 导出的 `[skill] name` 同一套语言,正文折在展开里)。

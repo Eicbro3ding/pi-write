@@ -629,6 +629,54 @@ describe("SessionHost branchMessage", () => {
 
 		await expect(host.navigateTo("no-such")).rejects.toThrow();
 	});
+
+	it("getSessionTree 给出消息版本视图(编辑重发 = user 多版本,leaves 指向各分支终点)", async () => {
+		const sm = makeRealSm();
+		const fake = makeFakeRuntime();
+		wireRealSm(fake, sm);
+		const host = makeHost(fake);
+		await host.start();
+
+		const u1 = pushMessage(sm, "user", "原来的开头");
+		const a1 = pushMessage(sm, "assistant", "原来的回复");
+		// 撤回第一条再重发:新 user 与旧 user 同父(根),形成两个版本
+		await host.retractMessage(u1);
+		const u2 = pushMessage(sm, "user", "改过的开头");
+		const a2 = pushMessage(sm, "assistant", "改过的回复");
+
+		const tree = await host.getSessionTree();
+		// 当前路径 = [u2, a2]:只有 u2 需要版本视图(键 = user 消息自己的 entry id)
+		expect(tree.versions).toEqual({
+			[u2]: { ids: [u1, u2], leaves: [a1, a2], index: 1 },
+		});
+
+		// 切到旧版本:index 翻转(同一个位置,当前停在第一版)
+		await host.navigateTo(tree.versions[u2]!.leaves[0]!);
+		const back = await host.getSessionTree();
+		expect(back.versions[u1]).toEqual({ ids: [u1, u2], leaves: [a1, a2], index: 0 });
+		expect(back.versions[u2]).toBeUndefined();
+		expect(host.getState().messages.map((m) => m.text)).toEqual(["原来的开头", "原来的回复"]);
+	});
+
+	it("assistant 组首段 entry 是版本键:多段(工具轮次)气泡的第一段", async () => {
+		const sm = makeRealSm();
+		const fake = makeFakeRuntime();
+		wireRealSm(fake, sm);
+		const host = makeHost(fake);
+		await host.start();
+
+		pushMessage(sm, "user", "去改文件");
+		const seg1 = pushToolCallMessage(sm, "先看看", [{ id: "t1", name: "read" }]);
+		pushToolResult(sm, "t1", "文件内容");
+		const seg2 = pushMessage(sm, "assistant", "改好了");
+
+		const state = host.getState();
+		expect(state.messages).toHaveLength(2); // user + 合并后的 assistant 气泡
+		const bubble = state.messages[1]!;
+		// id 取组内最后一段(历史口径不变),firstEntryId 才是这个位置的代表
+		expect(bubble.id).toBe(seg2);
+		expect(bubble.firstEntryId).toBe(seg1);
+	});
 });
 
 describe("extractMessagesFromManager(会话投影)", () => {

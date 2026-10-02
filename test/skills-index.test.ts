@@ -16,7 +16,20 @@ describe("listSkills(自带技能)", () => {
 		const skills = listSkills({});
 		const names = skills.map((s) => s.name);
 		// 不带数量断言:以后加技能不该红;只要求这几个核心方法论在里面
-		expect(names).toEqual(expect.arrayContaining(["outline", "critique", "revise", "craft", "onboarding", "stage-scripting"]));
+		// (craft 按阶段拆成 4 个:选题结构 / 正文技法 / 去 AI 味 / 审稿标准)
+		expect(names).toEqual(
+			expect.arrayContaining([
+				"outline",
+				"critique",
+				"revise",
+				"craft-outline",
+				"craft-prose",
+				"craft-deslop",
+				"craft-review",
+				"onboarding",
+				"stage-scripting",
+			]),
+		);
 		expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
 		for (const s of skills) {
 			expect(s.name.length).toBeGreaterThan(0);
