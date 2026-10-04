@@ -99,6 +99,17 @@ export class InspectPanel implements Component, Focusable {
 		this.closed = true;
 	}
 
+	/**
+	 * `Component` 契约要求的缓存失效钩子(主题切换/强制重绘时调用)。
+	 *
+	 * 本面板不缓存渲染结果 —— 每次 `render()` 都现算,所以这里是空实现。
+	 * 但**必须实现**:不实现的话 `implements Component` 编译不过,而
+	 * `ctx.ui.custom` 的返回类型正是 `Component`。
+	 */
+	invalidate(): void {
+		// 无缓存渲染状态,无需失效。
+	}
+
 	render(width: number): string[] {
 		const rows = Math.max(10, this.tui.terminal.rows);
 		const inner = Math.max(20, width - 4);

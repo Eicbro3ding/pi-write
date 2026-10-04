@@ -101,6 +101,8 @@ export function writerToolset(opts: { classicMode: boolean; mcpTools: ToolDefini
 		: [worldFindTool, styleUpdateTool, readChapterTool, askUserTool, ...opts.mcpTools];
 }
 import { SessionHost } from "./session-host.ts";
+// 2026-10-04(T6):句柄造型(见 web.ts 同处注释)
+import { toFactoryHandle, toHandle } from "../pi-adapter/index.ts";
 import { formatStageLines } from "../stage/assembler.ts";
 import { countStage } from "../stage/counters.ts";
 import { readStage } from "../stage/stage-store.ts";
@@ -637,10 +639,11 @@ export class WriterHost {
 		// 经典模式/book 模式仍会被拦住写别的文件(换了模式却写不了)。
 		const draftFile = writerDraftFile({ classicMode: this.classicMode, conversationScope: this.conversationScope, chapter });
 		const host = new SessionHost({
-			createRuntime: runtimeFactory,
+			// 2026-10-04(T6):SessionHost 契约收句柄,显式造型(零开销,见 web.ts 同处注释)
+			createRuntime: toFactoryHandle(runtimeFactory),
 			cwd: bookDir,
 			agentDir,
-			sessionManager,
+			sessionManager: toHandle(sessionManager),
 			toolGuard: { readOnlyDirs: resolveSkillReadOnlyDirs(), draftFile },
 		});
 		await host.start();

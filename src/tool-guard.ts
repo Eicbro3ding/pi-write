@@ -4,14 +4,14 @@
  * 敏感文件(如 ~/.pi/writer/agent/auth.json 中的 provider API key)。
  *
  * vendor 的路径解析(resolveToCwd)支持 ~ 展开与 ../ 上溯,本身无边界;
- * 本模块通过 vendor 的 setToolPathGuard 钩子(见
- * vendor/pi-coding-agent/src/core/tools/path-utils.ts)在解析后统一拦截。
- * 守卫未安装时 vendor 行为完全不变,不影响 pi 其他使用方。
+ * 本模块通过 vendor 的 setToolPathGuard 钩子(经 `pi-adapter/guard.ts` 收口,
+ * 见 T6)在解析后统一拦截。守卫未安装时 vendor 行为完全不变,不影响 pi 其他使用方。
  */
 
 import { relative, resolve, sep } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { clearToolPathGuard, setToolPathGuard } from "../vendor/pi-coding-agent/src/core/tools/path-utils.ts";
+// 2026-10-04(T6):深层路径 import 收口到 pi-adapter,本文件不再直接碰 vendor 源码
+import { installToolPathGuard as installVendorGuard, uninstallToolPathGuard as uninstallVendorGuard } from "./pi-adapter/index.ts";
 
 /** 工具路径守卫的会话上下文:SessionHost 在 prompt 调用期间写入。 */
 export interface ToolGuardContext {
@@ -63,7 +63,7 @@ export function assertPathWithinRoot(absPath: string, root: string): void {
 export function installToolPathGuard(bookDir: string, readOnlyDirs: string[] = [], draftFile?: string): void {
 	const fallbackRoot = resolve(bookDir);
 	const fallbackReadOnly = readOnlyDirs.map((d) => resolve(d));
-	setToolPathGuard((absPath, mode) => {
+	installVendorGuard((absPath, mode) => {
 		// 优先取 SessionHost 写入的会话上下文;TUI/CLI 等未写 ALS 的路径回退到
 		// 最近一次 installToolPathGuard 传入的目录。
 		const ctx = toolGuardContext.getStore();
@@ -93,7 +93,7 @@ export function installToolPathGuard(bookDir: string, readOnlyDirs: string[] = [
 
 /** 卸载守卫(vendor 行为恢复原样);测试或复用进程时清理用。 */
 export function uninstallToolPathGuard(): void {
-	clearToolPathGuard();
+	uninstallVendorGuard();
 }
 
 /**

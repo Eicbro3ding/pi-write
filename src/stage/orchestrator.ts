@@ -4,6 +4,8 @@ import { getBookSessionsDir, initChapterFile } from "../book-manager.ts";
 import { resolveSkillReadOnlyDirs, resolveSkillsDir } from "../config.ts";
 import { createSessionRuntimeFactory } from "../session-factory.ts";
 import { collectThinkingSummary, SessionHost, type ModelRefreshSummary, type SessionContextUsage, type ThinkingSummary } from "../web/session-host.ts";
+// 2026-10-04(T6):句柄造型(见 web.ts 同处注释)
+import { toFactoryHandle, toHandle } from "../pi-adapter/index.ts";
 import type { WriterHost } from "../web/writer-host.ts";
 import {
 	type CreateAgentSessionRuntimeFactory,
@@ -505,10 +507,11 @@ export class StageOrchestrator {
 		const { sessionsDir, abs } = await this.ensureRoleSession(fileBase);
 		const sessionManager = SessionManager.open(abs, sessionsDir, this.bookDir);
 		const host = new SessionHost({
-			createRuntime: this.roleFactory(spec),
+			// 2026-10-04(T6):SessionHost 契约收句柄,显式造型(零开销,见 web.ts 同处注释)
+			createRuntime: toFactoryHandle(this.roleFactory(spec)),
 			cwd: this.bookDir,
 			agentDir: this.agentDir,
-			sessionManager,
+			sessionManager: toHandle(sessionManager),
 			toolGuard: { readOnlyDirs: resolveSkillReadOnlyDirs() },
 		});
 		await host.start();

@@ -1,0 +1,36 @@
+{
+	// 类型检查配置(2026-10-04,T6 补)。
+	//
+	// ## 为什么必须有这个文件
+	//
+	// 此前项目只有 tsconfig.build.json,**没有** tsconfig.json。于是裸跑
+	// `npx tsc --noEmit` 会退回到一份「无 strict、无 types、无
+	// allowImportingTsExtensions」的默认配置,把一堆真错误静默放过去:
+	//
+	//   - `ui.notify(msg, "warn")` —— 正确值是 "warning",默认配置不查这个
+	//   - 类未实现 `Component.invalidate()` —— 是 TUI 组件契约的必需方法
+	//   - `WorldData` 忘了 import
+	//
+	// 这三类都是「跑构建才现形」的问题,而构建脚本在此之前从未被当作检查手段
+	// 跑过。加上本文件后,`npm run typecheck` 才真的等于「类型没问题」。
+	//
+	// ## 范围
+	//
+	// - **含 src/** 与 vendor/(口径与 tsconfig.build.json 对齐)
+	// - **不含 test/** —— 纳入后有 200 个既有错误(测试从未做过类型检查:
+	//   隐式 any、DTO 形状对不上、缺 --jsx 等)。那是独立一笔债,混进来会把
+	//   「本次改动有没有引入新错误」这个信号淹掉。收 test 需单独一批。
+	// - **不含 web/** —— 它是独立的 Vite 工程,有自己的 tsconfig
+	//
+	// ## 已知噪音
+	//
+	// vendor/ 下有 3 处既有错误(undici 用法 ×2、highlight.js 缺类型 ×1),
+	// 都是上游代码,本仓库不可修。判读时看 `npm run typecheck` 的过滤输出。
+	"extends": "./tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"composite": false
+	},
+	"include": ["src/**/*.ts", "vendor/**/*.ts"],
+	"exclude": ["node_modules", "dist", "web", "test"]
+}

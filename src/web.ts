@@ -28,6 +28,8 @@ import { writerExtension } from "./extension.ts";
 import { McpManager } from "./mcp/manager.ts";
 import { loadPlugins } from "./plugin-loader.ts";
 import { createSessionRuntimeFactory } from "./session-factory.ts";
+// 2026-10-04(T6):句柄造型(见 SessionHost 构造处注释)
+import { toFactoryHandle, toHandle } from "./pi-adapter/index.ts";
 import { buildWriterSystemPrompt } from "./prompt.ts";
 import { readWriterSettings } from "./writer-settings.ts";
 import { resolveWriterShell } from "./shell-kind.ts";
@@ -275,10 +277,12 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 	});
 
 	const host = new SessionHost({
-		createRuntime,
+		// 2026-10-04(T6):SessionHost 的契约收句柄,这里显式造型 —— 转换是零开销的
+		// (同一个对象),但它把「谁会碰到 vendor 类型」这件事固定在了调用点。
+		createRuntime: toFactoryHandle(createRuntime),
 		cwd: bookDir,
 		agentDir,
-		sessionManager,
+		sessionManager: toHandle(sessionManager),
 		toolGuard: { readOnlyDirs: resolveSkillReadOnlyDirs() },
 	});
 	await host.start();

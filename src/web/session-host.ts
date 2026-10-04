@@ -18,8 +18,8 @@ import {
 	SessionManager,
 } from "../../vendor/pi-coding-agent/src/index.ts";
 import type { AuthInteraction } from "../../vendor/pi-ai/src/index.ts";
-// getUsageCostBreakdown 没有从 vendor 的 index 再导出,只能按相对源码路径取(本项目一贯做法)
-import { getUsageCostBreakdown } from "../../vendor/pi-coding-agent/src/core/usage-totals.ts";
+// 2026-10-04(T6):深层路径 import 收口到 pi-adapter,本文件不再直接碰 vendor 源码
+import { fromFactoryHandle, fromHandle, projectUsageCost } from "../pi-adapter/index.ts";
 import { settleDanglingAsks } from "../ask-user.ts";
 import { getBooksDir } from "../config.ts";
 import { buildSessionTree, type SessionTreeInfo } from "../session-tree.ts";
@@ -34,98 +34,36 @@ import {
 } from "../session-text.ts";
 import { createKeyInteraction, deriveAuthKind, sortProviders, type ProviderDetail, type ProviderListItem } from "./provider-auth.ts";
 
-/** SessionHost 构造选项;createRuntime 由调用方注入,SessionHost 不自己构造 services。 */
-export interface SessionHostOptions {
-	createRuntime: CreateAgentSessionRuntimeFactory;
-	cwd: string; // 书目录
-	agentDir: string;
-	sessionManager: SessionManager;
-	/** 工具路径守卫与 world_update/word_count 所需的会话上下文(readOnlyDirs/draftFile)。
-	 *  缺省时仅使用 cwd 作为书目录,不额外放行只读目录、不限制正文白名单。 */
-	toolGuard?: { readOnlyDirs?: string[]; draftFile?: string };
-}
+// 2026-10-04(T6):以下 9 个对外接口迁入 pi-adapter/domain.ts,这里重导出,
+// 保持既有 import 点(`from "./session-host.ts"`)不变。
+// 迁走的理由:其中 SessionHostOptions 原先直接写着 vendor 的 SessionManager /
+// CreateAgentSessionRuntimeFactory 类型,属于「vendor 类型泄漏」—— vendor 改名时
+// 自研侧会同时红,而那跟写作领域毫无关系。
+//
+// 注意必须是「先 import 再 export」而不是 `export type { ... } from`:
+// 本文件内部仍在用这些名字(SessionHostOptions / SessionStateSnapshot ...),
+// 只 re-export 不会把它们带进当前作用域,会一路报 Cannot find name。
+import type {
+	ModelRefreshSummary,
+	SessionCompactionResult,
+	SessionContextUsage,
+	SessionHostOptions,
+	SessionStateSnapshot,
+	SessionUsageStats,
+	ThinkingLevelResult,
+	ThinkingSummary,
+} from "../pi-adapter/index.ts";
 
-/** getState() 返回的会话状态快照。 */
-export interface SessionStateSnapshot {
-	sessionFile: string | null;
-	bookSlug: string | null; // 会话文件所在书目录名
-	chapterFile: string | null; // 会话文件 basename
-	isStreaming: boolean;
-	/**
-	 * 消息列表(沿会话 leaf 链提取;撤回后旧分支消息自然消失)。
-	 * id 是会话 entry 的稳定 id(撤回/编辑的定位依据);timestamp 同 entry。
-	 * thinking / text 是**兼容投影**(整条消息拼接,供 TUI 与分支摘要取文本);
-	 * `content` 才是渲染依据:**有序内容块**(思考 / 正文 / 工具调用),
-	 * 工具块内联执行结果。缺 content 的旧形状按 text/thinking 兜底。
-	 * startedAt / endedAt 是组内首末 entry 时间(ms),供「已工作 X 分 Y 秒」还原。
-	 */
-	messages: Array<{
-		role: "user" | "assistant";
-		text: string;
-		thinking?: string;
-		content?: ChatContentPart[];
-		timestamp?: string;
-		startedAt?: number;
-		endedAt?: number;
-		id?: string;
-		/**
-		 * assistant 组的**首段** entry id(user 消息不设,它的 id 就是首段)。
-		 *
-		 * 为什么要单独给:一个 assistant 气泡是多段输出合并的,`id` 取组内**最后**
-		 * 一段(历史口径),而「这条消息的版本位置」在树上是**首段**决定的
-		 * —— `src/session-tree.ts` 的版本地图按首段 entry 建键。前端用
-		 * `firstEntryId ?? entryId` 就能在「水合」与「实时」两条路径上取到同一个键
-		 * (实时路径 assistant 组的 entryId 本来就被 message_end 落在首段上)。
-		 */
-		firstEntryId?: string;
-		/**
-		 * provider 侧报错的原文(vendor 不抛异常,而是给 assistant 消息落
-		 * `stopReason: "error"` + `errorMessage`,content 为空)。
-		 *
-		 * 这类 entry 以前被「无正文无思考即丢弃」的兜底整条丢掉 —— 于是刷新后
-		 * 报错凭空消失、只剩一个空气泡。原文要留着(需求 1),所以单独带出来。
-		 * provider / model 是出错那一刻的取值(与 vendor 消息字段同源),供前端
-		 * 在原文下方补一行「provider: x · model: y」——供应商排查要看这两个。
-		 */
-		errorMessage?: string;
-		provider?: string;
-		model?: string;
-	}>;
-	diagnostics: Array<{ type: "error" | "warning" | "info"; message: string }>;
-}
-
-/** 会话上下文占用(与 vendor AgentSession.getContextUsage 对齐;前端 /compact 提示用)。 */
-export interface SessionContextUsage {
-	tokens: number | null;
-	contextWindow: number;
-	percent: number | null;
-}
-
-/**
- * 会话用量统计(与 vendor AgentSession.getSessionStats 对齐 + 按模型拆成本)。
- * 口径是**整个会话文件**(含被压缩掉的历史),即"花了多少",不是"现在上下文多大"。
- */
-export interface SessionUsageStats {
-	userMessages: number;
-	assistantMessages: number;
-	toolCalls: number;
-	toolResults: number;
-	totalMessages: number;
-	tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
-	/** 累计成本(供应商侧计价,单位随供应商;DeepSeek 等按美元)。 */
-	cost: number;
-	/** 当前上下文占用(与 /context 同一个值,顺便带出来省一次请求)。 */
-	contextUsage: SessionContextUsage | null;
-	/** 按 provider/model 拆的成本与 token(含 "Tools/summaries" 这一桶);按 cost 倒序。 */
-	breakdown: Array<{ key: string; cost: number; tokens: number }>;
-}
-
-/** 手动压缩返回摘要(与 vendor CompactionResult 对齐)。 */
-export interface SessionCompactionResult {
-	summary: string;
-	tokensBefore: number;
-	estimatedTokensAfter?: number;
-}
+export type {
+	ModelRefreshSummary,
+	SessionCompactionResult,
+	SessionContextUsage,
+	SessionHostOptions,
+	SessionStateSnapshot,
+	SessionUsageStats,
+	ThinkingLevelResult,
+	ThinkingSummary,
+};
 
 export class SessionHost {
 	private runtime: AgentSessionRuntime | undefined;
@@ -147,7 +85,10 @@ export class SessionHost {
 
 	constructor(options: SessionHostOptions) {
 		this.options = options;
-		this.sessionManager = options.sessionManager;
+		// 2026-10-04(T6):对外契约收句柄(`SessionManagerHandle`),内部立刻还原为实体。
+		// 句柄与实体运行期是同一个对象,这次转换零开销;收益是自研侧不再有人能
+		// 顺着这个字段摸到 vendor 的 SessionManager 类型。
+		this.sessionManager = fromHandle(options.sessionManager);
 		// 上一进程/上一运行时留下的未答提问:闸门是纯内存的,重启后那张卡永远
 		// 等不到回答,不补结果的话前端重载会弹出一张点不动的死卡(2026-09)。
 		settleDanglingAsks(this.sessionManager);
@@ -158,7 +99,7 @@ export class SessionHost {
 		// 返回 CreateAgentSessionRuntimeResult({ session, extensionsResult, services, diagnostics });
 		// 经 createAgentSessionRuntime 包装成 AgentSessionRuntime(含 session/switchSession/dispose)后持有,
 		// 与 cli.ts 的装配路径一致。
-		this.runtime = await createAgentSessionRuntime(this.options.createRuntime, {
+		this.runtime = await createAgentSessionRuntime(fromFactoryHandle(this.options.createRuntime), {
 			cwd:
 				(typeof this.sessionManager.getCwd === "function" && this.sessionManager.getCwd()) ||
 				this.options.cwd,
@@ -389,8 +330,8 @@ export class SessionHost {
 	 * + 顺带 contextUsage。它累加**整个会话文件**的条目(含被压缩掉的历史),
 	 * 口径是「真实计费」,不是「当前上下文多大」(那个看 getContextUsage)。
 	 *
-	 * 另外把 vendor 的 `getUsageCostBreakdown()`(按 provider/model 拆成本)也带上;
-	 * 它没从 vendor 的 index 再导出,只能按相对源码路径 import(本项目一贯做法)。
+	 * 另外把成本拆分(`projectUsageCost`,经 pi-adapter 收口 vendor 的
+	 * `getUsageCostBreakdown`)也带上 —— 失败时返回空数组,不影响总量。
 	 *
 	 * 注意:`sessionFile` / `sessionId` 不外传 —— 前端不需要绝对路径。
 	 */
@@ -398,16 +339,8 @@ export class SessionHost {
 		const rt = this.runtime;
 		if (!rt) return null;
 		const s = rt.session.getSessionStats();
-		let breakdown: Array<{ key: string; cost: number; tokens: number }> = [];
-		try {
-			breakdown = getUsageCostBreakdown(rt.session.sessionManager.getEntries()).map((b) => ({
-				key: b.key,
-				cost: b.cost,
-				tokens: b.tokens,
-			}));
-		} catch {
-			/* 拆分失败不影响总量(老会话条目形状异常等) */
-		}
+		// 条目形状异常(老会话等)时 projectUsageCost 内部兜底为空数组,这里不必再 try
+		const breakdown = projectUsageCost(rt.session.sessionManager.getEntries());
 		return {
 			userMessages: s.userMessages,
 			assistantMessages: s.assistantMessages,
@@ -832,55 +765,6 @@ interface RuntimeDefaults {
 	thinkingLevel: string | null;
 	temperature: number | null;
 	topP: number | null;
-}
-
-/**
- * 在**单个会话**上设置思考档位的结果(2026-10 审计 BUG-013)。
- */
-export interface ThinkingLevelResult {
-	/** 实际生效的档位(null = 该会话拿不到状态,如最小 fake)。 */
-	level: string | null;
-	/** 实际档位 ≠ 请求档位 —— 被模型能力回落(clamp)。 */
-	clamped: boolean;
-}
-
-/**
- * **宿主级**思考档位设置结果:一个宿主可能带多个会话(编剧按对话、舞台按角色),
- * 每个会话的模型能力不同,可能被 clamp 到**不同**档位。逐个回报,不拿主会话的值
- * 冒充所有窗口(2026-10 审计 BUG-013)。
- */
-export interface ThinkingSummary {
-	/** 处理到的会话数。 */
-	sessions: number;
-	/** 各会话实际生效的档位(去重、保序)。 */
-	levels: string[];
-	/** 至少一个会话被回落。 */
-	clamped: boolean;
-	/** 失败的会话(消息原文;不抛错,由调用方分宿主报告)。 */
-	failed: string[];
-	/**
-	 * **故意**没跟随全局档位的会话数(舞台演员:思考档位属于角色设计,§10.6)。
-	 * 用来把「这里本来就该跳过」与「改失败了」分开,免得调用方以为漏刷了。
-	 */
-	actorsOmitted?: number;
-}
-
-/**
- * 模型目录刷新的**宿主级结果**(2026-10 审计 BUG-005)。
- *
- * 「刷新模型列表」现在要覆盖主会话 + 常驻编剧 + 舞台三处宿主:每个会话宿主在装配时
- * 各建一份 ModelRuntime,只刷主会话时已建的编剧/舞台会话仍是旧目录。逐个宿主收集
- * 结果,是为了让部分成功**不被伪装成**全成功(响应里能列出到底谁没刷上)。
- */
-export interface ModelRefreshSummary {
-	/** 目录刷新期间 provider 报出的错误(provider id → 原文;主会话的联网刷新才有)。 */
-	errors: Array<{ provider: string; message: string }>;
-	/** 目录里可用的模型数(null = 该宿主拿不到目录统计)。 */
-	modelCount: number | null;
-	/** 本宿主处理的已建会话数。 */
-	sessions: number;
-	/** 因「还没选到模型」被释放的会话键(下次装配按最新目录重新解析)。 */
-	released: string[];
 }
 
 /**
