@@ -5,7 +5,7 @@
  * 注意:本文件不得在 import 时触碰 DOM 专属 API(EventSource 只在 subscribeEvents 内使用),
  * 以兼容 node 环境的 vitest 单测。
  */
-import type { AgentEventDto, BookDetail, BookFileTextDto, BookFilesDto, BookMeta, ChapterRef, ContextUsageDto, ConversationDto, ConversationScopeDto, ImageProviderDto, ImageSizeDto, McpServerInfo, McpServerStatus, PluginInfoDto, PluginSettingsItemDto, ProviderDetailDto, ProviderInfo, ProviderRefreshError, ResolvedShellDto, SessionState, SessionUsageStatsDto, SessionTreeDto, SetupStateDto, SkillInfoDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, ThinkingHostResult, TrimSummaryDto, WorldDataDto, ShellKindDto, WriterSettingsDto, WriterStateDto } from "../types.ts";
+import type { AgentEventDto, BookDetail, BookFileTextDto, BookFilesDto, BookMeta, ChapterRef, ContextUsageDto, ConversationDto, ConversationScopeDto, ImageProviderDto, ImageSizeDto, InspectReportDto, McpServerInfo, McpServerStatus, PluginInfoDto, PluginSettingsItemDto, ProviderDetailDto, ProviderInfo, ProviderRefreshError, ResolvedShellDto, SessionState, SessionUsageStatsDto, SessionTreeDto, SetupStateDto, SkillInfoDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, ThinkingHostResult, TrimSummaryDto, WorldDataDto, ShellKindDto, WriterSettingsDto, WriterStateDto } from "../types.ts";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
 
 /** 图片访问 URL(同源相对路径;生产/Electron 同源,vite dev 经代理)。 */
@@ -808,6 +808,21 @@ export class ApiClient {
 			withQuery(`/api/writer/${encodeURIComponent(slug)}/context`, locator),
 		);
 		return { usage: r.usage, trim: r.trim ?? null };
+	}
+
+	/**
+	 * 上下文检视面板数据(2026-10-04,T5;纯读,不创建会话)。
+	 * `available=false` 表示本章还没有注入过背景包(面板应显示空态而不是一堆 0)。
+	 */
+	async writerInspect(
+		slug: string,
+		chapterFile?: string | null,
+		conversation?: string | null,
+	): Promise<{ available: boolean; report: InspectReportDto | null }> {
+		const r = await this.request<{ available: boolean; report?: InspectReportDto | null }>(
+			withQuery(`/api/writer/${encodeURIComponent(slug)}/inspect`, writerLocator(chapterFile, conversation)),
+		);
+		return { available: r.available, report: r.report ?? null };
 	}
 
 	/**

@@ -1166,6 +1166,61 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .paper-zone > .notice { margin: 10px 22px 0; }
 .chat-scroll .notice { margin-bottom: 10px; }
 
+/* 上下文检视面板(T5,2026-10-04):只读快照,不新增主题键 —— 全部复用既有 token
+   (--bg-elev-2 / --line / --faint / --amber / --green / --red / --accent)。 */
+.inspect-entry { margin: 8px 22px 0; align-self: flex-start; font-size: 12px; color: var(--faint); background: none; border: none; cursor: pointer; padding: 2px 0; }
+.inspect-entry:hover { color: var(--accent); }
+.inspect-panel { margin: 10px 22px 0; padding: 12px 14px; background: var(--bg-elev-2); border: 1px solid var(--line); border-radius: var(--r-md); font-size: 12px; line-height: 1.6; animation: fade-up var(--dur-base) var(--ease-out); }
+.inspect-loading, .inspect-empty { color: var(--faint); }
+.inspect-head { display: flex; align-items: baseline; gap: 10px; }
+.inspect-total { display: flex; align-items: baseline; gap: 8px; }
+.inspect-pct { font-size: 18px; font-weight: 600; color: var(--green); }
+.inspect-pct.hot { color: var(--red); }
+.inspect-total-label { color: var(--faint); }
+.inspect-refresh { margin-left: auto; font-size: 12px; padding: 3px 10px; cursor: pointer; }
+.inspect-bar { height: 6px; margin: 8px 0 12px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.inspect-bar-fill { height: 100%; background: var(--green); transition: width var(--dur-base) var(--ease-out); }
+.inspect-bar-fill.hot { background: var(--red); }
+.inspect-section-title { margin: 12px 0 6px; color: var(--faint); font-size: 11px; letter-spacing: 0.04em; }
+.inspect-section-title:first-of-type { margin-top: 0; }
+.inspect-empty-line { color: var(--faint); padding: 4px 0; }
+.inspect-sections, .inspect-trims, .inspect-budgets { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.inspect-section { display: grid; grid-template-columns: 88px 1fr 44px 48px 48px; align-items: center; gap: 8px; }
+.inspect-name { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inspect-mini-bar { height: 5px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.inspect-mini-fill { display: block; height: 100%; }
+.inspect-mini-fill.resident { background: var(--faint); }
+.inspect-mini-fill.trimmable { background: var(--amber); }
+.inspect-count { color: var(--faint); text-align: right; }
+.inspect-tokens { color: var(--ink); text-align: right; font-variant-numeric: tabular-nums; }
+.inspect-badge { font-size: 10px; padding: 1px 6px; border-radius: var(--r-sm); text-align: center; }
+.inspect-badge.resident { color: var(--faint); border: 1px solid var(--line); }
+.inspect-badge.trimmable { color: var(--amber); border: 1px solid var(--amber-tint-strong); }
+.inspect-trim { padding: 6px 8px; background: var(--bg); border-left: 2px solid var(--amber); border-radius: var(--r-sm); }
+.inspect-trim-head { display: flex; gap: 8px; align-items: baseline; }
+.inspect-trim-label { color: var(--ink); }
+.inspect-trim-tokens { margin-left: auto; color: var(--faint); font-variant-numeric: tabular-nums; }
+.inspect-trim-impact { color: var(--faint); margin-top: 2px; }
+.inspect-budget { display: grid; grid-template-columns: 92px 96px 1fr; gap: 8px; align-items: baseline; }
+.inspect-budget-label { color: var(--ink); }
+.inspect-budget-value { color: var(--ink); font-variant-numeric: tabular-nums; }
+.inspect-budget-range { color: var(--faint); font-size: 11px; }
+.inspect-budget-effect { color: var(--faint); }
+/* 手机端:分段行挤不下五列,折成两行(名称+徽标 / 条+数值) */
+@media (max-width: 640px) {
+	.inspect-panel, .inspect-entry { margin-left: 12px; margin-right: 12px; }
+	.inspect-section { grid-template-columns: 1fr auto; grid-template-areas: "name badge" "bar tokens"; row-gap: 3px; }
+	.inspect-name { grid-area: name; }
+	.inspect-badge { grid-area: badge; justify-self: end; }
+	.inspect-mini-bar { grid-area: bar; }
+	.inspect-tokens { grid-area: tokens; }
+	.inspect-count { display: none; }
+	.inspect-budget { grid-template-columns: 1fr auto; grid-template-areas: "label value" "effect effect"; row-gap: 2px; }
+	.inspect-budget-label { grid-area: label; }
+	.inspect-budget-value { grid-area: value; text-align: right; }
+	.inspect-budget-effect { grid-area: effect; }
+}
+
 /* 空书引导 */
 .empty-books { max-width: 460px; margin: 0 auto; padding-top: 96px; text-align: center; }
 .empty-books-title { font-size: 22px; font-weight: 500; letter-spacing: 0.04em; margin-bottom: 10px; color: var(--ink); }

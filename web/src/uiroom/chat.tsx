@@ -33,6 +33,7 @@ import type {
 	ChatMessage,
 	ConversationDto,
 	ContextUsageDto,
+	InspectReportDto,
 	SessionUsageStatsDto,
 	SessionVersionInfo,
 	StageScriptDto,
@@ -54,6 +55,7 @@ import { PreviewBody, PreviewCard, worldSummary } from "../components/PreviewCar
 import { PreviewEntryCard } from "../components/PreviewEntryCard.tsx";
 import { PreviewGraph } from "../components/PreviewGraph.tsx";
 import { UsagePanel, formatCost, formatCount } from "../components/UsagePanel.tsx";
+import { ContextInspectPanel } from "../components/ContextInspectPanel.tsx";
 
 /* ════════════════════════════════════════════════════════════════
    展示辅助
@@ -877,6 +879,15 @@ export const CHAT_ENTRIES: readonly UIRoomEntry[] = [
 		note: "累计 token / 成本 / 按模型拆分(含被压缩掉的历史);成本为 0 但有 token 时写明「该模型未配价格」,非有限数与 0 都走「—」。",
 		variants: ["空闲", "高占用", "未计价", "统计中", "无数据"],
 	},
+	{
+		id: "context-inspect",
+		group: "chat",
+		title: "上下文检视板",
+		module: "components/ContextInspectPanel.tsx",
+		symbols: ["ContextInspectPanel"],
+		note: "背景包装配的只读快照(T5):总量条 → 各段占用(常驻/可裁分开着色)→ 被省略清单(每条注明「丢了会怎样」)→ 相关设置字段名。数据来自服务端缓存的「最近一次真正注入」,面板自己不重算。",
+		variants: ["健康", "超预算", "无裁切", "未装配"],
+	},
 ];
 
 /* ════════════════════════════════════════════════════════════════
@@ -1207,6 +1218,80 @@ function UsageEmpty() {
 	return <UsagePanel stats={null} loading={false} err={null} onClose={noop} />;
 }
 
+// —— 上下文检视板(T5) ——
+
+/**
+ * 演示报告:照 InspectReportDto 形状手写。
+ * 三档共用同一份「设置项」—— 那一段在任何状态下都不该消失(用户「怎么改」的入口)。
+ */
+const INSPECT_BUDGET_ITEMS = [
+	{ key: "contextBudget", label: "上下文预算", value: 2000, range: "200 - 20000", effect: "背景包总量上限,超出即按下面的顺序裁" },
+	{ key: "memoryBudget", label: "记忆预算", value: 1500, range: "100 - 20000", effect: "跨章节记忆 memory.md 注入前的裁剪上限" },
+	{ key: "activationDepth", label: "激活深度", value: 0, range: "0 - 5", effect: "0 = 只注入关键词命中的条目;越大越会带出关联条目" },
+];
+
+const INSPECT_HEALTHY: InspectReportDto = {
+	slug: "fog-harbor",
+	chapterFile: "ch01.jsonl",
+	chapterTitle: "雨夜",
+	budget: 2000,
+	used: 820,
+	percent: 41,
+	sections: [
+		{ id: "entries", label: "世界书·本章相关", tokens: 400, count: 5, percent: 20, usage: "400 / 2000(20%)", trimmable: true },
+		{ id: "sample", label: "文风采样", tokens: 200, count: 1, percent: 10, usage: "200 / 2000(10%)", trimmable: true },
+		{ id: "memory", label: "记忆", tokens: 120, count: 1, percent: 6, usage: "120 / 2000(6%)", trimmable: false },
+		{ id: "constraints", label: "写作约束", tokens: 100, count: 2, percent: 5, usage: "100 / 2000(5%)", trimmable: false },
+	],
+	trimmed: [],
+	budgetItems: INSPECT_BUDGET_ITEMS,
+};
+
+const INSPECT_OVER: InspectReportDto = {
+	slug: "fog-harbor",
+	chapterFile: "ch07.jsonl",
+	chapterTitle: "退潮",
+	budget: 2000,
+	used: 1930,
+	percent: 97,
+	sections: [
+		{ id: "entries", label: "世界书·本章相关", tokens: 1200, count: 12, percent: 60, usage: "1200 / 2000(60%)", trimmable: true },
+		{ id: "constraints", label: "写作约束", tokens: 380, count: 6, percent: 19, usage: "380 / 2000(19%)", trimmable: false },
+		{ id: "notice", label: "Notice·备忘录", tokens: 180, count: 6, percent: 9, usage: "180 / 2000(9%)", trimmable: false },
+		{ id: "storyline", label: "发展线", tokens: 170, count: 1, percent: 9, usage: "170 / 2000(9%)", trimmable: true },
+	],
+	trimmed: [
+		{ kind: "entry", label: "旧城地图", tokens: 220, impact: "模型看不到这条设定,可能把「没写进世界书」当作事实" },
+		{ kind: "entry", label: "林父的手记", tokens: 180, impact: "模型看不到这条设定,可能把「没写进世界书」当作事实" },
+		{ kind: "sample", label: "文风采样", tokens: 900, impact: "文风一致性下降,模型会退回自己的默认语感" },
+		{ kind: "milestones", label: "发展线·已完成", tokens: 60, impact: "已完成的目标可能被重复推进 —— 这一段装的是「勿再追求」清单" },
+	],
+	budgetItems: INSPECT_BUDGET_ITEMS,
+};
+
+function InspectHealthy() {
+	return <ContextInspectPanel report={INSPECT_HEALTHY} loading={false} onRefresh={noop} />;
+}
+
+function InspectOver() {
+	return <ContextInspectPanel report={INSPECT_OVER} loading={false} onRefresh={noop} />;
+}
+
+/** 没超预算 → trimmed 空,面板明说「没有裁切」而不是留白(留白会让人以为加载失败)。 */
+function InspectNoTrim() {
+	return (
+		<ContextInspectPanel
+			report={{ ...INSPECT_HEALTHY, used: 260, percent: 13, sections: INSPECT_HEALTHY.sections.slice(2), trimmed: [] }}
+			loading={false}
+			onRefresh={noop}
+		/>
+	);
+}
+
+function InspectUnloaded() {
+	return <ContextInspectPanel report={null} loading={false} onRefresh={noop} />;
+}
+
 // —— 对话切换器(book 模式的对话入口) ——
 
 /** 演示数据:照 ConversationDto 形状手写(id 是章节文件名或裸 id `c-xxxxxx`)。 */
@@ -1321,5 +1406,11 @@ export const CHAT_SECTION: UIRoomSection = {
 		{ label: "未计价", note: "有 token 但成本为 0 → 写明原因", render: UsageNoPrice },
 		{ label: "统计中", note: "loading", render: UsageLoading },
 		{ label: "无数据", note: "这一章还没有会话记录", render: UsageEmpty },
+	],
+	"context-inspect": [
+		{ label: "健康", note: "41%:常驻段灰、可裁段琥珀", render: InspectHealthy },
+		{ label: "超预算", note: "97%:数字转红 + 被省略清单(每条带后果)", render: InspectOver },
+		{ label: "无裁切", note: "trimmed 空 → 明说「没有裁切」而不是留白", render: InspectNoTrim },
+		{ label: "未装配", note: "该章还没注入过背景包", render: InspectUnloaded },
 	],
 };

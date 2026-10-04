@@ -29,8 +29,9 @@ import { applyWorldUpdate, readChapterTool, readCountsForFile, wordCountTool, wo
 import { flattenWorldTree, renderWorldTree, renderWorldTreeFromData } from "./world-tree.ts";
 import { ensureWorld } from "./world-data.ts";
 import { chatTextOfMessage } from "./session-text.ts";
-import { buildChapterContext, summarizeTrim, trimMemory } from "./world-context.ts";
-import { readWriterSettings } from "./writer-settings.ts";
+import { buildChapterContext, type ChapterContextResult, summarizeTrim, trimMemory } from "./world-context.ts";
+import { readWriterSettings, type WriterSettings } from "./writer-settings.ts";
+import { buildInspectReport, inspectHeadline, openInspectPanel, type InspectReport } from "./inspect/index.ts";
 import { buildWriterTheme } from "./writer-theme.ts";
 import { pathWithinRoot } from "./tool-guard.ts";
 import { countWriting, WriterFooter, WriterInfoBar, type WriterUiState } from "./writer-ui.ts";
@@ -593,6 +594,31 @@ function writerFactory(pi: ExtensionAPI): void {
 		},
 	});
 
+	// 上下文检视(2026-10-04,T5):把「这一轮到底看到了什么、还差什么」摊开。
+	// 复用 switchChapter 那套装配逻辑(同参数、同预算),因此面板里看到的
+	// 就是切章时真正注入的那一份 —— 而不是另起炉灶算一遍。
+	pi.registerCommand("inspect", {
+		description: "查看当前章的上下文装配:每段占多少、哪些被省略、相关设置在哪",
+		handler: async (_args, ctx) => {
+			const slug = bookSlugFromSessionFile(ctx.sessionManager.getSessionFile() ?? undefined);
+			if (!slug) {
+				ctx.ui.notify("当前不在任何书中", "error");
+				return;
+			}
+			const report = await assembleInspectReport(ctx, slug);
+			if (!report) {
+				ctx.ui.notify(`找不到书(或本书还没有章节): ${slug}`, "error");
+				return;
+			}
+			// 无交互模式(TUI 关掉)时退化成一行摘要 —— 面板没法开。
+			if (!ctx.hasUI) {
+				ctx.ui.notify(inspectHeadline(report), "info");
+				return;
+			}
+			await openInspectPanel(ctx, { report });
+		},
+	});
+
 	pi.registerCommand("new-book", {
 		description: "新建一本书并切换到它的第一章（可选: /new-book 标题）",
 		handler: async (args, ctx) => {
@@ -771,7 +797,43 @@ async function switchChapter(ctx: ExtensionCommandContext, slug: string, file: s
 	await initChapterFile(absPath, bookDir);
 	// 构造本章背景包(注入在 withSession 内用 newCtx.sendMessage 完成,
 	// 旧 ctx/pi 在 switchSession 后已 invalidate,不能在切换后使用)
+	const assembly = await assembleChapterContext(ctx, slug, file);
+	const context = assembly.context;
+	const result = await ctx.switchSession(absPath, {
+		withSession: async (newCtx) => {
+			await setCurrentChapter(slug, file);
+			// 用 newCtx.sendMessage(绑定新会话)注入,nextTurn 随下个用户 prompt 进入,
+			// 不触发独立回复;切换取消时 withSession 不执行,注入自动跳过
+			if (context.text.length > 0) {
+				await newCtx.sendMessage({ ...worldContextMessage(context.text), display: true }, { deliverAs: "nextTurn" });
+			}
+			newCtx.ui.notify(`已切换到 ${file}`, "info");
+			// 裁切可见(2026-10-04):预算不够时告诉用户省了什么,而不是默默让他
+			// 以为设定都进去了。只在这一处提示 —— 每轮都弹会变成噪音。
+			const trim = summarizeTrim(context);
+			if (trim.text.length > 0) newCtx.ui.notify(`上下文${trim.text}`, "warn");
+		},
+	});
+	if (result.cancelled) {
+		ctx.ui.notify("切换已取消", "info");
+	}
+}
+
+/**
+ * 装配一章的背景包(2026-10-04,T5 抽出)。
+ *
+ * 抽出来的原因:`/inspect` 面板必须展示**切章时真正注入的那一份**,而不是
+ * 另算一遍。两处各写一份装配参数,迟早会漂移(改了预算忘了改 inspect),
+ * 那时面板就成了误导 —— 比没有面板更糟。
+ */
+async function assembleChapterContext(
+	ctx: ExtensionContext,
+	slug: string,
+	file: string,
+): Promise<{ context: ChapterContextResult; settings: WriterSettings; world: WorldData; bookDir: string; chapterId: string }> {
+	const bookDir = getBookDir(slug);
 	const chapterId = chapterIdFromFile(file);
+	const absPath = getChapterSessionsPath(slug, file);
 	let draftText = "";
 	try {
 		const draftAbs = join(bookDir, "draft", `${chapterId}.md`);
@@ -819,24 +881,19 @@ async function switchChapter(ctx: ExtensionCommandContext, slug: string, file: s
 			completedMilestoneLimit: settings.completedMilestoneLimit,
 		},
 	});
-	const result = await ctx.switchSession(absPath, {
-		withSession: async (newCtx) => {
-			await setCurrentChapter(slug, file);
-			// 用 newCtx.sendMessage(绑定新会话)注入,nextTurn 随下个用户 prompt 进入,
-			// 不触发独立回复;切换取消时 withSession 不执行,注入自动跳过
-			if (context.text.length > 0) {
-				await newCtx.sendMessage({ ...worldContextMessage(context.text), display: true }, { deliverAs: "nextTurn" });
-			}
-			newCtx.ui.notify(`已切换到 ${file}`, "info");
-			// 裁切可见(2026-10-04):预算不够时告诉用户省了什么,而不是默默让他
-			// 以为设定都进去了。只在这一处提示 —— 每轮都弹会变成噪音。
-			const trim = summarizeTrim(context);
-			if (trim.text.length > 0) newCtx.ui.notify(`上下文${trim.text}`, "warn");
-		},
-	});
-	if (result.cancelled) {
-		ctx.ui.notify("切换已取消", "info");
-	}
+	return { context, settings, world, bookDir, chapterId };
+}
+
+/** 组装 `/inspect` 的报告;书不存在或本书还没章节时返回 null。 */
+async function assembleInspectReport(ctx: ExtensionContext, slug: string): Promise<InspectReport | null> {
+	const book = await loadBook(slug);
+	if (!book) return null;
+	// 取当前章:index 里记着的那个,否则第一章 —— 与 CLI/Web 的取章口径一致。
+	const file = book.currentChapterFile ?? book.chapters[0]?.file ?? "";
+	if (file.length === 0) return null;
+	const { context, settings } = await assembleChapterContext(ctx, slug, file);
+	const chapter = book.chapters.find((c) => c.file === file);
+	return buildInspectReport({ slug, chapterFile: file, chapterTitle: chapter?.title ?? "", context, settings });
 }
 
 export const writerExtension: InlineExtension = {

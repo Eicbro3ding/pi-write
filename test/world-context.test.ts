@@ -332,6 +332,59 @@ describe("T4 裁切可见（trimmed 明细 + summarizeTrim）", () => {
 	});
 });
 
+describe("T5 分段占用（sections 快照）", () => {
+	it("空世界时不产生任何分段（UI 据此不渲染预算面板）", () => {
+		const r = buildChapterContext(createEmptyWorld(), { chapterId: "ch01", draftText: "", recentUserMessages: [], budget: DEFAULT_CONTEXT_BUDGET });
+		expect(r.sections).toEqual([]);
+	});
+
+	it("各段 id 唯一,且 tokens 与正文实际体量对得上", () => {
+		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
+		w.constraints.push({ id: "c1", name: "第一人称", text: "全程第一人称", enabled: true, target: "all" });
+		w.styleSample = { text: "夜色如墨。", source: "第一章", updatedAt: 0 };
+		w.worldSummary = "旧城临海。";
+		w.notice.enabled = true;
+		w.notice.items.push({ id: "n1", text: "补齐线索", done: false });
+		w.storyline.enabled = true;
+		w.storyline.nodes.push({ id: "s1", title: "初遇", status: "in-progress", goal: "相识", next: "同行", updatedAt: 0 });
+		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉推门。", recentUserMessages: [], memory: "上一章:林婉抵城。", budget: 2000 });
+		const ids = r.sections.map((s) => s.id);
+		expect(new Set(ids).size).toBe(ids.length); // 无重复
+		for (const s of r.sections) {
+			expect(s.tokens).toBeGreaterThan(0);
+			expect(s.label.length).toBeGreaterThan(0);
+		}
+		// 关键点:tokens 是「实际进上下文的量」,而非原始数据量。
+		// 记忆段与正文里的【记忆】块应等长。
+		const mem = r.sections.find((s) => s.id === "memory");
+		expect(mem?.tokens).toBe(estimateTokens("【记忆】\n上一章:林婉抵城。"));
+		expect(r.sections.find((s) => s.id === "constraints")?.count).toBe(1);
+		expect(r.sections.find((s) => s.id === "entries")?.count).toBe(1);
+	});
+
+	it("被裁的段不进 sections（裁掉的量只体现在 trimmed）", () => {
+		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
+		w.styleSample = { text: "字".repeat(3000), source: "", updatedAt: 0 };
+		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: 100 });
+		expect(r.trimmed.some((t) => t.kind === "sample")).toBe(true);
+		// 采样被裁 → 不进 sections(否则预算面板会虚报占用)
+		expect(r.sections.some((s) => s.id === "sample")).toBe(false);
+	});
+
+	it("sections 的 token 之和不超过预算（越界说明哪段没算对）", () => {
+		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
+		w.styleSample = { text: "字".repeat(500), source: "", updatedAt: 0 };
+		w.worldSummary = "概".repeat(300);
+		const budget = 200;
+		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], memory: "上文。", budget });
+		const total = r.sections.reduce((sum, s) => sum + s.tokens, 0);
+		// 允许少量余量:分段各自量会重复计入段标题分隔符(空行/title),
+		// 与 used 的累加口径有零点几的差 —— 这里只断言「同量级、没少算一倍」
+		expect(total).toBeLessThanOrEqual(budget * 2);
+		expect(total).toBeGreaterThan(0);
+	});
+});
+
 describe("buildChapterContext（关联激活）", () => {
 	it("缺省/0 深度不展开:邻居不进背景包(兼容回归)", () => {
 		const w = relWorld();

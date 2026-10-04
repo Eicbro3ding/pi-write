@@ -78,6 +78,18 @@ export interface TrimRecord {
 	tokens: number;
 }
 
+/** 背景包里的一个分段及其占用(2026-10-04,T5 上下文可视化)。 */
+export interface ContextSection {
+	/** 段 id(稳定,供 UI 排序/着色;不用展示名做键,展示名会改)。 */
+	id: "memory" | "summary" | "entries" | "constraints" | "sample" | "notice" | "storyline";
+	/** 展示名。 */
+	label: string;
+	/** 该段实际占用的 token(裁掉的不算——裁掉的另在 trimmed 里)。 */
+	tokens: number;
+	/** 该段包含的条目数(条目类才有意义;其余为 0 或 1)。 */
+	count: number;
+}
+
 export interface ChapterContextResult {
 	text: string;
 	activatedIds: string[];
@@ -90,6 +102,13 @@ export interface ChapterContextResult {
 	 * 顺序 = 被裁的先后(条目按优先级填充时被挤出的顺序)。
 	 */
 	trimmed: TrimRecord[];
+	/**
+	 * 分段占用(2026-10-04,T5)。`used` 是滚动累加值,拿不到「哪一段花了多少」,
+	 * 而 T5 的预算面板恰好只需要这个 —— 因此单独快照一份。
+	 *
+	 * 只含**实际进入上下文**的段;被裁的看 trimmed。
+	 */
+	sections: ContextSection[];
 	included: {
 		constraints: string[];
 		hasSample: boolean;
@@ -239,7 +258,12 @@ export function rankActivationCandidates(data: WorldData, seeds: string[], expan
 
 /** 组装背景包文本(常驻组 + 激活组,预算裁剪)。 */
 export function buildChapterContext(data: WorldData, input: ChapterContextInput): ChapterContextResult {
-	const result: ChapterContextResult = { text: "", activatedIds: [], trimmedCount: 0, trimmed: [], included: { constraints: [], hasSample: false, hasSummary: false, hasNotice: false, hasCompletedMilestones: false, storylineNode: null } };
+	const result: ChapterContextResult = { text: "", activatedIds: [], trimmedCount: 0, trimmed: [], sections: [], included: { constraints: [], hasSample: false, hasSummary: false, hasNotice: false, hasCompletedMilestones: false, storylineNode: null } };
+	/** 分段占用的累加器(见 ContextSection;最后统一 push,省得各分支各自维护顺序)。 */
+	const sections: ContextSection[] = [];
+	const addSection = (s: ContextSection): void => {
+		if (s.tokens > 0) sections.push(s);
+	};
 
 	// 常驻组:启用的约束 + 采样 + 简要世界观(裁剪顺序:先裁采样,仍超再裁概述,约束保留)
 	// 约束按 target 过滤。主会话(这个函数)是**写作 agent**——TUI 里它就是唯一动笔的那个,
@@ -251,15 +275,19 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 		(c) => c.enabled && (constraintTargetMatches(c.target, "main") || constraintTargetMatches(c.target, "writer")),
 	);
 	let resident = "";
+	let residentConstraints = "";
 	if (enabledConstraints.length > 0) {
-		resident += "【写作约束】\n";
+		residentConstraints = "【写作约束】\n";
 		for (const c of enabledConstraints) {
-			resident += `- ${c.name}: ${c.text}\n`;
+			residentConstraints += `- ${c.name}: ${c.text}\n`;
 			result.included.constraints.push(c.name);
 		}
+		resident += residentConstraints;
 	}
+	let sample = "";
 	if (data.styleSample && data.styleSample.text.length > 0) {
-		resident += `【文风采样】(来源: ${data.styleSample.source || "未知"}；只模仿语感与句式，不复用原文)\n${data.styleSample.text}\n`;
+		sample = `【文风采样】(来源: ${data.styleSample.source || "未知"}；只模仿语感与句式，不复用原文)\n${data.styleSample.text}\n`;
+		resident += sample;
 		result.included.hasSample = true;
 	}
 	let overview = "";
@@ -274,6 +302,7 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 			// 记录被裁掉的那一段的实际体量(裁之前先量),供 T4 的可视化用
 			const dropped = resident.slice(sampleStart);
 			resident = resident.slice(0, sampleStart);
+			sample = "";
 			result.included.hasSample = false;
 			result.trimmed.push({ kind: "sample", label: "文风采样", tokens: estimateTokens(dropped) });
 			used = estimateTokens(resident) + estimateTokens(overview);
@@ -285,6 +314,12 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 			used = estimateTokens(resident);
 		}
 	}
+	// 分段快照(2026-10-04,T5):常驻组的约束与采样在 resident 里拼在一起,
+	// 因此各自单独量长度 —— 采样若被裁掉,量出来的必须是「切完还剩多少」。
+	// 必须在剪裁之后量,否则面板会把已经丢掉的内容算进预算。
+	addSection({ id: "constraints", label: "写作约束", tokens: estimateTokens(residentConstraints), count: result.included.constraints.length });
+	addSection({ id: "sample", label: "文风采样", tokens: estimateTokens(sample), count: sample.length > 0 ? 1 : 0 });
+	addSection({ id: "summary", label: "世界观概述", tokens: estimateTokens(overview), count: overview.length > 0 ? 1 : 0 });
 
 	// 激活组(预算内按优先级装填;首条无条件装入保证"至少一条相关设定")
 	// 种子 = 关键词命中(activatedEntryIds 产线,零改动);深度 > 0 时经
@@ -310,30 +345,36 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 		result.activatedIds.push(id);
 		used += tokens;
 	}
+	// 激活组的分段快照(2026-10-04,T5):按已装入的行实际长度量,
+	// 不按 ids 重算 —— 装填时 used 已经累加过,这里只需把总量落到面板上。
+	addSection({ id: "entries", label: "世界书·本章相关", tokens: activeParts.reduce((sum, line) => sum + estimateTokens(line), 0), count: activeParts.length });
 
 	// Notice(全局备忘录·待办清单):只注入未完成项,上限 NOTICE_INJECT_LIMIT——完成
 	// 的条目留在 UI 板子可见,不进上下文(2026-08-12 回到初衷)。常驻不可裁。
 	let tail = "";
+	let noticeBlock = "";
 	const noticeLimit = input.limits?.noticeInjectLimit ?? NOTICE_INJECT_LIMIT;
 	const milestoneLimit = input.limits?.completedMilestoneLimit ?? COMPLETED_MILESTONE_LIMIT;
 	const noticeItems = data.notice.items.filter((i) => !i.done).slice(0, noticeLimit);
 	if (data.notice.enabled && noticeItems.length > 0) {
-		tail += `【Notice·备忘录】\n${noticeItems.map((i) => `- [ ] ${i.text}`).join("\n")}\n`;
+		noticeBlock = `【Notice·备忘录】\n${noticeItems.map((i) => `- [ ] ${i.text}`).join("\n")}\n`;
+		tail += noticeBlock;
 		result.included.hasNotice = true;
 	}
 	const view = buildStorylineView(data, milestoneLimit);
+	let storylineBlock = "";
 	if (view) {
 		if (view.currentTitle) {
 			const current = data.storyline.nodes.find((n) => n.status === "in-progress");
-			tail += `【发展线】\n当前位置: ${view.currentTitle}\n`;
-			if (current?.goal) tail += `目标: ${current.goal}\n`;
-			if (current?.next) tail += `下一步: ${current.next}\n`;
+			storylineBlock += `【发展线】\n当前位置: ${view.currentTitle}\n`;
+			if (current?.goal) storylineBlock += `目标: ${current.goal}\n`;
+			if (current?.next) storylineBlock += `下一步: ${current.next}\n`;
 			if (current) result.included.storylineNode = current.id;
 		}
 		if (view.completed.length > 0) {
 			const completedBlock = `【发展线·已完成】以下目标已完成,禁止重复追求/推进:\n${view.completed.map((t) => `- ${t}`).join("\n")}`;
 			if (used + estimateTokens(completedBlock) <= input.budget) {
-				tail += `\n${completedBlock}\n`;
+				storylineBlock += `\n${completedBlock}\n`;
 				result.included.hasCompletedMilestones = true;
 			} else {
 				// 这一段整块丢弃目前无声无息 —— 而它恰好装的是「勿再追求」清单,
@@ -341,12 +382,19 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 				result.trimmed.push({ kind: "milestones", label: "发展线·已完成", tokens: estimateTokens(completedBlock) });
 			}
 		}
+		tail += storylineBlock;
 	}
+	// 分段快照(2026-10-04,T5):Notice 与发展线为常驻不可裁的尾段,
+	// 但发展线的「已完成」块仍可能被预算挤掉,故同样在裁剪判定之后量。
+	addSection({ id: "notice", label: "Notice·备忘录", tokens: estimateTokens(noticeBlock), count: noticeItems.length });
+	addSection({ id: "storyline", label: "发展线", tokens: estimateTokens(storylineBlock), count: view ? 1 : 0 });
 
 	const parts: string[] = [];
 	// 跨章节记忆放最前:agent 最先看到它,再读本章相关设定
+	let memoryBlock = "";
 	if (input.memory && input.memory.trim().length > 0) {
-		parts.push(`【记忆】\n${input.memory.trim()}`);
+		memoryBlock = `【记忆】\n${input.memory.trim()}`;
+		parts.push(memoryBlock);
 	}
 	// 简要世界观紧跟记忆:先读叙事态,再读稳定设定,然后才是本章相关
 	if (overview.length > 0) parts.push(overview.trimEnd());
@@ -374,6 +422,10 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 		const labels = result.trimmed.map((t) => (t.kind === "entry" ? `《${t.label}》` : SHORT[t.kind])).join("、");
 		text += `\n(因预算未包含: ${labels};需要可 read world.json)`;
 	}
+	// 记忆段放在最前,故最后回填 —— sections 的展示顺序由 UI 决定(id 稳定),
+	// 这里只需保证「每段都在、量的是实际进上下文的那份」(2026-10-04,T5)。
+	addSection({ id: "memory", label: "记忆", tokens: estimateTokens(memoryBlock), count: memoryBlock.length > 0 ? 1 : 0 });
+	result.sections = sections;
 	return { ...result, text: text.trim() };
 }
 

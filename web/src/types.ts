@@ -356,6 +356,60 @@ export interface TrimSummaryDto {
 	text: string;
 }
 
+// ---- 上下文检视(T5,2026-10-04) ----
+// 与后端 src/inspect/report.ts 的 InspectReport 一一对应;改后端形状必须同步这里,
+// 否则面板会静默显示 undefined(没有编译期约束,故在此写死对应关系)。
+
+/** 一段在检视面板里的展示行。 */
+export interface InspectSectionRowDto {
+	/** 段 id(稳定键)。 */
+	id: "memory" | "summary" | "entries" | "constraints" | "sample" | "notice" | "storyline";
+	/** 展示名。 */
+	label: string;
+	/** 该段实际进入上下文的 token。 */
+	tokens: number;
+	/** 该段的条目数。 */
+	count: number;
+	/** 占总预算的百分比。 */
+	percent: number;
+	/** 人类可读的占用描述。 */
+	usage: string;
+	/** 是否可能被裁。 */
+	trimmable: boolean;
+}
+
+/** 一条被省掉的内容。 */
+export interface InspectTrimRowDto {
+	kind: "entry" | "sample" | "summary" | "milestones";
+	label: string;
+	tokens: number;
+	/** 「丢了会怎样」。 */
+	impact: string;
+}
+
+/** 面板里的一个可调项。 */
+export interface InspectBudgetRowDto {
+	/** 设置字段名(与 writer settings 一致)。 */
+	key: string;
+	label: string;
+	value: number;
+	range: string;
+	effect: string;
+}
+
+/** 一次上下文装配的完整检视结果。 */
+export interface InspectReportDto {
+	slug: string;
+	chapterFile: string;
+	chapterTitle: string;
+	budget: number;
+	used: number;
+	percent: number;
+	sections: InspectSectionRowDto[];
+	trimmed: InspectTrimRowDto[];
+	budgetItems: InspectBudgetRowDto[];
+}
+
 /** 最近一轮 assistant 消息的提示词缓存命中(usage.cacheRead 投影;2026-08-22)。 */
 export interface CacheHitInfo {
 	/** 命中率 0..1(cacheRead / 全部提示词 token)。 */

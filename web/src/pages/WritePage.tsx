@@ -14,6 +14,7 @@ import type {
 	ConversationDto,
 	ConversationScopeDto,
 	DraftStatus,
+	InspectReportDto,
 	SessionTreeDto,
 	SessionUsageStatsDto,
 	TextSelectionSnapshot,
@@ -53,6 +54,7 @@ import { AskUserOverlay } from "../components/AskUserCard.tsx";
 import type { EnterBehavior } from "../settings.ts";
 import { findPendingAsk } from "../ask-user.ts";
 import { NoticeBoard } from "../components/NoticeBoard.tsx";
+import { ContextInspectPanel } from "../components/ContextInspectPanel.tsx";
 import { WorkspacePanel } from "../components/WorkspacePanel.tsx";
 import { newId } from "../components/id.ts";
 import { createEditCapture } from "../edit-capture.ts";
@@ -289,6 +291,11 @@ export function WritePage({
 	const [writerUsage, setWriterUsage] = useState<ContextUsageDto | null>(null);
 	/** 最近一次装配的裁切摘要(2026-10-04,T4);null = 未裁切,不显示提示条。 */
 	const [writerTrim, setWriterTrim] = useState<TrimSummaryDto | null>(null);
+	/** 上下文检视报告(T5,2026-10-04):展开面板时才拉,不在每次 /context 轮询里顺带取 —— 
+	 *  它比 usage/trim 重(含分段与设置项),而用户绝大多数时候不看。 */
+	const [inspectReport, setInspectReport] = useState<InspectReportDto | null>(null);
+	const [inspectOpen, setInspectOpen] = useState(false);
+	const [inspectLoading, setInspectLoading] = useState(false);
 	/** 会话用量浮层(点输入条的上下文圆环展开):开合 / 数据 / 载入中 / 错误。 */
 	const [usageOpen, setUsageOpen] = useState(false);
 	const [usageStats, setUsageStats] = useState<SessionUsageStatsDto | null>(null);
@@ -1286,6 +1293,42 @@ export function WritePage({
 			.catch(() => {});
 	}
 
+	/**
+	 * 拉取上下文检视报告(T5,2026-10-04)。
+	 *
+	 * 纯读端点,不创建会话;服务端返回的是「最近一次真正注入」的快照,
+	 * 因此这里拿到的 used/percent 与用户实际看到的上下文一致。
+	 * 每章每次展开都重拉:世界书可能刚被 AI 改过,缓存反而会误导。
+	 */
+	function refreshWriterInspect() {
+		const slug = bookDetailRef.current?.slug;
+		if (!slug) return;
+		const ch = currentChapterRef.current;
+		const conv = selectedConversationRef.current;
+		const t = writerTargetNow(ch?.file ?? null);
+		setInspectLoading(true);
+		void client
+			.writerInspect(slug, t.chapterFile, t.conversation)
+			.then(({ report }) => {
+				if (
+					bookDetailRef.current?.slug === slug &&
+					currentChapterRef.current?.file === ch?.file &&
+					selectedConversationRef.current === conv
+				) {
+					setInspectReport(report);
+				}
+			})
+			.catch(() => {})
+			.finally(() => setInspectLoading(false));
+	}
+
+	/** 展开/收起检视面板;展开时拉最新数据。 */
+	function toggleInspect() {
+		const next = !inspectOpen;
+		setInspectOpen(next);
+		if (next) refreshWriterInspect();
+	}
+
 	/** `/compact` 动作:手动压缩编剧当前章节上下文(压缩事件经 writer_event 驱动 UI)。 */
 	async function runWriterCompact(instructions: string) {
 		const slug = bookDetailRef.current?.slug;
@@ -2052,11 +2095,27 @@ export function WritePage({
 							)}
 							{/* 裁切可见(2026-10-04,T4):背景包预算不够时告诉用户省了什么,
 							    而不是让他以为设定都进去了 —— 与用量提示条同款式。
-							    key 带 text:裁切内容变化时重挂载,重播入场动画(同 writerUsageHint 手法)。 */}
+							    key 带 text:裁切内容变化时重挂载,重播入场动画(同 writerUsageHint 手法)。
+							    T5 起这条同时是「上下文检视」的入口:点它展开完整面板 —— 看到
+							    被省略的清单还不够,用户接下来必然要问「那总量是多少、怎么改」,
+							    所以入口就放在「已经让他起疑」的那一行上。 */}
 							{writerTrim && (
 								<div key={writerTrim.text} className="notice warn" role="status">
 									⚠ 背景包预算不足,{writerTrim.text}
+									<button type="button" className="notice-action" onClick={toggleInspect} aria-expanded={inspectOpen}>
+										{inspectOpen ? "收起" : "查看详情"}
+									</button>
 								</div>
+							)}
+							{/* 没有裁切时也给一个轻量入口 —— 否则「没超预算」的用户永远
+							    发现不了这个面板,而它恰好是「提前调预算」的唯一依据。 */}
+							{!writerTrim && (
+								<button type="button" className="inspect-entry" onClick={toggleInspect} aria-expanded={inspectOpen}>
+									{inspectOpen ? "▾ 收起上下文检视" : "▸ 上下文检视"}
+								</button>
+							)}
+							{inspectOpen && (
+								<ContextInspectPanel report={inspectReport} loading={inspectLoading} onRefresh={refreshWriterInspect} />
 							)}
 							{/* 桌面:输入条留在伙伴栏底部;手机端它被提到壳层底部(.m-composer),
 							    所以这里按 isPhone 二者取一 */}

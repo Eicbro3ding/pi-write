@@ -1926,6 +1926,39 @@ describe("WriterServer · 编剧上下文与插件路由预留", () => {
 		const body = (await res.json()) as { trim: { text: string } };
 		expect(body.trim.text).toBe("");
 	});
+	it("GET /api/writer/:slug/inspect 返回检视报告骨架(T5)", async () => {
+		const res = await fetch(`${base}/api/writer/fog-harbor/inspect?chapterFile=${encodeURIComponent("ch01.jsonl")}`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			available: boolean;
+			report: {
+				slug: string;
+				chapterFile: string;
+				budget: number;
+				used: number;
+				percent: number;
+				sections: unknown[];
+				trimmed: unknown[];
+				budgetItems: Array<{ key: string; value: number }>;
+			};
+		};
+		// 本用例没走过切章 → 没有快照:面板据此显示空态,而不是编一份像真的数据
+		expect(body.available).toBe(false);
+		expect(body.report.slug).toBe("fog-harbor");
+		expect(body.report.sections).toEqual([]);
+		expect(body.report.trimmed).toEqual([]);
+		// 但设置项与预算在任何情况下都要有 —— 用户「怎么改」的入口不能因为没快照就消失
+		const budgetKeys = body.report.budgetItems.map((b) => b.key);
+		expect(budgetKeys).toContain("contextBudget");
+		expect(budgetKeys).toContain("activationDepth");
+		expect(body.report.budget).toBeGreaterThan(0);
+	});
+	it("inspect 端点是纯读的:不创建会话(反复调用结果稳定)", async () => {
+		const url = `${base}/api/writer/fog-harbor/inspect?chapterFile=${encodeURIComponent("ch01.jsonl")}`;
+		const a = await (await fetch(url)).json();
+		const b = await (await fetch(url)).json();
+		expect(a).toEqual(b);
+	});
 	it("POST /api/writer/:slug/compact 返回压缩结果", async () => {
 		const res = await fetch(`${base}/api/writer/fog-harbor/compact`, {
 			method: "POST",

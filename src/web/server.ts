@@ -67,7 +67,8 @@ import { listSkills } from "../skills-index.ts";
 import { BOOK_FILE_GROUPS, classifyBookFileKind, isWorkspaceFile, listBookFiles, readWorkspaceText, statWorkspaceFile } from "../book-files.ts";
 import { MAX_ZIP_BYTES, exportBookZip, readImportZip, type BookZipImport } from "./book-zip.ts";
 import { ensureWorld, newId, readWorldEditRecord, saveWorld, WorldValidationError, type WorldData } from "../world-data.ts";
-import { buildChapterContext, EMPTY_TRIM_SUMMARY, summarizeTrim, trimMemory, type TrimSummary } from "../world-context.ts";
+import { buildChapterContext, EMPTY_TRIM_SUMMARY, summarizeTrim, trimMemory, type ContextSection, type TrimRecord, type TrimSummary } from "../world-context.ts";
+import { buildInspectReport } from "../inspect/report.ts";
 import type { SessionHost } from "./session-host.ts";
 import { extractMessagesFromManager, usableModelRef, type ThinkingSummary } from "./session-host.ts";
 import { askUserGate } from "../ask-user.ts";
@@ -582,6 +583,22 @@ export class WriterServer {
 	 */
 	private readonly lastTrim = new Map<string, TrimSummary>();
 	/**
+	 * 最近一次背景包装配的分段占用快照(2026-10-04,T5 上下文可视化),
+	 * 键与 lastTrim 相同(`slug/chapterFile`)。
+	 *
+	 * 与 lastTrim 同源同一次装配 —— 分两个 Map 而不是合成一个对象,是因为
+	 * T4 的读写路径已经稳定,合成要动的地方多;两者键完全一致,查起来等价。
+	 */
+	private readonly lastSections = new Map<string, ContextSection[]>();
+	/**
+	 * 最近一次装配的**裁切明细**(TrimRecord 原样,2026-10-04 T5)。
+	 *
+	 * 与 lastTrim(展示用摘要)的区别:摘要把同类合并且丢掉 token 量,
+	 * 而检视面板要的是「每一条省了多少、丢了会怎样」—— 那需要原始记录。
+	 * 两者都由同一次 injectChapterContext 写入,键一致。
+	 */
+	private readonly lastTrimmed = new Map<string, TrimRecord[]>();
+	/**
 	 * models.json 读-改-写串行队列(2026-10 审计 BUG-011):并发新增/编辑/删除
 	 * 自定义 provider/model 时,各自「读旧快照 → 改 → 原子写」会互相覆盖。
 	 * 同一文件的操作排成一条链,锁内**重新读取**最新文件再变更。
@@ -747,6 +764,8 @@ export class WriterServer {
 			{ method: "GET", segments: ["writer", ":slug", "context"], handler: (ctx) => this.handleGetWriterContext(ctx) },
 			{ method: "GET", segments: ["writer", ":slug", "stats"], handler: (ctx) => this.handleGetWriterStats(ctx) },
 			{ method: "POST", segments: ["writer", ":slug", "compact"], handler: (ctx) => this.handlePostWriterCompact(ctx) },
+			// inspect(上下文检视面板数据;纯读缓存,不创建会话,2026-10-04 T5)
+			{ method: "GET", segments: ["writer", ":slug", "inspect"], handler: (ctx) => this.handleGetWriterInspect(ctx) },
 			// conversations(对话清单/新建/删除;book 模式「章节与对话各聊各的」的入口。
 			//   静态段 conversations 与参数段无同段数冲突,仍按约定静态在前)
 			{ method: "GET", segments: ["conversations"], handler: (ctx) => this.handleGetConversations(ctx) },
@@ -903,6 +922,8 @@ export class WriterServer {
 		// 查询端(/context)只读不重算 —— 两次装配之间世界书可能已被 AI 改过,
 		// 重算出的摘要会与用户实际看到的上下文对不上。
 		this.lastTrim.set(`${slug}/${chapterFile}`, trim);
+		this.lastSections.set(`${slug}/${chapterFile}`, context.sections);
+		this.lastTrimmed.set(`${slug}/${chapterFile}`, context.trimmed);
 		if (context.text.length > 0) {
 			await this.options.sessionHost.injectContext(context.text);
 		}
@@ -925,6 +946,33 @@ export class WriterServer {
 			if (key.startsWith(`${slug}/`)) latest = value;
 		}
 		return latest ?? EMPTY_TRIM_SUMMARY;
+	}
+
+	/**
+	 * 取某会话最近一次的分段占用快照,用法与 lastTrimSummary 一致(2026-10-04,T5)。
+	 *
+	 * 未装配过时返回空数组 —— 面板据此显示「本章还没有注入过背景包」,
+	 * 而不是编一份看起来像真的数据。
+	 */
+	lastSectionSnapshot(slug: string, chapterFile: string | null): ContextSection[] {
+		const exact = this.lastSections.get(`${slug}/${chapterFile ?? ""}`);
+		if (exact) return exact;
+		let latest: ContextSection[] | undefined;
+		for (const [key, value] of this.lastSections) {
+			if (key.startsWith(`${slug}/`)) latest = value;
+		}
+		return latest ?? [];
+	}
+
+	/** 取某会话最近一次的裁切明细(TrimRecord 原样);未装配过时为空数组。 */
+	lastTrimmedSnapshot(slug: string, chapterFile: string | null): TrimRecord[] {
+		const exact = this.lastTrimmed.get(`${slug}/${chapterFile ?? ""}`);
+		if (exact) return exact;
+		let latest: TrimRecord[] | undefined;
+		for (const [key, value] of this.lastTrimmed) {
+			if (key.startsWith(`${slug}/`)) latest = value;
+		}
+		return latest ?? [];
 	}
 
 	/**
@@ -2657,6 +2705,35 @@ export class WriterServer {
 		const usage = await writer.contextUsage(ctx.params.slug!, ref.chapterFile, { warm, conversation: ref.conversation });
 		// 裁切摘要是**本类**的状态(由 injectChapterContext 写入),不走 writerHost
 		this.send(ctx.res, 200, { usage, trim: this.lastTrimSummary(ctx.params.slug!, ref.chapterFile ?? null, ref.conversation) });
+	}
+
+	/**
+	 * GET /api/writer/:slug/inspect?chapterFile=&conversation=:上下文检视面板数据
+	 * (2026-10-04,T5;纯读,不创建会话)。
+	 *
+	 * 数据来源是 lastSections —— 即**最近一次真正注入**的分段占用,而不是现算。
+	 * 理由与 T4 的 lastTrim 完全相同:两次装配之间世界书可能已被 AI 改过,
+	 * 现算出的数字会与用户实际看到的上下文对不上,那比没有面板更糟。
+	 *
+	 * 未装配过(sections 为空)时返回 available:false,前端据此显示
+	 * 「本章还没有注入过背景包」而不是渲染一堆 0。
+	 */
+	private async handleGetWriterInspect(ctx: RouteContext): Promise<void> {
+		const ref = this.writerRef(ctx, null);
+		const slug = ctx.params.slug!;
+		const sections = this.lastSectionSnapshot(slug, ref.chapterFile ?? null);
+		const settings = await readWriterSettings();
+		const book = await loadBook(slug);
+		const chapterFile = ref.chapterFile ?? book?.currentChapterFile ?? book?.chapters[0]?.file ?? "";
+		const chapter = book?.chapters.find((c) => c.file === chapterFile);
+		const report = buildInspectReport({
+			slug,
+			chapterFile,
+			chapterTitle: chapter?.title ?? "",
+			context: { sections, trimmed: this.lastTrimmedSnapshot(slug, ref.chapterFile ?? null) },
+			settings,
+		});
+		this.send(ctx.res, 200, { available: sections.length > 0, report });
 	}
 
 	/**
