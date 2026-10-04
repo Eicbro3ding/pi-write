@@ -6,8 +6,7 @@
  * the card is rebuilt on every render with the current terminal width.
  */
 
-import type { Theme } from "../vendor/pi-coding-agent/src/index.ts";
-import { type Component, type TUI, truncateToWidth, visibleWidth } from "../vendor/pi-tui/src/index.ts";
+import { type Component, type Theme, type TUI, truncateToWidth, visibleWidth } from "./pi-adapter/index.ts";
 import { APP_NAME, VERSION } from "./config.ts";
 
 export interface WriterHeaderContext {

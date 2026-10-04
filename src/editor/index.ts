@@ -2,7 +2,7 @@
  * Built-in editor entry points for pi-writer.
  */
 
-import type { ExtensionContext } from "../../vendor/pi-coding-agent/src/index.ts";
+import type { ExtensionContext } from "../../src/pi-adapter/index.ts";
 import { VimFileEditor, type VimFileEditorOptions, type VimFileEditorResult } from "./vim-file-editor.ts";
 
 export type { EditArgs } from "./args.ts";

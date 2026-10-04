@@ -1,15 +1,16 @@
 import { existsSync } from "node:fs";
 import { copyFile, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import type { AgentMessage } from "../vendor/pi-agent-core/src/index.ts";
+// 2026-10-04(T7 批 3):vendor 类型改从 pi-adapter 取(ExtensionAPI / 上下文 / 事件)
 import type {
+	AgentMessage,
 	ExtensionAPI,
 	ExtensionCommandContext,
 	ExtensionContext,
 	InlineExtension,
 	ToolResultEvent,
-} from "../vendor/pi-coding-agent/src/index.ts";
-import type { TUI } from "../vendor/pi-tui/src/index.ts";
+	TUI,
+} from "./pi-adapter/index.ts";
 import {
 	addChapter,
 	createBook,

@@ -4,17 +4,18 @@ import { getBookSessionsDir, initChapterFile } from "../book-manager.ts";
 import { resolveSkillReadOnlyDirs, resolveSkillsDir } from "../config.ts";
 import { createSessionRuntimeFactory } from "../session-factory.ts";
 import { collectThinkingSummary, SessionHost, type ModelRefreshSummary, type SessionContextUsage, type ThinkingSummary } from "../web/session-host.ts";
-// 2026-10-04(T6/T7):句柄造型;roleFactory 现返回工厂句柄(见 session-factory)
-import { toHandle, type RuntimeFactoryHandle } from "../pi-adapter/index.ts";
-import type { WriterHost } from "../web/writer-host.ts";
+// 2026-10-04(T6/T7):句柄造型 + vendor 类型全部收口到 pi-adapter
 import {
-	type CreateAgentSessionRuntimeFactory,
+	openSession,
+	toHandle,
+	type AgentMessage,
+	type AgentSessionEvent,
 	type InlineExtension,
-	SessionManager,
+	type RuntimeFactoryHandle,
+	type ThinkingLevel,
 	type ToolDefinition,
-} from "../../vendor/pi-coding-agent/src/index.ts";
-import type { AgentMessage, ThinkingLevel } from "../../vendor/pi-agent-core/src/index.ts";
-import type { AgentSessionEvent } from "../../vendor/pi-coding-agent/src/index.ts";
+} from "../pi-adapter/index.ts";
+import type { WriterHost } from "../web/writer-host.ts";
 import { buildActorContextBlocks, formatStageLines, resolveWorldInjection } from "./assembler.ts";
 import type { ChatContentPart } from "../session-text.ts";
 import { loadCast, saveCast, validateCast, validateSceneCast } from "./cast.ts";
@@ -505,7 +506,7 @@ export class StageOrchestrator {
 
 	private async createRoleHost(fileBase: string, spec: RoleSpec): Promise<SessionHost> {
 		const { sessionsDir, abs } = await this.ensureRoleSession(fileBase);
-		const sessionManager = SessionManager.open(abs, sessionsDir, this.bookDir);
+		const sessionManager = openSession(abs, sessionsDir, this.bookDir);
 		const host = new SessionHost({
 			// 2026-10-04(T7 批 2):roleFactory 现返回工厂句柄,无需再包一层
 			createRuntime: this.roleFactory(spec),

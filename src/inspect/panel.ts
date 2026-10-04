@@ -11,8 +11,17 @@
  * 键位:↑/↓ 或 j/k 滚动 · g/G 顶/底 · q/Esc 退出 · Tab 在「分段 / 省略 / 设置」间切换。
  */
 
-import type { Theme } from "../../vendor/pi-coding-agent/src/index.ts";
-import { type Component, CURSOR_MARKER, type Focusable, matchesKey, sliceByColumn, type TUI, truncateToWidth, visibleWidth } from "../../vendor/pi-tui/src/index.ts";
+import {
+	type Component,
+	CURSOR_MARKER,
+	type Focusable,
+	matchesKey,
+	sliceByColumn,
+	type Theme,
+	type TUI,
+	truncateToWidth,
+	visibleWidth,
+} from "../../src/pi-adapter/index.ts";
 import type { InspectReport } from "./report.ts";
 
 export interface InspectPanelOptions {

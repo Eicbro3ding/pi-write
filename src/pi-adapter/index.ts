@@ -15,7 +15,7 @@
  *    `pi-adapter/*` 里**禁止** import `../../src/` 下的业务模块(唯一例外是
  *    `domain.ts` 对 `../session-text.ts` 的纯类型引用)。
  *
- * ## 五个模块的分工
+ * ## 六个模块的分工
  *
  * | 文件 | 承载 | vendor 依赖形态 |
  * |---|---|---|
@@ -25,6 +25,7 @@
  * | `usage.ts` | 成本拆分投影 | **深层路径**(唯一) |
  * | `session.ts` | 句柄 ↔ 实体造型 | 包的 `index.ts` |
  * | `runtime.ts` | 会话**打开 / 装配**函数 | 包的 `index.ts` |
+ * | `tool.ts` | `defineTool` 工具定义工厂 | 包的 `index.ts` |
  *
  * ## 检查方式
  *
@@ -52,5 +53,7 @@ export * from "./domain.ts";
 export * from "./guard.ts";
 export * from "./runtime.ts";
 export * from "./session.ts";
+export * from "./tool.ts";
+export * from "./tui.ts";
 export * from "./types.ts";
 export * from "./usage.ts";

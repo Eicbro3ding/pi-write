@@ -2,7 +2,7 @@
  * `/inspect` 入口(2026-10-04,T5)。
  */
 
-import type { ExtensionContext } from "../../vendor/pi-coding-agent/src/index.ts";
+import type { ExtensionContext } from "../../src/pi-adapter/index.ts";
 import { InspectPanel, type InspectPanelOptions } from "./panel.ts";
 
 export type { InspectBudgetRow, InspectReport, InspectSectionRow, InspectTrimRow } from "./report.ts";

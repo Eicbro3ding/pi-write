@@ -8,18 +8,20 @@
  * the normal/insert/visual keybindings.
  */
 
-import { copyToClipboard, getMarkdownTheme, type Theme } from "../../vendor/pi-coding-agent/src/index.ts";
 import {
+	copyToClipboard,
 	type Component,
 	CURSOR_MARKER,
 	type Focusable,
+	getMarkdownTheme,
 	Markdown,
 	matchesKey,
 	sliceByColumn,
+	type Theme,
 	type TUI,
 	truncateToWidth,
 	visibleWidth,
-} from "../../vendor/pi-tui/src/index.ts";
+} from "../../src/pi-adapter/index.ts";
 import type { ChatApi, ChatMessage } from "./chat.ts";
 import { type Cursor, VimDocument } from "./document.ts";
 import { MOUSE_DISABLE_SEQUENCE, MOUSE_ENABLE_SEQUENCE, parseSgrMouse, type SgrMouseEvent } from "./mouse.ts";

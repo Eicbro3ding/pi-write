@@ -35,10 +35,12 @@ import {
 	createAgentSessionServices,
 	type CreateAgentSessionServicesOptions,
 	type CreateAgentSessionRuntimeFactory,
+	InteractiveMode as VendorInteractiveMode,
 	parseSkillBlock as vendorParseSkillBlock,
 	type ParsedSkillBlock,
+	type PrintModeOptions as VendorPrintModeOptions,
 	resolveCliModel,
-	type ResolveCliModelResult,
+	runPrintMode as vendorRunPrintMode,
 	SessionManager,
 } from "../../vendor/pi-coding-agent/src/index.ts";
 import type { SessionManagerHandle } from "./domain.ts";
@@ -147,6 +149,24 @@ export const resolveModelSpec = resolveCliModel;
 
 /** 把「运行时包装器」和初始会话目标组合成 `AgentSessionRuntime`;原样转发。 */
 export const createRuntime = createAgentSessionRuntime;
+
+// ============================================================================
+// 运行模式（TUI / 打印）
+// ============================================================================
+
+/**
+ * 交互式 TUI 模式。
+ *
+ * 这两项(`InteractiveMode` / `runPrintMode`)是 cli.ts 与 vendor 之间**最后一层**
+ * 直接耦合 —— 它们是「怎么把 runtime 跑起来」的两种方式,语义上属于 adapter。
+ */
+export const InteractiveMode: typeof VendorInteractiveMode = VendorInteractiveMode;
+
+/** 打印模式(非交互,把结果打到 stdout);`--print` 走的路径。 */
+export const runPrintMode: typeof vendorRunPrintMode = vendorRunPrintMode;
+
+/** 打印模式选项(`{ mode, initialMessage, … }`)。 */
+export type PrintModeOptions = VendorPrintModeOptions;
 
 // ============================================================================
 // 技能消息解析

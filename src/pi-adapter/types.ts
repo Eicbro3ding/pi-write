@@ -50,6 +50,8 @@ import type {
 	AgentSessionRuntime as VendorAgentSessionRuntime,
 	CreateAgentSessionRuntimeFactory as VendorCreateAgentSessionRuntimeFactory,
 	ExtensionAPI as VendorExtensionAPI,
+	ExtensionCommandContext as VendorExtensionCommandContext,
+	ExtensionContext as VendorExtensionContext,
 	ExtensionFactory as VendorExtensionFactory,
 	InlineExtension as VendorInlineExtension,
 	ParsedSkillBlock as VendorParsedSkillBlock,
@@ -57,12 +59,16 @@ import type {
 	SessionEntry as VendorSessionEntry,
 	SessionTreeNode as VendorSessionTreeNode,
 	ToolDefinition as VendorToolDefinition,
+	ToolResultEvent as VendorToolResultEvent,
 } from "../../vendor/pi-coding-agent/src/index.ts";
 import type {
 	AgentMessage as VendorAgentMessage,
 	ThinkingLevel as VendorThinkingLevel,
 } from "../../vendor/pi-agent-core/src/index.ts";
-import type { AuthInteraction as VendorAuthInteraction } from "../../vendor/pi-ai/src/index.ts";
+import type {
+	AuthInteraction as VendorAuthInteraction,
+	Usage as VendorUsage,
+} from "../../vendor/pi-ai/src/index.ts";
 
 // —— pi-coding-agent ——
 
@@ -77,6 +83,15 @@ export type ExtensionFactory = VendorExtensionFactory;
 
 /** 扩展 API 句柄(`pi` 参数);扩展内部用它注册命令 / 工具 / 钩子。 */
 export type ExtensionAPI = VendorExtensionAPI;
+
+/** 扩展运行上下文(命令回调收到的东西:TUI、会话、cwd 等)。 */
+export type ExtensionContext = VendorExtensionContext;
+
+/** 命令回调的上下文(比 `ExtensionContext` 多命令名/参数等)。 */
+export type ExtensionCommandContext = VendorExtensionCommandContext;
+
+/** 工具执行结果事件(`tool_result` 钩子收到的东西)。 */
+export type ToolResultEvent = VendorToolResultEvent;
 
 /** 会话事件(流式增量、消息结束、工具调用…);SessionHost 把它扇出给订阅者。 */
 export type AgentSessionEvent = VendorAgentSessionEvent;
@@ -111,3 +126,6 @@ export type AgentMessage = VendorAgentMessage;
 
 /** 交互式认证回调(web 端只用「输一次 API key」这一种形态)。 */
 export type AuthInteraction = VendorAuthInteraction;
+
+/** token 用量(输入/输出/缓存读/缓存写);工具执行结果里回填给会话统计。 */
+export type Usage = VendorUsage;

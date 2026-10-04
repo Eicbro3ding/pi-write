@@ -7,17 +7,17 @@
  * with the agent session (AI edits reload the panel when it is clean).
  */
 
-import type { Theme } from "../vendor/pi-coding-agent/src/index.ts";
 import {
 	type Component,
 	CURSOR_MARKER,
 	matchesKey,
 	sliceByColumn,
+	type Theme,
 	type TUI,
 	truncateToWidth,
 	visibleWidth,
 	wrapTextWithAnsi,
-} from "../vendor/pi-tui/src/index.ts";
+} from "./pi-adapter/index.ts";
 import { VimDocument } from "./editor/document.ts";
 import { MOUSE_DISABLE_SEQUENCE, MOUSE_ENABLE_SEQUENCE, parseSgrMouse, type SgrMouseEvent } from "./editor/mouse.ts";
 import { countWriting, type WriterUiState } from "./writer-ui.ts";

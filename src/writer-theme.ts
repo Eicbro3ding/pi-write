@@ -6,7 +6,7 @@
  * process at startup.
  */
 
-import { Theme, type ThemeColor } from "../vendor/pi-coding-agent/src/index.ts";
+import { Theme, type ThemeColor } from "./pi-adapter/index.ts";
 
 /** Background color tokens (keys of Theme's bg record). */
 type ThemeBg = keyof ConstructorParameters<typeof Theme>[1];

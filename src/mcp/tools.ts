@@ -9,8 +9,8 @@
  */
 
 import { Type, type TSchema } from "typebox";
-import { defineTool, type ToolDefinition } from "../../vendor/pi-coding-agent/src/index.ts";
-import type { Usage } from "../../vendor/pi-ai/src/index.ts";
+// 2026-10-04(T7 批 3):工具定义工厂与类型改从 pi-adapter 取
+import { defineTool, type ToolDefinition, type Usage } from "../pi-adapter/index.ts";
 
 /** SDK listTools 返回的 MCP 工具最小形状(load 层负责转换,本层不依赖 SDK 类型)。 */
 export interface McpToolInfo {

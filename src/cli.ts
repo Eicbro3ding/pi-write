@@ -12,16 +12,16 @@ import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ThinkingLevel } from "../vendor/pi-agent-core/src/index.ts";
-import {
-	createAgentSessionRuntime,
-	InteractiveMode,
-	type PrintModeOptions,
-	runPrintMode,
-	SessionManager,
-} from "../vendor/pi-coding-agent/src/index.ts";
 import { getAgentDir, getBookDir, getBooksDir, VERSION } from "./config.ts";
-import { assembleRuntime, openSession } from "./pi-adapter/index.ts";
+// 2026-10-04(T7 批 3):vendor 接入全部收口到 pi-adapter
+import {
+	assembleRuntime,
+	InteractiveMode,
+	openSession,
+	runPrintMode,
+	type PrintModeOptions,
+	type ThinkingLevel,
+} from "./pi-adapter/index.ts";
 import { createSessionRuntimeFactory } from "./session-factory.ts";
 
 import {

@@ -6,8 +6,7 @@
  * screen always shows where the user is writing and how much exists.
  */
 
-import type { Theme } from "../vendor/pi-coding-agent/src/index.ts";
-import { type Component, type TUI, truncateToWidth, visibleWidth } from "../vendor/pi-tui/src/index.ts";
+import { type Component, type Theme, type TUI, truncateToWidth, visibleWidth } from "./pi-adapter/index.ts";
 import { cjkCount } from "./cjk.ts";
 import { APP_NAME, VERSION } from "./config.ts";
 

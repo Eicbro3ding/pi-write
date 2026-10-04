@@ -15,11 +15,11 @@ import { loadCast } from "../stage/cast.ts";
 import { readStage } from "../stage/stage-store.ts";
 import { StageOrchestrator, type StageEvent } from "../stage/orchestrator.ts";
 import type { CastConfig, DirectorMode, ScenePhase, SceneScript, ScriptPatch, StageEntry, StageStatus } from "../stage/types.ts";
-import type { ToolDefinition } from "../../vendor/pi-coding-agent/src/index.ts";
+// 2026-10-04(T7 批 3):vendor 类型改从 pi-adapter 取
+import type { AgentSessionEvent, ToolDefinition } from "../pi-adapter/index.ts";
 import { ensureWorld } from "../world-data.ts";
 import type { ModelRefreshSummary, SessionContextUsage, ThinkingSummary } from "./session-host.ts";
 import type { WriterHost } from "./writer-host.ts";
-import type { AgentSessionEvent } from "../../vendor/pi-coding-agent/src/index.ts";
 
 /**
  * 舞台区 web 宿主：每本书一个 StageOrchestrator（惰性创建），把 CLI 命令面

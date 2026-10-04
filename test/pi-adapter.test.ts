@@ -117,32 +117,24 @@ describe("pi-adapter 契约（T7 批 2）", () => {
 	});
 
 	it("批 3/批 4 待迁移文件清单**只减不增**（防新增穿透）", () => {
-		// 全局断言现在还做不到(批 3/批 4 尚未迁移)。折中:把当前已知的穿透文件
+		// 全局断言现在还做不到(批 4 尚未迁移)。折中:把当前已知的穿透文件
 		// 钉成白名单 —— 数量只能变少。新文件若偷偷直接 import vendor,这条会红。
+		//
+		// 批 3 已迁出(不再出现于此): cli.ts / draft-panel.ts / editor/index.ts /
+		// editor/vim-file-editor.ts / extension.ts / inspect/index.ts / inspect/panel.ts /
+		// mcp/tools.ts / stage/orchestrator.ts / startup-header.ts / writer-theme.ts /
+		// writer-ui.ts / web/stage-host.ts
 		const KNOWN_PENDING = new Set([
 			"ask-user.ts",
 			"book-manager.ts",
-			"cli.ts",
-			"draft-panel.ts",
-			"editor/index.ts",
-			"editor/vim-file-editor.ts",
-			"extension.ts",
-			"inspect/index.ts",
-			"inspect/panel.ts",
 			"mcp/manager.ts",
-			"mcp/tools.ts",
 			"plugin-loader.ts",
 			"skills-index.ts",
-			"stage/orchestrator.ts",
 			"stage/stage-extension.ts",
 			"stage/stage-store.ts",
-			"startup-header.ts",
 			"tools.ts",
 			"web/provider-auth.ts",
 			"web/server.ts",
-			"web/stage-host.ts",
-			"writer-theme.ts",
-			"writer-ui.ts",
 		]);
 		const unexpected: string[] = [];
 		for (const file of walk(SRC)) {
@@ -162,6 +154,37 @@ describe("pi-adapter 契约（T7 批 2）", () => {
 		).toEqual([]);
 	});
 
+	it("批 3 的 13 个交付文件全部清零（回归护栏）", () => {
+		// 批 3 = TUI 面 + 其余类型泄漏面。逐文件钉名,理由同批 2:
+		// 这些文件是「自研侧不该再出现 vendor 字样」的样板,回退必须立刻可见。
+		const BATCH3 = [
+			"cli.ts",
+			"draft-panel.ts",
+			"editor/index.ts",
+			"editor/vim-file-editor.ts",
+			"extension.ts",
+			"inspect/index.ts",
+			"inspect/panel.ts",
+			"mcp/tools.ts",
+			"stage/orchestrator.ts",
+			"startup-header.ts",
+			"writer-theme.ts",
+			"writer-ui.ts",
+			"web/stage-host.ts",
+		];
+		const offenders: string[] = [];
+		for (const rel of BATCH3) {
+			const text = readFileSync(path.join(SRC, rel), "utf-8");
+			for (const line of text.split("\n")) {
+				const t = line.trim();
+				if ((t.startsWith("import ") || t.startsWith("} from")) && t.includes("vendor/pi-")) {
+					offenders.push(`${rel}: ${t}`);
+				}
+			}
+		}
+		expect(offenders, `批 3 目标文件出现 vendor 回退:\n${offenders.join("\n")}`).toEqual([]);
+	});
+
 	it("domain.ts 仍然零 vendor（批 2 新增了 types.ts，不该顺手污染 domain）", () => {
 		const text = readFileSync(path.join(SRC, "pi-adapter/domain.ts"), "utf-8");
 		expect(text).not.toContain("vendor/pi-");
@@ -169,19 +192,38 @@ describe("pi-adapter 契约（T7 批 2）", () => {
 
 	it("types.ts 的 vendor 引用**全部是 import type**（编译后不产生运行期 import）", () => {
 		// 这条保证别名区不会把 vendor 拖进任何 bundle —— 类型别名应该是纯编译期的事。
+		//
+		// ⚠️ 必须**按语句**而不是**按行**判断:格式化成多行后(`import type {\n  X,\n} from`)
+		// `import` 与 `vendor/` 不在同一行,按行匹配会得到 0 行 —— 一个「检查全部通过」
+		// 的假象。T7 批 3 踩过这个坑:断言 `length > 0` 直接把自己暴露了。
 		const text = readFileSync(path.join(SRC, "pi-adapter/types.ts"), "utf-8");
-		const importLines = text
-			.split("\n")
-			.map((l) => l.trim())
-			.filter((l) => l.startsWith("import ") && l.includes("vendor/"));
-		expect(importLines.length).toBeGreaterThan(0);
-		for (const line of importLines) {
-			expect(line, `这行 import 会变成运行期依赖：${line}`).toMatch(/^import type /);
+		const statements = text.match(/^import[^;]*?from\s+"[^"]+"\s*;/gm) ?? [];
+		const vendorImports = statements.filter((s) => s.includes("vendor/"));
+		expect(vendorImports.length).toBeGreaterThan(0);
+		for (const stmt of vendorImports) {
+			expect(stmt.replace(/\s+/g, " "), "这个 import 会变成运行期依赖").toMatch(/^import type /);
 		}
 	});
 
-	it("runtime.ts 只 import vendor 与 pi-adapter 自己（单向依赖不回流到业务模块）", () => {
-		const text = readFileSync(path.join(SRC, "pi-adapter/runtime.ts"), "utf-8");
+	it("tui.ts 的 vendor 引用**允许**非 import type（它要搬值），但不得 import 业务模块", () => {
+		const text = readFileSync(path.join(SRC, "pi-adapter/tui.ts"), "utf-8");
+		// class 必须走 re-export(`export { X }`,含本地 `export { Theme };` 形式),
+		// 不能写成 `export const X: typeof VendorX = VendorX` —— 后者丢类型通道,
+		// 自研侧写 `x: Theme` 会 TS2749。这条护栏钉住「至少有一个 re-export」。
+		const valueReexports = text.match(/^export\s*\{[^}]*\}\s*;?/gm) ?? [];
+		expect(
+			valueReexports.length,
+			"tui.ts 必须用 export { X } 搬 class（值+类型双通道），而不是 export const",
+		).toBeGreaterThan(0);
+
+		const statements = text.match(/^(?:import|export)[^;]*?from\s+"[^"]+"\s*;/gm) ?? [];
+		// 依旧不许回流到业务模块
+		for (const stmt of statements) {
+			expect(stmt, `单向依赖被破坏：${stmt}`).not.toMatch(/from\s+"\.\.\/[a-z]/);
+		}
+	});
+
+	it("runtime.ts 只 import vendor 与 pi-adapter 自己（单向依赖不回流到业务模块）", () => {		const text = readFileSync(path.join(SRC, "pi-adapter/runtime.ts"), "utf-8");
 		for (const line of text.split("\n")) {
 			const t = line.trim();
 			if (!t.startsWith("import ") && !t.startsWith("export ")) continue;
