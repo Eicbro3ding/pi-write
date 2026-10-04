@@ -10,8 +10,6 @@
 
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import type { ThinkingLevel } from "../vendor/pi-agent-core/src/index.ts";
-import { SessionManager } from "../vendor/pi-coding-agent/src/index.ts";
 import { applyCacheRetention, getAgentDir, getBookDir, getBooksDir, resolveSkillReadOnlyDirs } from "./config.ts";
 import { createAskUserTool } from "./ask-user.ts";
 import {
@@ -28,8 +26,9 @@ import { writerExtension } from "./extension.ts";
 import { McpManager } from "./mcp/manager.ts";
 import { loadPlugins } from "./plugin-loader.ts";
 import { createSessionRuntimeFactory } from "./session-factory.ts";
-// 2026-10-04(T6):句柄造型(见 SessionHost 构造处注释)
-import { toFactoryHandle, toHandle } from "./pi-adapter/index.ts";
+// 2026-10-04(T6/T7):vendor 接入收口到 pi-adapter。`openSession` 打开会话文件
+// 并直接产出句柄(SessionHost 的契约就是句柄);`ThinkingLevel` 是会话设置类型。
+import { openSession, type ThinkingLevel } from "./pi-adapter/index.ts";
 import { buildWriterSystemPrompt } from "./prompt.ts";
 import { readWriterSettings } from "./writer-settings.ts";
 import { resolveWriterShell } from "./shell-kind.ts";
@@ -234,7 +233,7 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 	const resolvedShell = resolveWriterShell(writerSettings);
 	const shellOn = shellEnabled && resolvedShell.dialect !== "none";
 	if (shellEnabled && resolvedShell.warning) process.stderr.write(`${resolvedShell.warning}\n`);
-	const sessionManager = SessionManager.open(chapterAbsPath, sessionsDir, bookDir);
+	const sessionManager = openSession(chapterAbsPath, sessionsDir, bookDir);
 	// MCP 服务器:读 mcp.json → 连接各 server → 工具定义注入 createRuntime 的
 	// customTools(单个 server 失败隔离,状态经 /api/mcp 展示;配置变更后由
 	// server 端点触发 reload + 会话重建,新工具随之生效)
@@ -277,12 +276,13 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 	});
 
 	const host = new SessionHost({
-		// 2026-10-04(T6):SessionHost 的契约收句柄,这里显式造型 —— 转换是零开销的
-		// (同一个对象),但它把「谁会碰到 vendor 类型」这件事固定在了调用点。
-		createRuntime: toFactoryHandle(createRuntime),
+		// 2026-10-04(T7 批 2):`createSessionRuntimeFactory` 现在**自己返回句柄**,
+		// 调用点不再需要 toFactoryHandle 包装(重复包装已被 adapter 的幂等处理,
+		// 但去掉更直白)。`openSession` 直接产出句柄,也不再需要 toHandle。
+		createRuntime,
 		cwd: bookDir,
 		agentDir,
-		sessionManager: toHandle(sessionManager),
+		sessionManager,
 		toolGuard: { readOnlyDirs: resolveSkillReadOnlyDirs() },
 	});
 	await host.start();

@@ -8,18 +8,24 @@
  */
 
 import { basename, dirname, join } from "node:path";
-import type { ThinkingLevel } from "../../vendor/pi-agent-core/src/index.ts";
+// 2026-10-04(T6/T7):vendor 接入全部收口到 pi-adapter,本文件不再直接碰 vendor 源码。
+// 本文件内部**持有 vendor 实体**(sessionManager 字段、runtime),所以需要
+// `fromHandle` / `fromFactoryHandle` 把句柄还原成实体 —— 这是 adapter 有意留的
+// 「内部还原点」,只有明确要操作实体的模块才用它。
 import {
+	assembleRuntime,
+	fromHandle,
+	openSession,
+	projectUsageCost,
+	resolveModelSpec,
 	type AgentSessionEvent,
 	type AgentSessionRuntime,
-	createAgentSessionRuntime,
-	type CreateAgentSessionRuntimeFactory,
-	resolveCliModel,
-	SessionManager,
-} from "../../vendor/pi-coding-agent/src/index.ts";
-import type { AuthInteraction } from "../../vendor/pi-ai/src/index.ts";
-// 2026-10-04(T6):深层路径 import 收口到 pi-adapter,本文件不再直接碰 vendor 源码
-import { fromFactoryHandle, fromHandle, projectUsageCost } from "../pi-adapter/index.ts";
+	type AuthInteraction,
+	type SessionEntity,
+	type SessionEntry,
+	type SessionReader,
+	type ThinkingLevel,
+} from "../pi-adapter/index.ts";
 import { settleDanglingAsks } from "../ask-user.ts";
 import { getBooksDir } from "../config.ts";
 import { buildSessionTree, type SessionTreeInfo } from "../session-tree.ts";
@@ -74,7 +80,7 @@ export class SessionHost {
 	 * 当前会话的 SessionManager。构造时来自 options;reloadRuntime() 重建
 	 * runtime 时会以「当前会话文件」重新 open(保留切章后的会话位置)。
 	 */
-	private sessionManager: SessionManager;
+	private sessionManager: SessionEntity;
 	/**
 	 * runtime 重建时要恢复的会话级设置(2026-10 审计 BUG-009):
 	 * API 切过的模型/思考档位/采样参数,不能被启动参数在重建后盖回去。
@@ -99,13 +105,15 @@ export class SessionHost {
 		// 返回 CreateAgentSessionRuntimeResult({ session, extensionsResult, services, diagnostics });
 		// 经 createAgentSessionRuntime 包装成 AgentSessionRuntime(含 session/switchSession/dispose)后持有,
 		// 与 cli.ts 的装配路径一致。
-		this.runtime = await createAgentSessionRuntime(fromFactoryHandle(this.options.createRuntime), {
+		// 2026-10-04(T7 批 2):`assembleRuntime` 把「工厂句柄 / 会话句柄 → 实体」的
+		// 两次还原收在 adapter 内,这里不必再写 fromHandle/fromFactoryHandle。
+		this.runtime = await assembleRuntime({
+			createRuntime: this.options.createRuntime,
 			cwd:
 				(typeof this.sessionManager.getCwd === "function" && this.sessionManager.getCwd()) ||
 				this.options.cwd,
 			agentDir: this.options.agentDir,
-			sessionManager: this.sessionManager,
-			sessionStartEvent: undefined,
+			sessionManager: this.options.sessionManager,
 		});
 		this.markStarted();
 		this.bindSession();
@@ -181,7 +189,7 @@ export class SessionHost {
 		await this.dispose();
 		if (sessionFile) {
 			// 会话文件在 sessions/<slug>/<file>.jsonl:父目录即 sessionsDir,cwd 保持不变
-			this.sessionManager = SessionManager.open(sessionFile, dirname(sessionFile), prevCwd);
+			this.sessionManager = fromHandle(openSession(sessionFile, dirname(sessionFile), prevCwd));
 			if (prevLeafId && this.sessionManager.getEntry(prevLeafId)) {
 				this.sessionManager.branch(prevLeafId);
 			}
@@ -379,7 +387,7 @@ export class SessionHost {
 			// 服务端删除当前书后 runtime 已释放:下次切章时按新书目录重新启动。
 			const sessionsDir = dirname(chapterAbsPath);
 			const bookDir = cwd ?? join(getBooksDir(), basename(sessionsDir));
-			this.sessionManager = SessionManager.open(chapterAbsPath, sessionsDir, bookDir);
+			this.sessionManager = fromHandle(openSession(chapterAbsPath, sessionsDir, bookDir));
 			await this.start();
 			return;
 		}
@@ -390,7 +398,7 @@ export class SessionHost {
 	async setModel(model: string): Promise<void> {
 		const rt = this.requireRuntime();
 		// 与 cli.ts 相同的模型解析:模型 pattern 字符串 → Model,再交给 session
-		const resolved = resolveCliModel({ cliModel: model, modelRuntime: rt.services.modelRuntime });
+		const resolved = resolveModelSpec({ cliModel: model, modelRuntime: rt.services.modelRuntime });
 		if (resolved.error) throw new Error(resolved.error);
 		if (resolved.warning) process.stderr.write(`${resolved.warning}\n`);
 		if (resolved.model) await rt.session.setModel(resolved.model);
@@ -811,8 +819,12 @@ export async function refreshModelsOfHosts(
  * user 消息开新组;同一 user 之后的多个 assistant 消息(一次回复里的多轮工具调用)
  * 合并为一条气泡——text 以空行拼接。id 取组内最后一条 entry 的 id
  * (撤回只作用于 user 消息,user 的 id 即该组起点 entry 的 id,不受合并影响)。
- * 接受任意 SessionManager(逻辑同 extractMessages)——供 server 只读端点读取
+ * 接受任意**只读会话读取器**(逻辑同 extractMessages)——供 server 只读端点读取
  * 指定章节会话,不依赖 runtime。
+ *
+ * 2026-10-04(T7 批 2):入参从 vendor 的 `SessionManager` 改为自研的
+ * `SessionReader`。原先这个签名是**最后 3 处 vendor 类型泄漏之一** ——
+ * 而函数体只用到一个 `getBranch()`,为它拖进整个 vendor 类型并不划算。
  *
  * 2026-09-19 起每条消息另带 `content`:**有序内容块**(思考 / 正文 / 工具调用),
  * 工具结果按 toolCallId 从独立 toolResult entry 配对回填到调用块上。
@@ -820,7 +832,7 @@ export async function refreshModelsOfHosts(
  * 于是「刷新页面后历史工具卡全没了」且思考链与工具的真实先后无从还原。
  * text/thinking 作为兼容投影保留(TUI 与分支摘要仍按整条消息取文本)。
  */
-export function extractMessagesFromManager(sm: SessionManager): SessionStateSnapshot["messages"] {
+export function extractMessagesFromManager(sm: SessionReader): SessionStateSnapshot["messages"] {
 	const out: SessionStateSnapshot["messages"] = [];
 	/** 当前 assistant 组的块序列(工具结果要回填到其中的调用块上)。 */
 	let groupParts: ChatContentPart[] = [];
@@ -845,8 +857,13 @@ export function extractMessagesFromManager(sm: SessionManager): SessionStateSnap
 		return typeof v === "string" && v.length > 0 ? v : undefined;
 	};
 
-	// 只走 leaf 链(getBranch 沿 parentId 回溯):撤回后旧分支不显示,与上下文一致
-	for (const entry of sm.getBranch()) {
+	// 只走 leaf 链(getBranch 沿 parentId 回溯):撤回后旧分支不显示,与上下文一致。
+	//
+	// 2026-10-04(T7 批 2):`SessionReader.getBranch()` 刻意返回 `unknown[]`(adapter
+	// 不假装知道 entry 形状),这里一次性收窄成 vendor 的 `SessionEntry` ——
+	// 本函数是**唯一**读 entry 内部字段的地方,断言收在这一行,不外溢。
+	const branch = sm.getBranch() as SessionEntry[];
+	for (const entry of branch) {
 		const msg = (entry as { message?: { role?: string; content?: unknown; toolCallId?: unknown } }).message;
 		if (!msg) continue;
 

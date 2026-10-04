@@ -10,15 +10,21 @@
  * 动态工具段,MCP 外部工具对 agent 不可见——2026-08-08 根因,见 prompt.ts)。
  */
 
-import type { InlineExtension, ExtensionFactory, ToolDefinition } from "../vendor/pi-coding-agent/src/index.ts";
+import type {
+	CreateAgentSessionRuntimeFactory,
+	ExtensionFactory,
+	InlineExtension,
+	ResolveCliModelResult,
+	RuntimeFactoryHandle,
+	ThinkingLevel,
+	ToolDefinition,
+} from "./pi-adapter/index.ts";
 import {
-	type CreateAgentSessionRuntimeFactory,
-	createAgentSessionFromServices,
-	createAgentSessionServices,
-	resolveCliModel,
-	type ResolveCliModelResult,
-} from "../vendor/pi-coding-agent/src/index.ts";
-import type { ThinkingLevel } from "../vendor/pi-agent-core/src/index.ts";
+	assembleSessionServices,
+	createSessionFromServices,
+	resolveModelSpec,
+	toFactoryHandle,
+} from "./pi-adapter/index.ts";
 import { resolveExtraSkillsDirs, resolveSkillsDir } from "./config.ts";
 import { dedupePaths, installToolPathGuard, skillDirsOf } from "./tool-guard.ts";
 import { setWordCountCwd, setWorldUpdateBookDir } from "./tools.ts";
@@ -102,11 +108,17 @@ export function sessionSkillDirs(
 }
 
 /**
- * 生成会话 runtime 工厂;每次会话创建时调用(切书 cwd 变化,路径基准与
- * 工具路径守卫随工厂重建更新)。
+ * 生成会话 runtime 工厂。
+ *
+ * **对外返回的是句柄**(`RuntimeFactoryHandle`)而不是 vendor 的
+ * `CreateAgentSessionRuntimeFactory` —— 见 T7 批 2 的「消除 vendor 类型泄漏」。
+ * 调用方只能把它原样交给 `SessionHost` / `assembleRuntime`,看不到内部签名。
+ * 每次会话创建时调用(切书 cwd 变化,路径基准与工具路径守卫随工厂重建更新)。
  */
-export function createSessionRuntimeFactory(opts: SessionFactoryOptions): CreateAgentSessionRuntimeFactory {
-	return async ({ cwd, sessionManager, sessionStartEvent }) => {
+export function createSessionRuntimeFactory(opts: SessionFactoryOptions): RuntimeFactoryHandle {
+	// 工厂体内部需要 vendor 的 `CreateAgentSessionRuntimeFactory` 形状(它就是
+	// **被 vendor 调用**的那个函数)。这里是唯一的收窄点:紧贴实现,不外漏。
+	const factory: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
 		// word_count/world_update 以会话 cwd(书目录)为路径基准,切书时随工厂重建更新
 		setWordCountCwd(cwd);
 		setWorldUpdateBookDir(cwd);
@@ -118,7 +130,7 @@ export function createSessionRuntimeFactory(opts: SessionFactoryOptions): Create
 		// 的静默故障(2026-10-01 writer-host 根因,见 sessionSkillDirs)。
 		const { skillPaths, readOnlyDirs } = sessionSkillDirs(opts);
 		installToolPathGuard(cwd, readOnlyDirs, opts.draftFile);
-		const services = await createAgentSessionServices({
+		const services = await assembleSessionServices({
 			cwd,
 			agentDir: opts.agentDir,
 			resourceLoaderOptions: {
@@ -166,12 +178,12 @@ export function createSessionRuntimeFactory(opts: SessionFactoryOptions): Create
 		}
 		let model: CliModel;
 		if (opts.model) {
-			const resolved = resolveCliModel({ cliModel: opts.model, modelRuntime: services.modelRuntime });
+			const resolved = resolveModelSpec({ cliModel: opts.model, modelRuntime: services.modelRuntime });
 			if (resolved.error) throw new Error(resolved.error);
 			if (resolved.warning) process.stderr.write(`${resolved.warning}\n`);
 			model = resolved.model ?? undefined;
 		}
-		const result = await createAgentSessionFromServices({
+		const result = await createSessionFromServices({
 			services,
 			sessionManager,
 			sessionStartEvent,
@@ -190,4 +202,7 @@ export function createSessionRuntimeFactory(opts: SessionFactoryOptions): Create
 			diagnostics: services.diagnostics,
 		};
 	};
+	// 出口处一次性造型成句柄:上游只有 `createAgentSessionRuntime` 会调用它,
+	// 而那条路径已经由 `assembleRuntime` 在 adapter 内部还原成实体。
+	return toFactoryHandle(factory);
 }

@@ -85,3 +85,127 @@ describe("projectUsageCost（成本拆分投影）", () => {
 		}
 	});
 });
+
+// ============================================================================
+// T7 批 2：类型别名 + 运行时值接入
+// ============================================================================
+
+describe("pi-adapter 契约（T7 批 2）", () => {
+	it("批 2 的三个目标文件确实清零（回归护栏）", () => {
+		// 这三个文件是 T7 批 2 的交付范围。单独钉住它们的名字,
+		// 是为了「将来有人为了方便又在这里写 vendor import」时能立刻发现。
+		for (const rel of ["session-factory.ts", "web/session-host.ts", "web/writer-host.ts"]) {
+			const text = readFileSync(path.join(SRC, rel), "utf-8");
+			for (const line of text.split("\n")) {
+				const t = line.trim();
+				if (t.startsWith("import ")) expect(t).not.toContain("vendor/pi-");
+			}
+		}
+	});
+
+	it("批 2 顺带收口的 web.ts / session-tree.ts 也已清零", () => {
+		// 这两个文件不在原计划的批 2 清单里,但批 2 改动牵连到它们
+		// (web.ts 的 SessionManager.open、session-tree.ts 的 entry 类型),
+		// 一并收口后加护栏防止回退。
+		for (const rel of ["web.ts", "session-tree.ts"]) {
+			const text = readFileSync(path.join(SRC, rel), "utf-8");
+			for (const line of text.split("\n")) {
+				const t = line.trim();
+				if (t.startsWith("import ")) expect(t).not.toContain("vendor/pi-");
+			}
+		}
+	});
+
+	it("批 3/批 4 待迁移文件清单**只减不增**（防新增穿透）", () => {
+		// 全局断言现在还做不到(批 3/批 4 尚未迁移)。折中:把当前已知的穿透文件
+		// 钉成白名单 —— 数量只能变少。新文件若偷偷直接 import vendor,这条会红。
+		const KNOWN_PENDING = new Set([
+			"ask-user.ts",
+			"book-manager.ts",
+			"cli.ts",
+			"draft-panel.ts",
+			"editor/index.ts",
+			"editor/vim-file-editor.ts",
+			"extension.ts",
+			"inspect/index.ts",
+			"inspect/panel.ts",
+			"mcp/manager.ts",
+			"mcp/tools.ts",
+			"plugin-loader.ts",
+			"skills-index.ts",
+			"stage/orchestrator.ts",
+			"stage/stage-extension.ts",
+			"stage/stage-store.ts",
+			"startup-header.ts",
+			"tools.ts",
+			"web/provider-auth.ts",
+			"web/server.ts",
+			"web/stage-host.ts",
+			"writer-theme.ts",
+			"writer-ui.ts",
+		]);
+		const unexpected: string[] = [];
+		for (const file of walk(SRC)) {
+			const rel = path.relative(SRC, file);
+			if (KNOWN_PENDING.has(rel)) continue;
+			const text = readFileSync(file, "utf-8");
+			for (const line of text.split("\n")) {
+				const t = line.trim();
+				if (t.startsWith("import ") && t.includes("vendor/pi-")) {
+					unexpected.push(`${rel}: ${t}`);
+				}
+			}
+		}
+		expect(
+			unexpected,
+			`这些**不在待迁移清单**里的文件新引入了 vendor 直接引用:\n${unexpected.join("\n")}`,
+		).toEqual([]);
+	});
+
+	it("domain.ts 仍然零 vendor（批 2 新增了 types.ts，不该顺手污染 domain）", () => {
+		const text = readFileSync(path.join(SRC, "pi-adapter/domain.ts"), "utf-8");
+		expect(text).not.toContain("vendor/pi-");
+	});
+
+	it("types.ts 的 vendor 引用**全部是 import type**（编译后不产生运行期 import）", () => {
+		// 这条保证别名区不会把 vendor 拖进任何 bundle —— 类型别名应该是纯编译期的事。
+		const text = readFileSync(path.join(SRC, "pi-adapter/types.ts"), "utf-8");
+		const importLines = text
+			.split("\n")
+			.map((l) => l.trim())
+			.filter((l) => l.startsWith("import ") && l.includes("vendor/"));
+		expect(importLines.length).toBeGreaterThan(0);
+		for (const line of importLines) {
+			expect(line, `这行 import 会变成运行期依赖：${line}`).toMatch(/^import type /);
+		}
+	});
+
+	it("runtime.ts 只 import vendor 与 pi-adapter 自己（单向依赖不回流到业务模块）", () => {
+		const text = readFileSync(path.join(SRC, "pi-adapter/runtime.ts"), "utf-8");
+		for (const line of text.split("\n")) {
+			const t = line.trim();
+			if (!t.startsWith("import ") && !t.startsWith("export ")) continue;
+			// 允许:vendor / 同目录 ./xxx / 上层的 ../session-text.ts(纯类型)
+			if (t.includes('"../')) {
+				expect(t).toContain('"../session-text.ts"');
+			}
+		}
+	});
+});
+
+describe("pi-adapter 句柄（幂等造型）", () => {
+	it("toHandle 对句柄幂等（重复包装不会出问题）", async () => {
+		const { toHandle } = await import("../src/pi-adapter/session.ts");
+		const fake = {} as never;
+		const once = toHandle(fake);
+		// 幂等:再包一次仍是同一引用(造型是纯 cast,不产生新对象)
+		expect(toHandle(once)).toBe(once);
+	});
+
+	it("toFactoryHandle 对句柄幂等", async () => {
+		const { toFactoryHandle } = await import("../src/pi-adapter/session.ts");
+		const fake = {} as never;
+		const once = toFactoryHandle(fake);
+		expect(toFactoryHandle(once)).toBe(once);
+	});
+});

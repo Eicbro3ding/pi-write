@@ -20,7 +20,7 @@
  * 是一组多段输出(思考 / 工具 / 正文)的首段 entry(见 extractMessagesFromManager
  * 的 firstEntryId)—— 组内后续段不是这个位置的代表。
  */
-import type { SessionEntry, SessionTreeNode } from "../vendor/pi-coding-agent/src/index.ts";
+import type { SessionEntry, SessionTreeNode } from "./pi-adapter/index.ts";
 import { chatTextOfMessage } from "./session-text.ts";
 
 /** 一条候选分支的概览(分支栏的数据;字段与前端 SessionBranchInfo 对齐)。 */
@@ -57,6 +57,15 @@ export interface SessionTreeInfo {
  * 只读的会话树来源。取结构类型而不是直接依赖 SessionManager 类:
  * 磁盘只读恢复路径手里拿的确实是 SessionManager,而单测给一份最小内存实现即可
  * (无需真的落一个 jsonl 文件)。
+ *
+ * 2026-10-04(T7 批 2):本接口的方法名与 pi-adapter 的 `SessionReader` **一致**
+ * (getLeafId / getBranch / getTree),但不做 `extends` —— 因为这里要的是
+ * **精确类型**(`SessionEntry[]` / `SessionTreeNode[]`),而 adapter 那层刻意
+ * 只承诺 `unknown[]`(它不该假装知道 entry 的形状,见该处注释)。
+ *
+ * 两者的关系是:**adapter 的 `SessionReader` 是最小契约,本接口是它的精确版本**。
+ * 调用点若手里是 adapter 的读取器,需要显式断言一次 —— 那一处断言就是
+ * 「我知道这里要的是精确形状」的表达。
  */
 export interface SessionTreeSource {
 	getLeafId(): string | null;

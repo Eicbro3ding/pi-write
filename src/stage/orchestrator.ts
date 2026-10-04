@@ -4,8 +4,8 @@ import { getBookSessionsDir, initChapterFile } from "../book-manager.ts";
 import { resolveSkillReadOnlyDirs, resolveSkillsDir } from "../config.ts";
 import { createSessionRuntimeFactory } from "../session-factory.ts";
 import { collectThinkingSummary, SessionHost, type ModelRefreshSummary, type SessionContextUsage, type ThinkingSummary } from "../web/session-host.ts";
-// 2026-10-04(T6):句柄造型(见 web.ts 同处注释)
-import { toFactoryHandle, toHandle } from "../pi-adapter/index.ts";
+// 2026-10-04(T6/T7):句柄造型;roleFactory 现返回工厂句柄(见 session-factory)
+import { toHandle, type RuntimeFactoryHandle } from "../pi-adapter/index.ts";
 import type { WriterHost } from "../web/writer-host.ts";
 import {
 	type CreateAgentSessionRuntimeFactory,
@@ -467,7 +467,7 @@ export class StageOrchestrator {
 		return { sessionsDir, abs };
 	}
 
-	private roleFactory(spec: RoleSpec): CreateAgentSessionRuntimeFactory {
+	private roleFactory(spec: RoleSpec): RuntimeFactoryHandle {
 		const { agentDir, temperature, topP } = this;
 		// 角色级覆盖(cast.json)固定;全局模型/思考档位走 getter —— createSessionRuntimeFactory
 		// 在**每次**装配(含 reloadRuntime)时才读 opts.model,传值会把当时的全局值
@@ -507,8 +507,8 @@ export class StageOrchestrator {
 		const { sessionsDir, abs } = await this.ensureRoleSession(fileBase);
 		const sessionManager = SessionManager.open(abs, sessionsDir, this.bookDir);
 		const host = new SessionHost({
-			// 2026-10-04(T6):SessionHost 契约收句柄,显式造型(零开销,见 web.ts 同处注释)
-			createRuntime: toFactoryHandle(this.roleFactory(spec)),
+			// 2026-10-04(T7 批 2):roleFactory 现返回工厂句柄,无需再包一层
+			createRuntime: this.roleFactory(spec),
 			cwd: this.bookDir,
 			agentDir: this.agentDir,
 			sessionManager: toHandle(sessionManager),

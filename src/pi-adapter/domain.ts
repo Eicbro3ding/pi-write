@@ -14,6 +14,7 @@
  * - vendor 真的换名字时,只改 adapter 内部的 `toHandle` / `fromHandle` 两行。
  *
  * 本文件**不 import 任何 vendor 模块** —— 这是刻意的,保证类型层零耦合。
+ * (T7 批 2 新增的 vendor 类型别名放在同目录的 `types.ts`,不污染本文件。)
  */
 
 import type { ChatContentPart } from "../session-text.ts";

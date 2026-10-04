@@ -45,7 +45,7 @@ import { join } from "node:path";
 import { getBookSessionsDir, initChapterFile, loadBook } from "../book-manager.ts";
 import { getAgentDir, getBookDir, resolveSkillReadOnlyDirs } from "../config.ts";
 import { createSessionRuntimeFactory } from "../session-factory.ts";
-import { buildSessionTree, type SessionBranchInfo, type SessionTreeInfo, type SessionVersionInfo } from "../session-tree.ts";
+import { buildSessionTree, type SessionBranchInfo, type SessionTreeInfo, type SessionTreeSource, type SessionVersionInfo } from "../session-tree.ts";
 import {
 	collectThinkingSummary,
 	extractMessagesFromManager,
@@ -57,15 +57,18 @@ import {
 	type SessionUsageStats,
 	type ThinkingSummary,
 } from "./session-host.ts";
-import type { AgentMessage, ThinkingLevel } from "../../vendor/pi-agent-core/src/index.ts";
-import type { ToolDefinition } from "../../vendor/pi-coding-agent/src/index.ts";
 import {
 	parseSkillBlock,
+	openSession,
+	readSessionFile,
+	type AgentMessage,
 	type AgentSessionEvent,
-	type CreateAgentSessionRuntimeFactory,
 	type ExtensionAPI,
-	SessionManager,
-} from "../../vendor/pi-coding-agent/src/index.ts";
+	type RuntimeFactoryHandle,
+	type SessionEntry,
+	type ThinkingLevel,
+	type ToolDefinition,
+} from "../pi-adapter/index.ts";
 import { ensureWorld, newId } from "../world-data.ts";
 import { buildStorylineView, constraintTargetMatches, NOTICE_INJECT_LIMIT } from "../world-context.ts";
 import { buildEditorSystemPrompt, buildWriterSystemPrompt, writerShellLine } from "../prompt.ts";
@@ -101,8 +104,6 @@ export function writerToolset(opts: { classicMode: boolean; mcpTools: ToolDefini
 		: [worldFindTool, styleUpdateTool, readChapterTool, askUserTool, ...opts.mcpTools];
 }
 import { SessionHost } from "./session-host.ts";
-// 2026-10-04(T6):句柄造型(见 web.ts 同处注释)
-import { toFactoryHandle, toHandle } from "../pi-adapter/index.ts";
 import { formatStageLines } from "../stage/assembler.ts";
 import { countStage } from "../stage/counters.ts";
 import { readStage } from "../stage/stage-store.ts";
@@ -633,17 +634,17 @@ export class WriterHost {
 		const abs = join(sessionsDir, writerSessionFile(key));
 		await initChapterFile(abs, bookDir);
 		const runtimeFactory = this.roleFactory(slug, key, chapter);
-		const sessionManager = SessionManager.open(abs, sessionsDir, bookDir);
+		const sessionManager = openSession(abs, sessionsDir, bookDir);
 		// 正文白名单必须与 roleFactory 一致(两处都走 writerDraftFile):工具的 ALS
 		// 上下文(draftFile)优先于 installToolPathGuard 的兜底值,这里不清掉的话
 		// 经典模式/book 模式仍会被拦住写别的文件(换了模式却写不了)。
 		const draftFile = writerDraftFile({ classicMode: this.classicMode, conversationScope: this.conversationScope, chapter });
 		const host = new SessionHost({
-			// 2026-10-04(T6):SessionHost 契约收句柄,显式造型(零开销,见 web.ts 同处注释)
-			createRuntime: toFactoryHandle(runtimeFactory),
+			// 2026-10-04(T7 批 2):roleFactory 现返回工厂句柄,无需再包一层
+			createRuntime: runtimeFactory,
 			cwd: bookDir,
 			agentDir,
-			sessionManager: toHandle(sessionManager),
+			sessionManager,
 			toolGuard: { readOnlyDirs: resolveSkillReadOnlyDirs(), draftFile },
 		});
 		await host.start();
@@ -669,7 +670,7 @@ export class WriterHost {
 	 *  @param chapter - 创建时的章节语义(chapter 模式的正文白名单与注入依据);
 	 *    book 模式下忽略它,注入的章节每次调用现读 viewChapter。
 	 */
-	private roleFactory(slug: string, key: string, chapter: string | null): CreateAgentSessionRuntimeFactory {
+	private roleFactory(slug: string, key: string, chapter: string | null): RuntimeFactoryHandle {
 		const agentDir = getAgentDir();
 		const { temperature, topP } = this;
 		// 模型/思考档位用 getter 而不是值:createSessionRuntimeFactory 在**每次**
@@ -1180,13 +1181,18 @@ function readSessionFromDisk(slug: string, conversationId: string | null): {
 		const sessionsDir = getBookSessionsDir(slug);
 		const abs = join(sessionsDir, writerSessionFile(conversationId));
 		if (!existsSync(abs)) return null;
-		const sm = SessionManager.open(abs, sessionsDir, getBookDir(slug));
+		// 2026-10-04(T7 批 2):openSession 收口到 adapter;这里拿的是**只读读取器**,
+		// 不是 vendor 实体 —— 下方两个消费者都只要 getBranch/getTree,读取器足够。
+		const sm = readSessionFile(abs, sessionsDir, getBookDir(slug));
+		if (!sm) return null;
 		const messages = extractMessagesFromManager(sm);
 		// 纯读路径没有运行时:上一进程留下的未答提问永远等不到回答,标成「未回答」,
 		// 避免前端水合后弹出一张点不动的死卡(写盘那条走 SessionHost 构造里的清扫)。
 		settleDanglingAskParts(messages);
-		// 分支视图(分支栏 + 消息版本):与 SessionHost.getSessionTree 同一份实现
-		const tree = buildSessionTree(sm);
+		// 分支视图(分支栏 + 消息版本):与 SessionHost.getSessionTree 同一份实现。
+		// 造型:reader 只承诺 `unknown[]`,而 buildSessionTree 要精确的 entry 形状
+		// (见 session-tree.ts 的 SessionTreeSource 注释)。
+		const tree = buildSessionTree(sm as SessionTreeSource);
 		return { messages, currentLeafId: tree.currentLeafId, branches: tree.branches, versions: tree.versions };
 	} catch {
 		return null;
@@ -1258,11 +1264,13 @@ function sessionLeafHasFingerprint(slug: string, conversationId: string | null, 
 		const sessionsDir = getBookSessionsDir(slug);
 		const abs = join(sessionsDir, writerSessionFile(conversationId));
 		if (!existsSync(abs)) return false;
-		const sm = SessionManager.open(abs, sessionsDir, getBookDir(slug));
+		// 2026-10-04(T7 批 2):只读读取器(见 readSessionFromDisk 同处注释)
+		const sm = readSessionFile(abs, sessionsDir, getBookDir(slug));
+		if (!sm) return false;
 		const leafId = sm.getLeafId();
 		if (!leafId) return false;
 		const marker = `指纹 ${fp}`;
-		for (const e of sm.getBranch(leafId)) {
+		for (const e of sm.getBranch(leafId) as SessionEntry[]) {
 			if (e.type !== "custom_message") continue;
 			if (JSON.stringify(e).includes(marker)) return true;
 		}

@@ -21,6 +21,7 @@ import {
 	SessionManager,
 } from "../vendor/pi-coding-agent/src/index.ts";
 import { getAgentDir, getBookDir, getBooksDir, VERSION } from "./config.ts";
+import { assembleRuntime, openSession } from "./pi-adapter/index.ts";
 import { createSessionRuntimeFactory } from "./session-factory.ts";
 
 import {
@@ -381,7 +382,7 @@ async function main(): Promise<void> {
 	const shell = resolveWriterShell(await readWriterSettings());
 	const shellOn = shell.dialect !== "none";
 	if (shell.warning) process.stderr.write(`${shell.warning}\n`);
-	const initialSessionManager = SessionManager.open(chapterAbsPath, sessionsDir, bookDir);
+	const initialSessionManager = openSession(chapterAbsPath, sessionsDir, bookDir);
 	// MCP 服务器:与 web 模式共用 ~/.pi/writer/agent/mcp.json;启动时连接一次,
 	// 工具经 customTools 注入(配置变更需重启 TUI 生效)
 	const mcpManager = new McpManager(agentDir);
@@ -416,7 +417,8 @@ async function main(): Promise<void> {
 		customTools: mcpManager.getTools(),
 	});
 
-	const runtime = await createAgentSessionRuntime(createRuntime, {
+	const runtime = await assembleRuntime({
+		createRuntime,
 		cwd: bookDir,
 		agentDir,
 		sessionManager: initialSessionManager,
