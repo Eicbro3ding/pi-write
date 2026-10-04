@@ -163,7 +163,14 @@ function countEnglishWords(text: string): number {
 	return words;
 }
 
-function countText(text: string): FileCounts {
+/**
+ * 统计一段文本的字/词/句/段。
+ *
+ * 导出原因(2026-10-04):`tool_result` 钩子要在每次 write/edit 之后把字数
+ * 附在工具返回值里(见 extension.ts 的 countAfterWriteHook),需要复用同一套
+ * 计数口径 —— 两处口径一旦分叉,AI 看到的字数与 word_count 报的会对不上。
+ */
+export function countText(text: string): FileCounts {
 	// CJK 计数统一在 cjk.ts(码点范围含 Ext A/Compat,不用 \p{ 正则)
 	const cnChars = cjkCount(text);
 	let enWords = 0;
@@ -184,7 +191,8 @@ function countText(text: string): FileCounts {
 	return { cnChars, enWords, sentences, paragraphs };
 }
 
-async function readCountsForFile(filePath: string): Promise<FileCounts> {
+/** 读文件并计数(供 word_count 与 write/edit 后的字数钩子共用)。 */
+export async function readCountsForFile(filePath: string): Promise<FileCounts> {
 	const content = await readFile(filePath, "utf-8");
 	return countText(content);
 }

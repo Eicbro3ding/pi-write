@@ -1,12 +1,13 @@
 import { existsSync } from "node:fs";
 import { copyFile, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { AgentMessage } from "../vendor/pi-agent-core/src/index.ts";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
 	ExtensionContext,
 	InlineExtension,
+	ToolResultEvent,
 } from "../vendor/pi-coding-agent/src/index.ts";
 import type { TUI } from "../vendor/pi-tui/src/index.ts";
 import {
@@ -24,12 +25,14 @@ import { APP_TITLE, getBookDir } from "./config.ts";
 import { autoSaveConflicts, DraftEditorPanel } from "./draft-panel.ts";
 import { type ChatApi, type ChatMessage, openFileEditor, parseEditArgs } from "./editor/index.ts";
 import { createWriterStartupHeader, type WriterHeaderContext } from "./startup-header.ts";
-import { applyWorldUpdate, wordCountTool, worldFindTool, worldUpdateTool } from "./tools.ts";
+import { applyWorldUpdate, readCountsForFile, wordCountTool, worldFindTool, worldUpdateTool } from "./tools.ts";
 import { flattenWorldTree, renderWorldTree, renderWorldTreeFromData } from "./world-tree.ts";
 import { ensureWorld } from "./world-data.ts";
 import { chatTextOfMessage } from "./session-text.ts";
-import { buildChapterContext, DEFAULT_CONTEXT_BUDGET, trimMemory } from "./world-context.ts";
+import { buildChapterContext, trimMemory } from "./world-context.ts";
+import { readWriterSettings } from "./writer-settings.ts";
 import { buildWriterTheme } from "./writer-theme.ts";
+import { pathWithinRoot } from "./tool-guard.ts";
 import { countWriting, WriterFooter, WriterInfoBar, type WriterUiState } from "./writer-ui.ts";
 
 /**
@@ -214,6 +217,44 @@ async function refreshStatus(ctx: ExtensionContext): Promise<void> {
 	ctx.ui.setStatus(WRITER_SLOT, `📖 《${book.title}》· ${ch?.id ?? file} · ${ch?.title ?? file}${label}`);
 }
 
+/**
+ * write/edit 落在正文(draft/*.md)时,算一次字数并返回要追加的文本行。
+ *
+ * 只在正文上生效:world.json / memory.md / notes 的字数对创作节奏没有意义,
+ * 每次都附一行反而把工具结果淹了。
+ *
+ * 返回值设计成「一行」而不是结构化 details:这行文字直接进模型的工具结果,
+ * 越短越不容易干扰它对"写入是否成功"的判断。
+ */
+async function countAfterWrite(
+	ctx: ExtensionContext,
+	event: ToolResultEvent,
+): Promise<string | null> {
+	const raw = event.input?.path;
+	if (typeof raw !== "string" || raw.length === 0) return null;
+
+	// 会话文件 → 书 slug → 书目录(与其余命令的推导方式一致,见 bookSlugFromSessionFile)
+	const slug = bookSlugFromSessionFile(ctx.sessionManager.getSessionFile() ?? undefined);
+	if (!slug) return null;
+	const bookDir = getBookDir(slug);
+
+	// 工具入参可能是相对书目录的路径,也可能是绝对路径;归一化后判断是否落在 draft/
+	const abs = isAbsolute(raw) ? raw : resolve(bookDir, raw);
+	if (!pathWithinRoot(abs, bookDir)) return null;
+	const rel = relative(bookDir, abs);
+	if (!rel.startsWith(`draft${sep}`)) return null;
+
+	try {
+		const counts = await readCountsForFile(abs);
+		const parts = [`${counts.cnChars} 字`];
+		if (counts.paragraphs > 0) parts.push(`${counts.paragraphs} 段`);
+		return `【本章字数】${parts.join(" · ")}`;
+	} catch {
+		// 计数失败(文件被并发删掉/读权限等)不阻断写入结果 —— 字数只是附带信息
+		return null;
+	}
+}
+
 function writerFactory(pi: ExtensionAPI): void {
 	// Register the writer-only custom tools.
 	pi.registerTool(wordCountTool);
@@ -318,6 +359,25 @@ function writerFactory(pi: ExtensionAPI): void {
 	});
 	pi.on("model_select", async (_event, ctx) => {
 		await refreshStatus(ctx);
+	});
+
+	// 写入正文后把字数附在工具返回值里(2026-10-04)。
+	//
+	// 为什么用钩子而不是让 AI 调 word_count:字数从来不是用户想问 AI 的问题,
+	// 而是 AI 写完一章之后**必须知道**的客观事实。让模型主动去查,等于把「记得
+	// 查」的责任推给一个不擅长计数的东西 —— 它经常不查,或者眼估一个数报出来。
+	// 挂在 tool_result 上之后,字数与「写入成功」在同一条返回值里,模型下一轮
+	// 必然看到,且与实际落盘内容同源(不是模型自己算的)。
+	//
+	// 为什么选 tool_result 而不是包一层 write 工具:pi 的 extension 设计意图就是
+	// 「react to session events」,声明式的钩子不会遗忘;而且 write/edit 是内置
+	// 工具,包装它们要复制一份 schema 与渲染逻辑,钩子只需改写返回值。
+	pi.on("tool_result", async (event, ctx) => {
+		if (event.toolName !== "write" && event.toolName !== "edit") return;
+		if (event.isError) return;
+		const text = await countAfterWrite(ctx, event);
+		if (!text) return;
+		return { content: [...event.content, { type: "text", text }] };
 	});
 
 	pi.registerCommand("chapters", {
@@ -717,10 +777,12 @@ async function switchChapter(ctx: ExtensionCommandContext, slug: string, file: s
 		draftText = "";
 	}
 	const world = await ensureWorld(slug);
+	// 预算全部来自用户设置(2026-10-04:此前是写死的常量,用户无法调整)
+	const settings = await readWriterSettings();
 	// 跨章节记忆:memory.md(容量有限,注入端按预算裁剪;不存在则为空)
 	let memory = "";
 	try {
-		memory = trimMemory(await readFile(join(bookDir, "memory.md"), "utf-8"));
+		memory = trimMemory(await readFile(join(bookDir, "memory.md"), "utf-8"), settings.memoryBudget);
 	} catch {
 		memory = "";
 	}
@@ -742,7 +804,18 @@ async function switchChapter(ctx: ExtensionCommandContext, slug: string, file: s
 		const goalText = [current.goal, current.next ?? ""].filter((s) => s.length > 0).join(" ");
 		if (goalText.length > 0) recent.push(goalText);
 	}
-	const context = buildChapterContext(world, { chapterId, draftText, recentUserMessages: recent, memory, budget: DEFAULT_CONTEXT_BUDGET });
+	const context = buildChapterContext(world, {
+		chapterId,
+		draftText,
+		recentUserMessages: recent,
+		memory,
+		budget: settings.contextBudget,
+		activationDepth: settings.activationDepth,
+		limits: {
+			noticeInjectLimit: settings.noticeInjectLimit,
+			completedMilestoneLimit: settings.completedMilestoneLimit,
+		},
+	});
 	const result = await ctx.switchSession(absPath, {
 		withSession: async (newCtx) => {
 			await setCurrentChapter(slug, file);

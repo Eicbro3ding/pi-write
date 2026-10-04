@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox";
 import { defineTool, type ExtensionAPI, type ToolDefinition } from "../../vendor/pi-coding-agent/src/index.ts";
 import { resolveSkillsDir, slugify } from "../config.ts";
+import { readWriterSettings } from "../writer-settings.ts";
 import { ensureWorld, type WorldData } from "../world-data.ts";
 import { loadPromptText, renderPrompt } from "../prompts.ts";
 import { wordCountTool, worldFindTool, worldUpdateTool } from "../tools.ts";
@@ -426,12 +427,15 @@ async function buildAndSaveScript(
 	// 演员知识面：导演显式 inject 优先；缺省按 cast 角色名自动生成
 	// （character 注入 + budget 2000）——信息差即悬念，导演可借此
 	// 决定演员知道什么（include-only，见设计文档 §5.1）。
+	// 演员知识面的默认预算取用户设置(2026-10-04:此前是写死的 2000,
+	// 导演未显式指定 budget 时无法跟随用户的全局背景包预算)
+	const defaultInjectBudget = (await readWriterSettings()).contextBudget;
 	const inject: Record<string, InjectRule> = {};
 	for (const [actorId, characters] of Object.entries(params.cast)) {
 		const custom = params.inject?.[actorId];
 		inject[actorId] = custom
-			? { characters: custom.characters ?? characters, world: custom.world, budget: custom.budget ?? 2000 }
-			: { characters, budget: 2000 };
+			? { characters: custom.characters ?? characters, world: custom.world, budget: custom.budget ?? defaultInjectBudget }
+			: { characters, budget: defaultInjectBudget };
 	}
 	const shared = {
 		setting: params.text.shared.setting,

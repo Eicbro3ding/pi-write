@@ -100,6 +100,25 @@ export interface WriterSettings {
 	imageWorldbook: boolean;
 	/** 每次生成前先确认(避免意外消耗额度)。 */
 	imageConfirmBeforeGen: boolean;
+
+	// —— 上下文预算(2026-10-04)——
+	//
+	// 此前这五项是 src/world-context.ts 里的硬编码常量(DEFAULT_CONTEXT_BUDGET
+	// 等),用户完全无法调整、裁切过程也不可感知。这里把它们全部改为可配置:
+	// 默认值沿用原常量,因此**未改过设置的安装行为逐字不变**。
+	//
+	// 为什么必须有:写作者的正文长度、世界观复杂度差异极大,一个写短篇的人被
+	// 2000 token 的背景包卡住、一个写百万字长篇的人又嫌太小,写死必然有一方受损。
+	/** 单次注入的背景包 token 预算(原 DEFAULT_CONTEXT_BUDGET,默认 2000)。 */
+	contextBudget: number;
+	/** 跨章节记忆 memory.md 注入的 token 预算(原 DEFAULT_MEMORY_BUDGET,默认 1500)。 */
+	memoryBudget: number;
+	/** 关联激活深度(0 = 关闭,仅关键词命中;1-3 = 多源 BFS 展开邻居)。 */
+	activationDepth: number;
+	/** Notice 备忘录注入上限(只注入未完成项,防上下文膨胀)。 */
+	noticeInjectLimit: number;
+	/** 已完成里程碑(发展线 done 节点)注入上限。 */
+	completedMilestoneLimit: number;
 }
 
 /** 图片接口形态。目前只有一种;留成联合类型是为了加第二种时不必改调用方。 */
@@ -161,7 +180,22 @@ export function defaultWriterSettings(): WriterSettings {
 		imageInReply: true,
 		imageWorldbook: true,
 		imageConfirmBeforeGen: true,
+		// 上下文预算:默认值与原 world-context.ts 的常量**逐一对应**,保证行为不变
+		contextBudget: 2000,
+		memoryBudget: 1500,
+		activationDepth: 0,
+		noticeInjectLimit: 10,
+		completedMilestoneLimit: 6,
 	};
+}
+
+/** 数值字段的钳制:非整数/越界/非数字 → 回落默认值(见 parseWriterSettings)。 */
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+	const n = Math.floor(value);
+	if (n < min) return min;
+	if (n > max) return max;
+	return n;
 }
 
 /**
@@ -192,6 +226,14 @@ export function parseWriterSettings(raw: unknown): WriterSettings {
 	if (typeof obj.imageInReply === "boolean") out.imageInReply = obj.imageInReply;
 	if (typeof obj.imageWorldbook === "boolean") out.imageWorldbook = obj.imageWorldbook;
 	if (typeof obj.imageConfirmBeforeGen === "boolean") out.imageConfirmBeforeGen = obj.imageConfirmBeforeGen;
+	// 上下文预算:数值一律钳制在合理区间(手写文件塞负数/超大值不应破坏装配)。
+	// 上限取 20000 是因为最大的模型上下文也不过 20 万 token,单包背景超过这个数
+	// 已无意义;下限保证「至少能塞进一条设定」。
+	out.contextBudget = clampInt(obj.contextBudget, 200, 20000, 2000);
+	out.memoryBudget = clampInt(obj.memoryBudget, 100, 20000, 1500);
+	out.activationDepth = clampInt(obj.activationDepth, 0, 5, 0);
+	out.noticeInjectLimit = clampInt(obj.noticeInjectLimit, 0, 50, 10);
+	out.completedMilestoneLimit = clampInt(obj.completedMilestoneLimit, 0, 30, 6);
 	return out;
 }
 

@@ -48,6 +48,12 @@ describe("parseWriterSettings", () => {
 			imageInReply: true,
 			imageWorldbook: true,
 			imageConfirmBeforeGen: true,
+			// 上下文预算(2026-10-04):默认值 = 原 world-context.ts 常量,一个不差
+			contextBudget: 2000,
+			memoryBudget: 1500,
+			activationDepth: 0,
+			noticeInjectLimit: 10,
+			completedMilestoneLimit: 6,
 		});
 	});
 
@@ -117,6 +123,55 @@ describe("parseWriterSettings", () => {
 		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, shellPath: "  C:\\pwsh.exe  " }).shellPath).toBe("C:\\pwsh.exe");
 		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, shellPath: 42 }).shellPath).toBe("");
 		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, shellPath: "x".repeat(900) }).shellPath).toHaveLength(500);
+	});
+
+	// —— 上下文预算(2026-10-04)——
+	// 这五项此前是 world-context.ts 里的硬编码常量。默认值必须与原常量逐一相等,
+	// 否则「未改过设置的老安装」会凭空改变背景包大小。
+	it("上下文预算缺省值与原常量一致(老安装行为不变)", () => {
+		const s = defaultWriterSettings();
+		expect(s.contextBudget).toBe(2000);
+		expect(s.memoryBudget).toBe(1500);
+		expect(s.activationDepth).toBe(0);
+		expect(s.noticeInjectLimit).toBe(10);
+		expect(s.completedMilestoneLimit).toBe(6);
+		// 旧文件完全没有这些字段:读出来也必须是上面的值
+		const old = parseWriterSettings({ version: WRITER_SETTINGS_VERSION });
+		expect(old.contextBudget).toBe(2000);
+		expect(old.memoryBudget).toBe(1500);
+		expect(old.activationDepth).toBe(0);
+		expect(old.noticeInjectLimit).toBe(10);
+		expect(old.completedMilestoneLimit).toBe(6);
+	});
+
+	it("上下文预算可被用户覆盖", () => {
+		const s = parseWriterSettings({
+			version: WRITER_SETTINGS_VERSION,
+			contextBudget: 3000,
+			memoryBudget: 800,
+			activationDepth: 2,
+			noticeInjectLimit: 20,
+			completedMilestoneLimit: 12,
+		});
+		expect(s.contextBudget).toBe(3000);
+		expect(s.memoryBudget).toBe(800);
+		expect(s.activationDepth).toBe(2);
+		expect(s.noticeInjectLimit).toBe(20);
+		expect(s.completedMilestoneLimit).toBe(12);
+	});
+
+	it("上下文预算越界被钳制,非法值回落默认", () => {
+		// 越界 → 钳到边界(手写文件塞超大值不应撑爆上下文)
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, contextBudget: 999999 }).contextBudget).toBe(20000);
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, contextBudget: 1 }).contextBudget).toBe(200);
+		// 负数深度无意义 → 钳到 0
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, activationDepth: -5 }).activationDepth).toBe(0);
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, activationDepth: 99 }).activationDepth).toBe(5);
+		// 非数字 → 回落默认
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, contextBudget: "3000" }).contextBudget).toBe(2000);
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, memoryBudget: null }).memoryBudget).toBe(1500);
+		// 小数取整
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, contextBudget: 2500.7 }).contextBudget).toBe(2500);
 	});
 });
 

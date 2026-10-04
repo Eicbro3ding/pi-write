@@ -67,7 +67,7 @@ import { listSkills } from "../skills-index.ts";
 import { BOOK_FILE_GROUPS, classifyBookFileKind, isWorkspaceFile, listBookFiles, readWorkspaceText, statWorkspaceFile } from "../book-files.ts";
 import { MAX_ZIP_BYTES, exportBookZip, readImportZip, type BookZipImport } from "./book-zip.ts";
 import { ensureWorld, newId, readWorldEditRecord, saveWorld, WorldValidationError, type WorldData } from "../world-data.ts";
-import { buildChapterContext, DEFAULT_CONTEXT_BUDGET, trimMemory } from "../world-context.ts";
+import { buildChapterContext, trimMemory } from "../world-context.ts";
 import type { SessionHost } from "./session-host.ts";
 import { extractMessagesFromManager, usableModelRef, type ThinkingSummary } from "./session-host.ts";
 import { askUserGate } from "../ask-user.ts";
@@ -862,10 +862,12 @@ export class WriterServer {
 		} catch {
 			draftText = "";
 		}
+		// 预算全部来自用户设置(2026-10-04:此前是写死的常量,用户无法调整)
+		const settings = await readWriterSettings();
 		// 跨章节记忆:memory.md(容量有限,注入端按预算裁剪;不存在则为空)
 		let memory = "";
 		try {
-			memory = trimMemory(await readFile(join(getBookDir(slug), "memory.md"), "utf-8"));
+			memory = trimMemory(await readFile(join(getBookDir(slug), "memory.md"), "utf-8"), settings.memoryBudget);
 		} catch {
 			memory = "";
 		}
@@ -875,7 +877,18 @@ export class WriterServer {
 			.messages.filter((m) => m.role === "user")
 			.slice(-2)
 			.map((m) => m.text);
-		const context = buildChapterContext(world, { chapterId, draftText, recentUserMessages: recent, memory, budget: DEFAULT_CONTEXT_BUDGET });
+		const context = buildChapterContext(world, {
+			chapterId,
+			draftText,
+			recentUserMessages: recent,
+			memory,
+			budget: settings.contextBudget,
+			activationDepth: settings.activationDepth,
+			limits: {
+				noticeInjectLimit: settings.noticeInjectLimit,
+				completedMilestoneLimit: settings.completedMilestoneLimit,
+			},
+		});
 		if (context.text.length > 0) {
 			await this.options.sessionHost.injectContext(context.text);
 		}

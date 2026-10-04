@@ -1,16 +1,22 @@
 import type { WorldData, WorldEntry, ConstraintTarget } from "./world-data.ts";
 import { isCjkChar } from "./cjk.ts";
 
-/** 背景包默认 token 预算。 */
+/**
+ * 背景包默认 token 预算。
+ *
+ * ⚠️ 2026-10-04 起这些常量**仅作缺省回落**:实际取值来自
+ * `WriterSettings.contextBudget`(用户可在设置里调整)。保留导出是为了
+ * 向后兼容既有调用方与测试,新代码应优先读设置。
+ */
 export const DEFAULT_CONTEXT_BUDGET = 2000;
 
-/** 跨章节记忆(memory.md)注入的 token 预算。 */
+/** 跨章节记忆(memory.md)注入的 token 预算(缺省值;实际取 WriterSettings.memoryBudget)。 */
 export const DEFAULT_MEMORY_BUDGET = 1500;
 
 /** 关联激活默认深度(0 = 关闭,与旧行为一致;>0 启用多源 BFS 展开)。 */
 export const DEFAULT_ACTIVATION_DEPTH = 0;
 
-/** Notice 备忘录注入上限(只注入未完成项,防上下文膨胀)。 */
+/** Notice 备忘录注入上限(缺省值;实际取 WriterSettings.noticeInjectLimit)。 */
 export const NOTICE_INJECT_LIMIT = 10;
 
 /** 约束 target 是否匹配某角色(缺省 undefined = all,旧数据行为不变)。 */
@@ -22,6 +28,11 @@ export function constraintTargetMatches(target: ConstraintTarget | undefined, ro
  *  AI-Novel-Writing-Assistant 的 completedMilestones 守卫:已完成目标注入
  *  「勿再追求」列表,而非靠祈使句约束)。 */
 export const COMPLETED_MILESTONE_LIMIT = 6;
+/** Notice / 里程碑上限的合并入参(缺省时用上面的常量,保证旧调用方行为不变)。 */
+export interface ContextLimits {
+	noticeInjectLimit?: number;
+	completedMilestoneLimit?: number;
+}
 
 /** 发展线视图(2026-08-12):当前目标 + 已完成里程碑列表。未启用或无节点返回 null。 */
 export interface StorylineView {
@@ -32,12 +43,12 @@ export interface StorylineView {
 }
 
 /** 组装发展线视图:in-progress 节点 = 当前目标;done 节点 = 已完成列表(尾部优先)。 */
-export function buildStorylineView(data: WorldData): StorylineView | null {
+export function buildStorylineView(data: WorldData, limit: number = COMPLETED_MILESTONE_LIMIT): StorylineView | null {
 	if (!data.storyline.enabled || data.storyline.nodes.length === 0) return null;
 	const current = data.storyline.nodes.find((n) => n.status === "in-progress");
 	const completed = data.storyline.nodes.filter((n) => n.status === "done").map((n) => n.title);
 	if (!current && completed.length === 0) return null;
-	return { currentTitle: current?.title ?? null, completed: completed.slice(-COMPLETED_MILESTONE_LIMIT) };
+	return { currentTitle: current?.title ?? null, completed: limit > 0 ? completed.slice(-limit) : [] };
 }
 
 export interface ChapterContextInput {
@@ -53,6 +64,8 @@ export interface ChapterContextInput {
 	activationDepth?: number;
 	/** 背景包 token 预算。 */
 	budget: number;
+	/** Notice / 里程碑注入上限(缺省用常量;生产装配应传 WriterSettings 的值)。 */
+	limits?: ContextLimits;
 }
 
 export interface ChapterContextResult {
@@ -275,12 +288,14 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 	// Notice(全局备忘录·待办清单):只注入未完成项,上限 NOTICE_INJECT_LIMIT——完成
 	// 的条目留在 UI 板子可见,不进上下文(2026-08-12 回到初衷)。常驻不可裁。
 	let tail = "";
-	const noticeItems = data.notice.items.filter((i) => !i.done).slice(0, NOTICE_INJECT_LIMIT);
+	const noticeLimit = input.limits?.noticeInjectLimit ?? NOTICE_INJECT_LIMIT;
+	const milestoneLimit = input.limits?.completedMilestoneLimit ?? COMPLETED_MILESTONE_LIMIT;
+	const noticeItems = data.notice.items.filter((i) => !i.done).slice(0, noticeLimit);
 	if (data.notice.enabled && noticeItems.length > 0) {
 		tail += `【Notice·备忘录】\n${noticeItems.map((i) => `- [ ] ${i.text}`).join("\n")}\n`;
 		result.included.hasNotice = true;
 	}
-	const view = buildStorylineView(data);
+	const view = buildStorylineView(data, milestoneLimit);
 	if (view) {
 		if (view.currentTitle) {
 			const current = data.storyline.nodes.find((n) => n.status === "in-progress");
