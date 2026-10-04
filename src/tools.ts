@@ -7,6 +7,7 @@ import { cjkCount } from "./cjk.ts";
 import { ensureWorld, newId, saveWorld, validateWorld, writeWorldEditRecord, WorldValidationError, type ConstraintTarget, type EntryStatus, type EntryType, type RelationArrow, type StoryNodeStatus, type WorldData, type WorldEntry } from "./world-data.ts";
 import { pathWithinRoot, toolGuardContext } from "./tool-guard.ts";
 import { withWorldLock } from "./world-lock.ts";
+import { classifyBookFileKind, MAX_READ_BYTES, readWorkspaceText } from "./book-files.ts";
 
 /**
  * 把「判别联合」(Type.Union of Type.Object,以 op 字面量区分)压平成**单一对象** schema:
@@ -711,8 +712,8 @@ export function applyWorldUpdate(data: WorldData, update: WorldUpdateOp): WorldD
 let worldUpdateBookDir: string | null = null;
 export function setWorldUpdateBookDir(dir: string | null): void { worldUpdateBookDir = dir; }
 
-/** 当前 world_update/world_find 的书目录:SessionHost ALS 上下文优先,其次工厂注入值。 */
-function worldBookDir(): string | null {
+/** 当前会话的书目录:SessionHost ALS 上下文优先,其次工厂注入值(见 session-factory)。 */
+function bookDirBase(): string | null {
 	return toolGuardContext.getStore()?.bookDir ?? worldUpdateBookDir;
 }
 
@@ -735,7 +736,7 @@ export const worldFindTool: ToolDefinition = defineTool({
 		limit: Type.Optional(Type.Number({ description: "返回条数上限(1-100,默认 20)" })),
 	}),
 	async execute(_callId, params) {
-		const dir = worldBookDir();
+		const dir = bookDirBase();
 		if (!dir) throw new Error("world_find 未配置书目录");
 		const world = await ensureWorld(dir);
 		let entries = world.entries;
@@ -769,6 +770,86 @@ export const worldFindTool: ToolDefinition = defineTool({
 	},
 });
 
+/**
+ * read_chapter —— 一次读完整个正文文件(内置 read 做不到这件事)。
+ *
+ * 为什么需要(2026-10-04):pi 内置 `read` 的默认上限是 2000 行 / 50KB,超限
+ * 即截断,并在描述里写明「需要全文就带 offset 继续读」。这个假设来自代码库
+ * 场景(一个文件通常只看片段),在写作场景里是反的 —— 一章 8000 字的正文正好
+ * 卡在截断线上,模型读到的半章里如果恰好没有它要找的细节,它会(1) 以为自己
+ * 看到了全文,或 (2) 干脆放弃改去猜。两种情况都直接伤害写作质量,而且故障是
+ * 静默的:模型不会报告"我没读完",它只是基于残缺文本开始动笔。
+ *
+ * 本工具不做分片:一次给全文(上限 MAX_READ_BYTES = 512KB,远超任何单章)。
+ * 真触到 512KB 说明这已经是「一本书塞进一个文件」,那种情况下**显式告知已
+ * 截断**比悄悄给半截强 —— 用户和模型都能据此判断该怎么办。
+ *
+ * 与 word_count 的分工:word_count 回答「多长」,read_chapter 回答「写了什么」。
+ */
+const readChapterParameters = Type.Object({
+	path: Type.String({
+		description:
+			'正文章节文件路径,相对书目录,例如 "draft/ch01.md"。也接受 "ch01",会自动补成 draft/ch01.md。',
+	}),
+});
+
+/** 把 "ch01" / "draft/ch01" / "draft/ch01.md" 统一成书目录下的相对路径。 */
+function normalizeChapterPath(raw: string): string {
+	let p = raw.trim().replace(/\\/g, "/");
+	if (p.length === 0) return p;
+	if (!p.startsWith("draft/")) p = `draft/${p}`;
+	if (!p.endsWith(".md")) p = `${p}.md`;
+	return p;
+}
+
+export const readChapterTool: ToolDefinition = defineTool({
+	name: "read_chapter",
+	label: "Read Chapter",
+	description:
+		"读取一整章正文的**全部内容**,一次返回,不会像内置 read 那样在 2000 行处静默截断。改写、续写、审校前应当用这个工具而不是 read。参数 path 相对书目录(如 draft/ch01.md,或直接写 ch01)。返回值开头是文件路径与字数,末尾在超限时明确标注已截断。",
+	parameters: readChapterParameters,
+	async execute(_callId, params) {
+		const dir = bookDirBase();
+		if (!dir) throw new Error("read_chapter 未配置书目录");
+		const rel = normalizeChapterPath(params.path);
+		if (rel.length === 0) throw new Error("read_chapter 需要 path 参数");
+
+		// 路径守卫:只允许读工作区范围内的文本文件(隐藏文件、jsonl、世界书生成物
+		// 等一律拒绝,与工作区清单同源 —— 详见 book-files.isWorkspaceFile)
+		if (classifyBookFileKind(rel) !== "text") {
+			throw new Error(`read_chapter 只读文本文件:${rel}`);
+		}
+		const file = await readWorkspaceText(dir, rel);
+		if (!file) {
+			throw new Error(`找不到文件(或不在工作区可读范围内): ${rel}`);
+		}
+
+		const counts = countText(file.text);
+		// 头部元信息:模型拿到全文后仍需要知道「这是哪个文件、多长」——
+		// 尤其续写时要据字数判断节奏,不该再调一次 word_count。
+		const head = `# ${file.path}(${counts.cnChars} 字${counts.paragraphs > 0 ? ` · ${counts.paragraphs} 段` : ""}${file.truncated ? ` · 文件共 ${Math.ceil(file.bytes / 1024)}KB` : ""})`;
+		const lines = [head, ""];
+		if (file.truncated) {
+			// 截断必须显式、必须可操作:告诉模型拿到的是前多少字节,以及为什么被截
+			lines.push(
+				`> ⚠️ 文件超过 ${Math.round(MAX_READ_BYTES / 1024)}KB 读取上限,以下仅为前 ${Math.round(MAX_READ_BYTES / 1024)}KB(全文 ${Math.ceil(file.bytes / 1024)}KB)。`,
+				"",
+			);
+		}
+		lines.push(file.text);
+
+		return {
+			content: [{ type: "text", text: lines.join("\n") }],
+			details: {
+				path: file.path,
+				bytes: file.bytes,
+				truncated: file.truncated,
+				...counts,
+			},
+		};
+	},
+});
+
 export const worldUpdateTool: ToolDefinition = defineTool({
 	name: "world_update",
 	label: "World Update",
@@ -778,7 +859,7 @@ export const worldUpdateTool: ToolDefinition = defineTool({
 		update: WORLD_UPDATE_FLAT,
 	}),
 	async execute(_callId, params) {
-		const dir = worldBookDir();
+		const dir = bookDirBase();
 		if (!dir) throw new Error("world_update 未配置书目录");
 		// 读-改-写整体持锁:并行 world_update(agent 多工具调用)串行执行,
 		// 消除丢失更新与共享 tmp 竞态(saveWorld 另以唯一 tmp + 备份兜底)
@@ -829,7 +910,7 @@ export const styleUpdateTool: ToolDefinition = defineTool({
 		update: STYLE_UPDATE_FLAT,
 	}),
 	async execute(_callId, params) {
-		const dir = worldBookDir();
+		const dir = bookDirBase();
 		if (!dir) throw new Error("style_update 未配置书目录");
 		// 与 world_update 同一把锁:两个工具可能并行调用(agent 一轮多工具),串行化避免丢失更新
 		return withWorldLock(dir, async () => {

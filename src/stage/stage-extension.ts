@@ -4,7 +4,7 @@ import { resolveSkillsDir, slugify } from "../config.ts";
 import { readWriterSettings } from "../writer-settings.ts";
 import { ensureWorld, type WorldData } from "../world-data.ts";
 import { loadPromptText, renderPrompt } from "../prompts.ts";
-import { wordCountTool, worldFindTool, worldUpdateTool } from "../tools.ts";
+import { readChapterTool, wordCountTool, worldFindTool, worldUpdateTool } from "../tools.ts";
 import { createAskUserTool } from "../ask-user.ts";
 import { resolveWorldRefs } from "./assembler.ts";
 import { loadScript, reviseScript, saveScript } from "./script-store.ts";
@@ -65,7 +65,7 @@ export function directorRole(orch: StageOrchestrator): RoleSpec {
 		activeTools: ["read", "write", "edit", "ls", "grep"],
 		// ask_user:导演是舞台页的主交互,「剧情往哪走」正是最该问用户的岔路。
 		// 演员不给(角色扮演不该跳出剧情向用户要决定),收幕编剧也只给只读工具。
-		customTools: [scriptConfirmTool(orch), stageScriptTool(orch), stageReviseTool(orch), stageCastTool(orch), worldFindTool, worldUpdateTool, wordCountTool, createAskUserTool()],
+		customTools: [scriptConfirmTool(orch), stageScriptTool(orch), stageReviseTool(orch), stageCastTool(orch), worldFindTool, worldUpdateTool, wordCountTool, readChapterTool, createAskUserTool()],
 	};
 }
 
@@ -91,7 +91,8 @@ export function writerRole(): RoleSpec {
 		excludeTools: ["bash"],
 		activeTools: ["write", "read"],
 		// world_find(只读):收幕编剧查世界书条目(与常驻编剧同款,2026-08-12)
-		customTools: [worldFindTool],
+		// read_chapter:收幕要改写正文,必须能一次读到整章(内置 read 会静默截断)
+		customTools: [worldFindTool, readChapterTool],
 	};
 }
 

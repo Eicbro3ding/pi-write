@@ -36,4 +36,4 @@ export {
 } from "./config.ts";
 export { writerExtension } from "./extension.ts";
 export { WRITER_SYSTEM_PROMPT } from "./prompt.ts";
-export { wordCountTool } from "./tools.ts";
+export { readChapterTool, wordCountTool } from "./tools.ts";

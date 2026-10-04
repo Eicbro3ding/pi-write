@@ -25,7 +25,7 @@ import { APP_TITLE, getBookDir } from "./config.ts";
 import { autoSaveConflicts, DraftEditorPanel } from "./draft-panel.ts";
 import { type ChatApi, type ChatMessage, openFileEditor, parseEditArgs } from "./editor/index.ts";
 import { createWriterStartupHeader, type WriterHeaderContext } from "./startup-header.ts";
-import { applyWorldUpdate, readCountsForFile, wordCountTool, worldFindTool, worldUpdateTool } from "./tools.ts";
+import { applyWorldUpdate, readChapterTool, readCountsForFile, wordCountTool, worldFindTool, worldUpdateTool } from "./tools.ts";
 import { flattenWorldTree, renderWorldTree, renderWorldTreeFromData } from "./world-tree.ts";
 import { ensureWorld } from "./world-data.ts";
 import { chatTextOfMessage } from "./session-text.ts";
@@ -260,6 +260,9 @@ function writerFactory(pi: ExtensionAPI): void {
 	pi.registerTool(wordCountTool);
 	pi.registerTool(worldUpdateTool);
 	pi.registerTool(worldFindTool);
+	// read_chapter(2026-10-04):内置 read 在 2000 行/50KB 处静默截断,写正文时
+	// 模型会拿半章当作全文开工。这是写作场景专用的整章读取,一次给全。
+	pi.registerTool(readChapterTool);
 
 	// Keep the footer slot in sync after lifecycle events.
 	pi.on("session_start", async (_event, ctx) => {

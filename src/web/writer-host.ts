@@ -71,7 +71,7 @@ import { buildStorylineView, constraintTargetMatches, NOTICE_INJECT_LIMIT } from
 import { buildEditorSystemPrompt, buildWriterSystemPrompt, writerShellLine } from "../prompt.ts";
 import type { ShellDialect } from "../shell-kind.ts";
 import type { ConversationScope } from "../writer-settings.ts";
-import { styleUpdateTool, wordCountTool, worldFindTool, worldUpdateTool } from "../tools.ts";
+import { readChapterTool, styleUpdateTool, wordCountTool, worldFindTool, worldUpdateTool } from "../tools.ts";
 import { createAskUserTool, settleDanglingAskParts } from "../ask-user.ts";
 
 /**
@@ -93,9 +93,12 @@ const askUserTool = createAskUserTool();
  * 用户看到的是"说了没生效"。
  */
 export function writerToolset(opts: { classicMode: boolean; mcpTools: ToolDefinition[] }): ToolDefinition[] {
+	// read_chapter(2026-10-04)两种形态都给:它是**只读**的,不触碰世界书/人物/关系,
+	// 因此不破坏上面这条边界。反过来,编剧写剧本、审校、提意见时**必须**能读到整章
+	// 正文——而内置 read 会在 2000 行/50KB 处静默截断,恰好在长章节上失效。
 	return opts.classicMode
-		? [wordCountTool, worldUpdateTool, worldFindTool, askUserTool, ...opts.mcpTools]
-		: [worldFindTool, styleUpdateTool, askUserTool, ...opts.mcpTools];
+		? [wordCountTool, worldUpdateTool, worldFindTool, readChapterTool, askUserTool, ...opts.mcpTools]
+		: [worldFindTool, styleUpdateTool, readChapterTool, askUserTool, ...opts.mcpTools];
 }
 import { SessionHost } from "./session-host.ts";
 import { formatStageLines } from "../stage/assembler.ts";

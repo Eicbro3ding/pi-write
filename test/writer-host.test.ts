@@ -459,6 +459,13 @@ describe("writerToolset（编剧 / 写作 agent 的权限边界）", () => {
 		expect(names(writerToolset({ classicMode: false, mcpTools: mcp }))).toContain("mcp_echo");
 		expect(names(writerToolset({ classicMode: true, mcpTools: mcp }))).toContain("mcp_echo");
 	});
+
+	// read_chapter 是只读的,不触碰世界书/人物/关系,因此不破坏上面那条边界;
+	// 但编剧写剧本、审校必须能读到整章(内置 read 会在 2000 行/50KB 处静默截断)。
+	it("read_chapter 两种形态都给(只读,不越界)", () => {
+		expect(names(writerToolset({ classicMode: false, mcpTools: [] }))).toContain("read_chapter");
+		expect(names(writerToolset({ classicMode: true, mcpTools: [] }))).toContain("read_chapter");
+	});
 });
 
 /**

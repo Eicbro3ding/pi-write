@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyStyleUpdate, applyWorldUpdate, normalizeStyleUpdate, normalizeWorldUpdate, setWordCountCwd, setWorldUpdateBookDir, styleUpdateTool, wordCountTool, worldFindTool, worldUpdateTool } from "../src/tools.ts";
+import { applyStyleUpdate, applyWorldUpdate, normalizeStyleUpdate, normalizeWorldUpdate, readChapterTool, setWordCountCwd, setWorldUpdateBookDir, styleUpdateTool, wordCountTool, worldFindTool, worldUpdateTool } from "../src/tools.ts";
 import { createEmptyWorld, ensureWorld, WorldValidationError } from "../src/world-data.ts";
 
 type ToolParams = Parameters<typeof wordCountTool.execute>[1];
@@ -99,6 +99,74 @@ describe("wordCountTool", () => {
 		} finally {
 			setWordCountCwd(null);
 		}
+	});
+});
+
+describe("read_chapter（整章全文读取）", () => {
+	type ReadParams = Parameters<typeof readChapterTool.execute>[1];
+	function runRead(params: ReadParams): ReturnType<typeof readChapterTool.execute> {
+		return readChapterTool.execute("call", params, undefined, undefined, {} as ToolContext);
+	}
+
+	/** 造一章:写到 draft/ch01.md 并让工具以书目录为基准解析。 */
+	function seedChapter(content: string): void {
+		mkdirSync(join(tmp, "draft"), { recursive: true });
+		writeFileSync(join(tmp, "draft", "ch01.md"), content, "utf-8");
+		setWorldUpdateBookDir(tmp);
+	}
+
+	afterEach(() => {
+		setWorldUpdateBookDir(null);
+	});
+
+	it("一次返回整章正文,不截断(内置 read 会在 2000 行处静默截断)", async () => {
+		// 3000 行、每行一句:远超内置 read 的 DEFAULT_MAX_LINES=2000。
+		// 若这个工具也走上了分片逻辑,末行的哨兵文本就不会出现。
+		const lines = Array.from({ length: 3000 }, (_, i) => `第 ${i + 1} 行正文。`);
+		seedChapter(`${lines.join("\n")}\n`);
+		const result = await runRead({ path: "draft/ch01.md" });
+		const text = resultText(result);
+		expect(text).toContain("第 3000 行正文。");
+		expect(text).toContain("第 1 行正文。");
+		expect(result.details?.truncated).toBe(false);
+	});
+
+	it("头部带路径与字数,模型续写不必再调 word_count", async () => {
+		seedChapter("第一章。\n\n第二段。\n");
+		const text = resultText(await runRead({ path: "draft/ch01.md" }));
+		expect(text).toContain("draft/ch01.md");
+		expect(text).toContain("6 字");
+		expect(text).toContain("2 段");
+	});
+
+	it("path 可省略 draft/ 前缀与 .md 后缀", async () => {
+		seedChapter("甲。");
+		for (const p of ["ch01", "draft/ch01", "draft/ch01.md"]) {
+			const text = resultText(await runRead({ path: p }));
+			expect(text).toContain("draft/ch01.md");
+			expect(text).toContain("甲。");
+		}
+	});
+
+	it("文件不存在时抛可读错误(而不是返回空文本让模型以为读到了)", async () => {
+		setWorldUpdateBookDir(tmp);
+		await expect(runRead({ path: "draft/nope.md" })).rejects.toThrow("找不到文件");
+	});
+
+	it("拒绝非文本与工作区外的路径(与清单同源,防越界探测)", async () => {
+		setWorldUpdateBookDir(tmp);
+		// 隐藏文件 / jsonl / 世界书生成物:isWorkspaceFile 一律拒绝
+		await expect(runRead({ path: "draft/.secret.md" })).rejects.toThrow("找不到文件");
+		await expect(runRead({ path: "../escape.md" })).rejects.toThrow();
+	});
+
+	it("超过 512KB 上限时显式告知已截断(不静默给半截)", async () => {
+		// 构造 > MAX_READ_BYTES 的文件:每行 100 字节 × 6000 行 ≈ 600KB
+		const line = `${"字".repeat(50)}\n`;
+		seedChapter(line.repeat(6000));
+		const result = await runRead({ path: "draft/ch01.md" });
+		expect(result.details?.truncated).toBe(true);
+		expect(resultText(result)).toContain("读取上限");
 	});
 });
 
