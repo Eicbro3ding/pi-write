@@ -17,6 +17,7 @@ import type {
 	SessionTreeDto,
 	SessionUsageStatsDto,
 	TextSelectionSnapshot,
+	TrimSummaryDto,
 	WorldDataDto,
 } from "../types.ts";
 import {
@@ -286,6 +287,8 @@ export function WritePage({
 	const [writerSession, writerDispatch] = useReducer(sessionReducer, undefined, initialSessionState);
 	/** 编剧会话上下文占用(「建议 /compact」提示;agent_settled / 压缩结束 / 对齐时刷新)。 */
 	const [writerUsage, setWriterUsage] = useState<ContextUsageDto | null>(null);
+	/** 最近一次装配的裁切摘要(2026-10-04,T4);null = 未裁切,不显示提示条。 */
+	const [writerTrim, setWriterTrim] = useState<TrimSummaryDto | null>(null);
 	/** 会话用量浮层(点输入条的上下文圆环展开):开合 / 数据 / 载入中 / 错误。 */
 	const [usageOpen, setUsageOpen] = useState(false);
 	const [usageStats, setUsageStats] = useState<SessionUsageStatsDto | null>(null);
@@ -1267,7 +1270,7 @@ export function WritePage({
 		const t = writerTargetNow(ch?.file ?? null);
 		void client
 			.writerContext(slug, t.chapterFile, warm, t.conversation)
-			.then((usage) => {
+			.then(({ usage, trim }) => {
 				// 期间切书/切章/切对话:丢弃过期快照
 				if (
 					bookDetailRef.current?.slug === slug &&
@@ -1275,6 +1278,9 @@ export function WritePage({
 					selectedConversationRef.current === conv
 				) {
 					setWriterUsage(usage);
+					// 裁切摘要(2026-10-04,T4):与服务端缓存的「真正注进去的那一次」
+					// 同源,不在这里重算。空摘要(null / text 为空)即未裁切。
+					setWriterTrim(trim && trim.text.length > 0 ? trim : null);
 				}
 			})
 			.catch(() => {});
@@ -2042,6 +2048,14 @@ export function WritePage({
 								/* key 带 tone:80%→90% 从 warn 变 err 时重挂载 → 重播 .notice 的入场淡入 */
 								<div key={writerUsageHint.tone} className={`notice ${writerUsageHint.tone}`} role="status">
 									{writerUsageHint.text}
+								</div>
+							)}
+							{/* 裁切可见(2026-10-04,T4):背景包预算不够时告诉用户省了什么,
+							    而不是让他以为设定都进去了 —— 与用量提示条同款式。
+							    key 带 text:裁切内容变化时重挂载,重播入场动画(同 writerUsageHint 手法)。 */}
+							{writerTrim && (
+								<div key={writerTrim.text} className="notice warn" role="status">
+									⚠ 背景包预算不足,{writerTrim.text}
 								</div>
 							)}
 							{/* 桌面:输入条留在伙伴栏底部;手机端它被提到壳层底部(.m-composer),

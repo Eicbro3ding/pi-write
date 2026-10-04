@@ -5,7 +5,7 @@
  * 注意:本文件不得在 import 时触碰 DOM 专属 API(EventSource 只在 subscribeEvents 内使用),
  * 以兼容 node 环境的 vitest 单测。
  */
-import type { AgentEventDto, BookDetail, BookFileTextDto, BookFilesDto, BookMeta, ChapterRef, ContextUsageDto, ConversationDto, ConversationScopeDto, ImageProviderDto, ImageSizeDto, McpServerInfo, McpServerStatus, PluginInfoDto, PluginSettingsItemDto, ProviderDetailDto, ProviderInfo, ProviderRefreshError, ResolvedShellDto, SessionState, SessionUsageStatsDto, SessionTreeDto, SetupStateDto, SkillInfoDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, ThinkingHostResult, WorldDataDto, ShellKindDto, WriterSettingsDto, WriterStateDto } from "../types.ts";
+import type { AgentEventDto, BookDetail, BookFileTextDto, BookFilesDto, BookMeta, ChapterRef, ContextUsageDto, ConversationDto, ConversationScopeDto, ImageProviderDto, ImageSizeDto, McpServerInfo, McpServerStatus, PluginInfoDto, PluginSettingsItemDto, ProviderDetailDto, ProviderInfo, ProviderRefreshError, ResolvedShellDto, SessionState, SessionUsageStatsDto, SessionTreeDto, SetupStateDto, SkillInfoDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, ThinkingHostResult, TrimSummaryDto, WorldDataDto, ShellKindDto, WriterSettingsDto, WriterStateDto } from "../types.ts";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
 
 /** 图片访问 URL(同源相对路径;生产/Electron 同源,vite dev 经代理)。 */
@@ -794,19 +794,20 @@ export class ApiClient {
 
 	/** 编剧会话上下文占用(无会话/未知 → null;供「建议 /compact」提示与输入条的圆环)。
 	 *  `warm` = 磁盘上已有该章会话时请服务端顺带把会话带起来 —— 打开页面/重连时用,
-	 *  否则服务重启后圆环要等本章说一句话才出现(2026-09-23)。 */
+	 *  否则服务重启后圆环要等本章说一句话才出现(2026-09-23)。
+	 *  2026-10-04(T4):一并返回最近一次装配的裁切摘要 `trim`(同一请求,不额外往返)。 */
 	async writerContext(
 		slug: string,
 		chapterFile?: string | null,
 		warm?: boolean,
 		conversation?: string | null,
-	): Promise<ContextUsageDto | null> {
+	): Promise<{ usage: ContextUsageDto | null; trim: TrimSummaryDto | null }> {
 		const locator = writerLocator(chapterFile, conversation);
 		if (warm) locator.warm = "1";
-		const r = await this.request<{ usage: ContextUsageDto | null }>(
+		const r = await this.request<{ usage: ContextUsageDto | null; trim?: TrimSummaryDto | null }>(
 			withQuery(`/api/writer/${encodeURIComponent(slug)}/context`, locator),
 		);
-		return r.usage;
+		return { usage: r.usage, trim: r.trim ?? null };
 	}
 
 	/**

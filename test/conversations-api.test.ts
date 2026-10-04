@@ -283,7 +283,11 @@ describe("WriterServer · writer 端点的 conversation 参数", () => {
 		expect(await tree.json()).toEqual({ currentLeafId: null, branches: [], versions: {} });
 		const ctx = await fetch(`${base}/api/writer/${encodeURIComponent(slug)}/context?conversation=ch01.jsonl`);
 		expect(ctx.status).toBe(200);
-		expect(await ctx.json()).toEqual({ usage: null });
+		// 2026-10-04(T4):/context 新增 trim 字段(未装配过 → 空摘要),见 world-context.test.ts
+		expect(await ctx.json()).toEqual({
+			usage: null,
+			trim: { entryCount: 0, entryTitles: [], droppedSections: [], tokens: 0, text: "" },
+		});
 		const stats = await fetch(`${base}/api/writer/${encodeURIComponent(slug)}/stats?conversation=ch01.jsonl`);
 		expect(stats.status).toBe(200);
 		expect(await stats.json()).toEqual({ stats: null });

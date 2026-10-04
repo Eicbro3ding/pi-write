@@ -337,6 +337,25 @@ export interface SessionUsageStatsDto {
 	breakdown: Array<{ key: string; cost: number; tokens: number }>;
 }
 
+/**
+ * 最近一次背景包装配的裁切摘要(2026-10-04,T4)。
+ *
+ * 此前只有一句「已裁剪 N 条」,用户不知道被省的是哪些设定,也就无从判断
+ * 该不该调大 contextBudget —— 裁切完全不可感知。这里是同一份事实的可读版本。
+ */
+export interface TrimSummaryDto {
+	/** 被省略的设定条目数。 */
+	entryCount: number;
+	/** 被省略的条目标题(按被挤出的顺序,上限由服务端 maxNames 控制)。 */
+	entryTitles: string[];
+	/** 被整段丢弃的其他内容(文风采样 / 世界观概述 / 已完成里程碑)。 */
+	droppedSections: string[];
+	/** 合计被省略的粗略 token 数。 */
+	tokens: number;
+	/** 一句话摘要;未裁切时为空串(前端据此决定要不要显示)。 */
+	text: string;
+}
+
 /** 最近一轮 assistant 消息的提示词缓存命中(usage.cacheRead 投影;2026-08-22)。 */
 export interface CacheHitInfo {
 	/** 命中率 0..1(cacheRead / 全部提示词 token)。 */

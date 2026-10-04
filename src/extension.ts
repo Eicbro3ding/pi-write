@@ -29,7 +29,7 @@ import { applyWorldUpdate, readChapterTool, readCountsForFile, wordCountTool, wo
 import { flattenWorldTree, renderWorldTree, renderWorldTreeFromData } from "./world-tree.ts";
 import { ensureWorld } from "./world-data.ts";
 import { chatTextOfMessage } from "./session-text.ts";
-import { buildChapterContext, trimMemory } from "./world-context.ts";
+import { buildChapterContext, summarizeTrim, trimMemory } from "./world-context.ts";
 import { readWriterSettings } from "./writer-settings.ts";
 import { buildWriterTheme } from "./writer-theme.ts";
 import { pathWithinRoot } from "./tool-guard.ts";
@@ -828,6 +828,10 @@ async function switchChapter(ctx: ExtensionCommandContext, slug: string, file: s
 				await newCtx.sendMessage({ ...worldContextMessage(context.text), display: true }, { deliverAs: "nextTurn" });
 			}
 			newCtx.ui.notify(`已切换到 ${file}`, "info");
+			// 裁切可见(2026-10-04):预算不够时告诉用户省了什么,而不是默默让他
+			// 以为设定都进去了。只在这一处提示 —— 每轮都弹会变成噪音。
+			const trim = summarizeTrim(context);
+			if (trim.text.length > 0) newCtx.ui.notify(`上下文${trim.text}`, "warn");
 		},
 	});
 	if (result.cancelled) {

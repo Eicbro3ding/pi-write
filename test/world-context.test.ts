@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildChapterContext, buildStorylineView, COMPLETED_MILESTONE_LIMIT, DEFAULT_CONTEXT_BUDGET, estimateTokens, activatedEntryIds, expandActivation, rankActivationCandidates, trimMemory } from "../src/world-context.ts";
+import { buildChapterContext, buildStorylineView, COMPLETED_MILESTONE_LIMIT, DEFAULT_CONTEXT_BUDGET, estimateTokens, activatedEntryIds, expandActivation, rankActivationCandidates, summarizeTrim, trimMemory } from "../src/world-context.ts";
 import { createEmptyWorld, type WorldData } from "../src/world-data.ts";
 
 function worldWith(...titles: Array<{ title: string; type: "character" | "world" | "timeline" | "outline"; keys?: string[]; chapters?: string[] }>): WorldData {
@@ -214,7 +214,11 @@ describe("buildChapterContext", () => {
 		expect(r.included.hasSample).toBe(false);
 		expect(r.included.constraints).toEqual(["对话风格"]);
 		expect(r.text).toContain("对话不用引号");
-		expect(r.text).not.toContain("文风采样");
+		// 2026-10-04(T4):原文用 `not.toContain("文风采样")` 验证「该段没进上下文」,
+		// 但裁切提示行现在会点名它(那正是 T4 要的可见性),字符串断言失去区分力。
+		// 改为直接验证**内容**未注入 —— 这才是原意。
+		expect(r.text).not.toContain("字".repeat(3000));
+		expect(r.trimmed.some((t) => t.kind === "sample")).toBe(true);
 	});
 	it("超预算按序裁剪激活组并计数", () => {
 		const w = createEmptyWorld();
@@ -224,7 +228,10 @@ describe("buildChapterContext", () => {
 		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "角色0 角色1 角色2 角色3 角色4", recentUserMessages: [], budget: 15 });
 		expect(r.activatedIds.length).toBeLessThan(5);
 		expect(r.trimmedCount).toBeGreaterThan(0);
-		expect(r.text).toContain("已裁剪");
+		// 2026-10-04(T4):提示语从「已裁剪 N 条」升级为点名省了什么 ——
+		// 用户/模型看到的是具体标题,不是光秃秃的数字。
+		expect(r.text).toContain("因预算未包含");
+		expect(r.text).toMatch(/《角色\d》/);
 	});
 	it("全关时背景包为空", () => {
 		const w = createEmptyWorld();
@@ -243,7 +250,89 @@ describe("buildChapterContext", () => {
 	});
 });
 
-describe("buildChapterContext(关联激活)", () => {
+describe("T4 裁切可见（trimmed 明细 + summarizeTrim）", () => {
+	it("被裁的激活条目记标题,不再只是一个数字", () => {
+		// 预算只够装 1-2 条:其余条目应出现在 trimmed 里且带标题
+		const w = createEmptyWorld();
+		for (let i = 0; i < 5; i++) {
+			w.entries.push({ id: `e${i}`, type: "character", title: `角色${i}`, keys: [`角色${i}`], chapters: [], status: "active", active: true, parent: null, tags: [], body: "正文", avatar: null, images: [], updatedAt: 0 });
+		}
+		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "角色0 角色1 角色2 角色3 角色4", recentUserMessages: [], budget: 15 });
+		const entries = r.trimmed.filter((t) => t.kind === "entry");
+		expect(entries.length).toBeGreaterThan(0);
+		// 每个被裁条目都要有标题,且是某个「角色N」——而不是空串或 id
+		for (const e of entries) expect(e.label).toMatch(/^角色\d$/);
+		// trimmedCount 与明细条数必须一致(两处口径同源,否则 UI 显示会自相矛盾)
+		expect(r.trimmedCount).toBe(entries.length);
+	});
+
+	it("文风采样被裁时进明细,标注为 sample 且带 token 量", () => {
+		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
+		w.styleSample = { text: "字".repeat(3000), source: "", updatedAt: 0 };
+		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: 100 });
+		const sample = r.trimmed.find((t) => t.kind === "sample");
+		expect(sample).toBeDefined();
+		expect(sample?.label).toBe("文风采样");
+		expect(sample?.tokens).toBeGreaterThan(1000);
+	});
+
+	it("世界观概述被裁时进明细", () => {
+		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
+		w.worldSummary = "概".repeat(4000);
+		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: 50 });
+		expect(r.trimmed.some((t) => t.kind === "summary")).toBe(true);
+	});
+
+	it("已完成里程碑被裁时进明细（它装的是「勿再追求」清单,丢了会让模型重复推进）", () => {
+		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
+		w.storyline.enabled = true;
+		w.storyline.nodes.push(
+			{ id: "n1", title: "初遇", status: "done", goal: "", next: null, updatedAt: 0 },
+			{ id: "n2", title: "决裂", status: "done", goal: "", next: null, updatedAt: 0 },
+		);
+		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: 1 });
+		expect(r.included.hasCompletedMilestones).toBe(false);
+		expect(r.trimmed.some((t) => t.kind === "milestones")).toBe(true);
+	});
+
+	it("未裁切时 trimmed 为空数组（UI 据此不显示提示条）", () => {
+		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
+		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: DEFAULT_CONTEXT_BUDGET });
+		expect(r.trimmed).toEqual([]);
+		expect(summarizeTrim(r).text).toBe("");
+	});
+
+	it("summarizeTrim 产出一句话摘要,含条目数与丢弃段", () => {
+		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
+		w.styleSample = { text: "字".repeat(3000), source: "", updatedAt: 0 };
+		for (let i = 0; i < 3; i++) {
+			w.entries.push({ id: `x${i}`, type: "character", title: `配角${i}`, keys: [`配角${i}`], chapters: [], status: "active", active: true, parent: null, tags: [], body: "正文", avatar: null, images: [], updatedAt: 0 });
+		}
+		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉 配角0 配角1 配角2", recentUserMessages: [], budget: 20 });
+		const s = summarizeTrim(r);
+		expect(s.entryCount).toBeGreaterThan(0);
+		expect(s.text).toContain("省略");
+		expect(s.tokens).toBeGreaterThan(0);
+		// 结构化字段与文本一致
+		expect(s.entryTitles).toEqual(r.trimmed.filter((t) => t.kind === "entry").map((t) => t.label));
+	});
+
+	it("summarizeTrim 超过 maxNames 时折叠成「等 N 项」", () => {
+		const w = createEmptyWorld();
+		for (let i = 0; i < 8; i++) {
+			w.entries.push({ id: `e${i}`, type: "character", title: `角色${i}`, keys: [`角色${i}`], chapters: [], status: "active", active: true, parent: null, tags: [], body: "正文", avatar: null, images: [], updatedAt: 0 });
+		}
+		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "角色0 角色1 角色2 角色3 角色4 角色5 角色6 角色7", recentUserMessages: [], budget: 12 });
+		const s = summarizeTrim(r, 3);
+		expect(r.trimmed.length).toBeGreaterThan(3);
+		expect(s.text).toContain("等");
+		expect(s.text).toMatch(/等 \d+ 项/);
+		// entryTitles 仍是完整清单(折叠只影响展示文本,不影响数据)
+		expect(s.entryTitles.length).toBe(r.trimmed.filter((t) => t.kind === "entry").length);
+	});
+});
+
+describe("buildChapterContext（关联激活）", () => {
 	it("缺省/0 深度不展开:邻居不进背景包(兼容回归)", () => {
 		const w = relWorld();
 		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉推开门。", recentUserMessages: [], budget: DEFAULT_CONTEXT_BUDGET });
@@ -308,8 +397,11 @@ describe("buildChapterContext(世界观概述)", () => {
 		expect(r.included.hasSummary).toBe(false);
 		expect(r.included.constraints).toEqual(["对话风格"]);
 		expect(r.text).toContain("对话不用引号");
-		expect(r.text).not.toContain("文风采样");
-		expect(r.text).not.toContain("世界观概述");
+		// 2026-10-04(T4):原断言靠段标题字符串判定「未注入」,但裁切提示行现在会
+		// 点名它们(可见性正是 T4 的目标)。改为验证内容未注入 + 两者都进了明细。
+		expect(r.text).not.toContain("字".repeat(3000));
+		expect(r.trimmed.some((t) => t.kind === "sample")).toBe(true);
+		expect(r.trimmed.some((t) => t.kind === "summary")).toBe(true);
 	});
 	it("预算中等时先裁采样、概述保留", () => {
 		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });

@@ -67,7 +67,7 @@ import { listSkills } from "../skills-index.ts";
 import { BOOK_FILE_GROUPS, classifyBookFileKind, isWorkspaceFile, listBookFiles, readWorkspaceText, statWorkspaceFile } from "../book-files.ts";
 import { MAX_ZIP_BYTES, exportBookZip, readImportZip, type BookZipImport } from "./book-zip.ts";
 import { ensureWorld, newId, readWorldEditRecord, saveWorld, WorldValidationError, type WorldData } from "../world-data.ts";
-import { buildChapterContext, trimMemory } from "../world-context.ts";
+import { buildChapterContext, EMPTY_TRIM_SUMMARY, summarizeTrim, trimMemory, type TrimSummary } from "../world-context.ts";
 import type { SessionHost } from "./session-host.ts";
 import { extractMessagesFromManager, usableModelRef, type ThinkingSummary } from "./session-host.ts";
 import { askUserGate } from "../ask-user.ts";
@@ -573,6 +573,15 @@ export class WriterServer {
 	 */
 	private switchQueue: Promise<void> = Promise.resolve();
 	/**
+	 * 最近一次背景包装配的裁切摘要(2026-10-04,T4),键 = `slug/chapterFile`。
+	 *
+	 * 为什么缓存在这里而不是现算:装配发生在 injectChapterContext(可能只在
+	 * 切章时跑一次),而查询发生在用户打开页面/拉 /context 时。不缓存就要么
+	 * 每次查询重算一遍(浪费且可能与实际注入的上下文不一致——两次装配之间
+	 * 世界书可能已被改),要么让前端猜。存下来的是**真正注进去的那一次**的结果。
+	 */
+	private readonly lastTrim = new Map<string, TrimSummary>();
+	/**
 	 * models.json 读-改-写串行队列(2026-10 审计 BUG-011):并发新增/编辑/删除
 	 * 自定义 provider/model 时,各自「读旧快照 → 改 → 原子写」会互相覆盖。
 	 * 同一文件的操作排成一条链,锁内**重新读取**最新文件再变更。
@@ -889,9 +898,33 @@ export class WriterServer {
 				completedMilestoneLimit: settings.completedMilestoneLimit,
 			},
 		});
+		const trim = summarizeTrim(context);
+		// 裁切可见(2026-10-04):缓存的必须是「这一次真正注进去的」结果,
+		// 查询端(/context)只读不重算 —— 两次装配之间世界书可能已被 AI 改过,
+		// 重算出的摘要会与用户实际看到的上下文对不上。
+		this.lastTrim.set(`${slug}/${chapterFile}`, trim);
 		if (context.text.length > 0) {
 			await this.options.sessionHost.injectContext(context.text);
 		}
+	}
+
+	/**
+	 * 取某会话最近一次的裁切摘要(无裁切/未装配过时空摘要,见 /context 端点)。
+	 *
+	 * 查询侧与写入侧的键都取「章节文件名」(如 ch01.jsonl),但两边来源不同
+	 * (写入来自切章路由,查询来自前端 writerTargetNow),book 模式下查询侧
+	 * 可能传 null。先精确匹配,未命中再回落到该书下**最近写入**的那条 ——
+	 * 摘要只用于提示,回落到同书的最近一次比显示空白更符合用户直觉。
+	 */
+	lastTrimSummary(slug: string, chapterFile: string | null, _conversation?: string): TrimSummary {
+		const exact = this.lastTrim.get(`${slug}/${chapterFile ?? ""}`);
+		if (exact) return exact;
+		// Map 迭代顺序 = 插入顺序,倒序找该书最近一次
+		let latest: TrimSummary | undefined;
+		for (const [key, value] of this.lastTrim) {
+			if (key.startsWith(`${slug}/`)) latest = value;
+		}
+		return latest ?? EMPTY_TRIM_SUMMARY;
 	}
 
 	/**
@@ -2612,6 +2645,9 @@ export class WriterServer {
 	 * 无活跃会话/压缩后尚无新的模型响应时 usage 为 null)。
 	 * `warm=1`:磁盘上已有该对话会话文件时把会话带起来再读(打开页面就有圆环数据;见
 	 * writer-host.contextUsage 的注释)。
+	 *
+	 * 2026-10-04(T4):顺带返回**最近一次装配的裁切摘要**——用户看到用量圆环的同时
+	 * 就知道「省了什么」。两份数据同源同请求,前端不必再发一次。
 	 */
 	private async handleGetWriterContext(ctx: RouteContext): Promise<void> {
 		const writer = this.options.writerHost;
@@ -2619,7 +2655,8 @@ export class WriterServer {
 		const ref = this.writerRef(ctx, null);
 		const warm = ctx.url.searchParams.get("warm") === "1";
 		const usage = await writer.contextUsage(ctx.params.slug!, ref.chapterFile, { warm, conversation: ref.conversation });
-		this.send(ctx.res, 200, { usage });
+		// 裁切摘要是**本类**的状态(由 injectChapterContext 写入),不走 writerHost
+		this.send(ctx.res, 200, { usage, trim: this.lastTrimSummary(ctx.params.slug!, ref.chapterFile ?? null, ref.conversation) });
 	}
 
 	/**

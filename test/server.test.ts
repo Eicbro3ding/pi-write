@@ -1908,10 +1908,23 @@ describe("WriterServer · 编剧上下文与插件路由预留", () => {
 		await server.stop();
 	});
 
-	it("GET /api/writer/:slug/context 返回占用快照", async () => {
+	it("GET /api/writer/:slug/context 返回占用快照 + 裁切摘要(T4)", async () => {
 		const res = await fetch(`${base}/api/writer/fog-harbor/context?chapterFile=${encodeURIComponent("ch01.jsonl")}`);
 		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ usage: { tokens: 1600, contextWindow: 2000, percent: 80 } });
+		// 2026-10-04(T4):响应新增 trim 字段。两份数据同源同请求 —— 用户看到用量
+		// 圆环的同时就知道省了什么,前端不必再发一次。
+		// 本用例未走过切章(injectChapterContext),故 trim 是空摘要;
+		// 有内容的路径由 world-context.test.ts 的 summarizeTrim 用例覆盖。
+		expect(await res.json()).toEqual({
+			usage: { tokens: 1600, contextWindow: 2000, percent: 80 },
+			trim: { entryCount: 0, entryTitles: [], droppedSections: [], tokens: 0, text: "" },
+		});
+	});
+	it("未装配过时 /context 的 trim 是空摘要(前端据此不显示提示条)", async () => {
+		const res = await fetch(`${base}/api/writer/other-book/context?chapterFile=${encodeURIComponent("ch01.jsonl")}`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { trim: { text: string } };
+		expect(body.trim.text).toBe("");
 	});
 	it("POST /api/writer/:slug/compact 返回压缩结果", async () => {
 		const res = await fetch(`${base}/api/writer/fog-harbor/compact`, {

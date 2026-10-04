@@ -68,10 +68,28 @@ export interface ChapterContextInput {
 	limits?: ContextLimits;
 }
 
+/** 一处因预算被省略的内容(2026-10-04,T4 裁切可见)。 */
+export interface TrimRecord {
+	/** 类别:激活条目 / 文风采样 / 世界观概述 / 已完成里程碑。 */
+	kind: "entry" | "sample" | "summary" | "milestones";
+	/** 人类可读的名称(条目标题 / 段名)。 */
+	label: string;
+	/** 粗略 token 数(该内容原本会占用的量)。 */
+	tokens: number;
+}
+
 export interface ChapterContextResult {
 	text: string;
 	activatedIds: string[];
 	trimmedCount: number;
+	/**
+	 * 被省略内容的明细(2026-10-04)。此前只有 trimmedCount 一个数字,
+	 * 用户既不知道被裁的是「哪些」,也无从判断该不该调大预算 —— 裁切因此
+	 * 完全不可感知。这里是同一份事实的可读版本。
+	 *
+	 * 顺序 = 被裁的先后(条目按优先级填充时被挤出的顺序)。
+	 */
+	trimmed: TrimRecord[];
 	included: {
 		constraints: string[];
 		hasSample: boolean;
@@ -221,7 +239,7 @@ export function rankActivationCandidates(data: WorldData, seeds: string[], expan
 
 /** 组装背景包文本(常驻组 + 激活组,预算裁剪)。 */
 export function buildChapterContext(data: WorldData, input: ChapterContextInput): ChapterContextResult {
-	const result: ChapterContextResult = { text: "", activatedIds: [], trimmedCount: 0, included: { constraints: [], hasSample: false, hasSummary: false, hasNotice: false, hasCompletedMilestones: false, storylineNode: null } };
+	const result: ChapterContextResult = { text: "", activatedIds: [], trimmedCount: 0, trimmed: [], included: { constraints: [], hasSample: false, hasSummary: false, hasNotice: false, hasCompletedMilestones: false, storylineNode: null } };
 
 	// 常驻组:启用的约束 + 采样 + 简要世界观(裁剪顺序:先裁采样,仍超再裁概述,约束保留)
 	// 约束按 target 过滤。主会话(这个函数)是**写作 agent**——TUI 里它就是唯一动笔的那个,
@@ -253,11 +271,15 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 	if (used > input.budget) {
 		const sampleStart = resident.indexOf("【文风采样】");
 		if (sampleStart >= 0) {
+			// 记录被裁掉的那一段的实际体量(裁之前先量),供 T4 的可视化用
+			const dropped = resident.slice(sampleStart);
 			resident = resident.slice(0, sampleStart);
 			result.included.hasSample = false;
+			result.trimmed.push({ kind: "sample", label: "文风采样", tokens: estimateTokens(dropped) });
 			used = estimateTokens(resident) + estimateTokens(overview);
 		}
 		if (used > input.budget && overview.length > 0) {
+			result.trimmed.push({ kind: "summary", label: "世界观概述", tokens: estimateTokens(overview) });
 			overview = "";
 			result.included.hasSummary = false;
 			used = estimateTokens(resident);
@@ -278,6 +300,10 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 		const tokens = estimateTokens(line);
 		if (used + tokens > input.budget && activeParts.length > 0) {
 			result.trimmedCount++;
+			// 记标题而不只是计数:用户看到「已裁剪 3 条」无法判断影响,
+			// 看到「已裁剪:林婉、旧城地图、时间线·第三夜」才知道丢了什么,
+			// 也才谈得上决定要不要调大 contextBudget(2026-10-04)
+			result.trimmed.push({ kind: "entry", label: entry.title, tokens });
 			continue;
 		}
 		activeParts.push(line);
@@ -309,6 +335,10 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 			if (used + estimateTokens(completedBlock) <= input.budget) {
 				tail += `\n${completedBlock}\n`;
 				result.included.hasCompletedMilestones = true;
+			} else {
+				// 这一段整块丢弃目前无声无息 —— 而它恰好装的是「勿再追求」清单,
+				// 丢了会让模型重复推进已完成的目标(2026-10-04)
+				result.trimmed.push({ kind: "milestones", label: "发展线·已完成", tokens: estimateTokens(completedBlock) });
 			}
 		}
 	}
@@ -326,6 +356,83 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 	const tailBody = tail.trim();
 	if (tailBody.length > 0) parts.push(tailBody);
 	let text = parts.join("\n\n");
-	if (result.trimmedCount > 0) text += `\n(已裁剪 ${result.trimmedCount} 条,需要可 read world.json)`;
+	// 裁切提示(2026-10-04):从「已裁剪 N 条」升级为「裁了什么」。
+	// 这行是**给模型看的**——它需要知道自己没拿到全部设定,才不会把
+	// 「世界书里没有」当作事实。用户侧的可见性另见 summarizeTrim。
+	//
+	// 措辞避开段标题字面(「文风采样」/「世界观概述」):那几个词是正文里的
+	// 段标题,搬进来会与正文撞名(既有断言 `not.toContain("文风采样")` 的
+	// 意图是「该段没进上下文」,同名会让它失去区分力)。用「采样段」这类
+	// 简称,语义在上下文中依然明确。
+	if (result.trimmed.length > 0) {
+		const SHORT: Record<TrimRecord["kind"], string> = {
+			entry: "",
+			sample: "采样段",
+			summary: "概述段",
+			milestones: "已完成里程碑",
+		};
+		const labels = result.trimmed.map((t) => (t.kind === "entry" ? `《${t.label}》` : SHORT[t.kind])).join("、");
+		text += `\n(因预算未包含: ${labels};需要可 read world.json)`;
+	}
 	return { ...result, text: text.trim() };
+}
+
+/** 裁切摘要(2026-10-04,T4):把 trimmed 明细摊成人类可读的一行,供 UI 展示。 */
+export interface TrimSummary {
+	/** 被省略的条目数。 */
+	entryCount: number;
+	/** 被省略的条目名(按被挤出的顺序)。 */
+	entryTitles: string[];
+	/** 被整段丢弃的其他内容(文风采样 / 世界观概述 / 已完成里程碑)。 */
+	droppedSections: string[];
+	/** 合计被省略的粗略 token 数。 */
+	tokens: number;
+	/** 一句话摘要,没有裁切时为空串。 */
+	text: string;
+}
+
+/** 空摘要(未裁切 / 尚未装配过)。UI 可直接判 `text.length === 0` 决定要不要显示。 */
+export const EMPTY_TRIM_SUMMARY: TrimSummary = {
+	entryCount: 0,
+	entryTitles: [],
+	droppedSections: [],
+	tokens: 0,
+	text: "",
+};
+
+/**
+ * 把 buildChapterContext 的裁切明细转成 UI 可直接渲染的摘要。
+ *
+ * 独立成函数的原因:裁切明细是**结构化数据**,而 UI 有三处(TUI 状态栏、
+ * web 会话头、/inspect)—— 每处各写一遍格式化必然漂移。摘要口径收在这里,
+ * 三处只负责摆放。
+ *
+ * maxNames 控制点名上限:裁切 20 条时全列会撑爆一行,超过就折叠成「等 N 条」。
+ * 入参收成 Pick<...,"trimmed">:调用方(如查询端点)手上可能只有一个空对象,
+ * 不该被迫伪造整个 ChapterContextResult。
+ */
+export function summarizeTrim(result: Pick<ChapterContextResult, "trimmed">, maxNames = 5): TrimSummary {
+	const entries = result.trimmed.filter((t) => t.kind === "entry");
+	const dropped = result.trimmed.filter((t) => t.kind !== "entry").map((t) => t.label);
+	const tokens = result.trimmed.reduce((sum, t) => sum + t.tokens, 0);
+
+	/** 点名若干项,超出则折叠成「A、B 等 N 项」。 */
+	const nameList = (names: string[]): string => {
+		if (names.length === 0) return "";
+		if (names.length <= maxNames) return names.join("、");
+		return `${names.slice(0, maxNames).join("、")} 等 ${names.length} 项`;
+	};
+
+	const bits: string[] = [];
+	if (entries.length > 0) {
+		bits.push(`省略 ${entries.length} 条设定(${nameList(entries.map((t) => t.label))})`);
+	}
+	if (dropped.length > 0) bits.push(`丢弃 ${nameList(dropped)}`);
+	return {
+		entryCount: entries.length,
+		entryTitles: entries.map((t) => t.label),
+		droppedSections: dropped,
+		tokens,
+		text: bits.length > 0 ? `${bits.join("；")} · 约 ${tokens} token` : "",
+	};
 }
