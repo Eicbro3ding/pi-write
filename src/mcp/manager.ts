@@ -15,7 +15,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { ToolDefinition } from "../../vendor/pi-coding-agent/src/index.ts";
+import type { ToolDefinition } from "../pi-adapter/index.ts";
 import { VERSION } from "../config.ts";
 import { WriteQueue } from "../write-queue.ts";
 import { loadMcpConfig, saveMcpConfig, saveRawMcpConfig, type McpConfig, type McpServerConfig } from "./config.ts";

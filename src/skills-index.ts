@@ -14,7 +14,7 @@
  */
 import { getAgentDir } from "./config.ts";
 import { sessionSkillDirs } from "./session-factory.ts";
-import { loadSkills } from "../vendor/pi-coding-agent/src/index.ts";
+import { loadSkills } from "./pi-adapter/index.ts";
 
 /** 一条技能(前端 `/skill` 菜单的候选项;不含正文,正文由 vendor 在发送时展开)。 */
 export interface SkillSummary {

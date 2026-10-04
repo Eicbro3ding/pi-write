@@ -1,5 +1,5 @@
 import { Type, type Static } from "typebox";
-import { defineTool, type ExtensionAPI, type ToolDefinition } from "../../vendor/pi-coding-agent/src/index.ts";
+import { defineTool, type ExtensionAPI, type ToolDefinition } from "../pi-adapter/index.ts";
 import { resolveSkillsDir, slugify } from "../config.ts";
 import { readWriterSettings } from "../writer-settings.ts";
 import { ensureWorld, type WorldData } from "../world-data.ts";

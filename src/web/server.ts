@@ -72,7 +72,7 @@ import { buildInspectReport } from "../inspect/report.ts";
 import type { SessionHost } from "./session-host.ts";
 import { extractMessagesFromManager, usableModelRef, type ThinkingSummary } from "./session-host.ts";
 import { askUserGate } from "../ask-user.ts";
-import { SessionManager } from "../../vendor/pi-coding-agent/src/index.ts";
+import { readSessionFile } from "../pi-adapter/index.ts";
 import { ProviderAuthError, sortProviders, type ProviderListItem } from "./provider-auth.ts";
 import type { McpManager, McpServerStatus } from "../mcp/manager.ts";
 import { getMcpConfigPath, type McpServerConfig } from "../mcp/config.ts";
@@ -1458,7 +1458,12 @@ export class WriterServer {
 				this.send(ctx.res, 200, { ...base, messages: [] });
 				return;
 			}
-			const sm = SessionManager.open(absPath, dirname(absPath), getBookDir(readSlug));
+			const sm = readSessionFile(absPath, dirname(absPath), getBookDir(readSlug));
+			if (!sm) {
+				// 文件存在但解析不出来(截断 / 手工改坏):当空会话处理,不让 500
+				this.send(ctx.res, 200, { ...base, messages: [] });
+				return;
+			}
 			this.send(ctx.res, 200, { ...base, messages: extractMessagesFromManager(sm) });
 			return;
 		}

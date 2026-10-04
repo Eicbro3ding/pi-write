@@ -1,4 +1,4 @@
-import type { AuthInteraction, AuthPrompt, Provider } from "../../vendor/pi-ai/src/index.ts";
+import type { AuthInteraction, AuthPrompt, Provider } from "../pi-adapter/index.ts";
 
 export type ProviderAuthKind = "api_key" | "oauth" | "both" | "ambient";
 

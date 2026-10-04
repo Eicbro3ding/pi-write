@@ -67,6 +67,8 @@ import type {
 } from "../../vendor/pi-agent-core/src/index.ts";
 import type {
 	AuthInteraction as VendorAuthInteraction,
+	AuthPrompt as VendorAuthPrompt,
+	Provider as VendorProvider,
 	Usage as VendorUsage,
 } from "../../vendor/pi-ai/src/index.ts";
 
@@ -126,6 +128,21 @@ export type AgentMessage = VendorAgentMessage;
 
 /** 交互式认证回调(web 端只用「输一次 API key」这一种形态)。 */
 export type AuthInteraction = VendorAuthInteraction;
+
+/**
+ * 单个认证提示(标题 / 说明 / 是否密码框)。
+ *
+ * 自研侧**要读字段**(渲染成 web 表单),所以是别名而不是句柄。
+ */
+export type AuthPrompt = VendorAuthPrompt;
+
+/**
+ * 模型供应商配置项(自研的模型设置面板要读它的 `auth` 来推导认证种类)。
+ *
+ * 注意:自研侧只读 `id` / `auth` 这类字段并展示,不去 `new` 一个 —— 所以
+ * `Pick<Provider, "auth">` 这种用法能过,别名保持结构形状即可。
+ */
+export type Provider = VendorProvider;
 
 /** token 用量(输入/输出/缓存读/缓存写);工具执行结果里回填给会话统计。 */
 export type Usage = VendorUsage;

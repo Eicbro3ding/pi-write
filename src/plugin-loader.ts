@@ -22,7 +22,7 @@ import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getWriterDir } from "./config.ts";
 import { atomicWriteFile } from "./atomic-write.ts";
-import type { ExtensionFactory } from "../vendor/pi-coding-agent/src/index.ts";
+import type { ExtensionFactory } from "./pi-adapter/index.ts";
 import type { PluginManifest, PluginSettingsFieldSpec, PluginSettingsFieldType, PluginSettingsItemSpec, PluginSlashCommandSpec, PluginUiSpec } from "./plugins.ts";
 
 /** plugins 根目录(~/.pi/writer/plugins)。 */

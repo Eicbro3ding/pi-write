@@ -23,7 +23,7 @@
  */
 
 import { Type } from "typebox";
-import { defineTool, type SessionManager, type ToolDefinition } from "../vendor/pi-coding-agent/src/index.ts";
+import { defineTool, type SessionEntity, type ToolDefinition } from "./pi-adapter/index.ts";
 import type { ChatContentPart } from "./session-text.ts";
 
 /** 工具名唯一真相源(工具注册、悬空提问清扫共用;前端对应 ASK_USER_TOOL 同值)。 */
@@ -161,16 +161,21 @@ export const ASK_CANCELLED_TEXT =
  * 不能替它结算)。缺省用共享 `askUserGate`。
  *
  * @returns 补写的条数。
+ *
+ * 入参类型是 `SessionEntity` 而不是 adapter 公开面之外的 `SessionManager`:
+ * 这个函数既要**读**分支(`getBranch`)、又要**写**回一条 toolResult
+ * (`appendMessage`),所以不能收 `SessionReader`(那是只读视图)。用
+ * `SessionEntity` 意味着「这是 adapter 交出来的会话实体」,上游改名不受影响。
  */
 export function settleDanglingAsks(
-	sm: SessionManager,
+	sm: SessionEntity,
 	isLive: (toolCallId: string) => boolean = (id) => askUserGate.has(id),
 ): number {
 	if (typeof (sm as { getBranch?: unknown }).getBranch !== "function") return 0;
 	const answered = new Set<string>();
 	/** 当前 leaf 链上的最后一条消息(悬空提问只可能挂在它上面)。 */
 	let lastMessage: { role?: string; content?: unknown } | undefined;
-	for (const entry of sm.getBranch()) {
+	for (const entry of sm.getBranch() as Array<{ type?: string }>) {
 		if (entry.type !== "message") continue;
 		const msg = (entry as { message?: { role?: string; content?: unknown; toolCallId?: unknown } }).message;
 		if (!msg) continue;

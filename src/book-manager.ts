@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { uuidv7 } from "../vendor/pi-ai/src/index.ts";
+import { uuidv7 } from "./util/uuid.ts";
 import { atomicWriteFile } from "./atomic-write.ts";
 import { getBookDir, getBooksDir, getWriterDir, slugify } from "./config.ts";
 import { createEmptyWorld, saveWorld } from "./world-data.ts";

@@ -116,48 +116,50 @@ describe("pi-adapter 契约（T7 批 2）", () => {
 		}
 	});
 
-	it("批 3/批 4 待迁移文件清单**只减不增**（防新增穿透）", () => {
-		// 全局断言现在还做不到(批 4 尚未迁移)。折中:把当前已知的穿透文件
-		// 钉成白名单 —— 数量只能变少。新文件若偷偷直接 import vendor,这条会红。
+	it("【T7 终点】自研业务代码**零 vendor 直接引用**（全局断言，无白名单）", () => {
+		// 这是 T7 的最终验收。批 2/批 3/批 4 期间这条只能是「白名单只减不增」,
+		// 因为还有文件没迁完。批 4 之后清单清空,于是升级为**无例外全局断言** ——
+		// 从「已知哪些还没改」变成「任何新穿透都会红」。
 		//
-		// 批 3 已迁出(不再出现于此): cli.ts / draft-panel.ts / editor/index.ts /
-		// editor/vim-file-editor.ts / extension.ts / inspect/index.ts / inspect/panel.ts /
-		// mcp/tools.ts / stage/orchestrator.ts / startup-header.ts / writer-theme.ts /
-		// writer-ui.ts / web/stage-host.ts
-		const KNOWN_PENDING = new Set([
-			"ask-user.ts",
-			"book-manager.ts",
-			"mcp/manager.ts",
-			"plugin-loader.ts",
-			"skills-index.ts",
-			"stage/stage-extension.ts",
-			"stage/stage-store.ts",
-			"tools.ts",
-			"web/provider-auth.ts",
-			"web/server.ts",
-		]);
-		const unexpected: string[] = [];
+		// 允许的例外只有两类,且都必须显式列出:
+		//   1. `pi-adapter/` 自身 —— 它就是干这个的;
+		//   2. `util/uuid.ts` —— 归属修正(把被误当成 AI 能力的 uuidv7 挪回
+		//      通用工具位),它是自研自己的模块,不是 adapter。
+		const ALLOWED = new Set(["util/uuid.ts"]);
+		const offenders: string[] = [];
 		for (const file of walk(SRC)) {
 			const rel = path.relative(SRC, file);
-			if (KNOWN_PENDING.has(rel)) continue;
+			if (ALLOWED.has(rel)) continue;
 			const text = readFileSync(file, "utf-8");
 			for (const line of text.split("\n")) {
 				const t = line.trim();
-				if (t.startsWith("import ") && t.includes("vendor/pi-")) {
-					unexpected.push(`${rel}: ${t}`);
-				}
+				// 覆盖三种 import/export 形态:单行 import、多行收尾 `} from "..."`、
+				// 以及 `export ... from "..."` 转发。注释里提到路径不算。
+				if (!t.startsWith("import ") && !t.startsWith("} from") && !t.startsWith("export ")) continue;
+				if (t.includes("vendor/pi-")) offenders.push(`${rel}: ${t}`);
 			}
 		}
 		expect(
-			unexpected,
-			`这些**不在待迁移清单**里的文件新引入了 vendor 直接引用:\n${unexpected.join("\n")}`,
+			offenders,
+			`自研业务代码不该直接引用 vendor:\n${offenders.join("\n")}`,
 		).toEqual([]);
 	});
 
-	it("批 3 的 13 个交付文件全部清零（回归护栏）", () => {
-		// 批 3 = TUI 面 + 其余类型泄漏面。逐文件钉名,理由同批 2:
-		// 这些文件是「自研侧不该再出现 vendor 字样」的样板,回退必须立刻可见。
-		const BATCH3 = [
+	it("【T7 全量】33 个交付文件逐一点名清零（历史样板护栏）", () => {
+		// 上面那条是**全局**断言(将来可能为某个新例外放宽);
+		// 这一条把 T7 三批**实际交付**的每个文件钉死 —— 任何回退都立刻可见,
+		// 且不受全局断言未来放宽的影响。
+		//
+		// 批 2(3): session-factory.ts, web/session-host.ts, web/writer-host.ts
+		//         (另顺带收口 web.ts / session-tree.ts,见上面单独一条)
+		// 批 3(13): 见下
+		// 批 4(10): 见下
+		const T7_DELIVERED = [
+			// —— 批 2 ——
+			"session-factory.ts",
+			"web/session-host.ts",
+			"web/writer-host.ts",
+			// —— 批 3 ——
 			"cli.ts",
 			"draft-panel.ts",
 			"editor/index.ts",
@@ -171,9 +173,20 @@ describe("pi-adapter 契约（T7 批 2）", () => {
 			"writer-theme.ts",
 			"writer-ui.ts",
 			"web/stage-host.ts",
+			// —— 批 4 ——
+			"ask-user.ts",
+			"book-manager.ts",
+			"mcp/manager.ts",
+			"plugin-loader.ts",
+			"skills-index.ts",
+			"stage/stage-extension.ts",
+			"stage/stage-store.ts",
+			"tools.ts",
+			"web/provider-auth.ts",
+			"web/server.ts",
 		];
 		const offenders: string[] = [];
-		for (const rel of BATCH3) {
+		for (const rel of T7_DELIVERED) {
 			const text = readFileSync(path.join(SRC, rel), "utf-8");
 			for (const line of text.split("\n")) {
 				const t = line.trim();

@@ -1,7 +1,7 @@
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { uuidv7 } from "../../vendor/pi-ai/src/index.ts";
+import { uuidv7 } from "../util/uuid.ts";
 import { type StageEntry } from "./types.ts";
 
 export const STAGE_DIR = "stage";

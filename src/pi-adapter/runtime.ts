@@ -36,6 +36,7 @@ import {
 	type CreateAgentSessionServicesOptions,
 	type CreateAgentSessionRuntimeFactory,
 	InteractiveMode as VendorInteractiveMode,
+	loadSkills as vendorLoadSkills,
 	parseSkillBlock as vendorParseSkillBlock,
 	type ParsedSkillBlock,
 	type PrintModeOptions as VendorPrintModeOptions,
@@ -184,6 +185,19 @@ export type PrintModeOptions = VendorPrintModeOptions;
 export function parseSkillBlock(text: string): ParsedSkillBlock | null {
 	return vendorParseSkillBlock(text);
 }
+
+/**
+ * 按目录清单加载技能(`SKILL.md` 集合)。
+ *
+ * 自研侧(`skills-index.ts`)只关心「从若干目录里捞出被启用的技能」,不关心
+ * vendor 用什么策略扫盘、去重、解析 frontmatter。返回类型从函数本身推断,
+ * 不额外命名一个 vendor 类型 —— 调用方 `const { skills } = loadSkills({...})`
+ * 就够了,不需要写出中间类型名。
+ *
+ * 签名同步检查:vendor 若改了入参形状,这里会编译失败(而不是让 10 个调用点
+ * 各自失败)。
+ */
+export const loadSkills: typeof vendorLoadSkills = vendorLoadSkills;
 
 // —— 上面这些转发的类型别名(供调用方标注) ——
 // 注意:`ResolveCliModelResult` 已在 types.ts 定义,此处**不重复导出**

@@ -1,7 +1,7 @@
 import type { Stats } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
-import { defineTool, type ToolDefinition } from "../vendor/pi-coding-agent/src/index.ts";
+import { defineTool, type ToolDefinition } from "./pi-adapter/index.ts";
 import { Type, type TSchema } from "typebox";
 import { cjkCount } from "./cjk.ts";
 import { ensureWorld, newId, saveWorld, validateWorld, writeWorldEditRecord, WorldValidationError, type ConstraintTarget, type EntryStatus, type EntryType, type RelationArrow, type StoryNodeStatus, type WorldData, type WorldEntry } from "./world-data.ts";
