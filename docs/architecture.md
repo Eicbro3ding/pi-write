@@ -22,6 +22,8 @@
 | `src/world-data.ts` | `world.json` 唯一真相源:校验 / 规范化 / 原子写 / md 视图导出;`WORLD_FILES` 文件布局表 |
 | `src/world-context.ts` | 上下文注入:背景包组装、激活引擎(关键词 + 关联激活)、记忆裁剪 |
 | `src/tools.ts` | 自定义工具:`world_update`(唯一变更通道)/ `world_find` / `word_count` |
+| `src/pi-adapter/` | **防腐层**:自研代码与 pi 框架之间的唯一接触面。自研侧**零 vendor 直接引用**(见 §9) |
+| `src/util/uuid.ts` | 通用工具(时间有序 UUID v7)。**注意它不属于 adapter** —— 见 §9 的归属说明 |
 | `src/mcp/` | MCP 配置(typebox 校验)/ 连接管理 / 工具适配 |
 | `src/stage/` | 舞台多 Agent 共演:orchestrator / assembler / script-store / stage-store / cast / stage-extension |
 | `vendor/` | pi 核心包源码(内部 import 已重写为相对路径,零 `@earendil-works` npm 依赖) |
@@ -159,3 +161,105 @@ agent 会话事件(pi vendor AgentSessionEvent)
 | `/` 命令注册表 | `web/src/slash-commands.ts`(InputBar 消费) |
 | 上下文占用提示 | `web/src/context-usage.ts`(阈值 80%) |
 | 手动压缩 | `src/web/session-host.ts` → vendor `AgentSession.compact` |
+| 上下文检视面板 | `src/inspect/`(TUI 面板 + report)/ `web/src/` 对应面板 |
+| 防腐层 | `src/pi-adapter/`(见 §9) |
+
+---
+
+## 9. 防腐层 `src/pi-adapter/`(2026-10-05)
+
+### 它解决什么问题
+
+自研代码原先**直接** `import { ... } from "../vendor/pi-coding-agent/src/index.ts"`——分布在全项目 **51 处 / 30 个文件**。上游一旦改名、挪包或升级大版本,这 30 个文件**同时编译失败**,而其中大多数和「写作」毫无关系(UI 组件、编辑器、MCP、世界书……)。
+
+这正是升 pi 1.0 的最大障碍:升级动作从「手工拷源码」变成「一次 install」时,失败面会一次铺开。
+
+### 三条铁律
+
+1. **对外 API 必须是写作领域形状**,不是 vendor 形状的透传。
+   例:打开会话对外叫 `openSession(file)`,不叫 `SessionManager.open(file, dir, cwd)`;成本拆分对外叫 `UsageCostRow`,不叫 vendor 的 `UsageCostBreakdown`。
+2. **厚度控制**。只包「自研真的用到、且位置不稳定」的那部分 vendor 面,**不做无差别转发**。
+   例:`pi-tui` 的 index 有 138 行导出,`tui.ts` 只收自研真用到的 13 个。多收一个符号 = 将来上游改它时多一处要跟着动。
+   它**不该变成第二个框架**。
+3. **单向依赖**:`自研 → pi-adapter → vendor`,不可回流。
+   `pi-adapter/*` 内**禁止** import `src/` 下的业务模块。
+
+### 模块分工
+
+| 文件 | 承载 | vendor 依赖形态 |
+|---|---|---|
+| `domain.ts` | 自研自定义接口 + **不透明句柄**类型 | **零**(刻意的) |
+| `types.ts` | **vendor 类型别名**(改名字,不改结构) | `import type` |
+| `guard.ts` | 工具路径守卫 | **深层路径**(唯一) |
+| `usage.ts` | 成本拆分投影 | **深层路径**(唯一) |
+| `session.ts` | 句柄 ↔ 实体造型 | 包的 `index.ts` |
+| `runtime.ts` | 会话**打开 / 装配**函数 + 技能加载 | 包的 `index.ts` |
+| `tool.ts` | `defineTool` 工具定义工厂 | 包的 `index.ts` |
+| `tui.ts` | TUI 接入点(组件 / 键盘 / 布局工具 / 主题) | 包的 `index.ts` |
+
+`tui.ts` 单开一个文件而不并入 `types.ts`:**`pi-tui` 是独立的终端 UI 框架**(自己的组件库、键盘协议、渲染管线),升级节奏与会话引擎不同 —— 分开后上游破坏性变更只需看这一个文件。
+
+### 两种隔离手段:句柄 vs 别名
+
+这两种**不能套错方向**,否则违反铁律 2。
+
+| | **不透明句柄** | **类型别名** |
+|---|---|---|
+| 适用 | 「只搬运、**从不看内部**」 | 「要**读字段**、要**构造对象**」 |
+| 例 | `SessionManager` | `ToolDefinition` / `AgentMessage` |
+| 实现 | `declare const brand: unique symbol` + `{ readonly [brand]: true }` | `export type X = VendorX` |
+| 造型 | `toHandle` / `fromHandle`(零开销 cast) | 无(同一类型,只是换个名字) |
+| 收益 | 品牌让句柄**不可伪造**(空对象不满足) | 名字归属权收归 adapter,但结构不变 |
+
+**判断依据**:若给 `ToolDefinition` 套句柄,自研侧就无法 `writerToolset()` 从零拼出工具数组,只能再加一层转发函数 —— 那是「为隔离而隔离」。
+
+**`SessionEntity` 的写法值得注意**:
+
+```ts
+export type SessionEntity = ReturnType<typeof fromHandle>;
+```
+
+**推断**而非命名 —— 自研侧拿不到「`SessionManager`」这个名字(否则 T6 建句柄的功夫白费),但字段声明处能通过检查,且上游改名时自动跟随。
+
+### ⚠️ 两个实际踩过的坑(改这里之前先看)
+
+1. **class 不能用 `export const X: typeof VendorX = VendorX` 搬。**
+   `Theme` / `Markdown` 是 class,**同时占据值通道与类型通道**。const 搬运只保留值通道,自研侧写 `x: Theme` 会报 `TS2749: 'Theme' refers to a value, but is being used as a type here`。
+   正解是 re-export:`export { Theme };` —— 原样保留双身份。
+   > **判据**:class / enum / namespace 用 `export { X }`;函数与常量才用 `export const X: typeof VendorX = VendorX`。
+
+2. **`src/` 二级目录到 adapter 是 `../../src/pi-adapter`,不是 `../../pi-adapter`。**
+   `vendor/` 在**仓库根**,`pi-adapter/` 在 **`src/` 下** —— 层级不同。
+
+### 上游升级时改哪里
+
+| 现象 | 改这个文件 |
+|---|---|
+| `core/tools/path-utils.ts` 找不到 | `guard.ts` |
+| `core/usage-totals.ts` 找不到 | `usage.ts` |
+| `SessionManager` 改名 / 挪包 | `session.ts`(只改 import 与两行断言) |
+| `ToolDefinition` / `ThinkingLevel` 等**改名字** | `types.ts`(改一行别名) |
+| `SessionManager.open` 签名变化 | `runtime.ts`(改 `openSession` 一处) |
+| `createAgentSessionServices` 装配面变化 | `runtime.ts`(转发处)+ 各调用点 |
+| TUI 组件 / 键盘 / 主题变化 | `tui.ts` |
+| 某个返回值多 / 少字段 | `domain.ts` 对应接口 |
+
+### 验收护栏
+
+`test/pi-adapter.test.ts`,关键三条:
+
+- **全局断言(无白名单)**:自研业务代码零 vendor 直接引用。允许的例外只有 `pi-adapter/` 自身与 `util/uuid.ts`,且必须显式列出。
+- **26 个交付文件逐一点名**:不受全局断言将来放宽的影响。
+- **单向依赖不回流**:`pi-adapter/*` 只允许 import vendor 与 adapter 自身。
+
+```bash
+# 手工核对
+grep -rn "vendor/pi-" src/ --exclude-dir=pi-adapter
+```
+
+### 一条归属判断(易错)
+
+**「vendor 里有什么」不等于「什么该进 adapter」。** 判据是「它是不是**框架的不稳定面**」,而非「它来自哪个包」。
+
+例:`uuidv7` 来自 pi-ai,但它**不是 AI 能力** —— 是通用标识符生成器(被 pi-ai 的 index 顺手再导出)。收进 `pi-adapter` 会违反铁律 1:让自研侧管一个 UUID 生成器叫「兼容层」,读代码的人会以为这里藏着模型调用。所以它归属 `src/util/uuid.ts`,且该文件**不遵守**「自研 → adapter → vendor」的方向约束。
+

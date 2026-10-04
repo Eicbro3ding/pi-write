@@ -43,12 +43,21 @@ npm test
 # 单测指定文件
 npx vitest run test/server.test.ts
 
-# 后端类型检查(本地 tsconfig.base.json 已补;vendor 有既有类型错误,过滤 vendor/)
-npx tsc -p tsconfig.build.json --noEmit
+# 后端类型检查(仓库根 tsconfig.json;vendor 有 2 个既有类型错误,过滤 vendor/)
+npm run typecheck
+# 等价写法(必须显式 -p,见下方警告):
+npx tsc -p tsconfig.json --noEmit
 
 # 前端类型检查
-cd web && npx tsc --noEmit -p tsconfig.json
+npx tsc -p web/tsconfig.json --noEmit
 ```
+
+> ⚠️ **类型检查必须显式指定 `-p tsconfig.json`。**
+> 在 2026-10-04(T6)之前,仓库**没有**根 `tsconfig.json` —— 那时裸跑 `npx tsc --noEmit`
+> 会因找不到配置而**静默退回宽松默认设置**,对所有类型错误视而不见。当时它掩盖了 4 个
+> 既有类型错误,直到补上 tsconfig 才暴露。
+> **检查手段失效比没有检查更危险**:绿灯会让人以为验证过了。任何新增的检查脚本都要
+> 先确认「它真的在检查东西」(用一个故意的错误验证一次)。
 
 测试纪律:
 
@@ -56,6 +65,8 @@ cd web && npx tsc --noEmit -p tsconfig.json
 - `globals: true`;
 - **test/ 不在 tsconfig include 内**:改过测试文件后,用严格旗标单独检查一次:
   `npx tsc --noEmit --strict --noUncheckedIndexedAccess --noUnusedLocals --noUnusedParameters --exactOptionalPropertyTypes --skipLibCheck --types node test/<file>.test.ts`
+  (已知技术债:全量纳入严格检查会暴露约 200 个既有错误,见 `docs/development.md` 与
+  `PI_WRITER_IMPLEMENTATION.md` 的「登记项」)
 
 ## 构建与打包
 
