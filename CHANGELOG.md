@@ -1,5 +1,11 @@
 # Changelog
 
+T11 后续:路径守卫 patch 加固 —— 形状不对时**安装即炸**。
+
+- [fix] **`setToolPathGuard` 增加形状检查**。调用点写的是 `__piWritePathGuard?.(resolved, mode)`,而可选调用只防 `undefined`、**不防「传进来的是个对象」**。那种情况下每次解析路径都抛 `__piWritePathGuard is not a function`,而所有 `expect(...).toThrow()` 断言**照样通过** —— 又是一次「看起来拦住了」:实际是 TypeError 在顶替真实拦截(我在临时脚本里传错过一次,看到这句费解的错误才发现)。现在安装时就炸,并报出实到的类型。
+- [test] `test/tool-guard.test.ts` 新增一条断言钉住它(传对象 / 传字符串都要抛「路径守卫必须是」,传 `undefined` 不抛 —— 那是卸载语义)。`patches/README.md` 补为**错误形态三**,与前两种(只改 path-utils 不改调用方、只改 .js 不改 .d.ts)并列。
+- [验证] 重装依赖(`rm -rf node_modules/@earendil-works/pi-coding-agent && npm install`)确认新 patch 生效;`verify-pathguard-patch.mjs` 全通过(含反证);全量测试 **92 文件 / 1596 例通过**(+1 即本条断言)。
+
 T11 后续:Node 版本要求同步到 ≥22.19.0(原计划里的 T12,因依赖化而提前)。
 
 - [fix] **`engines` 与实际要求不符**。四个 pi 包(`pi-coding-agent` / `pi-ai` / `pi-tui` / `pi-agent-core`)的 `engines.node` 全是 **≥22.19.0**,而本项目 `package.json` 写的是 ≥18.20.4。vendor 时代源码随仓库编译,**根本不吃上游的 engines**;改成 npm 依赖后这条才第一次生效 —— `npm install` 会打 EBADENGINE 告警,**不看告警的人用 Node 18 装完会在运行时崩**。已同步四处:`package.json`、`package-lock.json`、`README.md`、`docs/development.md`。

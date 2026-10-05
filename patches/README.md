@@ -38,6 +38,14 @@ dist/core/tools/edit-diff.js     → resolveToCwd(path, cwd, "write")           
 **错误形态二：只改 `.js` 不改 `.d.ts`**
 运行时正确，但 TypeScript 报 `has no exported member 'setToolPathGuard'` —— 类型层直接拦住编译。
 
+**错误形态三：守卫装进去了，但装的是「不是函数的东西」**
+调用点写的是 `__piWritePathGuard?.(resolved, mode)` —— 可选调用只防 `undefined`，
+**不防传进来的是个对象**。那种情况下每次解析路径都抛
+`__piWritePathGuard is not a function`，而所有 `expect(...).toThrow()` 断言照样通过 ——
+**「看起来拦住了」，实际是 TypeError 在顶替真实拦截**（T11 期间我自己在临时脚本里就
+传错过一次，看到这句费解的错误才发现）。所以 `setToolPathGuard` 里加了形状检查：
+**安装时就炸**，并说明实到的类型。`test/tool-guard.test.ts` 有一条断言钉住它。
+
 `scripts/t11/verify-pathguard-patch.mjs` 里有一条**反证测试**专门锁住第一种形态。
 
 ## 版本兼容

@@ -6,7 +6,7 @@
  }
 +// __PI_WRITE_PATCH_PATH_UTILS__
 +let __piWritePathGuard;
-+export function setToolPathGuard(guard) { __piWritePathGuard = guard; }
++export function setToolPathGuard(guard) { if (guard !== undefined && typeof guard !== "function") { throw new Error("[pi-writer] 路径守卫必须是 (absPath, mode) => void 的函数，实到 " + typeof guard + " —— 传错形状会在安装时炸，而不是等调用时才冒出 TypeError"); } __piWritePathGuard = guard; }
 +export function clearToolPathGuard() { __piWritePathGuard = undefined; }
  /**
   * Resolve a path relative to the given cwd.
