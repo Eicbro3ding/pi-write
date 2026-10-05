@@ -45,8 +45,6 @@ export interface WebCliOptions {
 	book: string | undefined; // --book <slug>:打开指定书(不存在则创建)
 	model: string | undefined; // --model <pattern>:模型指定
 	thinking: string | undefined; // --thinking <level>:思考等级
-	temperature: number | undefined; // --temperature <number>:采样温度
-	topP: number | undefined; // --top-p <number>:核采样概率
 	cacheRetention: string | undefined; // --cache-retention <short|long|none>:提示词缓存保留档位
 	/**
 	 * 前端静态目录(web/dist)显式路径。缺省时服务端按 resolveWebDistDir 探测
@@ -96,8 +94,6 @@ export function parseWebArgs(argv: string[]): WebCliOptions {
 		book: undefined,
 		model: undefined,
 		thinking: undefined,
-		temperature: undefined,
-		topP: undefined,
 		cacheRetention: undefined,
 	};
 	for (let i = 0; i < argv.length; i++) {
@@ -130,18 +126,6 @@ export function parseWebArgs(argv: string[]): WebCliOptions {
 			case "--thinking":
 				opts.thinking = next();
 				break;
-			case "--temperature": {
-				const v = Number(next());
-				if (Number.isNaN(v)) throw new Error(`Invalid temperature: ${argv[i]}`);
-				opts.temperature = v;
-				break;
-			}
-			case "--top-p": {
-				const v = Number(next());
-				if (Number.isNaN(v)) throw new Error(`Invalid top-p: ${argv[i]}`);
-				opts.topP = v;
-				break;
-			}
 			case "--cache-retention":
 				opts.cacheRetention = next();
 				applyCacheRetention(opts.cacheRetention);
@@ -261,8 +245,6 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 		pluginFactories,
 		model: opts.model,
 		thinkingLevel: opts.thinking as ThinkingLevel | undefined,
-		temperature: opts.temperature,
-		topP: opts.topP,
 		// shell 方言:path 有值(pwsh/自定义)则写进 vendor settings;null = 清空让 vendor
 		// 走 bash 探测链(设置里从 pwsh 切回 bash 时必须清,否则提示词说 bash、实际跑 pwsh)
 		shellPath: resolvedShell.path ?? null,
@@ -292,8 +274,6 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 	const writerHost = new WriterHost({
 		model: opts.model,
 		thinkingLevel: opts.thinking,
-		temperature: opts.temperature,
-		topP: opts.topP,
 		getMcpTools: () => mcpManager.getTools(),
 		classicMode: writerSettings.classicMode,
 		// 对话与章节的关系(缺省 chapter = 一段对话绑一章);启动时读一次,
@@ -309,7 +289,7 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 	// 舞台区宿主:每本书每个章节一个编排器,惰性创建;model/thinking 复用 web 的 CLI 选项
 	// (stage 端点未装配时由 server 侧 404,与 MCP 同款);writerHost 注入用于收幕委托
 	// (常驻编剧 === 收幕编剧,2026-08-11)
-	const stageHost = new StageHost({ model: opts.model, thinkingLevel: opts.thinking, temperature: opts.temperature, topP: opts.topP, writerHost, getMcpTools: () => mcpManager.getTools() });
+	const stageHost = new StageHost({ model: opts.model, thinkingLevel: opts.thinking, writerHost, getMcpTools: () => mcpManager.getTools() });
 	// PI_WRITER_TOKEN:可选 Bearer token(Android 壳注入);未设置时与桌面版行为完全一致
 	const server = new WriterServer({
 		host: "127.0.0.1",

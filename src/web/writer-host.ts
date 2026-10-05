@@ -219,10 +219,6 @@ export interface WriterHostOptions {
 	model?: string;
 	/** --thinking 档位。 */
 	thinkingLevel?: string;
-	/** 采样温度(0..2)。 */
-	temperature?: number;
-	/** 核采样概率(0..1)。 */
-	topP?: number;
 	/** MCP 外部工具惰性获取(web 注入,编剧会话可用;导演同款,2026-08-11)。 */
 	getMcpTools?: () => ToolDefinition[];
 	/** 经典模式(单 agent):会话装配换成全量工具的写作 agent;缺省 false。 */
@@ -301,8 +297,6 @@ async function readTextSafe(path: string): Promise<string | null> {
 
 export class WriterHost {
 	private readonly options: WriterHostOptions;
-	private temperature?: number;
-	private topP?: number;
 	/**
 	 * 当前模型(--model 模式串,形如 "provider/id")与思考档位。
 	 * **可变**:换模型后既在这里更新(新会话按新值装配),也即时应用到已建会话
@@ -364,8 +358,6 @@ export class WriterHost {
 
 	constructor(options: WriterHostOptions) {
 		this.options = options;
-		this.temperature = options.temperature;
-		this.topP = options.topP;
 		this.model = options.model;
 		this.thinkingLevel = options.thinkingLevel;
 		this.classicMode = options.classicMode ?? false;
@@ -445,15 +437,6 @@ export class WriterHost {
 	 *  与本次改动前逐字节一致,book 模式多一个 `conversation` 字段供前端过滤。 */
 	setEventSink(sink: (slug: string, chapterFile: string | null, event: AgentSessionEvent, conversation?: string) => void): void {
 		this.eventSink = sink;
-	}
-
-	/** 设置采样参数：更新未来新建会话的默认值，并即时应用到已创建的编剧会话。null 恢复模型默认。 */
-	setSamplingParameters(temperature?: number | null, topP?: number | null): void {
-		if (temperature !== undefined) this.temperature = temperature ?? undefined;
-		if (topP !== undefined) this.topP = topP ?? undefined;
-		for (const host of this.hosts.values()) {
-			host.setSamplingParameters(temperature, topP);
-		}
 	}
 
 	/**
@@ -700,7 +683,6 @@ export class WriterHost {
 	 */
 	private roleFactory(slug: string, key: string, chapter: string | null): RuntimeFactoryHandle {
 		const agentDir = getAgentDir();
-		const { temperature, topP } = this;
 		// 模型/思考档位用 getter 而不是值:createSessionRuntimeFactory 在**每次**
 		// 装配(含 reloadRuntime)时读 opts.model —— 传值会把构造时的 --model
 		// 固定进闭包,换模型后重建会话又退回旧值(2026-10-01)。
@@ -748,8 +730,6 @@ export class WriterHost {
 			get thinkingLevel() {
 				return self.thinkingLevel as ThinkingLevel | undefined;
 			},
-			temperature,
-			topP,
 			// bash:web 默认禁用(web 子集语义,见 web.ts webExcludeTools);设置里
 			// 放开「外部命令」后不再禁用,并在下面补进激活名单。
 			// 方言选 pwsh 而本机没装时 shellDialect = none:此时不放行 bash(否则模型

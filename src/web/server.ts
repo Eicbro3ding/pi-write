@@ -344,14 +344,6 @@ function optionalBoolean(body: unknown, key: string): boolean | undefined {
 	return value;
 }
 
-/** 取可选数字或 null 字段;null 表示恢复模型默认。 */
-function optionalNumberOrNull(body: unknown, key: string): number | null | undefined {
-	const value = (body as Record<string, unknown> | null)?.[key];
-	if (value === undefined || value === null) return value;
-	if (typeof value !== "number" || !Number.isFinite(value)) throw new HttpError(400, "bad_request", `字段 ${key} 必须是数字或 null`);
-	return value;
-}
-
 /** 自定义模型 id 规则(与 AddModelDialog 前端校验同款;唯一真相源)。 */
 const CUSTOM_MODEL_ID_RE = /^[a-z0-9][a-z0-9-_.]{0,127}$/;
 
@@ -749,7 +741,6 @@ export class WriterServer {
 			{ method: "DELETE", segments: ["models", "custom"], handler: (ctx) => this.handleDeleteModelCustom(ctx) },
 			{ method: "POST", segments: ["model"], handler: (ctx) => this.handlePostModel(ctx) },
 			{ method: "POST", segments: ["thinking"], handler: (ctx) => this.handlePostThinking(ctx) },
-			{ method: "POST", segments: ["sampling"], handler: (ctx) => this.handlePostSampling(ctx) },
 			{ method: "GET", segments: ["providers"], handler: (ctx) => this.handleGetProviders(ctx) },
 			{ method: "POST", segments: ["providers", "custom"], handler: (ctx) => this.handlePostProviderCustom(ctx) },
 			{ method: "GET", segments: ["providers", ":id"], handler: (ctx) => this.handleGetProviderDetail(ctx) },
@@ -1645,8 +1636,6 @@ export class WriterServer {
 			models,
 			current,
 			thinking: state.thinkingLevel,
-			temperature: state.temperature,
-			topP: state.topP,
 			// 2026-10 审计 BUG-017:历史 models.json 里的重复模型条目只**报告**不静默删除
 			// (vendor 合成目录按首项替换,第二条是隐藏/歧义配置)。前端可选择提示。
 			configWarnings: await modelsConfigWarnings(),
@@ -1675,8 +1664,6 @@ export class WriterServer {
 			models,
 			current,
 			thinking: state.thinkingLevel,
-			temperature: state.temperature,
-			topP: state.topP,
 			// 2026-09-23:改成结构化 —— 前端「测试连接」要按 provider 过滤,
 			// 之前只有一句拼好的字符串(`DeepSeek models request failed: 401 …`),
 			// 只能靠包含匹配 provider 名,脆且容易错判。map 的 key 是 provider id
@@ -2039,34 +2026,6 @@ export class WriterServer {
 			hosts,
 			...(failures.length > 0 ? { failures } : {}),
 		});
-	}
-
-	/**
-	 * POST /api/sampling {temperature?, topP?}:切换采样参数;null 表示恢复模型默认。
-	 *
-	 * 2026-10 审计 BUG-007:此前按主会话 → 编剧 → 舞台顺序直接调用,任一前置宿主抛错会
-	 * 中断后面所有宿主(已经改了的保持新值、没轮到的保持旧值,响应还只说"失败")。
-	 * 现在走 applyToAllSessions 的逐宿主容错:全部尝试,失败项统一报出。
-	 */
-	private async handlePostSampling(ctx: RouteContext): Promise<void> {
-		const body = await readJsonBody(ctx.req);
-		const temperature = optionalNumberOrNull(body, "temperature");
-		const topP = optionalNumberOrNull(body, "topP");
-		if (temperature === undefined && topP === undefined) {
-			throw new HttpError(400, "bad_request", "至少提供 temperature、topP 或 null 之一");
-		}
-		if (temperature !== null && temperature !== undefined && (temperature < 0 || temperature > 2)) {
-			throw new HttpError(400, "bad_request", "temperature 必须在 0..2 之间");
-		}
-		if (topP !== null && topP !== undefined && (topP < 0 || topP > 1)) {
-			throw new HttpError(400, "bad_request", "topP 必须在 0..1 之间");
-		}
-		await this.applyToAllSessions("切换采样参数", [
-			["主会话", () => this.options.sessionHost.setSamplingParameters(temperature, topP)],
-			["编剧会话", () => this.options.writerHost?.setSamplingParameters(temperature, topP)],
-			["舞台会话", () => this.options.stageHost?.setSamplingParameters(temperature, topP)],
-		]);
-		this.send(ctx.res, 200, { ok: true });
 	}
 
 	/**

@@ -13,8 +13,8 @@ function isActorSpec(value: unknown): value is ActorSpec {
 	if (v.character !== undefined && typeof v.character !== "string") return false;
 	if (v.model !== undefined && typeof v.model !== "string") return false;
 	if (v.thinking !== undefined && typeof v.thinking !== "string") return false;
-	if (v.temperature !== undefined && (typeof v.temperature !== "number" || Number.isNaN(v.temperature))) return false;
-	if (v.topP !== undefined && (typeof v.topP !== "number" || Number.isNaN(v.topP))) return false;
+	// temperature / topP 已不再支持(2026-10 移除采样调节)。旧 cast.json 里若残留这两个
+	// 字段,这里**刻意不校验也不报错** —— 宽容忽略,让它自然失效,避免旧书突然打不开。
 	return true;
 }
 
@@ -52,12 +52,6 @@ export function validateCast(cast: CastConfig): string[] {
 		}
 		if (actor.type === "pool" && actor.character) {
 			errors.push(`pool 演员 ${actor.id} 不应绑定 character（群演按幕注入）`);
-		}
-		if (actor.temperature !== undefined && (actor.temperature < 0 || actor.temperature > 2)) {
-			errors.push(`演员 ${actor.id} 的 temperature 必须在 0..2 之间`);
-		}
-		if (actor.topP !== undefined && (actor.topP < 0 || actor.topP > 1)) {
-			errors.push(`演员 ${actor.id} 的 topP 必须在 0..1 之间`);
 		}
 	}
 	return errors;

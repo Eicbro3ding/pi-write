@@ -84,9 +84,9 @@ export class SessionHost {
 	private sessionManager: SessionEntity;
 	/**
 	 * runtime 重建时要恢复的会话级设置(2026-10 审计 BUG-009):
-	 * API 切过的模型/思考档位/采样参数,不能被启动参数在重建后盖回去。
+	 * API 切过的模型/思考档位,不能被启动参数在重建后盖回去。
 	 */
-	private runtimeDefaults: RuntimeDefaults = { model: null, thinkingLevel: null, temperature: null, topP: null };
+	private runtimeDefaults: RuntimeDefaults = { model: null, thinkingLevel: null };
 	/** dispose() 之后置位:把「已释放」与「尚未 start」区分开(RISK-004 的诊断语义)。 */
 	private released = false;
 
@@ -130,13 +130,11 @@ export class SessionHost {
 	 * 一次 MCP 配置变更(reloadRuntime)就静默退回 `--model A` / 启动档位。
 	 */
 	private captureRuntimeDefaults(rt: AgentSessionRuntime | undefined): RuntimeDefaults {
-		const state = (rt?.session as { state?: { model?: unknown; thinkingLevel?: unknown; temperature?: unknown; topP?: unknown } } | undefined)?.state;
+		const state = (rt?.session as { state?: { model?: unknown; thinkingLevel?: unknown } } | undefined)?.state;
 		const model = usableModelRef(state?.model);
 		return {
 			model,
 			thinkingLevel: typeof state?.thinkingLevel === "string" ? state.thinkingLevel : null,
-			temperature: typeof state?.temperature === "number" ? state.temperature : null,
-			topP: typeof state?.topP === "number" ? state.topP : null,
 		};
 	}
 
@@ -160,14 +158,6 @@ export class SessionHost {
 		}
 		if (d.thinkingLevel) {
 			(rt.session as { setThinkingLevel?: (level: string) => unknown }).setThinkingLevel?.(d.thinkingLevel);
-		}
-		if (d.temperature !== null || d.topP !== null) {
-			// persist=false:这是恢复会话状态,不改全局默认(与演员级覆盖同款语义)
-			(rt.session as { setSamplingParameters?: (t?: number | null, p?: number | null, persist?: boolean) => unknown }).setSamplingParameters?.(
-				d.temperature,
-				d.topP,
-				false,
-			);
 		}
 	}
 
@@ -506,11 +496,6 @@ export class SessionHost {
 		const actual = typeof state?.thinkingLevel === "string" ? state.thinkingLevel : null;
 		return { level: actual, clamped: actual !== null && actual !== level };
 	}
-	/** 设置采样参数(temperature/topP);undefined 保持当前值, null 恢复模型默认。persist=false 时不写全局默认(演员级覆盖用)。 */
-	setSamplingParameters(temperature?: number | null, topP?: number | null, persist = true): void {
-		this.requireRuntime().session.setSamplingParameters(temperature, topP, persist);
-	}
-
 	/**
 	 * 撤回某条用户消息及其之后的所有消息:把会话 leaf 指针移回该消息之前,
 	 * 再以新 leaf 链重建 AI 上下文(vendor session tree 导航的同一模式:
@@ -772,8 +757,6 @@ export function collectThinkingSummary(entries: Iterable<SessionHost>, level: st
 interface RuntimeDefaults {
 	model: { provider: string; id: string } | null;
 	thinkingLevel: string | null;
-	temperature: number | null;
-	topP: number | null;
 }
 
 /**

@@ -74,10 +74,6 @@ export interface StageOrchestratorOptions {
 	/** --model 模式串（resolveCliModel 解析）。 */
 	model?: string;
 	thinkingLevel?: string;
-	/** 全局采样温度(0..2);演员可被 cast.json 覆盖。 */
-	temperature?: number;
-	/** 全局核采样概率(0..1);演员可被 cast.json 覆盖。 */
-	topP?: number;
 	/**
 	 * 常驻编剧宿主(web 模式注入):收幕成文委托给同一 (书, 章节) 编剧会话
 	 * (常驻编剧 === 收幕编剧,2026-08-11);未注入(CLI)时收幕走内置 writer。
@@ -113,10 +109,6 @@ export interface RoleSpec {
 	model?: string;
 	/** 角色级思考级别覆盖（如演员默认 low，§10.6 第一人称思考成本可控）。 */
 	thinkingLevel?: string;
-	/** 角色级采样温度。 */
-	temperature?: number;
-	/** 角色级核采样概率。 */
-	topP?: number;
 }
 
 /**
@@ -326,8 +318,6 @@ export class StageOrchestrator {
 	 *  之后新建的会话用,也要即时应用到已建会话(见 setModel / setThinkingLevel)。 */
 	private model?: string;
 	private thinkingLevel?: string;
-	private temperature?: number;
-	private topP?: number;
 	/** 归属章节(舞台按章节隔离;null = 书级兜底,导演会话文件用 stage-director.jsonl)。 */
 	private readonly chapterFile: string | null;
 	private readonly onEvent?: (event: StageEvent) => void;
@@ -374,8 +364,6 @@ export class StageOrchestrator {
 		this.chapterFile = options.chapterFile ?? null;
 		this.model = options.model;
 		this.thinkingLevel = options.thinkingLevel;
-		this.temperature = options.temperature;
-		this.topP = options.topP;
 		this.onEvent = options.onEvent;
 		this.writerHost = options.writerHost;
 		this.mcpTools = options.mcpTools;
@@ -469,7 +457,7 @@ export class StageOrchestrator {
 	}
 
 	private roleFactory(spec: RoleSpec): RuntimeFactoryHandle {
-		const { agentDir, temperature, topP } = this;
+		const { agentDir } = this;
 		// 角色级覆盖(cast.json)固定;全局模型/思考档位走 getter —— createSessionRuntimeFactory
 		// 在**每次**装配(含 reloadRuntime)时才读 opts.model,传值会把当时的全局值
 		// 固定进闭包,换模型后重建角色会话又退回旧模型(2026-10-01)。
@@ -494,8 +482,6 @@ export class StageOrchestrator {
 			get thinkingLevel() {
 				return (specThinking ?? self.thinkingLevel) as ThinkingLevel | undefined;
 			},
-			temperature: spec.temperature ?? temperature,
-			topP: spec.topP ?? topP,
 			excludeTools: spec.excludeTools,
 			initialActiveToolNames: spec.activeTools,
 			noTools: spec.noTools,
@@ -524,45 +510,10 @@ export class StageOrchestrator {
 		return this.createRoleHost(`stage-actor-${actorId}`, actorRole(this, actorId, spec));
 	}
 
-	/** 设置全局采样参数：更新未来会话默认值，并即时应用到已创建的导演/演员/编剧会话。
-	 *  演员若已在 cast.json 单独设置 temperature/topP，则保留演员级覆盖；
-	 *  传入 null 表示恢复模型默认，同时清除所有演员的对应覆盖。 */
-	async setSamplingParameters(temperature?: number | null, topP?: number | null): Promise<void> {
-		if (temperature !== undefined) this.temperature = temperature ?? undefined;
-		if (topP !== undefined) this.topP = topP ?? undefined;
-		const cast = this.cast ?? (temperature === null || topP === null ? await loadCast(this.bookDir) : null);
-		if (cast && (temperature === null || topP === null)) {
-			let changed = false;
-			for (const actor of cast.actors) {
-				if (temperature === null && actor.temperature !== undefined) {
-					delete actor.temperature;
-					changed = true;
-				}
-				if (topP === null && actor.topP !== undefined) {
-					delete actor.topP;
-					changed = true;
-				}
-			}
-			if (changed) {
-				await saveCast(this.bookDir, cast);
-				this.cast = cast;
-			}
-		}
-		const apply = (host: SessionHost | null) => host?.setSamplingParameters(temperature, topP);
-		apply(this.director);
-		apply(this.writer);
-		for (const [actorId, host] of this.actorHosts) {
-			const spec = cast?.actors.find((a) => a.id === actorId);
-			const actorTemp = temperature === null ? undefined : (spec?.temperature ?? temperature);
-			const actorTopP = topP === null ? undefined : (spec?.topP ?? topP);
-			host.setSamplingParameters(actorTemp, actorTopP, false);
-		}
-	}
-
 	/**
 	 * 换全局模型：更新之后新建会话的装配值，并即时应用到已创建的导演/演员/收幕编剧会话。
-	 * 演员在 cast.json 里单独指定了 model 的保留覆盖(与 setSamplingParameters 同款：
-	 * 角色级设置优先于全局)。2026-10-01 修 —— 此前换模型只打主会话宿主,舞台会话
+	 * 演员在 cast.json 里单独指定了 model 的保留覆盖(角色级设置优先于全局)。
+	 * 2026-10-01 修 —— 此前换模型只打主会话宿主,舞台会话
 	 * 用的是创建时绑定的模型,换完还是旧模型。
 	 */
 	async setModel(model: string): Promise<void> {
@@ -628,12 +579,12 @@ export class StageOrchestrator {
 	/**
 	 * 更新演员编制参数（导演工具 / 用户命令共用）。
 	 *
-	 * 只更新提供的字段；temperature/topP/thinking 会即时应用到已创建的演员会话，
+	 * 只更新提供的字段；thinking 会即时应用到已创建的演员会话，
 	 * model 也会尝试即时切换（无对应鉴权时保留 cast.json 配置，下次开演生效）。
 	 */
 	async updateActorSpec(
 		actorId: string,
-		patch: Partial<Pick<ActorSpec, "model" | "thinking" | "temperature" | "topP">>,
+		patch: Partial<Pick<ActorSpec, "model" | "thinking">>,
 	): Promise<{ ok: boolean; text: string; actor?: ActorSpec }> {
 		const cast = await loadCast(this.bookDir);
 		const actor = cast.actors.find((a) => a.id === actorId);
@@ -642,8 +593,6 @@ export class StageOrchestrator {
 		}
 		if (patch.model !== undefined) actor.model = patch.model;
 		if (patch.thinking !== undefined) actor.thinking = patch.thinking;
-		if (patch.temperature !== undefined) actor.temperature = patch.temperature;
-		if (patch.topP !== undefined) actor.topP = patch.topP;
 		const errors = validateCast(cast);
 		if (errors.length > 0) return { ok: false, text: `编制校验失败：\n${errors.join("\n")}` };
 		await saveCast(this.bookDir, cast);
@@ -652,10 +601,6 @@ export class StageOrchestrator {
 		const applied: string[] = [];
 		if (host) {
 			try {
-				if (patch.temperature !== undefined || patch.topP !== undefined) {
-					host.setSamplingParameters(patch.temperature, patch.topP, false);
-					applied.push("采样参数已即时生效");
-				}
 				if (patch.thinking !== undefined) {
 					host.setThinkingLevel(patch.thinking);
 					applied.push("思考级别已即时生效");
@@ -671,8 +616,6 @@ export class StageOrchestrator {
 		const text = `已更新演员 ${actorId}：${[
 			patch.model !== undefined ? `model=${patch.model}` : "",
 			patch.thinking !== undefined ? `thinking=${patch.thinking}` : "",
-			patch.temperature !== undefined ? `temperature=${patch.temperature}` : "",
-			patch.topP !== undefined ? `topP=${patch.topP}` : "",
 		].filter(Boolean).join("，") || "无字段变化"}。${applied.join("；")}`;
 		return { ok: true, text, actor };
 	}

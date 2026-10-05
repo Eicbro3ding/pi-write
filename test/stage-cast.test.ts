@@ -43,7 +43,7 @@ describe("cast.json 读写", () => {
 		const cast: CastConfig = {
 			version: 1,
 			actors: [
-				{ id: "actor-1", type: "named", character: "李四", temperature: 0.9, topP: 0.95 },
+				{ id: "actor-1", type: "named", character: "李四", model: "deepseek/deepseek-chat", thinking: "high" },
 				{ id: "actor-3", type: "pool" },
 				{ id: "actor-4", type: "narrator" },
 			],
@@ -102,17 +102,17 @@ describe("validateCast", () => {
 		expect(errors.some((e) => e.includes("不应绑定 character"))).toBe(true);
 	});
 
-	it("检出采样参数越界", () => {
+	it("旧的 temperature/topP 残留字段不再校验（D6 兼容承诺：旧书必须能开）", () => {
+		// 移除采样调节后,旧 cast.json 里可能还带这两个字段,且值可能越界(历史数据)。
+		// 判据是「不因此报错」—— 宽容忽略,让它们自然失效。
 		const cast: CastConfig = {
 			version: 1,
 			actors: [
 				{ id: "a", type: "pool", temperature: 2.5 },
 				{ id: "b", type: "pool", topP: 1.2 },
 			],
-		};
-		const errors = validateCast(cast);
-		expect(errors.some((e) => e.includes("temperature 必须在 0..2"))).toBe(true);
-		expect(errors.some((e) => e.includes("topP 必须在 0..1"))).toBe(true);
+		} as never;
+		expect(validateCast(cast)).toEqual([]);
 	});
 });
 

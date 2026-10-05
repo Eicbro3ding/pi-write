@@ -92,7 +92,6 @@ function fakeHost() {
 		setModel: async () => {},
 		// 实际档位由模型能力决定(vendor 会 clamp);fake 直接回报一个档位对象
 		setThinkingLevel: async () => ({ level: "off", clamped: false }),
-		setSamplingParameters: () => {},
 		listProviders: async () => providers,
 		getProviderDetail: async (id: string) => {
 			const p = providers.find((x) => x.id === id);
@@ -519,16 +518,6 @@ describe("WriterServer", () => {
 		expect(body).toMatchObject({ ok: true, thinking: "off", clamped: false });
 		// 分宿主回报(BUG-013):主会话的实际档位就在 hosts 里,不再只回一个全局值
 		expect(body.hosts[0]).toMatchObject({ host: "主会话", levels: ["off"] });
-	});
-	it("POST /api/sampling 返回 200 并校验范围", async () => {
-		const ok = await fetch(`${base}/api/sampling`, { method: "POST", headers: json, body: JSON.stringify({ temperature: 0.8, topP: 0.9 }) });
-		expect(ok.status).toBe(200);
-		const reset = await fetch(`${base}/api/sampling`, { method: "POST", headers: json, body: JSON.stringify({ temperature: null }) });
-		expect(reset.status).toBe(200);
-		const bad = await fetch(`${base}/api/sampling`, { method: "POST", headers: json, body: JSON.stringify({ temperature: 3 }) });
-		expect(bad.status).toBe(400);
-		const empty = await fetch(`${base}/api/sampling`, { method: "POST", headers: json, body: JSON.stringify({}) });
-		expect(empty.status).toBe(400);
 	});
 	it("POST /api/abort 返回 200", async () => {
 		const res = await fetch(`${base}/api/abort`, { method: "POST" });
@@ -2369,8 +2358,6 @@ describe("WriterServer · 换模型/思考等级广播到编剧与舞台会话",
 	const thinkingCalls: string[] = [];
 	/** 模型目录(models.json)变更后,三处宿主重读目录的记录(2026-10-04)。 */
 	const refreshCalls: string[] = [];
-	/** 采样参数逐宿主下发的记录(2026-10 审计 BUG-007)。 */
-	const samplingCalls: string[] = [];
 
 	beforeAll(async () => {
 		const fake = fakeHost();
@@ -2406,9 +2393,6 @@ describe("WriterServer · 换模型/思考等级广播到编剧与舞台会话",
 				thinkingCalls.push(`writer:${level}`);
 				return { sessions: 1, levels: ["off"], clamped: level !== "off", failed: [] };
 			},
-			setSamplingParameters: (temperature?: number | null, topP?: number | null) => {
-				samplingCalls.push(`writer:${String(temperature)}/${String(topP)}`);
-			},
 		};
 		const stage = {
 			setEventSink: () => {},
@@ -2424,9 +2408,6 @@ describe("WriterServer · 换模型/思考等级广播到编剧与舞台会话",
 				thinkingCalls.push(`stage:${level}`);
 				// 演员档位属于角色设计,故意不跟随(报出跳过条数)
 				return { sessions: 2, levels: [level], clamped: false, failed: [], actorsOmitted: 3 };
-			},
-			setSamplingParameters: (temperature?: number | null, topP?: number | null) => {
-				samplingCalls.push(`stage:${String(temperature)}/${String(topP)}`);
 			},
 		};
 		server = new WriterServer({
@@ -2513,42 +2494,6 @@ describe("WriterServer · 换模型/思考等级广播到编剧与舞台会话",
 			expect(body.hosts.find((h) => h.host === "舞台会话")).toMatchObject({ ok: false });
 		} finally {
 			stage.setThinkingLevel = original;
-		}
-	});
-
-	/**
-	 * 2026-10 审计 BUG-007:采样参数此前按宿主顺序直接调用,前置宿主抛错会中断后面所有宿主
-	 * (已改的保持新值、没轮到的保持旧值,响应还只说"失败")。现在逐宿主容错 + 统一报错。
-	 */
-	it("POST /api/sampling:三个宿主都下发;某个宿主抛错不中断其余(BUG-007)", async () => {
-		samplingCalls.length = 0;
-		const ok = await fetch(`${base}/api/sampling`, { method: "POST", headers: json, body: JSON.stringify({ temperature: 0.5 }) });
-		expect(ok.status).toBe(200);
-		expect(samplingCalls).toEqual(["writer:0.5/undefined", "stage:0.5/undefined"]);
-
-		const writer = (server as unknown as { options: { writerHost: { setSamplingParameters: unknown } } }).options.writerHost;
-		const original = writer.setSamplingParameters;
-		const reached: string[] = [];
-		writer.setSamplingParameters = () => {
-			reached.push("writer");
-			throw new Error("编剧炸了");
-		};
-		const stage = (server as unknown as { options: { stageHost: { setSamplingParameters: unknown } } }).options.stageHost;
-		const originalStage = stage.setSamplingParameters;
-		stage.setSamplingParameters = () => {
-			reached.push("stage");
-		};
-		try {
-			const res = await fetch(`${base}/api/sampling`, { method: "POST", headers: json, body: JSON.stringify({ temperature: 0.5 }) });
-			expect(res.status).toBe(400);
-			const body = (await res.json()) as { error: { message: string } };
-			expect(body.error.message).toContain("编剧会话");
-			expect(body.error.message).toContain("编剧炸了");
-			// 编剧失败后,后面的舞台仍然被调用(此前实现会在这里停住)
-			expect(reached).toEqual(["writer", "stage"]);
-		} finally {
-			writer.setSamplingParameters = original;
-			stage.setSamplingParameters = originalStage;
 		}
 	});
 

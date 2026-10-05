@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+移除采样参数调节(temperature / topP,D6)。
+
+- [remove] **删掉温度/top_p 的用户入口**:`--temperature` / `--top-p` 命令行长选项、`POST /api/sampling` 端点、设置页「采样参数」整块(滑块 + 手机页入口 + 分类索引)。`stage_cast` 工具也只再收 `model` / `thinking`。
+- [remove] **删掉三级覆盖链**:① 用户入口(CLI / web / 前端);② 舞台演员级覆盖(`cast.json` 的 `ActorSpec`、`orchestrator.updateActorSpec`、`setSamplingParameters`);③ host 与 session-factory 的透传层(`writer-host` / `stage-host` / `session-host` / `session-factory`)。`SessionHost.runtimeDefaults` 与 `captureRuntimeDefaults` / `applyRuntimeDefaults` 里采样那一路一并消失 —— 它只在 runtime 重建时用来恢复会话级设置,采样没了就没有存在意义。
+- [fix] **旧 `cast.json` 宽容忽略,不报错也不清理**。移除后旧书可能仍带 `temperature` / `topP`,且历史数据可能越界。`cast.ts` 的 `isActorSpec` 与 `validateCast` **刻意不再校验**这两个字段(删掉原「必须在 0..2 / 0..1」的越界检查),`saveCast` 也原样保留 —— 判据是「旧书必须还能打开」。用测试固化这条承诺(旧字段越界值 2.5 / 1.2 也 `validateCast() === []`)。
+- [docs] **更正一处归档错误**:T8 的 B 类审阅曾把 `agent-session.ts` / `sdk.ts` / `settings-manager.ts` 的采样参数列为「上游零命中 → 必须保留」。逐层追溯后确认**结论有误** —— `temperature` 是 `vendor/pi-ai` 里 **11 个 provider 适配器**共用的标准请求参数(`types.ts:117` 的 `Options.temperature` 是上游公开 API),上游全链路本来就有,我方只是在自研侧接了线。假阳性源于只 grep 了 `pi-coding-agent` 一个包、漏了 `pi-ai`。**净效果**:必须重放的 B 类改动从「约 147 行 / 4 文件」降到**约 24 行 / 1 文件**(只剩 `path-utils.ts` 的 `setToolPathGuard` 安全边界)。
+- [docs] **不动 vendor**。既然温度本就是上游能力(且 D2 已定 npm 依赖化,vendor 整体将被依赖替换),在其内部手工裁剪属纯浪费。本次 `vendor/` 零改动。
+- [test] 测试同步:`test/server.test.ts` 删 `/api/sampling` 两组用例与两个宿主 stub;`test/session-host.test.ts` 删转发用例、`reloadRuntime` 两组断言摘掉采样部分(BUG-009 的模型/档位恢复覆盖仍在);`test/stage-orchestrator.test.ts` 把采样用例改写成「模型/思考级别」+ 新增「旧字段宽容忽略」;`test/stage-cast.test.ts` 越界用例改写成兼容承诺;`test/web-cli.test.ts` 删 `--temperature`/`--top-p` 解析用例。**全量 92 文件 / 1595 例通过**,`src/` 与 `web/` 类型检查均 0 错误。
+
 世界书写入的安全性:补「静默无操作」与「静默清空」两处(`src/tools.ts`,P0-b/P1)。
 
 - [fix] **`delete_constraint` / `notice_delete` 补存在性校验**。这两个 op 原先直接 `filter` 掉一个不存在的 id 就返回 —— 传错 id 时**静默无操作**:工具回「已更新世界书(delete_constraint)」,模型据此以为删掉了、基于「约束已删除」继续推理,而用户那边规矩还在。同文件的 `delete_entry` / `notice_update` / `update_timeline` 一直都有这个校验,这两处是漏网。现在报错并附加「未删除任何内容」,符合本文件 narrowOp 注释写下的原则:「不静默无操作,报错原样进上下文让模型自我纠正」。

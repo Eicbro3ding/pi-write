@@ -215,13 +215,11 @@ export class ApiClient {
 		return this.request<SessionState>(`/api/session${q}`);
 	}
 
-	/** 模型列表、当前模型、思考等级与采样参数(vendor 模型元素最小形状见 SettingsPage)。 */
+	/** 模型列表、当前模型与思考等级(vendor 模型元素最小形状见 SettingsPage)。 */
 	async getModels(): Promise<{
 		models: unknown[];
 		current: unknown;
 		thinking: unknown;
-		temperature: unknown;
-		topP: unknown;
 		configWarnings?: string[];
 		/** 当前模型实际支持的思考档位(BUG-012);null/缺省 = 拿不到,前端展示全量。 */
 		thinkingLevels?: string[] | null;
@@ -230,8 +228,6 @@ export class ApiClient {
 			models: unknown[];
 			current: unknown;
 			thinking: unknown;
-			temperature: unknown;
-			topP: unknown;
 			configWarnings?: string[];
 			thinkingLevels?: string[] | null;
 		}>("/api/models");
@@ -245,8 +241,6 @@ export class ApiClient {
 		models: unknown[];
 		current: unknown;
 		thinking: unknown;
-		temperature: unknown;
-		topP: unknown;
 		errors?: ProviderRefreshError[];
 		hosts?: Array<{ host: string; ok: boolean; error?: string; errors?: ProviderRefreshError[] }>;
 		thinkingLevels?: string[] | null;
@@ -255,8 +249,6 @@ export class ApiClient {
 			models: unknown[];
 			current: unknown;
 			thinking: unknown;
-			temperature: unknown;
-			topP: unknown;
 			errors?: ProviderRefreshError[];
 			hosts?: Array<{ host: string; ok: boolean; error?: string; errors?: ProviderRefreshError[] }>;
 			thinkingLevels?: string[] | null;
@@ -355,11 +347,6 @@ export class ApiClient {
 			hosts?: ThinkingHostResult[];
 			failures?: string[];
 		}>("/api/thinking", { method: "POST", body: JSON.stringify({ level }) });
-	}
-
-	/** 设置采样参数(temperature/topP 至少一个;undefined 不更新, null 恢复模型默认)。 */
-	async setSampling(opts: { temperature?: number | null; topP?: number | null }): Promise<void> {
-		await this.request<{ ok: boolean }>("/api/sampling", { method: "POST", body: JSON.stringify(opts) });
 	}
 
 	/** 全部 provider + 认证状态。 */

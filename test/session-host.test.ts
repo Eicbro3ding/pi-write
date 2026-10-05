@@ -20,7 +20,6 @@ function makeFakeRuntime(modelRuntime: Record<string, unknown> = {}) {
 		abort: vi.fn(async () => {}),
 		setModel: vi.fn(async () => {}),
 		setThinkingLevel: vi.fn(() => {}),
-		setSamplingParameters: vi.fn(() => {}),
 		sendCustomMessage: vi.fn(async () => {}),
 		getContextUsage: vi.fn(() => ({ tokens: 1200, contextWindow: 2000, percent: 60 })),
 		compact: vi.fn(async () => ({
@@ -114,13 +113,6 @@ describe("SessionHost", () => {
 			estimatedTokensAfter: 400,
 		});
 		expect(fake.session.compact).toHaveBeenCalledWith("保留冲突");
-	});
-	it("setSamplingParameters 转发 temperature/topP", async () => {
-		const fake = makeFakeRuntime();
-		const host = makeHost(fake);
-		await host.start();
-		host.setSamplingParameters(0.8, 0.9);
-		expect(fake.session.setSamplingParameters).toHaveBeenCalledWith(0.8, 0.9, true);
 	});
 	it("switchSession 转发绝对路径", async () => {
 		const fake = makeFakeRuntime();
@@ -876,15 +868,13 @@ describe("模型目录刷新与「是否已选到模型」", () => {
 	 * (`--model A` / `--thinking`),runtime 重建(MCP 配置变更走 reloadRuntime)时会把
 	 * API 已经切换过的值盖回去。重建前抓当前设置、重建后恢复。
 	 */
-	it("reloadRuntime 后保留 API 切过的模型/思考档位/采样参数(不退启动参数)", async () => {
+	it("reloadRuntime 后保留 API 切过的模型/思考档位(不退启动参数)", async () => {
 		const resync = vi.fn();
 		const fake = makeFakeRuntime({ getModel: vi.fn((provider: string, id: string) => ({ provider, id })) });
 		(fake.session as Record<string, unknown>).resyncModelInstance = resync;
 		(fake.session as Record<string, unknown>).state = {
 			model: { provider: "openai", id: "gpt-5" },
 			thinkingLevel: "high",
-			temperature: 0.7,
-			topP: 0.9,
 		};
 		const host = makeHost(fake);
 		await host.start();
@@ -893,7 +883,6 @@ describe("模型目录刷新与「是否已选到模型」", () => {
 		await host.reloadRuntime();
 		expect(resync).toHaveBeenCalledWith({ provider: "openai", id: "gpt-5" });
 		expect(fake.session.setThinkingLevel).toHaveBeenCalledWith("high");
-		expect(fake.session.setSamplingParameters).toHaveBeenCalledWith(0.7, 0.9, false);
 	});
 	it("reloadRuntime 对占位模型/未设置档位的会话是空操作", async () => {
 		const resync = vi.fn();
@@ -905,7 +894,6 @@ describe("模型目录刷新与「是否已选到模型」", () => {
 		await host.reloadRuntime();
 		expect(resync).not.toHaveBeenCalled();
 		expect(fake.session.setThinkingLevel).not.toHaveBeenCalled();
-		expect(fake.session.setSamplingParameters).not.toHaveBeenCalled();
 	});
 });
 

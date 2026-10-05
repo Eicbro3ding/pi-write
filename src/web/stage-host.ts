@@ -38,10 +38,6 @@ export interface StageHostOptions {
 	model?: string;
 	/** --thinking 档位（初始值,换档位走 setThinkingLevel）。 */
 	thinkingLevel?: string;
-	/** 全局采样温度（演员可被 cast.json 覆盖）。 */
-	temperature?: number;
-	/** 全局核采样概率（演员可被 cast.json 覆盖）。 */
-	topP?: number;
 	/** 常驻编剧宿主(收幕委托;未注入时编排器走内置 writer,CLI 行为)。 */
 	writerHost?: WriterHost;
 	/** MCP 外部工具惰性获取(web 注入,编排器创建时才取最新——启动时 stdio 连接
@@ -200,8 +196,6 @@ export class StageCommandError extends Error {}
 
 export class StageHost {
 	private readonly options: StageHostOptions;
-	private temperature?: number;
-	private topP?: number;
 	/** 全局模型/思考档位;可变 —— 换模型时既给之后新建的编排器用,也即时应用到已建编排器
 	 *  (见 setModel / setThinkingLevel,2026-10-01)。 */
 	private model?: string;
@@ -212,8 +206,6 @@ export class StageHost {
 
 	constructor(options: StageHostOptions) {
 		this.options = options;
-		this.temperature = options.temperature;
-		this.topP = options.topP;
 		this.model = options.model;
 		this.thinkingLevel = options.thinkingLevel;
 	}
@@ -221,13 +213,6 @@ export class StageHost {
 	/** server 构造时注入事件转发（StageHost 在 web.ts 先于 server 创建）。 */
 	setEventSink(sink: (slug: string, event: StageHostEvent) => void): void {
 		this.eventSink = sink;
-	}
-
-	/** 设置采样参数：更新未来编排器的默认值，并即时应用到已创建的导演/演员/编剧会话。null 恢复模型默认。 */
-	async setSamplingParameters(temperature?: number | null, topP?: number | null): Promise<void> {
-		if (temperature !== undefined) this.temperature = temperature ?? undefined;
-		if (topP !== undefined) this.topP = topP ?? undefined;
-		await Promise.all([...this.orchestrators.values()].map((orch) => orch.setSamplingParameters(temperature, topP)));
 	}
 
 	/**
@@ -305,8 +290,6 @@ export class StageHost {
 						chapterFile: chapterFile ?? null,
 						model: this.model,
 						thinkingLevel: this.thinkingLevel,
-						temperature: this.temperature,
-						topP: this.topP,
 						writerHost: this.options.writerHost,
 						mcpTools: this.options.getMcpTools?.(),
 						onEvent: (event) => {

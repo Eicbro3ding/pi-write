@@ -450,33 +450,36 @@ describe("updateActorSpec（导演 stage_cast 后端）", () => {
 		rmSync(tmp, { recursive: true, force: true });
 	});
 
-	it("更新 cast.json 中的演员采样参数；不存在演员时返回错误", async () => {
+	it("更新 cast.json 中的演员模型/思考级别；不存在演员时返回错误", async () => {
 		await saveCast(tmp, { version: 1, actors: [{ id: "actor-1", type: "pool" }] });
 		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
-		const r = await orch.updateActorSpec("actor-1", { temperature: 0.8, topP: 0.9 });
+		const r = await orch.updateActorSpec("actor-1", { model: "deepseek/deepseek-chat", thinking: "high" });
 		expect(r.ok).toBe(true);
-		expect(r.text).toContain("temperature=0.8");
-		expect(r.text).toContain("topP=0.9");
+		expect(r.text).toContain("model=deepseek/deepseek-chat");
+		expect(r.text).toContain("thinking=high");
 		const cast = await loadCast(tmp);
-		expect(cast.actors[0]).toMatchObject({ id: "actor-1", temperature: 0.8, topP: 0.9 });
-		expect((await orch.updateActorSpec("ghost", { temperature: 1 })).ok).toBe(false);
+		expect(cast.actors[0]).toMatchObject({ id: "actor-1", model: "deepseek/deepseek-chat", thinking: "high" });
+		expect((await orch.updateActorSpec("ghost", { model: "x" })).ok).toBe(false);
 	});
 
-	it("setSamplingParameters(null) 清除所有演员的 temperature 覆盖", async () => {
+	it("旧 cast.json 里残留的 temperature/topP 被宽容忽略（不报错、不自动清理）", async () => {
+		// D6(2026-10-05)移除采样调节后,旧书 cast.json 可能仍带这两个字段。
+		// 判据是「旧书必须还能打开」—— 故刻意不校验、不清理,让它自然失效。
 		await saveCast(tmp, {
 			version: 1,
 			actors: [
 				{ id: "actor-1", type: "pool", temperature: 0.7, topP: 0.9 },
 				{ id: "actor-2", type: "pool", temperature: 1.1 },
 			],
-		});
+		} as never);
 		const orch = new StageOrchestrator({ bookDir: tmp, agentDir: tmp });
-		await orch.setSamplingParameters(null);
+		const r = await orch.updateActorSpec("actor-1", { thinking: "low" });
+		expect(r.ok).toBe(true);
 		const cast = await loadCast(tmp);
-		expect(cast.actors[0]?.temperature).toBeUndefined();
-		expect(cast.actors[1]?.temperature).toBeUndefined();
-		// 未传 topP 时不清除演员 topP
-		expect(cast.actors[0]?.topP).toBe(0.9);
+		// 新设置生效
+		expect(cast.actors[0]?.thinking).toBe("low");
+		// 旧字段仍在(宽容忽略 = 原样保留,不做迁移)
+		expect((cast.actors[0] as { temperature?: number })?.temperature).toBe(0.7);
 	});
 });
 
