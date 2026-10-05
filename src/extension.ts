@@ -332,7 +332,14 @@ function writerFactory(pi: ExtensionAPI): void {
 			writerTui = tui;
 			return new WriterFooter(tui, theme, writerUi);
 		});
-		// 常驻草稿编辑器：聊天区右侧面板。
+		// 常驻草稿编辑器。
+		//
+		// ⚠️ placement 用的是 `aboveEditor`,不是原先的 `sidePanel` ——
+		// `sidePanel` 是 **vendor 版独有的自研能力**(上游 v0.83.0 没有,是 pi-write
+		// 加进 vendor 的);npm 发布版 `WidgetPlacement` 只有 `aboveEditor` /
+		// `belowEditor` 两个取值。按「不影响 web 与整体核心功能的自研一律移除」
+		// 的口径,它不重放 —— TUI 的草稿面板改为纵向排布在编辑器上方。
+		// web 侧本来就有自己的三栏布局(`WritePage` / `DraftWorkspace`),不受影响。
 		ctx.ui.setWidget(
 			"draft-panel",
 			(tui, theme) => {
@@ -376,7 +383,8 @@ function writerFactory(pi: ExtensionAPI): void {
 				activeDraftPanel = panel;
 				return panel;
 			},
-			{ placement: "sidePanel" },
+			// `sidePanel` 只存在于 vendor 版;npm 发布版无此取值,见上方注释。
+			{ placement: "aboveEditor" },
 		);
 		ctx.ui.setTitle(APP_TITLE);
 		await refreshStatus(ctx);

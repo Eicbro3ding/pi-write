@@ -68,6 +68,7 @@ import type {
 import type {
 	AuthInteraction as VendorAuthInteraction,
 	AuthPrompt as VendorAuthPrompt,
+	Model as VendorModel,
 	Provider as VendorProvider,
 	Usage as VendorUsage,
 } from "@earendil-works/pi-ai";
@@ -105,6 +106,15 @@ export type AgentSessionRuntime = VendorAgentSessionRuntime;
 export type CreateAgentSessionRuntimeFactory = VendorCreateAgentSessionRuntimeFactory;
 
 /** `--model` 模式串的解析结果(含 `model` / `error` / `warning`)。 */
+/**
+ * 模型描述(供应商 / api / 上下文窗口 / 思考能力 / 计费)。
+ *
+ * 收这个别名是为了让「自研构造模型」的需求能留在自研侧 —— 例如动态发现的
+ * DeepSeek 模型的能力推断(见 `src/providers/deepseek-dynamic.ts`),它按模型 id
+ * 命名约定造一个 `Model`,不经过上游 provider 的静态目录。
+ */
+export type Model<TApi extends string = string> = VendorModel<TApi extends never ? never : TApi>;
+
 export type ResolveCliModelResult = VendorResolveCliModelResult;
 
 /** `/skill:<name>` 展开块的解析结果(`{ name, userMessage? }`)。 */
