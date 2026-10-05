@@ -1,5 +1,19 @@
 # Changelog
 
+文档与 skill 同步:T11(依赖化)与 T9-A(MCP 换上游)之后,知识文档还停在 vendor 时代。
+
+- [docs] **skill 知识地图(`.agents/skills/pi-writer/`)整轮校准** —— 它此前系统性描述的是一个**已不存在的仓库**:
+  - **开头段**:「核心包全部 vendor 在 `vendor/`,零 `@earendil-works` npm 依赖」→ 改为「四个 pi 包是 npm 依赖,锁精确 1.0.2,本地改动走 `patches/`,**不再有 `vendor/` 目录**」,并补 Node ≥22.19.0 与 `postinstall` 打补丁这两条上手前提;
+  - **布局表**:删 `vendor/` 行、加 `patches/` 与 `src/pi-adapter/` 行;`src/mcp/` 从「config/manager/tools 三件套」改写为「装配上游 `createMcpExtension` 的三个胶水文件」;`src/prompt.ts` 行去掉「手工拼 MCP 清单」;
+  - **新增 MCP 专节**:决策背景(为什么推翻「留自研」)、三个文件各自的「为什么必须自研」、**四条硬约束**(只有 stdio+http / `exposure` 默认 `direct` / 提示词段不再手工拼 / 上游懒重连),以及工具名 `mcp__<server>__<tool>` 的由来;
+  - **新增防腐层约定**:「pi 框架的 import 一律走 `src/pi-adapter/`」,并写明 `src/mcp/` 是唯一例外及理由;
+  - **构建命令整段重写**:删掉已不存在的 `tsconfig.tmp.json` / `vitest.tmp.config.ts`,改用仓库根真实配置;补 `npm run build` 与 `build:web` 的产物区别。
+- [docs] **`references/pitfalls.md` 换掉 3 条失效记录**:「tsc 的 vendor 类型错误」(vendor 已删)、「@modelcontextprotocol/sdk 顶层导出缺陷」(SDK 已无引用)删除,替换为两条**当前真实**的坑 ——「`npm run build` ≠ `npm run build:web`」(附 2026-10-05 的误判经过)与「改 pi 包要走 patches,别直接改 node_modules」(附路径守卫静默失效的判据)。`references/commands.md` / `architecture.md` 同步。
+- [docs] **项目文档**:`docs/development.md` 补「首次 clone 先 `npm install`」「`skipLibCheck` 是必需品」「`build`/`build:web` 两个产物」三处;`docs/architecture.md` 的 `vendor/` 表格行改为 `patches/`、§9 的层级说明随 vendor 移除简化、防腐层措辞从「零 vendor 直接引用」改为「零 pi 包直接引用」(并登记 `src/mcp/` 例外)。
+- [docs] `TODO.md` 记入一条 T9-A 副作用:**`@modelcontextprotocol/sdk` 已成孤儿依赖**(自研 MCP 删除后 `src/` 内无引用),建议后续移除。
+
+**验证**:typecheck 0 错误;全量 **91 文件 / 1604 例通过** / 2 skipped;skill 里新引用的 16 个文件路径逐条核实存在;`skill-references` / `skills-index` / `prompt` 三组护栏测试通过。
+
 T13 端到端收尾:用真实构建产物跑出的两处「迁移静默失败」。
 
 - [fix] **http 条目的 `env` 在迁移时丢失**。`legacyServerToUpstream` 的 stdio 分支带了 `env`,http 分支没带 —— `{"type":"http","url":...,"env":{"TOKEN":"abc"}}` 迁移后 `env` 直接消失,**不报错、不告警**,用户只能在工具连不上时反推。已补齐,并加两例断言(http 保留 env、sse 降级后同样保留)。

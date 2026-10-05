@@ -61,6 +61,15 @@
   - 现状:注释仍写「稳定块(世界观概述/世界书条目/**文风采样**/写作约束)」,
     而采样早已移出稳定块(同文件 `stableContext` 处已更正)。同一文件内前后矛盾。
 
+- [ ] **`@modelcontextprotocol/sdk` 成孤儿依赖**(T9-A 副作用)
+  - 来源:2026-10-05 文档/skill 同步时发现。
+  - 现状:自研 MCP 删除后 `src/` 内**已无 SDK 引用**(全仓只剩 `McpServerList.tsx` 一处
+    占位符文案 `-y,@modelcontextprotocol/server-everything`)。传输、OAuth、资源列表
+    全由上游 pi 扩展负责。
+  - 处置:确认无引用后从 `package.json` 移除(顺带减依赖体积 —— 自包含产物会跟着瘦);
+    移除前先 `grep -rn "modelcontextprotocol" src/ test/ web/src/` 复核。
+  - 注:别为 MCP 把它用回来 —— 那等于回退到 T9-A 之前(自研 843 行重造上游已有的东西)。
+
 - [ ] **MCP 上游化后还有三处未收口**(T9-A 遗留)
   - 来源:2026-10-05 T9-A 实施时有意留下(避免一次改太多、便于回滚)。
   - ① **`src/mcp/migrate.ts` 的备份不会清理**:每次迁移写一份 `.bak-<ts>`,迁移只在

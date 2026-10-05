@@ -1,20 +1,23 @@
 ---
 name: pi-writer
-description: pi-writer 写作 agent 项目(独立仓库, vendor 化 pi 核心包)的关键知识地图与操作指南。当需要在此仓库理解代码结构、定位功能实现、按项目约定写代码、运行/测试/构建/打包时使用——包括任何涉及 book/chapter 管理、world-book 世界书、web UI(GUI)、MCP 配置、会话/撤回/分支、SSE 事件流、vendor 包、Android 移植兼容的提问。即使用户只是顺带提到某个模块(如"改一下侧栏"、"MCP 配置有问题"、"消息撤回"),也先加载本技能获取架构与关键位置,避免从零探索。
+description: pi-writer 写作 agent 项目(独立仓库,pi 核心包走 npm 依赖 + patch)的关键知识地图与操作指南。当需要在此仓库理解代码结构、定位功能实现、按项目约定写代码、运行/测试/构建/打包时使用——包括任何涉及 book/chapter 管理、world-book 世界书、web UI(GUI)、MCP 配置、会话/撤回/分支、SSE 事件流、pi-adapter 防腐层、Android 移植兼容的提问。即使用户只是顺带提到某个模块(如"改一下侧栏"、"MCP 配置有问题"、"消息撤回"),也先加载本技能获取架构与关键位置,避免从零探索。
 ---
 
 # pi-writer 项目关键知识
 
-独立 git 仓库(非 monorepo 子目录),**核心包全部 vendor 在 `vendor/`**(pi-coding-agent、pi-ai、pi-tui、pi-agent-core、pi-client、pi-protocol),**零 `@earendil-works` npm 依赖**(npm 依赖只剩第三方,如 @anthropic-ai/sdk、@modelcontextprotocol/sdk)。写作 agent:book/chapter 会话管理、world-book 树、写作工具,web GUI + TUI 双前端,数据都在 `~/.pi/writer`(可被 `PI_WRITER_DIR`/`PI_WRITER_AGENT_DIR` 覆盖)。
+独立 git 仓库(非 monorepo 子目录)。**pi 核心包是 npm 依赖,不是 vendored 源码**(2026-10-05 T11 起,决策 D2):`@earendil-works/pi-coding-agent` / `pi-agent-core` / `pi-ai` / `pi-tui` 四个包锁精确版本 **1.0.2**,本地改动走 `patches/`(由 `postinstall` 的 `scripts/apply-patches.mjs` 施加,幂等)。**不再有 `vendor/` 目录**。写作 agent:book/chapter 会话管理、world-book 树、写作工具,web GUI + TUI 双前端,数据都在 `~/.pi/writer`(可被 `PI_WRITER_DIR`/`PI_WRITER_AGENT_DIR` 覆盖)。**Node ≥ 22.19.0**(四个 pi 包的 `engines` 要求,`npm install` 会 EBADENGINE 告警)。
+
+> **防腐层 `src/pi-adapter/` 是与 pi 框架的唯一接触面**(2026-10-05 T7)。自研代码**不准**直接 `import "@earendil-works/pi-xxx"`;`test/pi-adapter.test.ts` 扫全仓护栏(`T7_DELIVERED` 清单 + 禁止深层子路径 import)。唯一例外是 `src/mcp/`,理由见该节。
 
 ## 仓库布局速查
 
 | 路径 | 职责 |
 |---|---|
 | `src/cli.ts` | CLI 入口:TUI/print/web/stage 分支、HELP、Electron 拉起 |
-| `src/web.ts` | web 子命令装配:parseWebArgs/startWebServer,web 工具子集(MCP 注入) |
+| `src/pi-adapter/` | **防腐层**:自研与 pi 框架的唯一接触面(`domain` 不透明句柄 / `types` 类型别名 / `guard` `usage` 走深层路径 / `session` `runtime` `tool` `tui` 走包根) |
+| `src/web.ts` | web 子命令装配:parseWebArgs/startWebServer |
 | `src/session-factory.ts` | **会话装配唯一入口**:`createSessionRuntimeFactory` 统一 cli/web/stage 三处的 createRuntime 样板(路径基准注入、工具守卫、隐藏 skill 命令、模型解析、工具集);`sessionSkillDirs` 是**技能目录清单唯一真相源**(自带 `skills/` 恒加载 + 调用方附加 + 全局 `~/.agents/skills`,`skillPaths` 与只读放行同源;`packagedSkills:false` 才关,舞台角色用);新增装配点必须用它,禁止再复制样板 |
-| `src/web/server.ts` | `WriterServer`:Node 原生 http,**路由表驱动**(method + 路径段模式,40+ REST 端点按域分组为独立 handler)+ SSE 广播 + watcher 集成;`extraRoutes` 插件路由缝;multipart 用 busboy |
+| `src/web/server.ts` | `WriterServer`:Node 原生 http,**路由表驱动**(method + 路径段模式,REST 端点按域分组为独立 handler)+ SSE 广播 + watcher 集成;`extraRoutes` 插件路由缝;multipart 用 busboy |
 | `src/web/session-host.ts` | `SessionHost`:agent 会话 headless 封装(事件扇出、prompt/abort/switchSession、getState、撤回/分支/导航/树、getContextUsage/compact) |
 | `src/plugins.ts` | 插件预留类型:`PluginManifest`(后端 ExtensionFactory / 前端声明式斜杠命令) |
 | `src/web/file-watcher.ts` | `WorldWatcher`:world.json + draft/*.md 外部变更轮询(无缝同步核心) |
@@ -26,18 +29,19 @@ description: pi-writer 写作 agent 项目(独立仓库, vendor 化 pi 核心包
 | `src/atomic-write.ts` | **原子写唯一实现**(唯一 tmp + rename 重试);book-manager/world-data/mcp 配置共用 |
 | `src/session-text.ts` | **会话消息文本提取唯一实现**(chatTextOfMessage/chatThinkingOfMessage);TUI extension 与 web session-host 共用 |
 | `src/extension.ts` | TUI 内联扩展:`pi.registerTool`(word_count/world_update/world_find/read_chapter/**read_style**)+ 全部 `/` 命令 |
-| `src/prompt.ts` | `WRITER_SYSTEM_PROMPT` 写作系统提示词(工具约束/场景节奏/世界维护/**开场纪律**:新书没定风格时提一次并把长期偏好落盘) |
+| `src/prompt.ts` | `buildWriterSystemPrompt`(写作系统提示词,动态生成;**不再手工拼 MCP 清单**);`SCOPE_VARS` 见「手写边界」表 |
 | `prompts/` | 角色提示词本体:`writer-main.md`(写作 agent,TUI/经典模式/主会话,**2026-10-02 起 web 默认落地页**)/`writer-editor.md`(常驻编剧,**只有 world_find**)/`director.md`(导演,有 world_update,仅多 Agent 形态可达)。三份都带开场纪律,但落盘能力不同:写作 agent 与导演能写世界书,编剧只能写 `advice.md` 转交。`director.md` 的 `{STYLE_SETUP_PATH}` 由 `stage-extension.ts` 渲染成 onboarding 剧本绝对路径(舞台角色 `packagedSkills:false`,拿不到 `<available_skills>`)。**`writer-main.md` / `writer-editor.md` 还按 `conversationScope` 渲染**(`{SCOPE_SECTION}` 等占位,值在 `src/prompt.ts` 的 `SCOPE_VARS`):chapter 一列是解耦前原话(`SCOPE_SECTION` = 空串 → 默认模式提示词逐字节不变),book 一列换成「对话不隶属于任何章节 + 当前章节 = 用户正在看的那一章 + 正文白名单不设」。该用哪套由 `hostPromptScope(conversationScope, key)`(`writer-host.ts`)判定:key 是 `<id>.jsonl` 才按绑章叙述——**收幕成文(chatAndWait)在分离模式下仍按章节键建宿主,所以它必须拿绑章那套** |
 | `src/tools.ts` | 自定义工具:word_count(手写词扫描,不依赖 `\p{L}`)、world_update、world_find、**read_chapter**(整章全文;内置 read 在 2000 行/50KB 静默截断)、**read_style**(读回文风采样 —— 2026-10-05 起采样不再进任何上下文块,只由它取)、**style_update**(编剧窄通道:只写写作约束/文风采样/世界观概述,`applyStyleUpdate` 复用 `applyWorldUpdate` 引擎,约束强制 target=writer 且按**名字** upsert/删除;不写 `stage/last-world-edit.json` 记录——那只归舞台页消费)(defineTool + typebox) |
 | `src/tool-guard.ts` | `installToolPathGuard` 工具路径守卫(书目录内读写 + skills 只读) |
-| `src/mcp/` | MCP 配置(config.ts typebox 校验)/连接管理(manager.ts SDK 封装)/工具适配(tools.ts JSON Schema→typebox) |
+| `src/mcp/` | MCP:**装配上游 `createMcpExtension`**(无自研连接管理/工具桥)。三个文件 —— `extension.ts`(包装 + `PI_CODING_AGENT_DIR` 重定向 + `/mcp` 命令 + 一次性迁移)、`migrate.ts`(旧形状 → `mcpServers`+`transport`,纯函数)、`host.ts`(`McpHost`:web 设置页的配置读写面)。详见下方专节 |
 | `src/stage/` | 舞台区(导演/演员/编剧多 agent 共演 demo):orchestrator(状态机)/types/cast/script-store/stage-store/assembler/counters/stage-extension/cli |
 | `src/world-data.ts` | world.json 唯一真相源:校验/规范化/条目/关系/时间线 + md 视图导出;**`WORLD_FILES`/`WORLD_FILE_TITLES` 为世界书文件布局唯一真相源**(world-tree 复用) |
 | `web/src/` | React 前端(vite):「深夜书房」三栏写作台(书库\|纸张\|AI 伙伴);pages(WritePage/WorldPage/SettingsPage)、api/client.ts、store.ts(reducer)、preview.ts(卡片纯逻辑)、components/ |
 | `electron/` | Electron 壳:main.ts(进程内起服务 + 窗口)、preload.ts |
-| `dist/web/server.cjs` | 服务端 esbuild 单文件产物(全部依赖内联);**必须 .cjs 后缀**(包根 type:module) |
+| `patches/` | 对 pi npm 包的本地补丁(`apply-patches.mjs` 施加);见 `patches/README.md` 与 `NOTICE-pi.md` §3 |
+| `dist/web/server.cjs` | 服务端 esbuild 单文件产物(全部依赖内联);**必须 .cjs 后缀**(包根 type:module)。**注意:由 `npm run build:web` 产出,`npm run build` 不产它** —— `npm run web` 已加产物新鲜度自检 |
 | `test/` | vitest 测试(globals:true,只测纯逻辑,不碰真实 provider) |
-| `skills/` | 打包的写作技能:outline/critique/revise/stage-scripting(SKILL.md)+ **网文方法论按阶段拆四个**:`craft-outline`(选题结构/大纲/32 张题材卡,50 份)/ `craft-prose`(正文技法/人物,17 份)/ `craft-deslop`(去 AI 味/文风,7 份)/ `craft-review`(审稿标准,2 份)—— 共 76 份原样 vendor 的第三方 references,来源与 commit 见 `skills/craft-outline/references/ATTRIBUTION.md`(**四份副本内容相同**,`test/skill-references.test.ts` 断言逐字节一致),SKILL.md 只做路由、不含流程 + `onboarding`(**上手引导**:环境心智模型 / 风格引导剧本 / 功能教程备料三份 references;补首启向导不覆盖的「写作风格与题材风格」) |
+| `skills/` | 打包的写作技能:outline/critique/revise/stage-scripting(SKILL.md)+ **网文方法论按阶段拆四个**:`craft-outline`(选题结构/大纲/32 张题材卡,50 份)/ `craft-prose`(正文技法/人物,17 份)/ `craft-deslop`(去 AI 味/文风,7 份)/ `craft-review`(审稿标准,2 份)—— 共 76 份原样收录的第三方 references,来源与 commit 见 `skills/craft-outline/references/ATTRIBUTION.md`(**四份副本内容相同**,`test/skill-references.test.ts` 断言逐字节一致),SKILL.md 只做路由、不含流程 + `onboarding`(**上手引导**:环境心智模型 / 风格引导剧本 / 功能教程备料三份 references;补首启向导不覆盖的「写作风格与题材风格」) |
 
 ## Web 前端架构(深夜书房,2026-08-07 重设计)
 
@@ -51,18 +55,43 @@ description: pi-writer 写作 agent 项目(独立仓库, vendor 化 pi 核心包
 
 ## 关键数据流
 
-1. **会话存储**:vendor `SessionManager` 管理 append-only jsonl(entry 有 id/parentId/timestamp;leaf 指针决定当前分支;`branch()`/`resetLeaf()` 移动 leaf,`getBranch()` 沿 leaf 链,`getTree()` 全树)。**分支位置只在内存,不落盘**。
-2. **事件链**:vendor `AgentSessionEvent`(message_start/update/end、tool_execution_start/end、turn_start、agent_settled…)→ session-host 转发(对 message_end 附加 `entryId`)→ server `broadcast()` → SSE(`data: <json>\n\n`)→ 前端 store reducer(processAgentEvent)。
-3. **工具装配**:`createSessionRuntimeFactory`(src/session-factory.ts,**唯一装配入口**,cli/web/stage 三处共用;2026-08-10 收敛)→ `createAgentSessionFromServices({ excludeTools, initialActiveToolNames, customTools })`;MCP 工具经 `customTools` 注入;自定义工具经 extension `pi.registerTool`。**注意(2026-08-08 根因)**:不能用 `tools` 白名单收窄工具集(该参数同时是白名单,会把不在名单的 MCP customTools 滤掉)——用 `excludeTools` 黑名单 + `initialActiveToolNames`(vendor 新增,分离「初始激活」与「白名单」语义);系统提示必须用 `buildWriterSystemPrompt(mcpManager.getTools(), hasBash)` 动态生成(静态 override 会覆盖 pi 的动态工具段,MCP 工具对 agent 不可见)。
+1. **会话存储**:pi 的 `SessionManager`(经 `pi-adapter` 暴露)管理 append-only jsonl(entry 有 id/parentId/timestamp;leaf 指针决定当前分支;`branch()`/`resetLeaf()` 移动 leaf,`getBranch()` 沿 leaf 链,`getTree()` 全树)。**分支位置只在内存,不落盘**。
+2. **事件链**:pi 的 `AgentSessionEvent`(message_start/update/end、tool_execution_start/end、turn_start、agent_settled…)→ session-host 转发(对 message_end 附加 `entryId`)→ server `broadcast()` → SSE(`data: <json>\n\n`)→ 前端 store reducer(processAgentEvent)。
+3. **工具装配**:`createSessionRuntimeFactory`(src/session-factory.ts,**唯一装配入口**,cli/web/stage 三处共用;2026-08-10 收敛)→ 装配时传 `excludeTools` + `initialActiveToolNames`;**MCP 工具不再经 `customTools` 注入**,改由上游 `createMcpExtension` 自行注册(见下节);自研自定义工具经 extension `pi.registerTool`。**注意(2026-08-08 根因)**:不能用 `tools` 白名单收窄工具集(该参数同时是白名单,会把不在名单的工具滤掉)——用 `excludeTools` 黑名单 + `initialActiveToolNames`(区分「初始激活」与「白名单」语义);系统提示必须用 `buildWriterSystemPrompt(...)` 动态生成(静态 override 会覆盖 pi 的动态工具段)。
 4. **撤回/分支/导航**(web):`POST /api/messages/retract|branch|navigate {entryId}` → session-host 调 `sm.branch(...)` + `agent.state.messages = buildSessionContext().messages` 重建 AI 上下文 → 广播 `messages_retracted` → 前端 alignWithServer 重载。
 5. **无缝同步**:`WorldWatcher` 1s 轮询(mtimeMs+size)发现外部改 world.json/draft → 广播 `world_changed`/`draft_changed`(带 mtime);`PUT /api/draft|world` 支持 `If-Match` 条件写(409 conflict);仅在 SSE 客户端存在时运行。
+
+## MCP(2026-10-05 T9-A:换上游,**勿再自研**)
+
+**决策背景**:初判是「留自研」(理由:贴合写作场景、支持 SSE)。实读上游后推翻 —— 上游 `@earendil-works/pi-coding-agent` 自带 `dist/extensions/mcp/`(约 157KB),stdio + streamable HTTP、OAuth、资源列表、四档暴露策略、`mcp_servers` 提示词段**全都现成**;自研的 843 行里没有一行是上游做不到的。详细决策记录见 `docs/design.md` §14 与 `NOTICE-pi.md` §4.1。
+
+**现在只有三个文件,都是「上游替代不了的胶水」**:
+
+| 文件 | 职责 | 为什么必须自研 |
+|---|---|---|
+| `extension.ts` | `createWriterMcpExtension()` 包装上游扩展;`pointUpstreamAtWriter()` 写 `PI_CODING_AGENT_DIR`;注册 `/mcp` 命令;`session_start` 做一次性迁移 | 上游默认读 `~/.pi/agent`,pi-writer 的数据在 `~/.pi/writer/agent`;**不写这个环境变量,用户的 MCP 配置整个看不见** |
+| `migrate.ts` | 旧形状(`{servers:[...]}`)→ 上游形状(`{mcpServers:{}}` + `transport`);`exposure` 补 `direct`;SSE 降级为 http;`.bak-<ts>` 备份;幂等 | 上游不认识我们 v0.x 写下的形状,静默忽略 |
+| `host.ts` | `McpHost`:web 设置页的配置读写面(list/upsert/remove/raw);工具清单用 `pi.getAllTools()` | 上游包**入口没导出** `addMcpServerConfig` 等(只在内部子路径),而 `pi-adapter` 护栏禁止深层 import → 自实现读-改-写 |
+
+**四条硬约束(改这里之前必看)**:
+
+1. **传输只有 stdio + http**。上游不实现 SSE。旧 `sse` 条目迁移时**自动降级为 http 并告警**;web 保存 `sse` 被 **400 拒绝**(中文提示)。这是能力收窄,已写进 README/security.md。
+2. **`exposure` 默认写 `direct`**。上游默认 `codemode`(工具**不进**模型工具声明),直接沿用会让老用户的 MCP 工具突然"消失"。迁移与前端新建都写 `direct`。四档:`direct`(立即进声明)/`codemode`(不进声明,靠 `tool_search`)/`deferred`/`hidden`(不可达)。
+3. **MCP 提示词段不再手工拼**。自研时代 `cli.ts` 要传 `customTools: mcpManager.getTools()` 给 `buildWriterSystemPrompt`;现在上游经 `before_agent_start` 注入 `sections["mcp_servers"]`。关键区别:`systemPromptOverride` 是**整体替换**,而 sections 是**结构化增量、不受 override 影响** —— 所以「override 会吃掉 MCP 段」的担心不成立;但反过来**也不能靠 override 改 MCP 段的措辞**。
+4. **重连是上游的懒重连**(下次调用时按需),自研的 3-30s 退避已删。`server.ts` 里的 `onReconnect` 钩子与 `mcpManager.close()` 都随之删除。
+
+**工具名**:上游注册为 `mcp__<server>__<tool>`(`namespace.name` 形如 `mcp__<server>`,非 `[A-Za-z0-9_]` 转 `_`)。`McpHost.getStatus()` 就靠 `pi.getAllTools()` 的这个前缀反推每个服务器的工具数。
+
+**装配点**:`cli.ts` 与 `web.ts` 都走 `extensionFactories: [writerExtension, createWriterMcpExtension({ agentDir })]`。web 侧另有 `new McpHost(agentDir)` + `ensureMigrated()`(在 `createWriterMcpExtension` **之前**,告警必须打 stderr —— 否则 SSE 降级与"字段不完整已跳过"都是静默失败)。
+
+**API**:`GET|POST|DELETE /api/mcp` + `GET|PUT /api/mcp/raw`(直接编辑文件,原样读写)→ 设置页 `McpServerList.tsx`。兼容 Claude Code 配置(`imports: ["claude-code"]` 合并 `~/.claude.json`)。
 
 ## 关键实现位置(新功能索引)
 
 - **书/章节重命名**:`renameBook`(book-manager.ts)→ `PATCH /api/books/:slug`(server.ts,当前书走 enqueueSwitch 迁移会话)→ 前端 ChapterSidebar 行内输入 → TUI `/rename-book`(extension.ts)
 - **创作方式(多 Agent / 单 Agent)**:唯一实现 `web/src/components/CreationModeCards.tsx`(首启向导「创作方式」步 + 设置页「Agent 形态」卡,文案只写一份;手机端设置索引里是「Agent 形态」子页)。值是服务端 `settings.json` 的 `classicMode`,链路 `App.changeClassicMode` → `PUT /api/settings` → `WriterHost.setClassicMode`(切换即释放已建会话,下次对话生效)。**默认值有两份且必须同步翻转**:`src/writer-settings.ts` 的 `defaultWriterSettings()`(权威,2026-10-02 起 `classicMode: true` = 单 Agent)与 `web/src/settings.ts` 的 `parseClassicMode`(浏览器首帧缓存;只改一处会先画出舞台入口再收回,`test/settings.test.ts` 有护栏比对)。**首启向导八步**(2026-10-02:6 → 8,新增「对话范围」「执行命令」两步):步骤表两份必须同序 —— `SETUP_STEPS`(src/setup.ts)与 `WIZARD_STEPS`(SetupWizard.tsx);步骤判断一律用 `stepId` 不用 `step === N`,跳转走 `nextStep()` / `stepIndex(id)` 不写字面下标(插步骤时下标全体顺移,漏一处就是"进度条在第 N 步、界面还是第 N-1 步的控件");加步骤是追加式,不递增 `SETUP_VERSION`。已有 `settings.json` 的安装不受默认值翻转影响(文件里是显式值)
 - **三处两选一卡片**:骨架唯一实现 `web/src/components/ChoiceCards.tsx`(`.choice-*` 样式在 styles.css;图标底 + 标题胶囊 + 一句话定位 + 要点列表 + 右上单选圈),数据各一份 —— `CreationModeCards.tsx`(多/单 Agent)、`ConversationScopeCards.tsx`(绑定章节/分离)、`ShellCards.tsx`(保持关闭/开启 shell,并导出两处共用的风险确认正文 `SHELL_CONFIRM_TEXT`)。加第四处 = 只加一份数据,不要复制骨架。三处都**不落盘**:写服务端 + 失败回滚在调用方(`App.changeClassicMode` / `changeConversationScope` / `changeShellEnabled`)
-- **MCP**:`src/mcp/`(config/manager/tools)→ `GET|POST|PUT|DELETE /api/mcp` + `GET|PUT /api/mcp/raw`(直接编辑文件,原样读写含 imports/mcpServers 形状;保存后 reloadRuntime + 重新注入背景包)→ 设置页 McpServerList.tsx。传输 stdio/sse/http(streamable);兼容 Claude Code 配置(`imports: ["claude-code"]` 合并 ~/.claude.json);断线自动重连(watchdog 3-30s,重连后 handleMcpReload 重建会话)
+- **MCP**:见上方专节(2026-10-05 起走上游 `createMcpExtension`,只有 extension/migrate/host 三个胶水文件;传输 stdio/http,SSE 已不支持)
 - **撤回/编辑/分支**:session-host.ts(`retractMessage` 仅限最新 user 消息/`branchMessage`/`navigateTo`/`getSessionTree`)→ server.ts 端点 → 前端 MessageList.tsx(按钮:最新=编辑/撤回,旧=分支)+ BranchBar.tsx(分支栏切换)
 - **cot 合并+计时**:session-host `extractMessages` 按 user 开组合并(服务端分组权威);store.ts 实时同规则合并;MessageList ThinkingBlock 计时
 - **无缝同步**:file-watcher.ts + server.ts(watcher 集成/If-Match)+ 前端 DraftWorkspace/WorldPage(lastMtimeRef)
@@ -72,16 +101,17 @@ description: pi-writer 写作 agent 项目(独立仓库, vendor 化 pi 核心包
 - **自定义供应商 / 模型(models.json)**:`src/custom-models.ts` 是 models.json 增删改的**唯一纯函数实现**(`upsertCustomProvider`/`hasCustomProvider`/`updateCustomModel`/`deleteCustomModel`/`deleteCustomProvider`),落盘与热重载在 server.ts(`writeModelsConfig` + `reloadModels`)。两个入口分开:**加供应商** = `POST /api/providers/custom`(只写 provider 级 api/baseUrl/apiKey/name,`models: []`),**加模型** = `POST /api/models/custom`(在已有供应商下追加,不再覆盖条目的 `api`/`baseUrl`)。`GET /api/providers` 走 `listProvidersWithCustom()`:`SessionHost.listProviders()` 是从**模型目录反推** provider 的(`new Set(mr.getModels().map(m => m.provider))`),零模型的供应商没有痕迹,所以 server 再把 models.json 的条目补进来并 `sortProviders`。前端 ProviderList(桌面双栏 / 手机三态)+ AddProviderDialog + AddModelDialog
 - **换模型 / 换思考档位(会话级设置)**:`POST /api/model`、`POST /api/thinking` → `WriterServer.applyToAllSessions`(三处宿主齐发)→ `WriterHost.setModel`/`setThinkingLevel`、`StageHost` 与 `StageOrchestrator` 的同名方法(已建会话即时生效,演员级 `model` 覆盖优先);装配工厂里的 model/thinkingLevel 是 getter。**漏一处就等于「同一个对话窗口换模型不生效」**(2026-10-01,详见坑 23)
 - **手机端**:`useIsPhone()`/`PHONE_QUERY`(useMediaQuery.ts)+ `MobileHeader.tsx` + `WorldEntryDetail.tsx`(条目只读详情)+ `styles/mobile.css`,之后还有一层 `styles/presence.css`(**必须最后 import**,退场动画要压过各页入场 animation);四页 `MobileHeader` 由 App 传 `nav={{view, onNavigate}}` 接抽屉导航;编辑页底部输入条 `.m-composer`;设置页的 `PHONE_PAGES` + `cardClass()` 决定手机子页显示哪张卡
-- **斜杠命令**:`web/src/slash-commands.ts`(parseSlashQuery/SlashCommand/SlashSuggestion + node/chapter/compact/skill 工厂)→ `InputBar.tsx`(commands/context props,↑/↓+Enter/Tab 选择)→ `WritePage`/`StagePage` 注册;测试 `test/slash-commands.test.ts`。**`/skill`(2026-10-02)**:候选来自 `GET /api/skills`(`src/skills-index.ts` 用 vendor `loadSkills` + `sessionSkillDirs`,与 agent 装配同源 —— 菜单名字必须等于 `/skill:<name>` 能展开的那份),插入文本是 `/skill:<名字> ` 字面形态(vendor `agent-session.ts` 的 `_expandSkillCommand` 只认消息**首位**的 `/skill:`,所以 `composeMessageWithAttachments` 带引用芯片时把技能指令提到最前);技能正文由 vendor 展开,前端不要再拼一遍
+- **斜杠命令**:`web/src/slash-commands.ts`(parseSlashQuery/SlashCommand/SlashSuggestion + node/chapter/compact/skill 工厂)→ `InputBar.tsx`(commands/context props,↑/↓+Enter/Tab 选择)→ `WritePage`/`StagePage` 注册;测试 `test/slash-commands.test.ts`。**`/skill`(2026-10-02)**:候选来自 `GET /api/skills`(`src/skills-index.ts` 用 pi 的 `loadSkills` + `sessionSkillDirs`,与 agent 装配同源 —— 菜单名字必须等于 `/skill:<name>` 能展开的那份),插入文本是 `/skill:<名字> ` 字面形态(pi 的 `agent-session` 里 `_expandSkillCommand` 只认消息**首位**的 `/skill:`,所以 `composeMessageWithAttachments` 带引用芯片时把技能指令提到最前);技能正文由 pi 展开,前端不要再拼一遍
 - **技能纪律(2026-10-02 放宽)**:三份提示词里 `writer-main.md` / `writer-editor.md` 有《技能(按需使用)》一节 —— 场景命中就**直接按方法做事**,不再要求「只在用户提出时提供」;唯一保留的边界是**多轮流程先问一句**(不朗读方法论、不倒清单、不报技能名与路径),另有用户显式点名通道 `/skill:<name>`。舞台角色是**故意不给**技能浏览的(`packagedSkills:false`,避免诱导演员/导演去改正文),它们只有 `{SKILLS_PATH}` 指到的方法论文件
-- **上下文压缩**:`SessionHost.getContextUsage/compact`(vendor getContextUsage/compact)→ writer 端点 `GET /api/writer/:slug/context` + `POST /api/writer/:slug/compact`;导演走 `stage command compact` + 快照 `directorUsage`;前端 compaction_start/end → MessageList 压缩提示 + context-usage 80% 提示
+- **上下文压缩**:`SessionHost.getContextUsage/compact`(经 pi-adapter 转发 pi 的 getContextUsage/compact)→ writer 端点 `GET /api/writer/:slug/context` + `POST /api/writer/:slug/compact`;导演走 `stage command compact` + 快照 `directorUsage`;前端 compaction_start/end → MessageList 压缩提示 + context-usage 80% 提示
 - **UI 房(调试模式的组件陈列室)**:`web/src/pages/UIRoom.tsx`(页面壳:搜索 / 分组 / 带框格子宽度)+ `web/src/uiroom-types.ts`(**展项契约**:分组 / 展项 / 状态档类型 + 覆盖计算)+ 六个展项文件 `web/src/uiroom/{atoms,chat,world,settings,stage,tokens}.tsx` + `web/src/uiroom-runtime.tsx`(展项取 client/slug/library 的上下文,含 `demoLibrary()`)+ `web/src/styles/uiroom.css`。入口由 `web/src/nav.ts` 的 `navItems({debugMode})` 决定(App 顶栏 + ChapterSidebar 手机抽屉 + UI 房自带手机导航)。**加组件的同一条提交里要加展项**(或在 `UIROOM_NOT_EXHIBITED` 登记理由),否则 `test/uiroom.test.ts` 红
 - **插件预留**:`src/plugins.ts` 类型 + `WriterServerOptions.extraRoutes` + `broadcastEvent()`;后端执行式插件未来注入 `extensionFactories`,前端只接受声明式清单(不在 renderer 跑用户 JS)
 
 ## 约定(改代码前必读)
 
 - **只用 erasable TypeScript**:无 enum/namespace/参数属性(Android strip-types 兼容)。
-- 工具定义走 `defineTool` + typebox `Type.Object`,勿手写 schema;MCP 直接装配上游扩展(src/mcp/extension.ts 是唯一接缝,没有自研工具适配层)。
+- **pi 框架的 import 一律走 `src/pi-adapter/`**(唯一接触面):自研代码不准直接 `import "@earendil-works/pi-xxx"`,也**禁止深层子路径**(`@earendil-works/pi-coding-agent/dist/...`)。`test/pi-adapter.test.ts` 有护栏扫描。**唯一例外是 `src/mcp/`**(它从包根 import,如 `createMcpExtension` / `ToolInfo`)—— 理由:MCP 装配函数不是「写作领域形状」,塞进 adapter 会让 adapter 变成第二个框架。
+- 工具定义走 `defineTool` + typebox `Type.Object`,勿手写 schema;MCP 直接装配上游扩展(见上方专节),**没有自研工具适配层**。
 - 用户可见 UI 文案**中文内联**;prompt.ts 以英文为主(模型指令)。
 - agent 工具集 = read/write/edit/ls/grep/find/word_count/world_update/world_find,**无 bash**(web 模式同);TUI 多 bash。
 - 保持独立身份:不用 `~/.pi/agent` 配置,不引入 coding-agent 的扩展/技能。
@@ -127,32 +157,42 @@ description: pi-writer 写作 agent 项目(独立仓库, vendor 化 pi 核心包
 
 ```bash
 # 运行
-npx tsx src/cli.ts --book <slug>              # TUI
-npx tsx src/cli.ts --web [--port N] [--no-browser]   # web 服务(默认 127.0.0.1:8811)
-npx tsx src/cli.ts --web --no-browser &       # 只起服务;前端开发另开:cd web && npx vite dev
-# 测试(临时配置,勿用 vitest.config.ts——缺 monorepo base)
-npx vitest run --config vitest.tmp.config.ts
-# 类型检查
-npx tsc -p tsconfig.tmp.json                  # src+vendor(注意 vendor 有既有类型错误,过滤 vendor/)
+npx tsx src/cli.ts --book <slug>                      # TUI
+npx tsx src/cli.ts --web [--port N] [--no-browser]    # web 服务(默认 127.0.0.1:8811)
+npm run web -- --port N                               # 跑构建产物 dist/web/server.cjs(带产物新鲜度自检)
+# 前端开发另开:cd web && npx vite dev
+
+# 测试 / 类型检查(用仓库根的真实配置,无 tmp 变体)
+npm test                        # = vitest --run(全量)
+npx vitest --run test/xxx.test.ts   # 单文件
+npm run typecheck               # = tsc -p tsconfig.json --noEmit(全仓,含 test/)
 cd web && npx tsc --noEmit -p tsconfig.json   # 前端
+
 # 构建/打包
-npm run build:web                              # 服务端 server.cjs + 前端 dist(自包含检查 + 导出契约冒烟)
-npm run bundle                                 # TUI 单文件 exe(需 bun)→ release/pi-writer.exe
+npm run build                   # 只产 dist/cli.js + dist/index.js + 声明(**不产 server.cjs**)
+npm run build:web               # 服务端 server.cjs + Electron 主进程 + 前端 dist(自包含检查 + 导出契约冒烟)
+npm run bundle                  # TUI 单文件 exe(需 bun)→ release/pi-writer.exe
+npm run clean                   # 删 dist
+
 # 生产产物冒烟(临时目录,避免污染真实数据!env 前缀后**不要加分号**)
-env PI_WRITER_DIR="C:/.../tmp" node dist/web/server.cjs --no-browser --port 8899
-# 冒烟请求用 node --input-type=module -e "..."(undici fetch),勿用 curl 发中文/文件
+env PI_WRITER_DIR=/tmp/smoke node dist/web/server.cjs --no-browser --port 8899
+# 冒烟请求用 node -e "fetch(...)"(undici fetch),勿用 curl 发中文/文件
 #   —— Git Bash 的 curl 对 /tmp 的路径映射与 node 不一致(读文件会 exit 26),图片/zip 上传请用 fetch + FormData
 ```
 
+> **`build` 与 `build:web` 是两个产物,别搞混**:`npm run web` 跑的是 `dist/web/server.cjs`,而它**只由 `npm run build:web` 产出**。所以「改源码 → `npm run build` → `npm run web`」会**跑在旧产物上且不报错**(2026-10-05 真踩过,白查半小时)。`npm run web` 已前置 `scripts/check-web-fresh.mjs` 做 mtime 自检(过期打醒目警告,不阻断),`test/build-scripts.test.ts` 钉住这个契约。
+>
+> **首次 clone 后先 `npm install`**:`postinstall` 会跑 `scripts/apply-patches.mjs` 把 `patches/` 施加到 pi 包。补丁失配会报 `Hunk #1 FAILED` —— 多半是版本号漂移(`package.json` 里四个包锁的是精确 `1.0.2`,不要改回 `^`)。
+
 ## 常见坑(排查优先看)
 
-1. **vendor 类型错误**:tsc 报 vendor/* 的错误是既有问题(undici/fetch 类型),忽略,只看 src/ 与 test/。
+1. **`npm run build` ≠ `npm run build:web`**:前者只产 `dist/cli.js`/`dist/index.js`,**不产** `dist/web/server.cjs`;后者才是 web 产物。误用会让你「改了源码却跑在旧代码上」且**无任何报错**。`npm run web` 已有 mtime 自检兜底(见「常用操作」)。另外 `skipLibCheck: true` 是必需品(`pi-ai` 在 NodeNext 下有约 30 个 TS1543),别关掉。
 2. **冒烟污染真实数据**:`PI_WRITER_DIR=...; node ...` 的分号会让 env 前缀失效,服务写进真实 `~/.pi/writer`!用 `env VAR=... cmd` 或去掉分号。
-3. **SDK 顶层 exports 缺陷**:@modelcontextprotocol/sdk 1.30.0 的 `"."` 指向缺失的 index.js,必须从子路径导入(`@modelcontextprotocol/sdk/client/stdio.js` 等)。
+3. **`@modelcontextprotocol/sdk` 已成孤儿依赖**:自研 MCP 删除后 `src/` 内已无引用(只剩 `McpServerList.tsx` 里一处占位符文案)。传输、OAuth、资源列表全由上游 pi 扩展负责。**别为 MCP 改回 SDK** —— 那是回退到 T9-A 之前。
 4. **CJS 产物**:server 产物必须叫 `.cjs`(包根 type:module);esbuild 打 CJS 时 import.meta 为空,web-build.mjs 用 importMetaUrlPlugin 烘焙。
 5. **Windows mtime 精度**:短间隔写入共享 mtime,If-Match 有 1ms 容差;测试里外部修改用 `utimesSync` 推进时间戳。
 6. **curl 中文乱码 + /tmp 路径映射**:Git Bash curl 发中文 body/URL 会乱码;curl 与 node 对 `/tmp/x` 的解析不同(MSYS 转换 vs Windows 字面路径),`-F file=@/tmp/x` 可能 exit 26——用 node fetch + FormData 做冒烟。
-7. **服务残留进程**:TaskStop 可能杀不干净 node 子进程,端口占用时 `/c/Windows/System32/netstat.exe -ano | grep :PORT` + `/c/Windows/System32/taskkill.exe //F //PID <pid>`(Git Bash 的 netstat/taskkill 不在 PATH)。
+7. **服务残留进程**:TaskStop 可能杀不干净 node 子进程,端口占用时 `/c/Windows/System32/netstat.exe -ano | grep :PORT` + `/c/Windows/System32/taskkill.exe //F //PID <pid>`(Git Bash 的 netstat/taskkill 不在 PATH)。**本仓库跑冒烟常留后台进程,收尾记得 `pkill -f "server.cjs"` 并 `ps aux | grep [s]erver.cjs` 复核**。
 8. **分支状态不落盘**:重启/reloadRuntime 后 leaf 回到文件最深路径,代码已用 prevLeafId 恢复;手工改会话文件同理。
 9. **flex/grid 高度链**:内容超高整页被拉长 = 链上某处缺 `min-height:0`(`.view`/grid 子项/grid-template-rows 需 `minmax(0,1fr)`);滚动容器超高必须在容器内滚动,不能撑父级。
 10. **隐藏容器内 textarea**:display:none 容器中挂载的 textarea scrollHeight 为 0,JS 自动增高会钉成 0 高度——需 ResizeObserver 在容器恢复显示时重算(InputBar 已有,新输入框复用)。
@@ -173,15 +213,15 @@ env PI_WRITER_DIR="C:/.../tmp" node dist/web/server.cjs --no-browser --port 8899
 
 23. **会话级设置必须广播到「三个宿主」,模型/思考档位还是会话创建时绑死的**:web 侧有三个会话宿主 —— 主会话(`sessionHost`,book 级)、常驻编剧(`writerHost`,编辑页「AI 伙伴」的对话,键 = slug:chapterFile)、舞台编排器(`stageHost`,导演/演员/收幕编剧)。**聊天只走后两个**,`sessionHost` 不参与对话但 `/api/models` 的「当前模型」读的是它。
     - 漏转发的症状:设置页切完模型显示成功(读的是主会话),可同一个对话窗口继续用旧模型,直到换章/重启 —— 2026-10-01 的「同一个对话窗口不能换模型」。新增任何会话级设置,端点里一律走 `WriterServer.applyToAllSessions`(逐个宿主尝试、最后汇总报错,一个宿主坏了不挡其余)。
-    - 根因:vendor 在**会话创建时**解析一次模型(`vendor/pi-coding-agent/src/core/sdk.ts` 的 `defaultModelId: settingsManager.getDefaultModel()`),之后只有 `session.setModel()` 能改;`reloadRuntime()` 重建 runtime 时又按装配工厂重新解析。所以两处都要管:① `WriterHost`/`StageHost`/`StageOrchestrator` 给已建宿主转发(`setModel`/`setThinkingLevel`);② 装配工厂里把 `model`/`thinkingLevel` 写成 **getter**(`createSessionRuntimeFactory` 是在每次装配时才读 `opts.model` 的,传值会把当时的 `--model` 固定进闭包,重建后弹回旧模型)。
+    - 根因:pi 在**会话创建时**解析一次模型(`pi-coding-agent` 内部的 `defaultModelId: settingsManager.getDefaultModel()`),之后只有 `session.setModel()` 能改;`reloadRuntime()` 重建 runtime 时又按装配工厂重新解析。所以两处都要管:① `WriterHost`/`StageHost`/`StageOrchestrator` 给已建宿主转发(`setModel`/`setThinkingLevel`);② 装配工厂里把 `model`/`thinkingLevel` 写成 **getter**(`createSessionRuntimeFactory` 是在每次装配时才读 `opts.model` 的,传值会把当时的 `--model` 固定进闭包,重建后弹回旧模型)。
     - 语义边界:舞台**演员**在 `cast.json` 里单独写了 `model` 的保留覆盖(角色级优先于全局);思考档位不动演员(第一人称默认 low 是角色设计,§10.6),要改走 `updateActorSpec`。
 
-24. **「模型看得见技能文件却不知道有技能」= 技能目录清单漏加载**:vendor 只把 `loadSkills` 拿到的技能列进系统提示词的 `<available_skills>`(`buildSystemPrompt` 在「活跃工具含 `read`」时追加),而**能读**是路径守卫那一层(`readOnlyDirs` 放行 `skills/`)—— 两层不同源,所以会出现「模型能 `read skills/<name>/SKILL.md`,提示词里却没有它」。技能目录只认 `src/session-factory.ts` 的 `sessionSkillDirs()`(自带 `skills/` 恒加载 + `additionalSkillPaths` + `~/.agents/skills`,同时喂 `skillPaths` 与 `readOnlyDirs`);新增装配点若自行拼装目录就会漏(2026-10-01 的 `writer-host` 就是这么漏的:编辑页对话只列了全局技能)。舞台角色是唯一的显式例外(`packagedSkills: false`)。
+24. **「模型看得见技能文件却不知道有技能」= 技能目录清单漏加载**:pi 只把 `loadSkills` 拿到的技能列进系统提示词的 `<available_skills>`(`buildSystemPrompt` 在「活跃工具含 `read`」时追加),而**能读**是路径守卫那一层(`readOnlyDirs` 放行 `skills/`)—— 两层不同源,所以会出现「模型能 `read skills/<name>/SKILL.md`,提示词里却没有它」。技能目录只认 `src/session-factory.ts` 的 `sessionSkillDirs()`(自带 `skills/` 恒加载 + `additionalSkillPaths` + `~/.agents/skills`,同时喂 `skillPaths` 与 `readOnlyDirs`);新增装配点若自行拼装目录就会漏(2026-10-01 的 `writer-host` 就是这么漏的:编辑页对话只列了全局技能)。舞台角色是唯一的显式例外(`packagedSkills: false`)。
 
 25. **提示词里不许写死「会话 = 一章」**:对话与章节解耦(2026-10-03)之后,`prompts/*.md` 里那句「每个 pi-writer *会话*对应书的一章」和「正文文件固定由当前章节决定」在分离模式下与事实相反(白名单不设、可改任意章),模型会据此自我收窄——用户让它改别的章节,它把活推回去。规则:凡随 `conversationScope` 变的事实一律写成 `{占位}`,值只放在 `src/prompt.ts` 的 `SCOPE_VARS`;渲染入口是 `buildWriterSystemPrompt(tools, shell, scope)` 与 `buildEditorSystemPrompt(scope)`,**哪个宿主用哪套**走 `hostPromptScope(conversationScope, key)`(判据:key `<id>.jsonl` = 绑章;分离模式下收幕成文 `chatAndWait` 也走章节键,所以它拿到的是绑章那套)。chapter 一列的文本是解耦前原话、`SCOPE_SECTION` 是空串 —— 写作 agent(`writer-main.md`)在绑定章节下的系统提示必须**逐字节不变**(`test/prompt.test.ts` 有护栏:chapter 的句子在、`# 对话范围` 整节不在、两种范围都不许残留 `{占位}`)。
 
 ## 需要深入时读 references/
 
-- `references/architecture.md` — vendor 包关系、web 前端结构、会话/事件机制细节(branch/leaf/buildSessionContext)
+- `references/architecture.md` — pi 包关系与防腐层、web 前端结构、会话/事件机制细节(branch/leaf/buildSessionContext)
 - `references/commands.md` — 全部命令与脚本参数(web/electron/bundle/electron-builder)
 - `references/pitfalls.md` — 上述坑的详细排查路径与修复记录

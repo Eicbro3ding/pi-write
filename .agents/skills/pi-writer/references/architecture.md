@@ -1,24 +1,29 @@
 # pi-writer 架构细节
 
-## vendor 包关系(内部 import 已重写为相对路径)
+## pi 包关系与防腐层(2026-10-05 起,npm 依赖 + patch)
 
 ```
 pi-protocol ──> pi-ai ──> pi-agent-core ──> pi-coding-agent ──> pi-tui
                   │              │                  │
-                  └── typebox 1.3.7(直接 import "typebox")
+                  └── typebox(直接 import "typebox")
 ```
 
-- `pi-ai`:provider 适配(anthropic/openai/google/bedrock…)、ThinkingLevel、AssistantMessageEventStream、`Tool` 类型、auth(provider 登录/凭据)。
-- `pi-agent-core`:agent-loop(streamAssistantResponse)、harness(agent-harness,把 turn 状态喂给 provider)、AgentMessage 类型(无 id!id 在 SessionEntry 层)、AgentToolResult。
-- `pi-coding-agent`:AgentSession(prompt/abort/setModel/setThinkingLevel…)、SessionManager(append-only jsonl)、extension 系统(ExtensionAPI.registerTool/registerCommand、ToolDefinition、defineTool)、createAgentSessionFromServices(customTools 注入点)。
-- `pi-tui`:InteractiveMode、组件(assistant-message 等)、主题。
+四个包(`pi-coding-agent` / `pi-agent-core` / `pi-ai` / `pi-tui`)是 **npm 依赖,锁精确版本 1.0.2**,**不再有 `vendor/` 目录**。本地改动走 `patches/`(`scripts/apply-patches.mjs` 在 `postinstall` 施加)。
 
-**关键 vendor 事实**:
+**自研代码不准直接 import 这四个包** —— 一律走 `src/pi-adapter/`(防腐层,`test/pi-adapter.test.ts` 有护栏)。唯一例外是 `src/mcp/`(从包根 import `createMcpExtension` / `ToolInfo`,理由:MCP 装配不是「写作领域形状」)。
+
+- `pi-ai`:provider 适配(anthropic/openai/google/bedrock…)、ThinkingLevel、AssistantMessageEventStream、`Tool` 类型、auth。
+- `pi-agent-core`:agent-loop(streamAssistantResponse)、harness、AgentMessage 类型(无 id!id 在 SessionEntry 层)、AgentToolResult。
+- `pi-coding-agent`:AgentSession(prompt/abort/setModel/setThinkingLevel…)、SessionManager(append-only jsonl)、extension 系统(ExtensionAPI.registerTool/registerCommand、ToolDefinition、defineTool)、**内建 MCP 扩展**(`dist/extensions/mcp/`,pi-writer 直接装配它 —— 见 SKILL.md 的 MCP 专节)。
+- `pi-tui`:InteractiveMode、组件、主题。
+
+**关键 pi 事实**:
 - `AgentMessage` 无 id 字段;id/timestamp/parentId 在落盘后的 `SessionEntry` 上。
 - 会话持久化只在 `message_end` 时 `appendMessage`(user/assistant/toolResult 都落盘;custom 走 appendCustomMessageEntry)。
 - `SessionManager` 是 append-only:`getEntries()` 全部、`getBranch()` 沿 leaf 链(根→叶)、`getTree()` 全树、`branch(id)` 移动 leaf、`resetLeaf()`、`getEntry(id)` 全局查。**无删除/修改接口**——"撤回/分支"都是移动 leaf 指针。
-- 切换上下文:`sm.buildSessionContext()` 从 leaf 链重建消息;`agent.state.messages = ...` 后 AI 下一轮即用新上下文(vendor session tree 导航同款模式)。
+- 切换上下文:`sm.buildSessionContext()` 从 leaf 链重建消息;`agent.state.messages = ...` 后 AI 下一轮即用新上下文(pi 的 session tree 导航同款模式)。
 - harness 的 system prompt:`_rebuildSystemPrompt` 里只有带 `promptSnippet` 的工具进 "Available tools" 段;word_count/world_update/world_find 靠 prompt.ts 手动描述。
+- **提示词注入有两条通道,互不干扰**:`systemPromptOverride`(**整体替换**,会盖掉 pi 所有动态段)vs `before_agent_start` 的 `sections["mcp_servers"]`(**结构化增量,不受 override 影响**,MCP 段走这条)。
 
 ## 会话文件格式
 
@@ -54,4 +59,4 @@ header 第一行;`getEntries()` 跳过 header。message entry 的 id 是 8 位 h
 - 背景包:`injectChapterContext(slug, chapterFile)` 读 draft + ensureWorld + 最近 2 条 user 消息 → buildChapterContext → `sendCustomMessage(nextTurn)`。
 - 鉴权:回环 Host/Origin/Sec-Fetch-Site 守卫;可选 `PI_WRITER_TOKEN`(Android)。
 - multipart 解析用 **busboy**(2026-08-10 替换手写 boundary 切分;busboy 1.x 是函数调用 `busboy({ headers, limits })`,非 `new`)。
-- MCP 端点(POST/PUT 后):`handleMcpReload()` = reloadRuntime + 重新注入背景包 + 广播 session_changed。
+- MCP 端点:配置读写走 `McpHost`(自实现读-改-写,**不**调上游未导出的 config 函数);连接/工具由上游 `createMcpExtension` 在会话内完成。传输只支持 stdio + http(SSE 被 400 拒绝);`POST`/`DELETE` 后广播 session_changed(工具集变了)。
