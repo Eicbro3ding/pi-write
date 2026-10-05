@@ -64,6 +64,24 @@
 
 ## 明确不做(附理由,避免被重新提出)
 
+- **T14–T19(阶段 4「用上 1.0 能力」)暂缓** —— 2026-10-06 用户决定:没有必要。
+  - **它们依赖的东西真实存在**:`defineDoc` / `TaskGraph` / `TaskGraphWatch` /
+    `rewindable` / `StorageRejected` / `ReadAfterWrite` 全在 **`@earendil-works/pi-durable`**
+    (独立包,1.0.3,**2026-10-05 发布**)。任务文档 `PI_WRITER_IMPLEMENTATION.md` 第
+    1234–1303 行(T14–T19)定义完整,"上游对应"栏**准确**。
+    - 注意:这个包**不在本仓库依赖里**,`grep node_modules/` 是搜不到的 —— 曾据此误判
+      "API 不存在"(搜不到 ≠ 不存在)。核对上游 API 必须查 `npm view` / `npm pack`,
+      不能只扫已安装目录。
+  - **不做的理由不是"没有",而是"不划算"**:
+    - README 首行写明 **Experimental,API 在版本间无通知变化**;发布距今一天。
+    - 它不是"加个依赖",而是 **durable agent harness** —— 会接管 conversations /
+      model turns / tool calls 的整个存储层。
+    - T14 的收益文档写的是"删掉 106 行手写并发控制"(`world-lock.ts` 20 +
+      `atomic-write.ts` 42 + `write-queue.ts` 44)。**用整个会话运行时换 106 行,且换来的
+      是实验品** —— 收益远低于成本与风险。
+  - 若将来要重估,触发条件应是:pi-durable 从 Experimental 毕业(API 稳定)、或世界书
+    并发控制真的出了事故。届时可按 T14 原方案重开。
+
 - **条目删除不加硬拦**。它与「空内容 `write`」不是一类:模型删条目时**意图明确**
   (用户说「删掉那个临时角色」),结果**当场可见**(前端有 `last-world-edit.json` 的
   diff 预览卡)。加确认门槛成本高、收益低,还会挡住正常操作。
