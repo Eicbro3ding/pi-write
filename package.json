@@ -21,13 +21,13 @@
     "README.md",
     "LICENSE",
     "THIRD-PARTY.md",
-    "vendor/LICENSE-pi.txt",
-    "vendor/NOTICE.md"
+    "LICENSE-pi.txt",
+    "NOTICE-pi.md"
   ],
   "scripts": {
     "clean": "shx rm -rf dist",
     "build": "tsgo -p tsconfig.build.json && shx chmod +x dist/cli.js",
-    "bundle": "node scripts/check-bun.mjs && bun build src/cli.ts --compile --outfile release/pi-writer.exe && shx rm -rf release/skills release/theme release/prompts && shx cp -r skills release/skills && shx cp -r prompts release/prompts && shx mkdir -p release/theme && shx cp vendor/pi-coding-agent/src/modes/interactive/theme/*.json release/theme/ && shx cp package.json README.md LICENSE THIRD-PARTY.md release/ && shx cp vendor/LICENSE-pi.txt vendor/NOTICE.md release/",
+    "bundle": "node scripts/check-bun.mjs && bun build src/cli.ts --compile --outfile release/pi-writer.exe && shx rm -rf release/skills release/theme release/prompts && shx cp -r skills release/skills && shx cp -r prompts release/prompts && shx mkdir -p release/theme && shx cp node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/*.json release/theme/ && shx cp package.json README.md LICENSE THIRD-PARTY.md release/ && shx cp LICENSE-pi.txt NOTICE-pi.md release/",
     "test": "vitest --run",
     "typecheck": "tsgo -p tsconfig.json --noEmit 2>&1 | grep -E '^src/' || echo 'src/ 类型检查通过(0 错误)'",
     "prepublishOnly": "npm run clean && npm run build",
@@ -44,7 +44,7 @@
     "@codemirror/view": "^6.43.8",
     "@earendil-works/pi-agent-core": "1.0.2",
     "@earendil-works/pi-ai": "1.0.2",
-    "@earendil-works/pi-coding-agent": "^1.0.2",
+    "@earendil-works/pi-coding-agent": "1.0.2",
     "@earendil-works/pi-tui": "1.0.2",
     "@google/genai": "1.52.0",
     "@mistralai/mistralai": "2.2.6",

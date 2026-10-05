@@ -24,11 +24,11 @@ files:
   - ico.png
   - package.json
   # 许可与第三方声明必须随发行物走(MIT 要求版权声明 + 许可全文随每一份拷贝分发;
-  # dist/web/server.cjs 全量内联了 vendor 的 pi 内核与 500+ npm 模块)
+  # dist/web/server.cjs 全量内联了 pi 内核与 500+ npm 模块)
   - LICENSE
   - THIRD-PARTY.md
-  - vendor/LICENSE-pi.txt
-  - vendor/NOTICE.md
+  - LICENSE-pi.txt
+  - NOTICE-pi.md
   - "!node_modules/**/*"
   - "!**/node_modules/**/*"
 win:

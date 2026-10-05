@@ -1,5 +1,23 @@
 # Changelog
 
+T11 步骤 4:构建链与打包适配(T11 / D2 依赖化)。
+
+改的是「按 vendor 路径取文件」的那几处 —— 它们**改错了不会报错**:`files` 里写个不存在的路径,npm 安静跳过;`shx cp` 一个不存在的 glob,安静地什么都不拷。发行物少了主题 json 或缺了 MIT 许可全文,要等用户装完跑起来才现形。
+
+- [fix] **`pi-coding-agent` 补锁精确版本**。`package.json` 里另外三个 pi 包都是 `1.0.2`,唯独它是 `^1.0.2` —— caret 会装到 1.0.3,而 patch 的靶心是 1.0.2 的 dist,且 1.0.3 的 pi-tui 有破坏性变更(前置核实时已踩过一次)。
+- [fix] **主题 json 改指 node_modules**:`bundle` 脚本 `vendor/pi-coding-agent/src/modes/interactive/theme/*.json` → `node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/*.json`。已确认包内含 `dark.json` / `light.json` / `theme-schema.json`。
+- [refactor] **pi 许可声明迁出 vendor**:`git mv vendor/LICENSE-pi.txt LICENSE-pi.txt`(保留历史便于追溯来源);`vendor/NOTICE.md` 改写为根目录 **`NOTICE-pi.md`** —— 内容从「vendored 源码声明」改成「**npm 依赖 + patch 声明**」:包与版本表、为什么不再 vendor、三条本地修改及各自为什么不能没有、被判定不重放的能力(`sidePanel` / `uiMode`)、升级时要看的地方。`package.json` 的 `files`、`electron-builder.yml` 的 `files`、`THIRD-PARTY.md` 三处白名单与措辞同步。
+- [test] **两处读 vendor 源码的测试改为读 npm 包**:`skill-invocation.test.ts` 展开态正则同源对照读 `node_modules/.../dist/core/agent-session.js`(**已验证**编译不改写正则字面量,与 vendor 逐字相同);`skill-references.test.ts` 的 `loadSkills` / `formatSkillsForPrompt` 改走**包主入口**(1.0.2 的 `dist/index.d.ts` 已导出这两个,无需新增子路径)。
+- [test] **`scripts/t11/verify-build-chain.mjs`(新增)**:把三处发行白名单 + 测试里的固定路径展开成**存在性断言**(34 条)。已做**反证测试** —— 往 `files` 里塞回失效的 `vendor/LICENSE-pi.txt`,脚本 exit 1 并点名该路径;还原后 exit 0。
+
+**验证**:`npm run typecheck` 0 错误(此时 vendor 仍在);全量测试 **92 文件 / 1595 例通过**。
+
+T11 步骤 3b / 3c:适配 pi-tui 1.0.x 类型 + 处置 vendor 自研能力(补记,提交 `8cb3cbd` / `2c82e2e`)。
+
+- [fix] **路径守卫在测试里一次都没拦** —— 双实例静默失效:测试 import vendor 的 `path-utils`,而守卫装到 npm 包那份上,两者是独立模块实例,10 条「应该抛错」的断言全部静默通过。**又是「能力在,不等于接对了」**:编译正常、运行无报错。改指包名后 17 例恢复。
+- [fix] **鼠标与主题类型适配**:新增 `src/editor/mouse.ts` 的 `sgrMouseFromUpstream`(上游 `TuiMouseEvent` 0-based / `type`+`wheelDelta` ↔ 自研 `SgrMouseEvent` 1-based / `kind`+`delta`),几何逻辑一行未动;`writer-theme.ts` 改用 `ConstructorParameters<typeof Theme>`(`Record<ThemeColor, string>` 与 `Record<keyof …>` **都会丢 `Partial`**);`cli.ts` `uiMode` → `tuiMode`;防腐层判据从「查 vendor 相对路径」升级为「查任何绕过包入口的 pi 深层引用」。
+- [refactor] **按「不影响 web 与整体核心功能的自研移除」处置 4 处差异**:`setToolPathGuard` 是安全边界保留(已 patch);`sidePanel` 只影响 TUI 横向分栏 → 改 `aboveEditor`;`uiMode` 跟随上游改名;`deepSeekDynamicModel` 修的是 BUG-003(新推理模型选不到思考档位),**属核心故迁到 `src/providers/deepseek-dynamic.ts`**。类型错误 13 → 2(剩余为 vendor 自身 undici,删 vendor 后消失)。
+
 T11 步骤 3:8 个文件 import 改写为 npm 包名(T11 / D2 依赖化)。
 
 - [refactor] **11 处 vendor import 改为 npm 包名**。`src/pi-adapter/*`(7 文件)+`src/util/uuid.ts`,共 11 处 import 语句:`../../vendor/pi-coding-agent/src/index.ts` → `@earendil-works/pi-coding-agent`,依次类推 pi-agent-core / pi-ai / pi-tui;两个深层路径 `src/core/tools/path-utils.ts` / `src/core/usage-totals.ts` 改为包内子路径。注释里的示例路径**不动**(那是文档)。

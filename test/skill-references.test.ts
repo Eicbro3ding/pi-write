@@ -281,10 +281,8 @@ describe("所有技能：references 目录与引用一致", () => {
 		return out.sort();
 	}
 
-	it("每个技能的 SKILL.md 都能被 vendor 加载，且出现在 <available_skills> 里", async () => {
-		const { formatSkillsForPrompt, loadSkills } = await import(
-			"../vendor/pi-coding-agent/src/core/skills.ts"
-		);
+	it("每个技能的 SKILL.md 都能被 pi 加载，且出现在 <available_skills> 里", async () => {
+		const { formatSkillsForPrompt, loadSkills } = await import("@earendil-works/pi-coding-agent");
 		const result = loadSkills({
 			cwd: ROOT,
 			agentDir: path.join(ROOT, ".tmp-test-agent"),

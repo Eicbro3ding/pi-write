@@ -10,11 +10,12 @@ Copyright (c) 2026 Eicbro3ding。
 
 | 组件 | 位置 | 来源 | 许可 | 许可全文 |
 |---|---|---|---|---|
-| pi 核心包(6 个) | `vendor/pi-*` | [earendil-works/pi](https://github.com/earendil-works/pi) | MIT,Copyright (c) 2025 Mario Zechner | [`vendor/LICENSE-pi.txt`](vendor/LICENSE-pi.txt) |
+| pi 核心包(6 个) | npm 依赖 `@earendil-works/pi-*`(2026-10-05 起,取代原 `vendor/` 内嵌源码;锁精确版本 `1.0.2`) | [earendil-works/pi](https://github.com/earendil-works/pi) | MIT,Copyright (c) 2025 Mario Zechner | [`LICENSE-pi.txt`](LICENSE-pi.txt)(本地修改清单见 [`NOTICE-pi.md`](NOTICE-pi.md)) |
 | 网文创作方法论文库(76 份) | `skills/craft-outline/references/`、`craft-prose/`、`craft-deslop/`、`craft-review/`(按阶段拆 4 个技能,每个目录各带一份许可与来源说明) | [zenstory-ai/oh-story-claudecode](https://github.com/zenstory-ai/oh-story-claudecode)(收录 commit 见 ATTRIBUTION) | MIT,Copyright (c) 2025-2026 oh-story-claudecode | [`skills/craft-outline/references/LICENSE-oh-story-claudecode.txt`](skills/craft-outline/references/LICENSE-oh-story-claudecode.txt)(4 份内容相同) |
 | npm 依赖(生产,含传递依赖) | `node_modules` → 内联进 `dist/` | npm registry | 全部为宽松许可(MIT / ISC / Apache-2.0 / BSD 等),**无 GPL / AGPL / LGPL** | 各包自带的 LICENSE 文件 |
 
-`vendor/` 与技能库的详细来源、修改说明见 [`vendor/NOTICE.md`](vendor/NOTICE.md) 与
+pi 依赖的**本地修改清单**(patch 施加了什么、为什么)与技能库的详细来源见
+[`NOTICE-pi.md`](NOTICE-pi.md) 与
 [`skills/craft-outline/references/ATTRIBUTION.md`](skills/craft-outline/references/ATTRIBUTION.md)
 （4 个技能目录下各一份、内容相同；`test/skill-references.test.ts` 会断言它们逐字节一致，
 改一处要四处同步）。
@@ -22,11 +23,11 @@ Copyright (c) 2026 Eicbro3ding。
 ## 发行物:必须携带的声明
 
 三种发行形态都会把上面的代码**内联**进产物(`dist/web/server.cjs` 是 esbuild 全量内联,
-含 vendor 与 500+ npm 模块;`web/dist/assets/*.js` 内联前端依赖),因此必须随附声明:
+含 pi 内核与 500+ npm 模块;`web/dist/assets/*.js` 内联前端依赖),因此必须随附声明:
 
 | 发行形态 | 构建入口 | 带到发行目录的文件 |
 |---|---|---|
-| npm 包 | `package.json` 的 `files` | `LICENSE`(npm 自动带)+ `THIRD-PARTY.md` + `vendor/LICENSE-pi.txt` + `vendor/NOTICE.md` |
+| npm 包 | `package.json` 的 `files` | `LICENSE`(npm 自动带)+ `THIRD-PARTY.md` + `LICENSE-pi.txt` + `NOTICE-pi.md` |
 | 单文件可执行(`pi-writer.exe`) | `npm run bundle` | 同上,由脚本 `cp` 进 `release/` |
 | Electron 桌面端 | `electron-builder.yml` 的 `files` | 同上,进 app 包根目录 |
 
