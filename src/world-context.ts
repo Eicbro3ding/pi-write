@@ -13,6 +13,16 @@ export const DEFAULT_CONTEXT_BUDGET = 2000;
 /** 跨章节记忆(memory.md)注入的 token 预算(缺省值;实际取 WriterSettings.memoryBudget)。 */
 export const DEFAULT_MEMORY_BUDGET = 1500;
 
+/**
+ * 背景包注入用的 custom 消息类型。
+ *
+ * 三个写入方必须同值:`SessionHost.injectContext`(web)、`worldContextMessage`
+ * (TUI)、以及本文件的常量。此前是三处各自硬编码字符串,改一处漏两处就会出现
+ * 「注入了但扫描不到」的静默失忆 —— 扫描逻辑(见 server.ts 的
+ * sessionLeafHasWorldContext)依赖它认出背景包。
+ */
+export const WORLD_CONTEXT_TYPE = "world-context";
+
 /** 关联激活默认深度(0 = 关闭,与旧行为一致;>0 启用多源 BFS 展开)。 */
 export const DEFAULT_ACTIVATION_DEPTH = 0;
 

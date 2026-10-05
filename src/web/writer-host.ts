@@ -137,6 +137,20 @@ const STAGE_LIMIT = 8000;
 /** 无章节/无对话时的兜底对话 id:会话文件 writer-default.jsonl(与改动前一致)。 */
 const DEFAULT_CONVERSATION_ID = "default";
 
+/**
+ * 手动压缩的缺省摘要指令(2026-10-05 失忆修复)。
+ *
+ * vendor 的摘要模板(Goal/Progress/Next Steps/File Operations)是为**编码场景**
+ * 设计的,且更新版明确允许「不再相关可删除」—— 对小说对话,人物设定、用户
+ * 指示、伏笔很容易被"concise"掉。用户没写附加要求时,把写作场景的保留要求
+ * 注入进去(customInstructions 会以 "Additional focus: ..." 追加到摘要 prompt)。
+ */
+const WRITER_COMPACT_INSTRUCTIONS = [
+	"这是小说创作会话,不是编码会话。",
+	"摘要必须保留:①用户直接给出的设定、纠正、偏好与长期指示(逐条,不改写);②人物的关键特征与当前状态;③已埋伏笔与未回收线索;④时间线/因果上的关键事实;⑤尚未确认写入 world.json 的建议清单。",
+	"禁止以\u201c不再相关\u201d为由删除上述内容;不确定就保留。",
+].join("\n");
+
 /** 空对话的中性标题(没有任何用户消息可派生时用;前端列表据此显示)。 */
 export const DEFAULT_CONVERSATION_TITLE = "新对话";
 
@@ -921,7 +935,8 @@ export class WriterHost {
 		return host?.getSessionStats() ?? null;
 	}
 
-	/** 手动压缩编剧会话上下文(惰性建会话后执行;失败抛出由 server 映射为错误体)。 */
+	/** 手动压缩编剧会话上下文(惰性建会话后执行;失败抛出由 server 映射为错误体)。
+	 *  无 instructions 时注入写作场景的缺省摘要指令(见 WRITER_COMPACT_INSTRUCTIONS)。 */
 	async compact(
 		slug: string,
 		chapterFile?: string | null,
@@ -930,7 +945,7 @@ export class WriterHost {
 	): Promise<SessionCompactionResult> {
 		const { key, chapter } = this.resolveRef(slug, chapterFile, conversation);
 		const host = await this.getOrCreate(slug, key, chapter);
-		return await host.compact(instructions);
+		return await host.compact(instructions ?? WRITER_COMPACT_INSTRUCTIONS);
 	}
 
 	/** 发消息给编剧(惰性建会话;失败抛出,由 server 广播 chat_error)。

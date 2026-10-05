@@ -30,7 +30,7 @@ import { applyWorldUpdate, readChapterTool, readCountsForFile, wordCountTool, wo
 import { flattenWorldTree, renderWorldTree, renderWorldTreeFromData } from "./world-tree.ts";
 import { ensureWorld, type WorldData } from "./world-data.ts";
 import { chatTextOfMessage } from "./session-text.ts";
-import { buildChapterContext, type ChapterContextResult, summarizeTrim, trimMemory } from "./world-context.ts";
+import { buildChapterContext, buildStorylineView, type ChapterContextResult, summarizeTrim, trimMemory, WORLD_CONTEXT_TYPE } from "./world-context.ts";
 import { readWriterSettings, type WriterSettings } from "./writer-settings.ts";
 import { buildInspectReport, inspectHeadline, openInspectPanel, type InspectReport } from "./inspect/index.ts";
 import { buildWriterTheme } from "./writer-theme.ts";
@@ -72,7 +72,7 @@ export function isReadonlyPath(relPath: string): boolean {
 
 /** 背景包 custom 消息(nextTurn 注入,不触发独立回复)。 */
 export function worldContextMessage(text: string): { customType: string; content: Array<{ type: "text"; text: string }> } {
-	return { customType: "world-context", content: [{ type: "text", text }] };
+	return { customType: WORLD_CONTEXT_TYPE, content: [{ type: "text", text }] };
 }
 
 /**
@@ -112,6 +112,56 @@ async function recentUserMessagesFromSessionFile(absPath: string, count = 2): Pr
 function bookSlugFromSessionFile(sessionFile: string | undefined): string | undefined {
 	if (!sessionFile) return undefined;
 	return basename(dirname(sessionFile));
+}
+
+/**
+ * 每轮记忆锚(2026-10-05 失忆修复):跨章记忆 / 活跃 Notice / 发展线当前位置,
+ * 经 before_agent_start 追加到 systemPrompt 尾部。
+ *
+ * 为什么走 systemPrompt 而不是消息:背景包是会话里的一条普通消息,会被压缩移出
+ * leaf 链(server.ts 的 ensureChapterContext 负责丢了补);但**没压缩时同样会忘** ——
+ * 长对话里开头的世界状态在注意力上等同消失(lost in the middle)。systemPrompt
+ * 每轮都在最前,是唯一不依赖模型回忆的常驻通道。
+ *
+ * 为什么刻意**不**放:章节草稿全文(每轮都变,会击穿 prompt 缓存前缀)、世界书
+ * 全量条目(体积大,那是背景包与按需 read 的职责)。锚只承载「丢了就会写错」的
+ * 少量事实;内容只在 world_update / memory.md 更新时变化,缓存友好。
+ */
+export async function buildMemoryAnchor(slug: string, chapterFile: string | undefined): Promise<string> {	const bookDir = getBookDir(slug);
+	const settings = await readWriterSettings();
+	const blocks: string[] = [];
+	try {
+		const memory = trimMemory(await readFile(join(bookDir, "memory.md"), "utf-8"), settings.memoryBudget);
+		if (memory) blocks.push(`【跨章节记忆 memory.md】\n${memory}`);
+	} catch {
+		/* 无 memory.md:跳过 */
+	}
+	try {
+		const world = await ensureWorld(bookDir);
+		const noticeItems = world.notice.enabled
+			? world.notice.items.filter((i) => !i.done).slice(0, settings.noticeInjectLimit)
+			: [];
+		if (noticeItems.length > 0) {
+			blocks.push(`【Notice 备忘录 · 未完成】\n${noticeItems.map((i) => `- ${i.text}`).join("\n")}`);
+		}
+		const view = buildStorylineView(world, settings.completedMilestoneLimit);
+		if (view) {
+			const lines: string[] = [];
+			if (view.currentTitle) {
+				const cur = world.storyline.nodes.find((n) => n.status === "in-progress");
+				lines.push(`当前位置: ${view.currentTitle}`);
+				if (cur?.goal) lines.push(`目标: ${cur.goal}`);
+				if (cur?.next) lines.push(`下一步: ${cur.next}`);
+			}
+			if (view.completed.length > 0) lines.push(`已完成(勿重复推进): ${view.completed.join(" / ")}`);
+			if (lines.length > 0) blocks.push(`【发展线】\n${lines.join("\n")}`);
+		}
+	} catch {
+		/* 世界书缺失:跳过 */
+	}
+	if (blocks.length === 0) return "";
+	const head = chapterFile ? `当前章节: ${chapterFile}\n` : "";
+	return `【常驻记忆锚 · 每轮刷新】以下事实跨轮次、跨压缩恒定;与你的印象冲突时以这里为准,需要更多细节就 read 对应文件(memory.md / world.json)。\n${head}${blocks.join("\n\n")}`;
 }
 
 /** Derive the chapter file basename from an absolute session file path. */
@@ -351,6 +401,23 @@ function writerFactory(pi: ExtensionAPI): void {
 			}
 		}, 350);
 	});
+	// 每轮记忆锚(2026-10-05):before_agent_start 把记忆/Notice/发展线追加进
+	// systemPrompt —— 背景包只在切章注入、且会随压缩丢失,长对话里模型对开头的
+	// 世界状态会注意力衰减;锚让这些事实每轮都在上下文最前。web 侧经同一
+	// extensionFactories 装配(TUI/Web 同款行为)。失败静默跳过,不阻塞对话。
+	pi.on("before_agent_start", async (event, ctx) => {
+		try {
+			const sessionFile = ctx.sessionManager.getSessionFile() ?? undefined;
+			const slug = bookSlugFromSessionFile(sessionFile);
+			if (!slug) return;
+			const anchor = await buildMemoryAnchor(slug, chapterFileFromSessionFile(sessionFile));
+			if (!anchor) return;
+			return { systemPrompt: `${event.systemPrompt}\n\n${anchor}` };
+		} catch {
+			return;
+		}
+	});
+
 	pi.on("message_end", (event) => {
 		const text = chatTextOfMessage(event.message);
 		if (!text) return;

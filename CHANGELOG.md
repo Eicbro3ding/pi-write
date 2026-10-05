@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+记忆与上下文可靠性:修「agent 失忆」——记忆不再只活在会话历史深处。
+
+- [feat] **每轮记忆锚**(`src/extension.ts`):`before_agent_start` 把 **memory.md(按预算裁剪)+ 活跃 Notice + 发展线当前位置** 追加进 systemPrompt 尾部,每轮刷新。背景包是切章时的一条普通消息,会被压缩移出 leaf 链、长对话里也会被注意力稀释(lost in the middle);systemPrompt 每轮都在上下文最前,是唯一不依赖模型回忆的常驻通道。TUI/Web 同款生效(web runtime 装配同一 extensionFactories);内容只在 world_update / memory.md 更新时变化,prompt 缓存前缀不受扰动;刻意不含草稿全文(每轮都变,会击穿缓存)。
+- [fix] **压缩后补偿注入**(`src/web/server.ts`):`handlePostChat` 发消息前经 `ensureChapterContext` 扫当前 leaf 链(`sessionLeafHasWorldContext`),背景包不在上下文里(被 compaction 移出/服务重启/切书)就按**当前世界状态**重新装配注入。判据是存在性而非内容指纹——整包含草稿与发展线位置等易变内容,指纹每轮都变。
+- [fix] **提示词与实现对齐**(`prompts/writer-main.md`):「memory.md 会在每一章开写前注入」与实现(仅切章注入一次)矛盾,agent 以为记忆在、不会去读——改为如实描述并给出自救指引(不确定就读 memory.md);补「背景包是注入那一刻的快照,之后对 world.json 的改动不同步」。
+- [feat] **用户信息当场落盘纪律**(`prompts/writer-main.md`):用户在对话中给出的设定/纠正/偏好/长期指示,够格进条目的当场列建议清单,其余**当轮**写入 memory.md 顶部——此前只在章节收尾自主整理,压缩或切章一来未落盘的即消失;记忆的维护时机从「章末」放宽为「随时可记,章末整体检视」。
+- [feat] **手动压缩默认带写作指令**(`src/web/writer-host.ts`):无 instructions 时注入 `WRITER_COMPACT_INSTRUCTIONS`——vendor 摘要模板为编码场景设计(Goal/Progress/Next Steps)且允许「不再相关可删除」,小说的用户指示/人物状态/伏笔极易被"concise"掉。
+- [refactor] **`WORLD_CONTEXT_TYPE` 常量收口**(`src/world-context.ts`):`"world-context"` 此前在三处各写一份(session-host / extension / 新增的扫描逻辑),改一处漏两处会出现「注入了但扫描不到」的静默失忆;现集中为一个导出常量。
+- [test] `test/memory-anchor.test.ts`(7 例):锚的内容(memory/Notice 未完成项/发展线当前位置)与空态跳过、压缩判据(会话文件不存在/含背景包/只剩普通消息/其他 customType 不算)。
+
 上下文透明度与防腐层：看得见「agent 到底读到了什么」，并为 pi 1.0 升级铺好唯一缓冲带。
 
 - [feat] **`/inspect` 上下文检视**（TUI 面板 + Web 面板，T5）：全屏只读 overlay，回答「这一轮 agent 到底看到了什么、还差什么」。三个分页——**分段占用**（系统提示 / 技能 / 世界书 / 记忆 / 对话各占多少 token）、**被省略**（哪些条目因预算被裁掉、为什么）、**可调设置**（直接列出字段名，告诉你去哪改）。键位：`↑↓`/`j k` 滚动、`g G` 顶底、`Tab` 切页、`q Esc` 退出。**面板是只读的**——它不改任何东西，要改去设置。

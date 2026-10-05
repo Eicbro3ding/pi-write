@@ -67,12 +67,12 @@ import { listSkills } from "../skills-index.ts";
 import { BOOK_FILE_GROUPS, classifyBookFileKind, isWorkspaceFile, listBookFiles, readWorkspaceText, statWorkspaceFile } from "../book-files.ts";
 import { MAX_ZIP_BYTES, exportBookZip, readImportZip, type BookZipImport } from "./book-zip.ts";
 import { ensureWorld, newId, readWorldEditRecord, saveWorld, WorldValidationError, type WorldData } from "../world-data.ts";
-import { buildChapterContext, EMPTY_TRIM_SUMMARY, summarizeTrim, trimMemory, type ContextSection, type TrimRecord, type TrimSummary } from "../world-context.ts";
+import { buildChapterContext, EMPTY_TRIM_SUMMARY, summarizeTrim, trimMemory, WORLD_CONTEXT_TYPE, type ContextSection, type TrimRecord, type TrimSummary } from "../world-context.ts";
 import { buildInspectReport } from "../inspect/report.ts";
 import type { SessionHost } from "./session-host.ts";
 import { extractMessagesFromManager, usableModelRef, type ThinkingSummary } from "./session-host.ts";
 import { askUserGate } from "../ask-user.ts";
-import { readSessionFile } from "../pi-adapter/index.ts";
+import { readSessionFile, type SessionEntry } from "../pi-adapter/index.ts";
 import { ProviderAuthError, sortProviders, type ProviderListItem } from "./provider-auth.ts";
 import type { McpManager, McpServerStatus } from "../mcp/manager.ts";
 import { getMcpConfigPath, type McpServerConfig } from "../mcp/config.ts";
@@ -554,6 +554,37 @@ function matchRoute(method: string, parts: string[], routes: Route[]): { route: 
 	return null;
 }
 
+/**
+ * 当前 leaf 分支是否已含本章背景包(只读打开会话文件,不启动运行时)。
+ *
+ * 沿 leaf 链扫描 customType 为 world-context 的条目:压缩(compaction 把旧历史移出
+ * leaf 链)之后背景包就不在上下文里了 → 返回 false → ensureChapterContext 补注入。
+ *
+ * 与 writer-host.ts 稳定块的指纹扫描同源思路,差别在于这里只判**存在性**而不是
+ * 内容指纹:整包含草稿、发展线位置、最近用户消息等易变内容,指纹每轮都变,
+ * 拿它当稳定键会导致每轮都重注入(白付全价未缓存输入)。
+ *
+ * 文件不存在/解析失败返回 false —— 宁可多注一次,也不要让世界书静默缺席。
+ */
+export function sessionLeafHasWorldContext(slug: string, chapterFile: string): boolean {
+	try {
+		const absPath = getChapterSessionsPath(slug, chapterFile);
+		if (!existsSync(absPath)) return false;
+		const sm = readSessionFile(absPath, getBookSessionsDir(slug), getBookDir(slug));
+		if (!sm) return false;
+		const leafId = sm.getLeafId();
+		if (!leafId) return false;
+		// 读取器只承诺 unknown[];entry 形状与 writer-host.ts 同源,按 SessionEntry 造型
+		for (const e of sm.getBranch(leafId) as SessionEntry[]) {
+			if (e.type !== "custom_message") continue;
+			if ((e as { customType?: unknown }).customType === WORLD_CONTEXT_TYPE) return true;
+		}
+		return false;
+	} catch {
+		return false;
+	}
+}
+
 export class WriterServer {
 	private readonly httpServer = createServer((req, res) => void this.route(req, res));
 	private readonly sseClients = new Set<ServerResponse>();
@@ -927,6 +958,26 @@ export class WriterServer {
 		if (context.text.length > 0) {
 			await this.options.sessionHost.injectContext(context.text);
 		}
+	}
+
+	/**
+	 * 保证本章背景包**仍在上下文里**;不在就补注入(2026-10-05 失忆修复 P0)。
+	 *
+	 * 背景包是会话里的一条普通 custom 消息。只在切章注入一次的话,一次
+	 * compaction(旧历史被移出 leaf 链)就能把记忆、世界书条目、Notice、发展线
+	 * 全部抹掉 —— 而提示词还告诉 agent「记忆已在上下文里」,于是它也不会去读
+	 * memory.md 自救,表现为纯粹的失忆。
+	 *
+	 * 每轮 chat 前扫一次 leaf 链:还在就零额外成本跳过,丢了就按当前世界状态
+	 * 重新装配一份注进去。用「存在性」而非「内容指纹」判据的理由见
+	 * sessionLeafHasWorldContext —— 世界书中途被改而背景包还在的情况属 P1
+	 * (稳定块/易变块拆分),不在本方法的职责内。
+	 */
+	private async ensureChapterContext(): Promise<void> {
+		const state = this.options.sessionHost.getState();
+		if (!state.bookSlug || !state.chapterFile) return;
+		if (sessionLeafHasWorldContext(state.bookSlug, state.chapterFile)) return;
+		await this.injectChapterContext(state.bookSlug, state.chapterFile);
 	}
 
 	/**
@@ -1474,6 +1525,9 @@ export class WriterServer {
 	private async handlePostChat(ctx: RouteContext): Promise<void> {
 		const body = await readJsonBody(ctx.req);
 		const text = requireString(body, "text");
+		// 背景包补偿(见 ensureChapterContext 注释)。必须 await:nextTurn 消息要先
+		// 进 pending 队列,随后的 sendMessage 才会把它一起带进上下文。
+		await this.ensureChapterContext();
 		void this.options.sessionHost.sendMessage(text).catch((err) => {
 			// 发送/生成失败(未配置模型、认证被拒、网络等)必须让前端知道:
 			// 广播 chat_error,前端据此显示友好提示与快捷重试,而不是静默无回复

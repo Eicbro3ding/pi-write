@@ -28,6 +28,7 @@ import {
 } from "../pi-adapter/index.ts";
 import { settleDanglingAsks } from "../ask-user.ts";
 import { getBooksDir } from "../config.ts";
+import { WORLD_CONTEXT_TYPE } from "../world-context.ts";
 import { buildSessionTree, type SessionTreeInfo } from "../session-tree.ts";
 import { dedupePaths, skillDirsOf, toolGuardContext } from "../tool-guard.ts";
 import {
@@ -315,7 +316,7 @@ export class SessionHost {
 		await this.runInToolGuardContext(async () => {
 			const rt = this.requireRuntime();
 			await rt.session.sendCustomMessage(
-				{ customType: "world-context", content: [{ type: "text", text }], display: true },
+				{ customType: WORLD_CONTEXT_TYPE, content: [{ type: "text", text }], display: true },
 				{ deliverAs: "nextTurn" },
 			);
 		});
