@@ -14,7 +14,7 @@ Activates when the user wants a cold read of the current chapter (or a chosen dr
 
 ## Steps
 
-1. **Identify scope.** If the user names a file, use it; otherwise default to the current chapter file. `read` it in full.
+1. **Identify scope.** If the user names a file, use it; otherwise default to the current chapter file. Read it in full with `read_chapter` (one call; `read` truncates chapters).
 2. **Run the checklist below**, section by section. Report only what applies; do not manufacture problems.
 3. **For each section**, give:
    - a one-line verdict (strong / mixed / weak),

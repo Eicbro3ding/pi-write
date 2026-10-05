@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+提示词工程:治「agent 反复读文件」的行为异常(真实会话 `writer-c-v05ij1` 复盘)。
+
+- [fix] **`read_chapter` 进提示词工具清单**(`prompts/writer-main.md`):T3 做了这个整章通读工具(`src/tools.ts`),但 `prompts/` 与 `skills/` 里**零命中** —— 工具 schema 随请求发给模型,可提示词明说「以下是你可用的基础工具」并给了张清单,**模型服从提示词**,该工具自上线起就是死代码。复盘会话里 `read` 调用 **117 次**(91 次打在同一章上、全部带 offset、报过 `Offset 180 is beyond end of file`),`read_chapter` **0 次**。现在清单里明写两者分工:`read` 读片段、`read_chapter` 通读整章,**不要用 read 带 offset 把一整章翻完**。
+- [fix] **场景节奏加前置门禁**(`prompts/writer-main.md`):「这是清单,不是建议」原先**没有写什么时候启用这份清单** —— 用户在讨论双魂设定、虚构地名表、哥哥设定时,模型仍每轮执行「read 草稿 → 写场景 → word_count」。现在开宗明义:**先判断这一轮是不是要写**,讨论轮不执行 1–4 步,结论当场用 `world_update` 落盘。
+- [fix] **新增停止条件**(`prompts/writer-main.md`):通篇 6 处「如何开始动作」、**0 处「何时停止」**,循环一旦启动不会自己终止(L156「一眼只读一次」在长会话里失效——每轮都是"这一轮")。新增「同一文件一轮内读取不超过 2 次;读到重复/截断/offset 越界**立刻停**,绝不靠 offset 递增把文件翻完」。
+- [fix] **两处工具指令互打架**:`read_chapter` 描述说「改写/续写/审校前应当用这个工具而不是 read」,提示词 L151 却说「先 `read` 再写」。现统一为 `read_chapter`(仅改某一段时才用 `read` 定位)。
+- [fix] **两个技能跟上**(`skills/revise` 第 2 步、`skills/critique` 第 1 步):这两处正是「整章通读」场景,原先写的是 `read` it in full。
+- [docs] `PI_WRITER_PROMPT_DIAGNOSIS.md`:完整复盘(会话画像 / 六条根因 / 同类项目提示词工程原则对照 / P0–P2 修复清单)。
+
 记忆与上下文可靠性:修「agent 失忆」——记忆不再只活在会话历史深处。
 
 - [feat] **每轮记忆锚**(`src/extension.ts`):`before_agent_start` 把 **memory.md(按预算裁剪)+ 活跃 Notice + 发展线当前位置** 追加进 systemPrompt 尾部,每轮刷新。背景包是切章时的一条普通消息,会被压缩移出 leaf 链、长对话里也会被注意力稀释(lost in the middle);systemPrompt 每轮都在上下文最前,是唯一不依赖模型回忆的常驻通道。TUI/Web 同款生效(web runtime 装配同一 extensionFactories);内容只在 world_update / memory.md 更新时变化,prompt 缓存前缀不受扰动;刻意不含草稿全文(每轮都变,会击穿缓存)。

@@ -15,7 +15,7 @@ Activates when the user wants real, surgical edits applied to a draft file — n
 ## Steps
 
 1. **Confirm scope and intent.** Ask once — at most — which of the critique points to act on. If the user already named them, proceed.
-2. **Read the target file in full.** Re-read; do not edit from memory.
+2. **Read the target file in full.** Use `read_chapter` for chapter drafts (one call, no truncation); do not edit from memory and do not page through with `read` + offset.
 3. **Edit in surgical passes**, one concern at a time:
    - Use `edit` with the smallest precise `old_string` that contains the change. Do not replace whole paragraphs when one sentence is the fix.
    - Group related edits, but never batch unrelated concerns — if the model mixes voice fixes with continuity fixes, stop and split.
