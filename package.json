@@ -33,7 +33,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepublishOnly": "npm run clean && npm run build",
     "build:web": "node scripts/web-build.mjs",
-    "web": "node dist/web/server.cjs",
+    "web": "node scripts/check-web-fresh.mjs && node dist/web/server.cjs",
     "electron": "electron dist/electron/main.cjs",
     "build:electron": "bun build electron/main.ts --outfile dist/electron/main.cjs --external \"electron*\" --target node --format cjs && bun build electron/preload.ts --outfile dist/electron/preload.js --target node --format cjs",
     "postinstall": "node scripts/apply-patches.mjs"

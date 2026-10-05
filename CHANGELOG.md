@@ -1,5 +1,14 @@
 # Changelog
 
+T13 端到端收尾:用真实构建产物跑出的两处「迁移静默失败」。
+
+- [fix] **http 条目的 `env` 在迁移时丢失**。`legacyServerToUpstream` 的 stdio 分支带了 `env`,http 分支没带 —— `{"type":"http","url":...,"env":{"TOKEN":"abc"}}` 迁移后 `env` 直接消失,**不报错、不告警**,用户只能在工具连不上时反推。已补齐,并加两例断言(http 保留 env、sse 降级后同样保留)。
+- [fix] **web 启动丢弃迁移告警**。`web.ts` 调了 `ensureMigrated()` 却扔掉返回值,「SSE 已降级」与「字段不完整已跳过」两条告警全都不打。这两类恰是**静默失败**的典型:旧条目留在文件里不会报错,只是永远不生效 —— 现在逐条打到 stderr。
+- [fix] **`npm run web` 会静默跑在过期产物上**。`npm run build` 产的是 `dist/cli.js` / `dist/index.js`,而 `web` 脚本跑 **`dist/web/server.cjs`**(只由 `npm run build:web` 产出)。于是最自然的路径「改源码 → build → web」跑的是旧代码:旧文件还在、能正常启动、**不报任何错**。这正是本轮排查误判「迁移完全没生效」的原因(白查半小时)。新增 `scripts/check-web-fresh.mjs` 前置到 `web` 脚本:比源码与产物 mtime,过期就打醒目警告并给出正确命令,`exit 0` 不阻断启动(「跑旧产物看别的功能」有时是合理的)。**没让 `build` 顺带产 `server.cjs`** —— 那会把 esbuild 全量打包(含前端 vite)塞进每次 build。
+- [test] 新增 `test/build-scripts.test.ts`(**3 例**)钉住上面这条:web 脚本必须含自检且顺序在启动之前 / 自检脚本存在 / `build` 与 `build:web` 是两个产物这个事实本身。已**反证**:把 web 脚本改回旧形态 → 测试红。
+
+**验证(真实产物)**:typecheck 0 错误;全量 **91 文件 / 1604 例通过** / 2 skipped;端到端 —— 全新目录 + 旧形状配置 → 自动迁移 + `.bak` 备份 + 两条告警如期打 stderr + `/api/mcp` 读出上游 `mcpServers` 形状 + **二次启动幂等(不重复迁移、不新增备份)**;`POST` 新增 / `DELETE` / `/raw` / 重名拒绝 / `sse` 拒绝 / `exposure` 校验全通过。产物过期自检已正反两向验证(新鲜时静默、触碰源码后如期告警)。
+
 T9-A:MCP 不再自研,直接装配上游扩展(决策 D1 改判)。
 
 **升级影响(有,请读)**:① 配置**自动迁移**——首次启动把旧形状(`{name,type,command,args,env,url}`)改写为上游的 `mcpServers` + `transport` 判别形状,原文件留 `.bak-<时间戳>` 备份,重复启动幂等;② **SSE 服务器不再支持**——上游只实现 stdio 与 streamable HTTP,旧 `sse` 条目迁移时**自动降级为 http 并告警**,web 设置页再保存 `sse` 会被 400 拒绝;③ 新增「暴露策略」字段,迁移产生的新条目一律写 `direct`(与自研时代「工具直接可见」一致),可自行改为 `codemode`(按需加载)/`deferred`/`hidden`;④ **断线不再自动重连**(自研的 3-30s 退避取消,改为上游的懒重连:下次调用时按需连);⑤ OAuth 授权流改由上游扩展提供。以上四条同时写进 `README.md` 与 `docs/security.md`。

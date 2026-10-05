@@ -72,7 +72,17 @@
   - ③ **`exposure` 默认值的双写**:迁移写 `direct`,而前端新建服务器默认也是 `direct`
     (`McpServerList.tsx`)。两个默认值分散在两处,将来改一处会不一致。
 
-- [ ] **`package.json` 的 `build` 脚本 chmod 路径不存在**
+- [x] **`npm run build` 不产 `dist/web/server.cjs`,但 `npm run web` 依赖它** —— `3536d21` 后续
+  - 来源:2026-10-05 T13 端到端排查(误跑过期产物一度误判「迁移没生效」)。
+  - **已修**:新增 `scripts/check-web-fresh.mjs`(比源码与产物 mtime,过期打醒目警告 +
+    给出正确命令,`exit 0` 不阻断启动),挂在 `web` 脚本前置:
+    `"web": "node scripts/check-web-fresh.mjs && node dist/web/server.cjs"`。
+  - **护栏**:`test/build-scripts.test.ts` 三例钉住(web 脚本必须含自检且顺序在先 /
+    自检脚本存在 / `build` 与 `build:web` 是两个产物这个事实本身)。已反证:
+    把 web 脚本改回旧形态 → 测试红。
+  - 未做的取舍:**没让 `build` 顺带产 `server.cjs`** —— 那会把 esbuild 全量打包
+    塞进每次 build(含前端 vite),启动路径变慢;警告方案代价低且足够。
+
   - 来源:2026-10-05 源码审计。
   - 现状:`tsgo -p tsconfig.build.json && shx chmod +x dist/cli.js`,但 `rootDir:"."` +
     `outDir:"dist"` 产出的是 `dist/src/cli.js`(`bin` 字段也这么写)。`dist/cli.js` 不存在。
