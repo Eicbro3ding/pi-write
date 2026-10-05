@@ -19,12 +19,20 @@ import {
 	sliceByColumn,
 	type Theme,
 	type TUI,
+	type TuiMouseEventResult,
 	truncateToWidth,
 	visibleWidth,
 } from "../../src/pi-adapter/index.ts";
 import type { ChatApi, ChatMessage } from "./chat.ts";
 import { type Cursor, VimDocument } from "./document.ts";
-import { MOUSE_DISABLE_SEQUENCE, MOUSE_ENABLE_SEQUENCE, parseSgrMouse, type SgrMouseEvent } from "./mouse.ts";
+import {
+	MOUSE_DISABLE_SEQUENCE,
+	MOUSE_ENABLE_SEQUENCE,
+	parseSgrMouse,
+	sgrMouseFromUpstream,
+	type SgrMouseEvent,
+	type UpstreamMouseEvent,
+} from "./mouse.ts";
 
 export interface VimFileEditorResult {
 	saved: boolean;
@@ -540,7 +548,7 @@ export class VimFileEditor implements Component, Focusable {
 
 		const mouse = parseSgrMouse(data);
 		if (mouse) {
-			this.handleMouse(mouse);
+			this.handleSgrMouse(mouse);
 			return;
 		}
 
@@ -859,7 +867,22 @@ export class VimFileEditor implements Component, Focusable {
 		this.chatScroll = 0;
 	}
 
-	private handleMouse(event: SgrMouseEvent): void {
+	/**
+	 * 上游 TUI 派发的归一化鼠标事件入口(pi-tui 0.1.x 起 `Component` 定义的签名)。
+	 *
+	 * 上游派发的是 0-based 组件局部坐标的 `TuiMouseEvent`,而本编辑器的几何
+	 * 全部按自研 {@link SgrMouseEvent}(1-based 终端坐标)写的。这里只做形状
+	 * 折算,几何逻辑一行不动 —— 折算后交给 {@link handleSgrMouse}。
+	 *
+	 * 返回 `undefined` 表示「不做额外处理」,由上游按默认规则渲染。
+	 */
+	handleMouse(upstreamEvent: UpstreamMouseEvent): TuiMouseEventResult | undefined {
+		this.handleSgrMouse(sgrMouseFromUpstream(upstreamEvent));
+		return undefined;
+	}
+
+	/** 内部鼠标处理:入参恒为自研形状。 */
+	private handleSgrMouse(event: SgrMouseEvent): void {
 		const rows = Math.max(8, this.tui.terminal.rows);
 		const editorHeight = rows - 1;
 

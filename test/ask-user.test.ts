@@ -4,7 +4,7 @@
  * 纯逻辑:闸门是内存 Map,工具只依赖注入的闸门 —— 不碰真实会话,不阻塞。
  */
 import { describe, expect, it, vi } from "vitest";
-import { SessionManager } from "../vendor/pi-coding-agent/src/index.ts";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
 	ASK_CANCELLED_TEXT,
 	AskUserGate,

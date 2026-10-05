@@ -47,6 +47,23 @@ export interface AskUserDetails {
 	answers?: Array<{ question: string; answer: string }>;
 }
 
+/**
+ * 把 {@link AskUserDetails} 交付给会话历史的 details 槽。
+ *
+ * 为什么要这一层桥接,而不是给接口加索引签名 ——
+ * `details` 要求 `JsonValue`,而 TS 的 interface **不自带索引签名**,所以
+ * `{ cancelled?: boolean; answers?: ... }` 结构上不满足 `JsonObject`。给它补
+ * `[key: string]: JsonValue` 能编译通过,但那等于放弃对两个字段的检查:之后写错
+ * 成 `canceld` 也不报错。**字段只有两个且形状固定,这里宁可用一次显式造型,换来
+ * 定义处的类型仍然准确**。
+ *
+ * 造型是安全的:`AskUserDetails` 的取值只会是 boolean / string / 它们的数组,
+ * 天然是合法 JSON。
+ */
+function toMessageDetails(details: AskUserDetails): AskUserDetails & Record<string, never> {
+	return details as AskUserDetails & Record<string, never>;
+}
+
 /** 一次待回答的提问(前端浮层渲染用;与工具参数同形状)。 */
 export interface PendingAskView {
 	toolCallId: string;
@@ -196,7 +213,7 @@ export function settleDanglingAsks(
 			toolCallId: part.id,
 			toolName: ASK_USER_TOOL_NAME,
 			content: [{ type: "text", text: ASK_CANCELLED_TEXT }],
-			details,
+			details: toMessageDetails(details),
 			isError: false,
 			timestamp: Date.now(),
 		});

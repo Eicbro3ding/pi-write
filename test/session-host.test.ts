@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { SessionManager } from "../vendor/pi-coding-agent/src/index.ts";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { extractMessagesFromManager, modelCapabilitiesDiffer, SessionHost, usableModelRef } from "../src/web/session-host.ts";
 
 /** extractMessagesFromManager 只吃 getBranch() 的 entry 形状,给个最小桩即可。 */

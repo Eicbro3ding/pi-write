@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBook, getBookSessionsDir, initChapterFile } from "../src/book-manager.ts";
 import { getBookDir } from "../src/config.ts";
-import { SessionManager } from "../vendor/pi-coding-agent/src/index.ts";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_CONVERSATION_TITLE, WriterHost, isSafeSessionId, writerDraftFile } from "../src/web/writer-host.ts";
 import { SessionHost } from "../src/web/session-host.ts";
 

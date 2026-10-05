@@ -6,6 +6,13 @@
  * off)。现在按 id 命名约定确认(纯函数,不联网)。
  */
 import { describe, expect, it } from "vitest";
+// ⚠️ **这条 import 故意留在 vendor**:`deepSeekDynamicModel` 是 pi-write 自研的
+// 能力(vendor/pi-ai 相对上游 0.83.0 的 B 类语义改动),上游 1.0.2 的
+// `pi-ai/providers/deepseek` 只导出 `deepseekProvider`,**没有这个符号**。
+//
+// 依赖化(T11)时它需要迁到自研侧(约 60 行),而不是继续从 vendor 取 ——
+// 届时本条 import 连同 vendor 目录一起消失。此处保留 vendor 引用是有意的,
+// 不是漏改:TODO(T11) 迁出为 src/providers/deepseek-dynamic.ts。
 import { deepSeekDynamicModel } from "../vendor/pi-ai/src/providers/deepseek.ts";
 
 describe("deepSeekDynamicModel(未收录模型的保守能力推断)", () => {

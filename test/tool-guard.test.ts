@@ -8,7 +8,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveToCwd } from "../vendor/pi-coding-agent/src/core/tools/path-utils.ts";
+// 必须 import **包名**,不能 import vendor 源码 —— 两者是独立的模块实例。
+// 自研侧 installToolPathGuard 经 src/pi-adapter/guard.ts 装到 **npm 包那份**上;
+// 若这里读 vendor 那份,守卫会被装到别处,所有「应该抛错」的断言全部静默通过
+// (编译正常、运行无报错,但守卫实际一次都没拦)。
+import { resolveToCwd } from "@earendil-works/pi-coding-agent/core/tools/path-utils";
 import {
 	assertPathWithinRoot,
 	dedupePaths,

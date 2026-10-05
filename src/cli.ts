@@ -433,7 +433,7 @@ async function main(): Promise<void> {
 		initialMessages: [],
 		verbose: opts.verbose,
 		// fullscreen(viewport)布局是 sidePanel 生效的前提:regular 模式只有纵向堆叠,无水平分栏。
-		uiMode: "fullscreen",
+		tuiMode: "fullscreen",
 	});
 	await mode.run();
 	await runtime.dispose();

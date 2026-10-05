@@ -14,12 +14,20 @@ import {
 	sliceByColumn,
 	type Theme,
 	type TUI,
+	type TuiMouseEventResult,
 	truncateToWidth,
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "./pi-adapter/index.ts";
 import { VimDocument } from "./editor/document.ts";
-import { MOUSE_DISABLE_SEQUENCE, MOUSE_ENABLE_SEQUENCE, parseSgrMouse, type SgrMouseEvent } from "./editor/mouse.ts";
+import {
+	MOUSE_DISABLE_SEQUENCE,
+	MOUSE_ENABLE_SEQUENCE,
+	parseSgrMouse,
+	sgrMouseFromUpstream,
+	type SgrMouseEvent,
+	type UpstreamMouseEvent,
+} from "./editor/mouse.ts";
 import { countWriting, type WriterUiState } from "./writer-ui.ts";
 
 const TAB_WIDTH = 4;
@@ -326,7 +334,7 @@ export class DraftEditorPanel implements Component {
 			return undefined;
 		}
 		const mouse = parseSgrMouse(data);
-		if (mouse) return this.handleMouse(mouse);
+		if (mouse) return this.handleSgrMouse(mouse);
 
 		if (matchesKey(data, "alt+e")) {
 			if (!this.active) {
@@ -436,7 +444,23 @@ export class DraftEditorPanel implements Component {
 		return { consume: true };
 	}
 
-	private handleMouse(event: SgrMouseEvent): { consume?: boolean; data?: string } | undefined {
+	/**
+	 * 上游 TUI 派发的归一化鼠标事件入口(pi-tui 0.1.x 起 `Component` 定义的签名)。
+	 *
+	 * 上游与自研是两条鼠标链路:上游在组件树上做命中测试后派发 `TuiMouseEvent`
+	 * (0-based 组件局部坐标),而本面板的几何计算全部按自研 {@link SgrMouseEvent}
+	 * (1-based 终端坐标)写的。这里只做形状折算,不重复实现几何逻辑 ——
+	 * 折算后交给 {@link handleSgrMouse}。
+	 */
+	handleMouse(upstreamEvent: UpstreamMouseEvent): TuiMouseEventResult | undefined {
+		const result = this.handleSgrMouse(sgrMouseFromUpstream(upstreamEvent));
+		if (!result) return undefined;
+		// 自研侧用 `consume` 表示「本轮输入我处理了」,对应上游的 `handled`。
+		return { handled: result.consume ?? false };
+	}
+
+	/** 内部鼠标处理:入参恒为自研形状,返回自研的 consume 结果。 */
+	private handleSgrMouse(event: SgrMouseEvent): { consume?: boolean; data?: string } | undefined {
 		const cols = this.tui.terminal.columns;
 		const panelLeftCol = cols - this.panelWidth; // 0-based
 		const inPanel = event.x > panelLeftCol && event.y > this.panelTopRow() && event.y <= this.panelBottomRow();

@@ -6,14 +6,29 @@
  * process at startup.
  */
 
-import { Theme, type ThemeColor } from "./pi-adapter/index.ts";
+import { Theme } from "./pi-adapter/index.ts";
 
-/** Background color tokens (keys of Theme's bg record). */
-type ThemeBg = keyof ConstructorParameters<typeof Theme>[1];
+/**
+ * 主题色表的两个槽的类型 —— **直接取 `Theme` 的构造参数**,不重抄 `ThemeColor`
+ * 联合、也不写成 `Record<ThemeColor, string>`。
+ *
+ * 为什么必须这么做:
+ * - 上游把 4 个前景令牌(`scrollbarTrack` / `scrollbarThumb` / `thinkingMax` /
+ *   `searchMatchText`)和 1 个背景令牌(`searchMatchBg`)声明为**可选**,
+ *   构造参数的形状是 `Record<必选, V> & Partial<Record<可选, V>>`。
+ * - `Record<ThemeColor, string>` 会把可选项也变成必填;
+ * - `Record<keyof 构造参数[0], string>` 同样丢掉 `Partial` —— `keyof` 把交叉
+ *   类型展平成键的联合,可选信息随之丢失(这两种写法都实测会报错)。
+ *
+ * 取构造参数类型 = 上游改可选性时这里自动跟随。这正是 `ThemeBg` 早就用的办法,
+ * 这里把前景也统一过来。
+ */
+type ThemeFgColors = ConstructorParameters<typeof Theme>[0];
+type ThemeBgColors = ConstructorParameters<typeof Theme>[1];
 
 export const WRITER_THEME_NAME = "pi-writer";
 
-const FG: Record<ThemeColor, string> = {
+const FG: ThemeFgColors = {
 	accent: "#e8b56d",
 	border: "#8a7a63",
 	borderAccent: "#e8b56d",
@@ -62,9 +77,8 @@ const FG: Record<ThemeColor, string> = {
 	bashMode: "#9bbf88",
 };
 
-const BG: Record<ThemeBg, string> = {
+const BG: ThemeBgColors = {
 	selectedBg: "#4a4236",
-	scrollbarThumb: "#6b6355",
 	userMessageBg: "#38322a",
 	customMessageBg: "#39342c",
 	toolPendingBg: "#2f2b26",
