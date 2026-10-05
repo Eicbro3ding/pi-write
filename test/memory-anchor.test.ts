@@ -13,7 +13,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildMemoryAnchor } from "../src/extension.ts";
+import { buildMemoryAnchor, echoUserMessages } from "../src/extension.ts";
 import { sessionLeafHasWorldContext } from "../src/web/server.ts";
 import { getBookDir } from "../src/config.ts";
 import { getBookSessionsDir } from "../src/book-manager.ts";
@@ -80,6 +80,36 @@ describe("buildMemoryAnchor(每轮记忆锚)", () => {
 		const anchor = await buildMemoryAnchor(slug, undefined);
 		expect(anchor).toContain("一条记忆");
 		expect(anchor).not.toContain("当前章节");
+	});
+});
+
+describe("echoUserMessages(压缩时保住用户原话)", () => {
+	const user = (text: string) => ({ role: "user", content: [{ type: "text", text }] }) as never;
+	const assistant = (text: string) => ({ role: "assistant", content: [{ type: "text", text }] }) as never;
+
+	it("只取用户消息,按时间顺序原样保留(助手的话不占额度)", () => {
+		const echo = echoUserMessages([user("第一句"), assistant("助手的回答"), user("第二句")] as never);
+		expect(echo).toContain("- 第一句");
+		expect(echo).toContain("- 第二句");
+		expect(echo).not.toContain("助手的回答");
+		expect(echo.indexOf("- 第一句")).toBeLessThan(echo.indexOf("- 第二句"));
+	});
+
+	it("无用户消息 → 空串(钩子据此交回 vendor 默认摘要)", () => {
+		expect(echoUserMessages([assistant("只有助手")] as never)).toBe("");
+		expect(echoUserMessages([] as never)).toBe("");
+	});
+
+	it("空白内容不占额度", () => {
+		expect(echoUserMessages([user("   ")] as never)).toBe("");
+	});
+
+	it("超出上限时保留**较新**的(最早的通常已沉淀进 memory/世界书)", () => {
+		const old = "旧".repeat(6500); // 单条就超过 6000 上限
+		const fresh = "新设定:主角左眼是义眼";
+		const echo = echoUserMessages([user(old), user(fresh)] as never);
+		expect(echo).toContain(fresh); // 最新的必留
+		expect(echo).not.toContain(old); // 挤爆额度的旧话被弃
 	});
 });
 

@@ -127,6 +127,29 @@ function bookSlugFromSessionFile(sessionFile: string | undefined): string | unde
  * 全量条目(体积大,那是背景包与按需 read 的职责)。锚只承载「丢了就会写错」的
  * 少量事实;内容只在 world_update / memory.md 更新时变化,缓存友好。
  */
+/** 压缩摘要里保留的用户原话上限(字符)。超出时保留**较新**的:最早的用户消息
+ *  通常已沉淀进 memory.md / world.json(且记忆锚每轮都在),而近期指示往往还没落盘。 */
+const USER_ECHO_LIMIT = 6000;
+
+/** 把即将被压缩丢弃的对话里的**用户原话**原样抽出,作为摘要的一部分。
+ *  与模型改写过的进度摘要不同,这里是逐字保留 —— 用户说过的就不会被"总结"掉。 */
+export function echoUserMessages(messages: readonly AgentMessage[]): string {
+	const lines: string[] = [];
+	let used = 0;
+	// 从新往旧取(unshift 回到时间顺序),装满即停:保证装进来的是最近的
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const m = messages[i];
+		if (m?.role !== "user") continue;
+		const text = chatTextOfMessage(m);
+		if (!text) continue;
+		if (used + text.length > USER_ECHO_LIMIT) break;
+		lines.unshift(`- ${text}`);
+		used += text.length;
+	}
+	if (lines.length === 0) return "";
+	return `【压缩前的用户原话 · 按时间顺序,较新的在后】以下是被本次压缩丢弃的对话里用户说过的话,原样保留。与后续内容冲突时以较新的为准,但不要丢弃早期给出的长期设定:\n${lines.join("\n")}`;
+}
+
 export async function buildMemoryAnchor(slug: string, chapterFile: string | undefined): Promise<string> {	const bookDir = getBookDir(slug);
 	const settings = await readWriterSettings();
 	const blocks: string[] = [];
@@ -413,6 +436,37 @@ function writerFactory(pi: ExtensionAPI): void {
 			const anchor = await buildMemoryAnchor(slug, chapterFileFromSessionFile(sessionFile));
 			if (!anchor) return;
 			return { systemPrompt: `${event.systemPrompt}\n\n${anchor}` };
+		} catch {
+			return;
+		}
+	});
+
+	// 自动压缩摘要接管(2026-10-05 失忆修复 P-A)。
+	//
+	// vendor 自动压缩调 compact(..., undefined, ...):customInstructions 硬编码为空,
+	// 摘要模板是编码场景的 Goal/Progress/Next Steps,且明确允许「不再相关可删除」
+	// —— 小说对话里用户给的设定/纠正/长期指示会被"concise"掉,这就是「用户说过的
+	// 都要忘记」在自动压缩这一路的成因。
+	//
+	// 这里**不调模型、不碰 auth**:preparation.messagesToSummarize 里就是即将被丢弃
+	// 的消息,把用户原话原样抽出来,与记忆锚一起作为摘要。对写作场景,用户原话 +
+	// 结构化状态比一份改写过的进度摘要更可靠;最近 keepRecentTokens 的原文不受影响,
+	// 仍在摘要之后完整保留。失败一律静默交回 vendor 默认摘要,不阻塞压缩。
+	pi.on("session_before_compact", async (event, ctx) => {
+		try {
+			const sessionFile = ctx.sessionManager.getSessionFile() ?? undefined;
+			const slug = bookSlugFromSessionFile(sessionFile);
+			if (!slug) return; // 非书会话:交回 vendor 默认摘要
+			const anchor = await buildMemoryAnchor(slug, chapterFileFromSessionFile(sessionFile));
+			const echoes = echoUserMessages(event.preparation.messagesToSummarize);
+			if (!anchor && !echoes) return; // 无内容可保:交回默认
+			return {
+				compaction: {
+					summary: [anchor, echoes].filter(Boolean).join("\n\n"),
+					firstKeptEntryId: event.preparation.firstKeptEntryId,
+					tokensBefore: event.preparation.tokensBefore,
+				},
+			};
 		} catch {
 			return;
 		}

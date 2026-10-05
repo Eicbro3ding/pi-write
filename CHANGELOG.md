@@ -8,9 +8,10 @@
 - [fix] **压缩后补偿注入**(`src/web/server.ts`):`handlePostChat` 发消息前经 `ensureChapterContext` 扫当前 leaf 链(`sessionLeafHasWorldContext`),背景包不在上下文里(被 compaction 移出/服务重启/切书)就按**当前世界状态**重新装配注入。判据是存在性而非内容指纹——整包含草稿与发展线位置等易变内容,指纹每轮都变。
 - [fix] **提示词与实现对齐**(`prompts/writer-main.md`):「memory.md 会在每一章开写前注入」与实现(仅切章注入一次)矛盾,agent 以为记忆在、不会去读——改为如实描述并给出自救指引(不确定就读 memory.md);补「背景包是注入那一刻的快照,之后对 world.json 的改动不同步」。
 - [feat] **用户信息当场落盘纪律**(`prompts/writer-main.md`):用户在对话中给出的设定/纠正/偏好/长期指示,够格进条目的当场列建议清单,其余**当轮**写入 memory.md 顶部——此前只在章节收尾自主整理,压缩或切章一来未落盘的即消失;记忆的维护时机从「章末」放宽为「随时可记,章末整体检视」。
-- [feat] **手动压缩默认带写作指令**(`src/web/writer-host.ts`):无 instructions 时注入 `WRITER_COMPACT_INSTRUCTIONS`——vendor 摘要模板为编码场景设计(Goal/Progress/Next Steps)且允许「不再相关可删除」,小说的用户指示/人物状态/伏笔极易被"concise"掉。
+- [feat] **自动压缩接管,保住用户原话**(`src/extension.ts`):注册 `session_before_compact`。vendor 自动压缩调 `compact(..., undefined, ...)` —— customInstructions 硬编码为空,摘要模板是编码场景的 Goal/Progress/Next Steps 且允许「不再相关可删除」,用户给的设定/纠正/长期指示会被"concise"掉(即「用户说过的都要忘记」)。现改为自己拼摘要:**不调模型、不碰 auth** —— `preparation.messagesToSummarize` 里就是即将被丢弃的消息,把**用户原话逐字抽出**(上限 6000 字,超出保较新的,最早的通常已沉淀进 memory.md)与记忆锚一起作为摘要;最近 `keepRecentTokens` 的原文不受影响。失败静默交回 vendor 默认摘要。
+- [feat] **手动压缩默认带写作指令**(`src/web/writer-host.ts`):无 instructions 时注入 `WRITER_COMPACT_INSTRUCTIONS`——同上,小说的用户指示/人物状态/伏笔极易被"concise"掉。
 - [refactor] **`WORLD_CONTEXT_TYPE` 常量收口**(`src/world-context.ts`):`"world-context"` 此前在三处各写一份(session-host / extension / 新增的扫描逻辑),改一处漏两处会出现「注入了但扫描不到」的静默失忆;现集中为一个导出常量。
-- [test] `test/memory-anchor.test.ts`(7 例):锚的内容(memory/Notice 未完成项/发展线当前位置)与空态跳过、压缩判据(会话文件不存在/含背景包/只剩普通消息/其他 customType 不算)。
+- [test] `test/memory-anchor.test.ts`(11 例):锚的内容(memory/Notice 未完成项/发展线当前位置)与空态跳过、压缩判据(会话文件不存在/含背景包/只剩普通消息/其他 customType 不算)、用户原话保留(只取 user / 时间顺序 / 空白不占额度 / 超限保较新的)。
 
 上下文透明度与防腐层：看得见「agent 到底读到了什么」，并为 pi 1.0 升级铺好唯一缓冲带。
 
