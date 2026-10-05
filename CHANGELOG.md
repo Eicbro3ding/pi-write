@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+工具护栏:把「只写在提示词里拦不住」的两条规则下沉到工具层(`src/tool-rails.ts`)。
+
+- [feat] **`write` 拦空内容覆盖**(`tool_call` 钩子):复盘会话 L118 计到 2824 字 → L121 用户说「我还没叫你开始写」→ **L123 `write` 了 0 字节把第二章清空**,而工具回「Successfully wrote 0 bytes」,看起来像成功。提示词写着「write 会整体替换,优先用 edit」,模型照样照做。**提示词约束愿意遵守的模型,工具层才约束不愿意遵守的模型。** 拦截理由带三条出路(edit / 一次性给全内容 / 先回复用户)。
+- [feat] **`read` 拦循环**(`tool_call` 钩子):同一区间(offset+limit 相同)读第二次直接拦;同一文件一轮内读超 `READ_FILE_LIMIT`(6)次直接拦 —— 后者说明模型在用 `read` 分页翻整章,而 `read` 在 2000 行/50KB 处截断,这么翻永远翻不完。两条拦截都点名 `read_chapter`。护栏**按轮重置**(`before_agent_start` 调 `resetReadRails`),不跨轮累积,否则长会话后期什么都读不了。
+- [feat] **写入前后字数对比**(`tool_result` 追加):整体重写合法,所以不拦「覆盖已有文件」,但**静默丢内容必须显性化** —— 掉了一半以上就报「从 X 字改成 Y 字(减少 Z 字)……用 read_chapter 重读全文确认」。此前工具只回「Successfully wrote N bytes」,2824→0 也一样像成功。
+- [test] `test/tool-rails.test.ts`(17 例):空内容/纯空白拦截且有出路、有内容放行、书外交回路径守卫、首次读放行、同区间第二次拦截、换区间不误伤、超上限拦截、不同文件各算各的、按轮重置、字数对比的四种情形。
+
 提示词工程:治「agent 反复读文件」的行为异常(真实会话 `writer-c-v05ij1` 复盘)。
 
 - [fix] **`read_chapter` 进提示词工具清单**(`prompts/writer-main.md`):T3 做了这个整章通读工具(`src/tools.ts`),但 `prompts/` 与 `skills/` 里**零命中** —— 工具 schema 随请求发给模型,可提示词明说「以下是你可用的基础工具」并给了张清单,**模型服从提示词**,该工具自上线起就是死代码。复盘会话里 `read` 调用 **117 次**(91 次打在同一章上、全部带 offset、报过 `Offset 180 is beyond end of file`),`read_chapter` **0 次**。现在清单里明写两者分工:`read` 读片段、`read_chapter` 通读整章,**不要用 read 带 offset 把一整章翻完**。
