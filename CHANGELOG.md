@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+T11 步骤 2:工具路径守卫的 npm 依赖 patch 落地(T11 / D2 依赖化)。
+
+- [feat] **`patches/pi-coding-agent@1.0.2-pathguard.patch`(5 文件 / 279 行)**。上游 1.0.2 未导出 `setToolPathGuard`,且 `exports` 未开 `./core/tools/*` 子路径,自研侧无法从包外接入,只能 patch 编译产物 `dist/*.js`。patch 内容:`path-utils.js` 注入 `pathGuard` 变量 + `setToolPathGuard` / `clearToolPathGuard` + `resolveToCwd` 加第 3 参数 `mode`;`write.js` / `edit.js` / `edit-diff.js` 三处调用方同步传 `"write"`;`package.json` 补 `./core/tools/path-utils` 与 `./core/usage-totals` 子路径。
+- [fix] **防「写入守卫静默失效」**。这是本次最大的坑:只 patch `path-utils.js` 而不改三个调用方,所有调用都会落到默认值 `"read"`(放行模式),越权写入悄悄成功且**编译通过、运行无报错**。`scripts/t11/verify-pathguard-patch.mjs` 里有一条**反证测试**专门锁住这个形态(在只拦写入的守卫下,不传 mode 时 `/etc/passwd` 写会被放行)。
+- [test] **真实越权读/写回归(不靠「编译通过」)**:书内读放行 / 书内写放行 / 越权读 `~/.pi/writer/agent/auth.json` 拦住 / 越权写 `/etc/passwd` 拦住 / 默认 read 语义下读 auth.json 拦住。全部在真实 1.0.2 包上执行,非静态断言。
+- [docs] **更正 patch 规模:9 文件 → 5 文件**。T11 探针 §3 曾列 9 个文件。实测确认 `read.js` / `grep.js` / `find.js` / `ls.js` **不用改**(走默认 `"read"`,语义本就正确),`usage-totals.js` **不用改**(`getUsageCostBreakdown` 上游本就已导出,只缺 `exports` 子路径)。详见 `docs/PI_WRITER_T11_PROBE.md` §6。
+
 移除采样参数调节(temperature / topP,D6)。
 
 - [remove] **删掉温度/top_p 的用户入口**:`--temperature` / `--top-p` 命令行长选项、`POST /api/sampling` 端点、设置页「采样参数」整块(滑块 + 手机页入口 + 分类索引)。`stage_cast` 工具也只再收 `model` / `thinking`。
