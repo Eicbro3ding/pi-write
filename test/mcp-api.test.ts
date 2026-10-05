@@ -7,7 +7,7 @@
  * T9-A(2026-10-05)改用上游 `createMcpExtension` 后契约有两处**有意变更**:
  * 1. `sse` 不再被接受 —— 上游不支持 SSE,提交 sse 返回 400 并提示改用 http
  *    (已存在的 sse 条目在配置迁移时自动降级为 http,见 src/mcp/migrate.ts)。
- * 2. 端点背后的实现从 `McpManager` 换成 `McpHost`(配置读写门面)。
+ * 2. 端点背后的实现从自研 `McpManager` 换成 `McpHost`(配置读写门面)。
  *
  * 这里用真实 McpHost + 真实 http 监听,覆盖新增/编辑/删除/原样保存与拒绝路径。
  */

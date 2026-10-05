@@ -60,7 +60,7 @@ pi-writer 探索的是:**Agent 如何在一个持续存在的创作世界里工�
 | 经典模式(单 Agent,默认) | 去掉舞台,编辑页的 AI 换成带全量工具直接写的写作 agent;与舞台多 Agent 形态在设置「高级 → Agent 形态」/ 首启向导「创作方式」步一键互切 |
 | 工作区面板 | AI 产出的中间产物(资料 / 笔记 / 草稿 / 图片)按语义分组列出 + 只读预览;`outline.md` 这类世界书导出镜像不进清单,权威视图仍在世界书页 |
 | 外部命令(可选) | 默认关闭;开启后 agent 可执行 shell 命令,**命令与输出实时显示在对话里**。方言可选 bash 或 PowerShell:Windows 上不必装 Git Bash 也能用 |
-| MCP 扩展 | 通过 Model Context Protocol 接入外部工具(stdio / http / sse) |
+| MCP 扩展 | 通过 Model Context Protocol 接入外部工具(stdio / streamable HTTP);设置页可配「暴露策略」(直接可见 / 按需加载 / 隐藏) |
 
 ## 基于 Pi 构建
 
@@ -70,6 +70,9 @@ pi-writer 探索的是:**Agent 如何在一个持续存在的创作世界里工�
 - 世界状态管理(`world.json` 单一真相源 + 校验 / 原子写 / 视图导出);
 - 长篇记忆(跨章节 `memory.md`);
 - 创作工作流(背景包注入、预览卡、舞台共演)。
+
+MCP 直接装配上游扩展(不再自研管理器),仅在装配处做三件胶水:`PI_CODING_AGENT_DIR`
+重定向、旧配置迁移、web 设置页的配置读写面 —— 详见 [NOTICE-pi.md](NOTICE-pi.md) §4.1。
 
 pi-writer所有配置独立存放于 `~/.pi/writer`,不读取 Pi coding-agent 的配置。
 

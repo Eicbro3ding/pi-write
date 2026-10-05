@@ -2,7 +2,7 @@
  * pi-adapter 的**工具定义入口**(T7 批 3,2026-10-04)。
  *
  * `defineTool` 是 vendor 提供的「声明式工具定义」工厂:自研侧 5 个文件
- * (`tools.ts` / `mcp/tools.ts` / `stage/stage-extension.ts` / `extension.ts` …)
+ * (`tools.ts` / `stage/stage-extension.ts` / `extension.ts` …)
  * 用它造 `ToolDefinition`。它是**值**(不是类型),所以类型别名区救不了它 ——
  * 必须有这样一个薄壳。
  *

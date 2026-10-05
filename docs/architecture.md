@@ -24,7 +24,7 @@
 | `src/tools.ts` | 自定义工具:`world_update`(唯一变更通道)/ `world_find` / `word_count` |
 | `src/pi-adapter/` | **防腐层**:自研代码与 pi 框架之间的唯一接触面。自研侧**零 vendor 直接引用**(见 §9) |
 | `src/util/uuid.ts` | 通用工具(时间有序 UUID v7)。**注意它不属于 adapter** —— 见 §9 的归属说明 |
-| `src/mcp/` | MCP 配置(typebox 校验)/ 连接管理 / 工具适配 |
+| `src/mcp/` | MCP:**装配上游 `createMcpExtension`**(`extension.ts` 做目录重定向 / 命令 / 一次性迁移)、旧配置迁移(`migrate.ts`)、web 设置页配置读写面(`host.ts`)。**没有自研连接管理**——连接、重连、工具桥接、OAuth 全在上游 |
 | `src/stage/` | 舞台多 Agent 共演:orchestrator / assembler / script-store / stage-store / cast / stage-extension |
 | `vendor/` | pi 核心包源码(内部 import 已重写为相对路径,零 `@earendil-works` npm 依赖) |
 | `web/` | React 前端(vite):舞台 / 编辑 / 世界书 / 设置四页 |
@@ -71,8 +71,9 @@ agent 会话事件(pi vendor AgentSessionEvent)
 
 ## 4. 工具系统
 
-- **装配**:`createSessionRuntimeFactory`(src/session-factory.ts,唯一入口)。用 `excludeTools` 黑名单 + `initialActiveToolNames`,**不用** `tools` 白名单——那是白名单语义,会把不在名单的 MCP customTools 滤掉。
-- **系统提示**:`buildWriterSystemPrompt(customTools, shell, scope)` 动态生成(文末追加 MCP 工具清单,shell 行按方言注入 `none/bash/pwsh/powershell`);静态 override 会整个替换 pi 的动态工具段。第三个参数是**对话范围**(`conversationScope`):`prompts/writer-main.md` / `writer-editor.md` 里随范围变的事实(会话是否绑章、正文落点、白名单是否开)全写成占位,值只放 `src/prompt.ts` 的 `SCOPE_VARS`(**唯一实现**),编剧那份走 `buildEditorSystemPrompt(scope)`。chapter 一列是解耦前原话、`SCOPE_SECTION` 渲染为空串 → **默认(绑定章节)的提示词逐字节不变**;哪个宿主用哪套由 `web/writer-host.ts` 的 `hostPromptScope(conversationScope, key)` 定(key 为 `<id>.jsonl` = 绑章;分离模式下收幕成文仍按章节键建宿主,所以它按绑章叙述)。
+- **装配**:`createSessionRuntimeFactory`(src/session-factory.ts,唯一入口)。用 `excludeTools` 黑名单 + `initialActiveToolNames`,**不用** `tools` 白名单——那是白名单语义,会把不在名单的工具滤掉。
+- **MCP**(2026-10-05 T9-A,决策 D1 改判 B):不再自研管理器,`extensionFactories` 里直接装 `createWriterMcpExtension()`(包装上游 `createMcpExtension`)。三处胶水:① `PI_CODING_AGENT_DIR` 指向 `~/.pi/writer/agent`(上游 `getAgentDir()` 靠它定位 `mcp.json`);② 首次会话时把旧形状配置迁移成上游的 `mcpServers` + `transport` 判别形状(带 `.bak-<ts>` 备份、幂等);③ web 设置页走 `McpHost` 读写配置,工具清单用 `pi.getAllTools()`(上游包入口未导出 config 函数,故自实现读-改-写)。**SSE 不再支持**(上游只有 stdio + streamable HTTP),旧 sse 条目迁移时降级为 http;重连是上游的懒重连,不再有退避钩子。MCP 工具清单也不再由 `buildWriterSystemPrompt` 手工拼——上游经 `before_agent_start` 注入 `sections["mcp_servers"]`(结构化增量,**不受 `systemPromptOverride` 影响**)。
+- **系统提示**:`buildWriterSystemPrompt(customTools, shell, scope)` 动态生成(shell 行按方言注入 `none/bash/pwsh/powershell`);静态 override 会整个替换 pi 的动态工具段。第三个参数是**对话范围**(`conversationScope`):`prompts/writer-main.md` / `writer-editor.md` 里随范围变的事实(会话是否绑章、正文落点、白名单是否开)全写成占位,值只放 `src/prompt.ts` 的 `SCOPE_VARS`(**唯一实现**),编剧那份走 `buildEditorSystemPrompt(scope)`。chapter 一列是解耦前原话、`SCOPE_SECTION` 渲染为空串 → **默认(绑定章节)的提示词逐字节不变**;哪个宿主用哪套由 `web/writer-host.ts` 的 `hostPromptScope(conversationScope, key)` 定(key 为 `<id>.jsonl` = 绑章;分离模式下收幕成文仍按章节键建宿主,所以它按绑章叙述)。
 - **提问卡片**(`ask_user`,2026-09-21):`src/ask-user.ts` 提供阻塞式闸门 `AskUserGate` + 工具工厂;工具在 `execute` 里挂起,`POST /api/ask-user/answer|cancel` 结算,中断本轮时 `cancelAll`。前端不新增事件类型 —— 卡片以 `ask_user` 工具块为宿主(`result === null` 即等待中,见 `web/src/ask-user.ts` 的 `findPendingAsk`)。
 - **shell 与方言**(2026-09-18,2026-09-20 增 auto):`resolveWriterShell`(src/shell-kind.ts)把设置解析成「方言 + 可执行文件路径」;`shellKind` 缺省 `auto` = 按平台识别(Windows 优先 PowerShell,其余平台 bash),经 `settingsManager.shellPath` 交给 vendor(spawn 形态 `{shell, args:["-c"]}`);vendor 的工具 schema 固定叫 `bash`,故方言只改**执行哪个可执行文件**与**提示词怎么叙述**,不改工具名。解析不到(选了 pwsh 但本机没装)→ `dialect: "none"`:不激活 bash 工具 + 提示词如实说没有 shell。web 缺省不给 shell,由设置项 `enableShell` 显式放开(见 security.md)。
 - **世界书**:`world_update` 是唯一变更通道(提示词禁止 edit/write 直改);`applyWorldUpdate` 纯函数(判别联合 → clone → mutate → validateWorld),`withWorldLock` 串行化读-改-写(进程内;跨进程并发仍需外部文件锁)。
@@ -231,6 +232,14 @@ export type SessionEntity = ReturnType<typeof fromHandle>;
 
 2. **`src/` 二级目录到 adapter 是 `../../src/pi-adapter`,不是 `../../pi-adapter`。**
    `vendor/` 在**仓库根**,`pi-adapter/` 在 **`src/` 下** —— 层级不同。
+
+3. **`src/mcp/` 是防腐层外的例外,别再往里加 pi 的 import。**
+   `extension.ts` / `host.ts` / `migrate.ts` 都**从包名根 import**(`createMcpExtension` /
+   `loadExtensions` 与 `ToolInfo` 类型),没走 `pi-adapter`——因为 adapter 的职责是
+   「写作领域形状」,MCP 装配函数不是领域形状。代价是这三处将来要跟着上游 `extensions/mcp`
+   的导出面走。`test/pi-adapter.test.ts` 的 `T7_DELIVERED` 清单里记着它们就是为此。
+   **深层路径仍禁止**(`@earendil-works/pi-coding-agent/dist/extensions/mcp/config.js` 这类),
+   上游没导出 `addMcpServerConfig`,所以 `host.ts` 才自己实现了读-改-写。
 
 ### 上游升级时改哪里
 

@@ -54,6 +54,32 @@ vendor 版并不是「上游的一份干净拷贝」。2026-10-05 的 T8 清点�
 |---|---|---|
 | TUI 的 `sidePanel` 挂件方位 | 仅终端界面；web 侧本来就有自己的三栏布局（`WritePage` / `DraftWorkspace`） | 改为上游的 `aboveEditor` —— 草稿面板纵向排布在编辑器上方 |
 | `InteractiveModeOptions.uiMode` | 上游 1.0.2 改名为 `tuiMode`（取值不变） | 跟随上游改名 |
+| 自研 MCP 管理器（`src/mcp/manager.ts` 399 行 + `tools.ts` 237 行） | MCP 配置读写、连接管理、工具桥接 | **2026-10-05（T9-A / 决策 D1 改判 B）改为直接装配上游 `createMcpExtension`**，见下节 |
+
+## 4.1 MCP 走上游扩展（T9-A，2026-10-05）
+
+T9-A 勘察时的初判是「自研 MCP 更贴合写作场景，保留（A 方案）」。实际接入后发现
+**自研的 843 行几乎全是在重造上游已有的东西**：上游 `@earendil-works/pi-coding-agent`
+自带 `dist/extensions/mcp/`（index / config / runtime / tools / oauth / resources / cli，
+约 157KB），stdio + streamable HTTP、OAuth、资源列表、"mcp_servers" 提示词段、
+`codemode` 暴露策略一应俱全。最终**改判 B：删自研、装上游**。
+
+保留在仓库里的三个自研文件，都是**上游没提供的胶水**，不是重造：
+
+| 文件 | 作用 | 为什么上游替代不了 |
+|---|---|---|
+| `src/mcp/extension.ts` | `createWriterMcpExtension()` 包装上游扩展：写 `PI_CODING_AGENT_DIR` 让上游读 `~/.pi/writer/agent`；注册 `mcp` 命令查状态；`session_start` 时做一次性配置迁移 | 上游默认读的是 Pi coding-agent 自己的目录（`~/.pi/agent`），pi-writer 的数据必须隔离 |
+| `src/mcp/migrate.ts` | 旧配置（`{name,type,command,args,env,url}`）→ 上游形状（`mcpServers` + `transport` 判别）的纯函数迁移，带 `.bak-<ts>` 备份与幂等保护 | 上游没有历史包袱，不认识我们 v0.x 写下的形状 |
+| `src/mcp/host.ts` | `McpHost`：给 web 设置页提供配置读写面（list / upsert / remove / raw）；工具清单改用 `pi.getAllTools()` | 上游包**入口没有导出** `addMcpServerConfig` / `removeMcpServerConfig`（只在内部子路径），而 pi-adapter 护栏禁止深层 import |
+
+**行为变化（用户可见，已记入 README 与 CHANGELOG）**：
+
+- **不再支持 SSE 传输**：上游只实现 stdio + streamable HTTP。已存在的 `sse` 条目在迁移时
+  自动降级为 `http`（并告警）；web 设置页保存 `sse` 会被 400 拒绝。
+- **新增「暴露策略」字段**（`direct` / `codemode` / `deferred` / `hidden`）：迁移产生的新条目
+  一律写 `direct`（还原自研时代「工具直接进模型声明」的可见性语义），用户可自行改小。
+- **重连语义变更**：自研的 3-30s 指数退避重连被上游的**懒重连**取代（下次调用时按需重连），
+  故 `server.ts` 里的 `onReconnect` 钩子连同 `mcpManager.close()` 一起删除。
 
 ## 5. 上游升级时要看的地方
 
@@ -67,6 +93,10 @@ vendor 版并不是「上游的一份干净拷贝」。2026-10-05 的 T8 清点�
    能发现。详见 [`patches/README.md`](patches/README.md)。
 4. 测试里但凡要 import pi，**必须 import 包名**（`@earendil-works/pi-coding-agent`），
    不能 import 任何 vendored 源码 —— 两者是独立的模块实例，守卫会装到另一份上。
+5. **MCP 走上游扩展后，`PI_CODING_AGENT_DIR` 成了隐式契约**：`createWriterMcpExtension`
+   在装配时读/写该环境变量，上游的 `getAgentDir()` 靠它定位 `~/.pi/writer/agent/mcp.json`。
+   若有人提前设了这个变量（例如嵌套调用另一个 pi 实例），我们**不覆盖**（`pointUpstreamAtWriter`
+   会返回 `false`），此时 MCP 配置会读错目录 —— 排查 MCP「配置看不到 / 改了不生效」先看这里。
 
 ---
 

@@ -81,7 +81,7 @@ description: pi-writer 写作 agent 项目(独立仓库, vendor 化 pi 核心包
 ## 约定(改代码前必读)
 
 - **只用 erasable TypeScript**:无 enum/namespace/参数属性(Android strip-types 兼容)。
-- 工具定义走 `defineTool` + typebox `Type.Object`,勿手写 schema;MCP 工具适配在 src/mcp/tools.ts。
+- 工具定义走 `defineTool` + typebox `Type.Object`,勿手写 schema;MCP 直接装配上游扩展(src/mcp/extension.ts 是唯一接缝,没有自研工具适配层)。
 - 用户可见 UI 文案**中文内联**;prompt.ts 以英文为主(模型指令)。
 - agent 工具集 = read/write/edit/ls/grep/find/word_count/world_update/world_find,**无 bash**(web 模式同);TUI 多 bash。
 - 保持独立身份:不用 `~/.pi/agent` 配置,不引入 coding-agent 的扩展/技能。
@@ -113,7 +113,7 @@ description: pi-writer 写作 agent 项目(独立仓库, vendor 化 pi 核心包
 **必须用库,禁止手写**:
 - multipart 解析 → **busboy**(2026-08-10 替换手写 boundary 切分;手写版是安全 bug 高发区)。busboy 1.x 是**函数调用** `busboy({ headers, limits })` 不是 `new`(类型 `@types/busboy` 为 `export =` namespace)。
 - zip 打包/解包 → yazl/yauzl(book-zip.ts 已用)。
-- JSON Schema → typebox(Compile().Check() 做运行时校验,见 mcp/config.ts)。
+- JSON Schema → typebox(Compile().Check() 做运行时校验)。注:MCP 配置的校验已交还上游扩展。
 - 新增需求先查上述清单:能复用/引库就不手写;引库前先评估(见下)。
 
 **新依赖引入流程(必走)**:

@@ -164,7 +164,7 @@ export class SessionHost {
 	/**
 	 * 重建运行时(如 MCP 配置变更后让新工具生效):关闭旧 runtime,
 	 * 以当前会话文件重新 open SessionManager 并 start(createRuntime 工厂
-	 * 会被再次调用,调用方工厂里的 McpManager.getTools() 已返回新工具)。
+	 * 会被再次调用,调用方工厂里的工具清单已反映新工具)。
 	 * 注意:reload 后 nextTurn 背景包会丢失,调用方需重新注入章节背景包。
 	 * 分支位置(leaf 指针)只在内存,open 会落到文件最深路径——重建后恢复
 	 * 原 leaf,避免配置保存把当前对话"切"到其他分支(串对话)。

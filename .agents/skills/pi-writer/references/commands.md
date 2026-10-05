@@ -66,8 +66,8 @@ const t = await (await fetch(B + "/api/session/tree")).json();     // branches: 
 await fetch(B + "/api/messages/retract", { method: "POST", headers: {"content-type":"application/json"}, body: JSON.stringify({ entryId, replacement? }) });
 await fetch(B + "/api/messages/branch",  { ... body: JSON.stringify({ entryId }) });
 await fetch(B + "/api/messages/navigate",{ ... body: JSON.stringify({ entryId }) });
-// MCP
-await fetch(B + "/api/mcp", { method: "POST", ... body: JSON.stringify({ name, type: "stdio"|"http"|"sse", command?, args?, url? }) });
+// MCP(类型只有 stdio / http;上游不支持 sse,传 sse 会被 400 拒绝)
+await fetch(B + "/api/mcp", { method: "POST", ... body: JSON.stringify({ name, type: "stdio"|"http", command?, args?, url?, headers?, exposure?, enabled?, description? }) });
 // If-Match 条件写
 await fetch(B + "/api/draft", { method: "PUT", headers: { "content-type":"application/json", "if-match": String(mtime) }, body: JSON.stringify({ file, text }) });
 ```

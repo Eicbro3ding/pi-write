@@ -1,5 +1,19 @@
 # Changelog
 
+T9-A:MCP 不再自研,直接装配上游扩展(决策 D1 改判)。
+
+**升级影响(有,请读)**:① 配置**自动迁移**——首次启动把旧形状(`{name,type,command,args,env,url}`)改写为上游的 `mcpServers` + `transport` 判别形状,原文件留 `.bak-<时间戳>` 备份,重复启动幂等;② **SSE 服务器不再支持**——上游只实现 stdio 与 streamable HTTP,旧 `sse` 条目迁移时**自动降级为 http 并告警**,web 设置页再保存 `sse` 会被 400 拒绝;③ 新增「暴露策略」字段,迁移产生的新条目一律写 `direct`(与自研时代「工具直接可见」一致),可自行改为 `codemode`(按需加载)/`deferred`/`hidden`;④ **断线不再自动重连**(自研的 3-30s 退避取消,改为上游的懒重连:下次调用时按需连);⑤ OAuth 授权流改由上游扩展提供。以上四条同时写进 `README.md` 与 `docs/security.md`。
+
+- [refactor] **删掉自研 MCP 共 843 行**:`src/mcp/manager.ts`(399 行,连接管理 + 断线重连 + 工具桥接)、`src/mcp/tools.ts`(237 行,工具适配)、`src/mcp/config.ts`(typebox 校验,前置重构后已成死代码)。删掉的理由不是"自研不好",而是**上游 `dist/extensions/mcp/` 约 157KB 已经把同样的事做完且做得更全**(stdio + streamable HTTP、OAuth、资源列表、四档暴露策略、`mcp_servers` 提示词段)——继续维护一份平行实现,等于每次上游升级都要重放一遍。
+- [feat] **新增三个胶水文件**(上游替代不了的那部分,合计不到 200 行):`src/mcp/extension.ts`(`createWriterMcpExtension()` 包装上游扩展 —— 写 `PI_CODING_AGENT_DIR` 让上游读 `~/.pi/writer/agent` 而不是 `~/.pi/agent`;注册 `mcp` 命令查状态;`session_start` 时跑一次迁移)、`src/mcp/migrate.ts`(纯函数迁移层:旧形状 → 上游形状、`sse` 降级、备份、幂等)、`src/mcp/host.ts`(`McpHost`:给 web 设置页的配置读写面,工具清单改用 `pi.getAllTools()`)。
+- [fix] **`host.ts` 自实现读-改-写**而不是调用上游的 `addMcpServerConfig`——上游**包入口没导出**它(只在 `dist/extensions/mcp/config.js` 里),而 `test/pi-adapter.test.ts` 的护栏禁止深层 import。这是护栏起作用的实例:它逼我们承认"上游没把这个当公开 API",而不是绕过去偷用。
+- [refactor] **`cli.ts` / `web.ts` 改为装配 `extensionFactories`**,不再往 `customTools` 里灌 MCP 工具;`src/web/server.ts` 的 `mcpManager` 换 `mcpHost`,删掉 `onReconnect` 钩子(上游懒重连)与 `mcpManager.close()`(生命周期归上游管)。
+- [refactor] **`buildWriterSystemPrompt` 不再手工拼 MCP 清单**:MCP 工具的提示词段改由上游经 `before_agent_start` 注入 `sections["mcp_servers"]`。这与 `systemPromptOverride` 是**两条互不干扰的通道**(后者整体替换,前者结构化增量),所以"override 会不会吃掉 MCP 段"的担心不成立——不会。提示词标题随之从「外部工具(MCP)」改为「外部工具」。
+- [feat] **web 设置页适配**:服务器类型去 `sse`、新增「暴露策略」下拉(direct / codemode / deferred / hidden)与 `headers` / `enabled` / `description` 字段;保存 `sse` 时给出中文指引而不是静默失败。
+- [test] 新增 `test/mcp-migrate.test.ts`(**29 例**,含新旧形状判别、SSE 降级、备份、幂等、保真不覆盖用户 exposure)与 `test/mcp-host.test.ts`(**20 例**,含"原样保留 imports 形状");`test/mcp-api.test.ts` **重写**为真实 `McpHost` + 真实 http 监听(此前用 fake manager,"未装配 404 / sse 拒绝 / exposure 校验"这些路径根本没被覆盖);`test/pi-adapter.test.ts` 护栏清单更新;删除 4 个随自研实现一起作废的测试文件。净结果 **90 文件 / 1599 例通过**。
+
+**验证**:typecheck 0 错误;`npm run build:web` 成功;端到端冒烟 —— `GET /api/mcp` 正确读出上游 `mcpServers` 形状、`POST` 新增 http 服务器成功、`POST sse` 返回 400 并附中文提示、`GET /api/mcp/raw` 正确定位 `~/.pi/writer/agent/mcp.json`。
+
 T11 后续:`npm run build` 产物修复 —— npm 包的 CLI 现在真的能跑。
 
 - [fix] **tsc 不再 emit JS,只出声明**。261 处 `.ts` 相对 import 与 `allowImportingTsExtensions` 是绑死的,emit 出来的 `dist/src/*.js` 里 import 仍写 `.ts`,`node` 一跑就是 `ERR_MODULE_NOT_FOUND`。现在 tsc 只喂 `types`(`--emitDeclarationOnly`,顺带消掉 TS5096),可执行/可引用的 JS 交给 **esbuild** —— 与 `build:web` / `build:electron` 同一套做法。新增 `scripts/build-cli.mjs` 打两个产物,并**自检产物里不许残留 `.ts` 相对 import**:这是本次修复的核心,也是最容易悄悄退回的形态(哪天有人把 build 改回 tsc emit,编译照样"成功",只有用户启动时才炸)。
