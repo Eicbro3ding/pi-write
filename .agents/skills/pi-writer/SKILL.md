@@ -25,10 +25,10 @@ description: pi-writer 写作 agent 项目(独立仓库, vendor 化 pi 核心包
 | `src/cjk.ts` | **CJK 计数唯一实现**(码点范围,不用 `\p{` 正则——Android 无 ICU);tools/world-context/counters/writer-ui 共用 |
 | `src/atomic-write.ts` | **原子写唯一实现**(唯一 tmp + rename 重试);book-manager/world-data/mcp 配置共用 |
 | `src/session-text.ts` | **会话消息文本提取唯一实现**(chatTextOfMessage/chatThinkingOfMessage);TUI extension 与 web session-host 共用 |
-| `src/extension.ts` | TUI 内联扩展:`pi.registerTool`(word_count/world_update/world_find)+ 全部 `/` 命令 |
+| `src/extension.ts` | TUI 内联扩展:`pi.registerTool`(word_count/world_update/world_find/read_chapter/**read_style**)+ 全部 `/` 命令 |
 | `src/prompt.ts` | `WRITER_SYSTEM_PROMPT` 写作系统提示词(工具约束/场景节奏/世界维护/**开场纪律**:新书没定风格时提一次并把长期偏好落盘) |
 | `prompts/` | 角色提示词本体:`writer-main.md`(写作 agent,TUI/经典模式/主会话,**2026-10-02 起 web 默认落地页**)/`writer-editor.md`(常驻编剧,**只有 world_find**)/`director.md`(导演,有 world_update,仅多 Agent 形态可达)。三份都带开场纪律,但落盘能力不同:写作 agent 与导演能写世界书,编剧只能写 `advice.md` 转交。`director.md` 的 `{STYLE_SETUP_PATH}` 由 `stage-extension.ts` 渲染成 onboarding 剧本绝对路径(舞台角色 `packagedSkills:false`,拿不到 `<available_skills>`)。**`writer-main.md` / `writer-editor.md` 还按 `conversationScope` 渲染**(`{SCOPE_SECTION}` 等占位,值在 `src/prompt.ts` 的 `SCOPE_VARS`):chapter 一列是解耦前原话(`SCOPE_SECTION` = 空串 → 默认模式提示词逐字节不变),book 一列换成「对话不隶属于任何章节 + 当前章节 = 用户正在看的那一章 + 正文白名单不设」。该用哪套由 `hostPromptScope(conversationScope, key)`(`writer-host.ts`)判定:key 是 `<id>.jsonl` 才按绑章叙述——**收幕成文(chatAndWait)在分离模式下仍按章节键建宿主,所以它必须拿绑章那套** |
-| `src/tools.ts` | 自定义工具:word_count(手写词扫描,不依赖 `\p{L}`)、world_update、world_find、**style_update**(编剧窄通道:只写写作约束/文风采样/世界观概述,`applyStyleUpdate` 复用 `applyWorldUpdate` 引擎,约束强制 target=writer 且按**名字** upsert/删除;不写 `stage/last-world-edit.json` 记录——那只归舞台页消费)(defineTool + typebox) |
+| `src/tools.ts` | 自定义工具:word_count(手写词扫描,不依赖 `\p{L}`)、world_update、world_find、**read_chapter**(整章全文;内置 read 在 2000 行/50KB 静默截断)、**read_style**(读回文风采样 —— 2026-10-05 起采样不再进任何上下文块,只由它取)、**style_update**(编剧窄通道:只写写作约束/文风采样/世界观概述,`applyStyleUpdate` 复用 `applyWorldUpdate` 引擎,约束强制 target=writer 且按**名字** upsert/删除;不写 `stage/last-world-edit.json` 记录——那只归舞台页消费)(defineTool + typebox) |
 | `src/tool-guard.ts` | `installToolPathGuard` 工具路径守卫(书目录内读写 + skills 只读) |
 | `src/mcp/` | MCP 配置(config.ts typebox 校验)/连接管理(manager.ts SDK 封装)/工具适配(tools.ts JSON Schema→typebox) |
 | `src/stage/` | 舞台区(导演/演员/编剧多 agent 共演 demo):orchestrator(状态机)/types/cast/script-store/stage-store/assembler/counters/stage-extension/cli |

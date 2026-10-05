@@ -83,12 +83,13 @@ agent 会话事件(pi vendor AgentSessionEvent)
 `buildChapterContext`(src/world-context.ts)按序组装:
 
 ```
-【记忆】→【世界观概述】→【世界书·本章相关】→【写作约束】+【文风采样】→【Notice】+【发展线】
+【记忆】→【世界观概述】→【世界书·本章相关】→【写作约束】→【Notice】+【发展线】
 ```
 
 - 预算:`DEFAULT_CONTEXT_BUDGET = 2000`(常驻 + 激活共享);记忆单独 `DEFAULT_MEMORY_BUDGET = 1500` 先裁剪。
 - 激活引擎:种子 = 关键词命中(keys 子串匹配草稿 + 最近 2 条用户消息);`expandActivation` 深度内多源 BFS 沿关系展开(visited 去重,无视 arrow);排序键 = 直接命中 > 强关联 > 普通关联 > 跳距 > 类型优先级。详见 [design.md](design.md)。
-- 裁剪顺序:先裁采样,仍超再裁概述,约束 / Notice / 发展线不可裁。
+- 裁剪顺序:先裁概述,约束 / Notice / 发展线不可裁。
+- **文风采样不注入**(2026-10-05):改由 `read_style` 按需读取,见 [design.md](design.md) §2 的说明。
 
 ## 6. 舞台区(实验)
 

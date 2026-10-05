@@ -80,13 +80,12 @@ export interface InspectReport {
 
 const TRIM_IMPACT: Record<TrimRecord["kind"], string> = {
 	entry: "模型看不到这条设定,可能把「没写进世界书」当作事实",
-	sample: "文风一致性下降,模型会退回自己的默认语感",
 	summary: "世界观基调丢失,细节设定仍在(世界书条目未受影响)",
 	milestones: "已完成的目标可能被重复推进 —— 这一段装的是「勿再追求」清单",
 };
 
 /** 可被预算挤掉的段 —— 与 buildChapterContext 里的裁剪顺序一致。 */
-const TRIMMABLE: ReadonlySet<ContextSection["id"]> = new Set(["sample", "summary", "entries", "storyline"]);
+const TRIMMABLE: ReadonlySet<ContextSection["id"]> = new Set(["summary", "entries", "storyline"]);
 
 /** 展开为面板行(按占用降序;占用为 0 的段仍然保留,让用户看到「这段是空的」)。 */
 export function buildInspectReport(args: {

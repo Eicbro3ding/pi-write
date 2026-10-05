@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { buildChapterContext, buildStorylineView, COMPLETED_MILESTONE_LIMIT, DEFAULT_CONTEXT_BUDGET, estimateTokens, activatedEntryIds, expandActivation, rankActivationCandidates, summarizeTrim, trimMemory } from "../src/world-context.ts";
 import { createEmptyWorld, type WorldData } from "../src/world-data.ts";
@@ -161,7 +162,7 @@ describe("rankActivationCandidates", () => {
 });
 
 describe("buildChapterContext", () => {
-	it("背景包包含激活组/约束/采样/Notice·备忘录/发展线", () => {
+	it("背景包包含激活组/约束/Notice·备忘录/发展线 —— 但**不含**文风采样", () => {
 		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
 		w.constraints.push({ id: "c1", name: "对话风格", text: "对话不用引号。", enabled: true });
 		w.styleSample = { text: "雨落青瓦。", source: "draft/ch01.md", updatedAt: 0 };
@@ -170,11 +171,16 @@ describe("buildChapterContext", () => {
 		const r = buildChapterContext(w, { chapterId: "ch04", draftText: "林婉走进来。", recentUserMessages: [], budget: DEFAULT_CONTEXT_BUDGET });
 		expect(r.text).toContain("林婉");
 		expect(r.text).toContain("对话不用引号");
-		expect(r.text).toContain("雨落青瓦");
 		expect(r.text).toContain("【Notice·备忘录】");
 		expect(r.text).toContain("- [ ] 保持悬疑。");
 		expect(r.text).toContain("真相浮出");
 		expect(r.text).toContain("写宴前对峙");
+		// 2026-10-05:采样从背景包挪出去了 —— 它在 world.json 里还在,要读者自己去取
+		// (`read_style`)。理由见 src/world-context.ts 常驻组那段注释:注入即快照,而采样
+		// 每写一章就可能换新,快照会变成旧版本还看着像权威。
+		expect(r.text).not.toContain("雨落青瓦");
+		expect(r.sections.some((s) => s.id === "sample")).toBe(false);
+		expect(r.trimmed.some((t) => t.kind === "summary")).toBe(false);
 	});
 	it("禁用约束与关闭开关不进背景包", () => {
 		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
@@ -206,19 +212,23 @@ describe("buildChapterContext", () => {
 		expect(r.text).toContain("- [ ] 未完成待办");
 		expect(r.text).not.toContain("已完成事项");
 	});
-	it("超预算先裁采样(约束保留)", () => {
+	it("超预算先裁概述(约束保留);采样已经完全不在候选里", () => {
 		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
 		w.constraints.push({ id: "c1", name: "对话风格", text: "对话不用引号。", enabled: true });
-		w.styleSample = { text: "字".repeat(3000), source: "", updatedAt: 0 };
+		w.worldSummary = "字".repeat(3000);
+		// 采样还在 world.json 里 —— 但它连「被裁」都不会发生,因为压根不参与背景包
+		w.styleSample = { text: "雨落青瓦。", source: "", updatedAt: 0 };
 		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: 100 });
-		expect(r.included.hasSample).toBe(false);
+		expect(r.included.hasSummary).toBe(false);
 		expect(r.included.constraints).toEqual(["对话风格"]);
 		expect(r.text).toContain("对话不用引号");
-		// 2026-10-04(T4):原文用 `not.toContain("文风采样")` 验证「该段没进上下文」,
-		// 但裁切提示行现在会点名它(那正是 T4 要的可见性),字符串断言失去区分力。
+		// 2026-10-04(T4):原文用 `not.toContain(...)` 靠段标题字符串判定「未注入」,
+		// 但裁切提示行现在会点名它们(可见性正是 T4 的目标),字符串断言失去区分力。
 		// 改为直接验证**内容**未注入 —— 这才是原意。
 		expect(r.text).not.toContain("字".repeat(3000));
-		expect(r.trimmed.some((t) => t.kind === "sample")).toBe(true);
+		expect(r.text).not.toContain("雨落青瓦");
+		expect(r.trimmed.some((t) => t.kind === "summary")).toBe(true);
+		expect(r.trimmed.some((t) => t.kind === "sample")).toBe(false);
 	});
 	it("超预算按序裁剪激活组并计数", () => {
 		const w = createEmptyWorld();
@@ -266,21 +276,25 @@ describe("T4 裁切可见（trimmed 明细 + summarizeTrim）", () => {
 		expect(r.trimmedCount).toBe(entries.length);
 	});
 
-	it("文风采样被裁时进明细,标注为 sample 且带 token 量", () => {
-		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
-		w.styleSample = { text: "字".repeat(3000), source: "", updatedAt: 0 };
-		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: 100 });
-		const sample = r.trimmed.find((t) => t.kind === "sample");
-		expect(sample).toBeDefined();
-		expect(sample?.label).toBe("文风采样");
-		expect(sample?.tokens).toBeGreaterThan(1000);
-	});
-
-	it("世界观概述被裁时进明细", () => {
+	it("世界观概述被裁时进明细 —— 2026-10-05 起这是常驻组唯一可裁的段", () => {
 		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
 		w.worldSummary = "概".repeat(4000);
 		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: 50 });
-		expect(r.trimmed.some((t) => t.kind === "summary")).toBe(true);
+		const summary = r.trimmed.find((t) => t.kind === "summary");
+		expect(summary).toBeDefined();
+		expect(summary?.label).toBe("世界观概述");
+		expect(summary?.tokens).toBeGreaterThan(1000);
+	});
+
+	it("文风采样既不注入也不进 trimmed —— 它没有参与背景包,不是「被裁掉了」", () => {
+		// 两者的差别对用户是有意义的:被裁意味着「调大预算就能回来」;
+		// 而采样是被有意移走的,调预算也回不来 —— 它只认 read_style。
+		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
+		w.styleSample = { text: "字".repeat(3000), source: "", updatedAt: 0 };
+		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: 100 });
+		expect(r.text).not.toContain("字".repeat(3000));
+		expect(r.trimmed.some((t) => t.kind === "sample")).toBe(false);
+		expect(r.trimmed).toEqual([]);
 	});
 
 	it("已完成里程碑被裁时进明细（它装的是「勿再追求」清单,丢了会让模型重复推进）", () => {
@@ -364,11 +378,11 @@ describe("T5 分段占用（sections 快照）", () => {
 
 	it("被裁的段不进 sections（裁掉的量只体现在 trimmed）", () => {
 		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
-		w.styleSample = { text: "字".repeat(3000), source: "", updatedAt: 0 };
+		w.worldSummary = "字".repeat(3000);
 		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: 100 });
-		expect(r.trimmed.some((t) => t.kind === "sample")).toBe(true);
-		// 采样被裁 → 不进 sections(否则预算面板会虚报占用)
-		expect(r.sections.some((s) => s.id === "sample")).toBe(false);
+		expect(r.trimmed.some((t) => t.kind === "summary")).toBe(true);
+		// 概述被裁 → 不进 sections(否则预算面板会虚报占用)
+		expect(r.sections.some((s) => s.id === "summary")).toBe(false);
 	});
 
 	it("sections 的 token 之和不超过预算（越界说明哪段没算对）", () => {
@@ -440,28 +454,26 @@ describe("buildChapterContext(世界观概述)", () => {
 		expect(r.text).not.toContain("【世界观概述】");
 		expect(r.included.hasSummary).toBe(false);
 	});
-	it("超预算先裁采样、仍超再裁概述(约束保留)", () => {
+	it("超预算裁概述(约束保留)", () => {
 		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
 		w.constraints.push({ id: "c1", name: "对话风格", text: "对话不用引号。", enabled: true });
 		w.styleSample = { text: "字".repeat(3000), source: "", updatedAt: 0 };
 		w.worldSummary = "字".repeat(3000);
 		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: 100 });
-		expect(r.included.hasSample).toBe(false);
 		expect(r.included.hasSummary).toBe(false);
 		expect(r.included.constraints).toEqual(["对话风格"]);
 		expect(r.text).toContain("对话不用引号");
 		// 2026-10-04(T4):原断言靠段标题字符串判定「未注入」,但裁切提示行现在会
-		// 点名它们(可见性正是 T4 的目标)。改为验证内容未注入 + 两者都进了明细。
+		// 点名它们(可见性正是 T4 的目标)。改为验证内容未注入 + 概述进了明细;
+		// 采样则两者都不沾(它不参与背景包,见上面的专门用例)。
 		expect(r.text).not.toContain("字".repeat(3000));
-		expect(r.trimmed.some((t) => t.kind === "sample")).toBe(true);
 		expect(r.trimmed.some((t) => t.kind === "summary")).toBe(true);
+		expect(r.trimmed.some((t) => t.kind === "sample")).toBe(false);
 	});
-	it("预算中等时先裁采样、概述保留", () => {
+	it("预算中等时概述保留", () => {
 		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
-		w.styleSample = { text: "雨".repeat(50), source: "", updatedAt: 0 };
 		w.worldSummary = "雾".repeat(50);
 		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: 90 });
-		expect(r.included.hasSample).toBe(false);
 		expect(r.included.hasSummary).toBe(true);
 	});
 });
@@ -555,5 +567,47 @@ describe("buildChapterContext(发展线·已完成注入)", () => {
 		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: DEFAULT_CONTEXT_BUDGET });
 		expect(r.included.hasCompletedMilestones).toBe(false);
 		expect(r.text).not.toContain("【发展线·已完成】");
+	});
+});
+
+/**
+ * 防回归护栏(2026-10-05):采样必须只有**一个**来源 —— `read_style` 工具。
+ *
+ * 2026-10-05 之前,采样**同时有三条路进上下文**:web 稳定块、背景包(`buildChapterContext`
+ * 的常驻组)、舞台收幕委托消息。前两条留的都是同一份数据的**快照**,而采样按纪律
+ * 「明显变化则换新」—— 每写一章就可能换一次,于是快照很快就变成旧版本,还顶着一个
+ * 看起来很权威的块标题。这里用最笨也最不容易失效的方式钉住单源:源码里出现
+ * 「【文风采样】」这个块标题的文件只能是白名单里的两个:
+ * - `src/tools.ts` —— `read_style` 的**输出**,这是唯一该渲染它的地方;
+ * - `src/stage/orchestrator.ts` —— 收幕成文是**一次性委托**(那一条消息里没有后续工具回合),
+ *   必须自带全部材料才自包含,所以保留内联。
+ * 任何别处再把这个块拼进上下文,这条断言就会坏 —— 报出来的就是「多了哪个文件」。
+ */
+describe("采样单源护栏(read_style 是唯一入口)", () => {
+	const ALLOWED = new Set(["src/tools.ts", "src/stage/orchestrator.ts"]);
+
+	/** 递归列出目录下的 .ts 文件(相对仓库根,统一正斜杠)。 */
+	function tsFiles(dir: string): string[] {
+		const out: string[] = [];
+		for (const ent of readdirSync(dir, { withFileTypes: true })) {
+			const rel = `${dir}/${ent.name}`;
+			if (ent.isDirectory()) out.push(...tsFiles(rel));
+			else if (ent.name.endsWith(".ts")) out.push(rel.replace(/^\.\//, "").replace(/\\/g, "/"));
+		}
+		return out;
+	}
+
+	it("「【文风采样】」只在白名单文件中出现", () => {
+		const hits = tsFiles("src").filter((f) => readFileSync(f, "utf8").includes("【文风采样】"));
+		// 命中列表必须是白名单的子集 —— 写等号而不是写 `toContain` 循环,是为了让报错
+		// 一眼看出「多了哪个文件」而不是只报一句 true/false
+		expect(hits.sort()).toEqual([...ALLOWED].sort());
+	});
+
+	it("背景包与稳定块的装配函数都不再引用 styleSample", () => {
+		// world-context.ts(背景包/TUI 常驻组)与 writer-host.ts(web 稳定块)是两条历史注入路径。
+		// 上面的运行时用例已各验一边;这里从源码层面钉死「它们不再认识采样」。
+		expect(readFileSync("src/world-context.ts", "utf8")).not.toContain("styleSample");
+		expect(readFileSync("src/web/writer-host.ts", "utf8")).not.toContain("styleSample");
 	});
 });

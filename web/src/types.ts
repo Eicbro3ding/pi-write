@@ -348,7 +348,7 @@ export interface TrimSummaryDto {
 	entryCount: number;
 	/** 被省略的条目标题(按被挤出的顺序,上限由服务端 maxNames 控制)。 */
 	entryTitles: string[];
-	/** 被整段丢弃的其他内容(文风采样 / 世界观概述 / 已完成里程碑)。 */
+	/** 被整段丢弃的其他内容(世界观概述 / 已完成里程碑)。 */
 	droppedSections: string[];
 	/** 合计被省略的粗略 token 数。 */
 	tokens: number;
@@ -363,7 +363,7 @@ export interface TrimSummaryDto {
 /** 一段在检视面板里的展示行。 */
 export interface InspectSectionRowDto {
 	/** 段 id(稳定键)。 */
-	id: "memory" | "summary" | "entries" | "constraints" | "sample" | "notice" | "storyline";
+	id: "memory" | "summary" | "entries" | "constraints" | "notice" | "storyline";
 	/** 展示名。 */
 	label: string;
 	/** 该段实际进入上下文的 token。 */
@@ -380,7 +380,7 @@ export interface InspectSectionRowDto {
 
 /** 一条被省掉的内容。 */
 export interface InspectTrimRowDto {
-	kind: "entry" | "sample" | "summary" | "milestones";
+	kind: "entry" | "summary" | "milestones";
 	label: string;
 	tokens: number;
 	/** 「丢了会怎样」。 */

@@ -77,7 +77,9 @@ describe("开场纪律(新书还没定风格时的一次性提议)", () => {
 		const main = loadPromptText("writer-main.md");
 		expect(main).toContain("开场纪律");
 		expect(main).toContain("【写作约束】");
-		expect(main).toContain("【文风采样】");
+		// 2026-10-05:采样已移出所有上下文块,判断「有没有」的唯一入口是 read_style
+		// ——原先这里断言的是 `【文风采样】` 那个块名,而它现在不该出现在这个入口的判据里了。
+		expect(main).toContain("`read_style` 查回来也说没有文风采样");
 		expect(main).toContain("同一场对话里不许再提");
 		expect(main).toContain("onboarding");
 	});

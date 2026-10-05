@@ -14,9 +14,10 @@ const KIND_LABEL: Record<string, string> = {
 	summary: "世界观概述",
 	entries: "世界书条目",
 	constraints: "写作约束",
-	sample: "文风采样",
 	notice: "Notice",
 	storyline: "发展线",
+	// 2026-10-05:这里原先还有一条 `sample: "文风采样"` —— 采样已移出背景包
+	// (改由 read_style 按需取),背景包里再没有这一段可展示。
 };
 
 /**

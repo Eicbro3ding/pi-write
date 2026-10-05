@@ -36,7 +36,7 @@ function makeTui(rows = 40): { tui: TUI; renders: () => number } {
 function makeReport(over: Partial<InspectReport> = {}): InspectReport {
 	const sections: ContextSection[] = [
 		{ id: "entries", label: "世界书·本章相关", tokens: 400, count: 5 },
-		{ id: "sample", label: "文风采样", tokens: 300, count: 1 },
+		{ id: "summary", label: "世界观概述", tokens: 300, count: 1 },
 		{ id: "memory", label: "记忆", tokens: 100, count: 1 },
 	];
 	return buildInspectReport({
@@ -67,7 +67,9 @@ describe("InspectPanel（T5 TUI 面板）", () => {
 		expect(text).toContain("fog-harbor");
 		expect(text).toContain("雨夜");
 		expect(text).toContain("世界书·本章相关");
-		expect(text).toContain("文风采样");
+		// 2026-10-05:原先这里断言「文风采样」——采样已移出背景包(改由 read_style 按需取)
+		expect(text).toContain("世界观概述");
+		expect(text).not.toContain("文风采样");
 		expect(text).toContain("记忆");
 	});
 

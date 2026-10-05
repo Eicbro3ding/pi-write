@@ -80,8 +80,8 @@ export interface ChapterContextInput {
 
 /** 一处因预算被省略的内容(2026-10-04,T4 裁切可见)。 */
 export interface TrimRecord {
-	/** 类别:激活条目 / 文风采样 / 世界观概述 / 已完成里程碑。 */
-	kind: "entry" | "sample" | "summary" | "milestones";
+	/** 类别:激活条目 / 世界观概述 / 已完成里程碑(文风采样已移出背景包,不再有 segment)。 */
+	kind: "entry" | "summary" | "milestones";
 	/** 人类可读的名称(条目标题 / 段名)。 */
 	label: string;
 	/** 粗略 token 数(该内容原本会占用的量)。 */
@@ -91,7 +91,7 @@ export interface TrimRecord {
 /** 背景包里的一个分段及其占用(2026-10-04,T5 上下文可视化)。 */
 export interface ContextSection {
 	/** 段 id(稳定,供 UI 排序/着色;不用展示名做键,展示名会改)。 */
-	id: "memory" | "summary" | "entries" | "constraints" | "sample" | "notice" | "storyline";
+	id: "memory" | "summary" | "entries" | "constraints" | "notice" | "storyline";
 	/** 展示名。 */
 	label: string;
 	/** 该段实际占用的 token(裁掉的不算——裁掉的另在 trimmed 里)。 */
@@ -119,9 +119,12 @@ export interface ChapterContextResult {
 	 * 只含**实际进入上下文**的段;被裁的看 trimmed。
 	 */
 	sections: ContextSection[];
+	/**
+	 * 2026-10-05:文风采样已移出背景包,`included` 里不再有 `hasSample`(恒 false 的
+	 * 字段是噪音)。判断「有没有采样」的唯一入口是 `read_style` 工具。
+	 */
 	included: {
 		constraints: string[];
-		hasSample: boolean;
 		hasSummary: boolean;
 		hasNotice: boolean;
 		hasCompletedMilestones: boolean;
@@ -268,14 +271,23 @@ export function rankActivationCandidates(data: WorldData, seeds: string[], expan
 
 /** 组装背景包文本(常驻组 + 激活组,预算裁剪)。 */
 export function buildChapterContext(data: WorldData, input: ChapterContextInput): ChapterContextResult {
-	const result: ChapterContextResult = { text: "", activatedIds: [], trimmedCount: 0, trimmed: [], sections: [], included: { constraints: [], hasSample: false, hasSummary: false, hasNotice: false, hasCompletedMilestones: false, storylineNode: null } };
+	const result: ChapterContextResult = { text: "", activatedIds: [], trimmedCount: 0, trimmed: [], sections: [], included: { constraints: [], hasSummary: false, hasNotice: false, hasCompletedMilestones: false, storylineNode: null } };
 	/** 分段占用的累加器(见 ContextSection;最后统一 push,省得各分支各自维护顺序)。 */
 	const sections: ContextSection[] = [];
 	const addSection = (s: ContextSection): void => {
 		if (s.tokens > 0) sections.push(s);
 	};
 
-	// 常驻组:启用的约束 + 采样 + 简要世界观(裁剪顺序:先裁采样,仍超再裁概述,约束保留)
+	// 常驻组:启用的约束 + 简要世界观(裁剪顺序:先裁概述,约束保留)
+	//
+	// **文风采样不在这里**(2026-10-05):它原先是常驻组的第二块,每一次背景包注入都会
+	// 带上它 —— 而采样按提示词纪律「明显变化则换新,从当前章草稿选 300–500 字」,
+	// **每写一章就可能换一次**,于是注入那一刻的快照很快就成了旧版本:用户在第七章换了
+	// 样本,第八章上下文里可能还是第七章那份。模型分不清「上下文里的」与「当前的」,且
+	// 它看着像权威 block,模型不会去校对。现在只有 `read_style` 一个来源(单源),
+	// 见 `src/tools.ts` 的 readStyleTool。舞台收幕的委托消息例外 —— 那是**一次性**任务,
+	// 消息自带采样保证自包含(见 stage/orchestrator.ts)。
+	//
 	// 约束按 target 过滤。主会话(这个函数)是**写作 agent**——TUI 里它就是唯一动笔的那个,
 	// 所以它收 target ∈ {main, writer, all} 的并集:写作 agent 同时是「主会话」与「编剧」。
 	// 口径与 writer-host 的经典模式一致(那里也是 writer || main 的并集,2026-08-12 就有)。
@@ -294,41 +306,23 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 		}
 		resident += residentConstraints;
 	}
-	let sample = "";
-	if (data.styleSample && data.styleSample.text.length > 0) {
-		sample = `【文风采样】(来源: ${data.styleSample.source || "未知"}；只模仿语感与句式，不复用原文)\n${data.styleSample.text}\n`;
-		resident += sample;
-		result.included.hasSample = true;
-	}
 	let overview = "";
 	if (data.worldSummary.trim().length > 0) {
 		overview = `【世界观概述】\n${data.worldSummary.trim()}\n`;
 		result.included.hasSummary = true;
 	}
 	let used = estimateTokens(resident) + estimateTokens(overview);
-	if (used > input.budget) {
-		const sampleStart = resident.indexOf("【文风采样】");
-		if (sampleStart >= 0) {
-			// 记录被裁掉的那一段的实际体量(裁之前先量),供 T4 的可视化用
-			const dropped = resident.slice(sampleStart);
-			resident = resident.slice(0, sampleStart);
-			sample = "";
-			result.included.hasSample = false;
-			result.trimmed.push({ kind: "sample", label: "文风采样", tokens: estimateTokens(dropped) });
-			used = estimateTokens(resident) + estimateTokens(overview);
-		}
-		if (used > input.budget && overview.length > 0) {
-			result.trimmed.push({ kind: "summary", label: "世界观概述", tokens: estimateTokens(overview) });
-			overview = "";
-			result.included.hasSummary = false;
-			used = estimateTokens(resident);
-		}
+	// 超预算:概述可裁、约束保留(采样已不在 resident 里,见上方注释)
+	if (used > input.budget && overview.length > 0) {
+		result.trimmed.push({ kind: "summary", label: "世界观概述", tokens: estimateTokens(overview) });
+		overview = "";
+		result.included.hasSummary = false;
+		used = estimateTokens(resident);
 	}
-	// 分段快照(2026-10-04,T5):常驻组的约束与采样在 resident 里拼在一起,
-	// 因此各自单独量长度 —— 采样若被裁掉,量出来的必须是「切完还剩多少」。
-	// 必须在剪裁之后量,否则面板会把已经丢掉的内容算进预算。
+	// 分段快照(2026-10-04,T5):常驻组里只剩约束与概述两块(约束始终保有原样、
+	// 概述可能被整段裁掉),故各自单独量长度。必须在剪裁之后量,否则面板会把
+	// 已经丢掉的内容算进预算。
 	addSection({ id: "constraints", label: "写作约束", tokens: estimateTokens(residentConstraints), count: result.included.constraints.length });
-	addSection({ id: "sample", label: "文风采样", tokens: estimateTokens(sample), count: sample.length > 0 ? 1 : 0 });
 	addSection({ id: "summary", label: "世界观概述", tokens: estimateTokens(overview), count: overview.length > 0 ? 1 : 0 });
 
 	// 激活组(预算内按优先级装填;首条无条件装入保证"至少一条相关设定")
@@ -418,14 +412,13 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 	// 这行是**给模型看的**——它需要知道自己没拿到全部设定,才不会把
 	// 「世界书里没有」当作事实。用户侧的可见性另见 summarizeTrim。
 	//
-	// 措辞避开段标题字面(「文风采样」/「世界观概述」):那几个词是正文里的
-	// 段标题,搬进来会与正文撞名(既有断言 `not.toContain("文风采样")` 的
-	// 意图是「该段没进上下文」,同名会让它失去区分力)。用「采样段」这类
-	// 简称,语义在上下文中依然明确。
+	// 措辞避开段标题字面(「世界观概述」/「已完成里程碑」):那些词是正文里的
+	// 段标题,搬进来会与正文撞名(当初断言 `not.toContain("文风采样")` 的意图
+	// 是「该段没进上下文」,同名会让它失去区分力)。用「概述段」这类简称,
+	// 语义在上下文中依然明确。
 	if (result.trimmed.length > 0) {
 		const SHORT: Record<TrimRecord["kind"], string> = {
 			entry: "",
-			sample: "采样段",
 			summary: "概述段",
 			milestones: "已完成里程碑",
 		};
@@ -445,7 +438,7 @@ export interface TrimSummary {
 	entryCount: number;
 	/** 被省略的条目名(按被挤出的顺序)。 */
 	entryTitles: string[];
-	/** 被整段丢弃的其他内容(文风采样 / 世界观概述 / 已完成里程碑)。 */
+	/** 被整段丢弃的其他内容(世界观概述 / 已完成里程碑)。 */
 	droppedSections: string[];
 	/** 合计被省略的粗略 token 数。 */
 	tokens: number;

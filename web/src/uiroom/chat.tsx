@@ -1239,7 +1239,7 @@ const INSPECT_HEALTHY: InspectReportDto = {
 	percent: 41,
 	sections: [
 		{ id: "entries", label: "世界书·本章相关", tokens: 400, count: 5, percent: 20, usage: "400 / 2000(20%)", trimmable: true },
-		{ id: "sample", label: "文风采样", tokens: 200, count: 1, percent: 10, usage: "200 / 2000(10%)", trimmable: true },
+		{ id: "summary", label: "世界观概述", tokens: 200, count: 1, percent: 10, usage: "200 / 2000(10%)", trimmable: true },
 		{ id: "memory", label: "记忆", tokens: 120, count: 1, percent: 6, usage: "120 / 2000(6%)", trimmable: false },
 		{ id: "constraints", label: "写作约束", tokens: 100, count: 2, percent: 5, usage: "100 / 2000(5%)", trimmable: false },
 	],
@@ -1263,7 +1263,7 @@ const INSPECT_OVER: InspectReportDto = {
 	trimmed: [
 		{ kind: "entry", label: "旧城地图", tokens: 220, impact: "模型看不到这条设定,可能把「没写进世界书」当作事实" },
 		{ kind: "entry", label: "林父的手记", tokens: 180, impact: "模型看不到这条设定,可能把「没写进世界书」当作事实" },
-		{ kind: "sample", label: "文风采样", tokens: 900, impact: "文风一致性下降,模型会退回自己的默认语感" },
+		{ kind: "summary", label: "世界观概述", tokens: 900, impact: "世界观基调丢失,细节设定仍在(世界书条目未受影响)" },
 		{ kind: "milestones", label: "发展线·已完成", tokens: 60, impact: "已完成的目标可能被重复推进 —— 这一段装的是「勿再追求」清单" },
 	],
 	budgetItems: INSPECT_BUDGET_ITEMS,

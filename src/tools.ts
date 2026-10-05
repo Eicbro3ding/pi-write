@@ -894,6 +894,66 @@ export const worldUpdateTool: ToolDefinition = defineTool({
 });
 
 /**
+ * read_style —— 读回文风采样(`style_update` 的**读**对偶)。
+ *
+ * 为什么需要(2026-10-05):
+ *
+ *   1. **此前没有任何工具能读到它。** `world_find` 只返回 id/type/title/status
+ *      (连条目 body 都不给);采样是 world.json 的**顶层字段**而不是条目,导出视图
+ *      `.writer/` 只有 characters / world / timeline 三份 —— 所有「检索条目」的通路
+ *      全都够不着它。剩下唯一办法是 `read world.json`,可那会把整本世界书倒进上下文,
+ *      比常驻还亏。**又一个 read_chapter 式处境**:东西在数据里,可模型手上没有把柄。
+ *
+ *   2. **它原先常驻在稳定块里,是版本堆叠的第二大来源。** 稳定块内容一变就重注一份
+ *      (见 `writer-host.ts` 的 `countStableContextInLeaf`),而按提示词纪律「采样:
+ *      明显变化则换新,从当前章草稿选 300–500 字」—— 也就是**每写一章就可能换一次**,
+ *      每换一次多一份。挪出去等于直接削掉一类重注入触发。
+ *
+ * 与 `style_update` 的分工:那边**写**(也是编剧唯一能改世界书的通道),这边**读**。
+ * 两个工具都不碰条目 / 关系 / 时间线,权限边界一致。
+ *
+ * **没有采样时必须给出去路**(护栏的一贯做法):光回一个「空」的话,模型会以为自己
+ * 可以随手起调子,文风就这么飘走了,而且很静默。所以这里把两条出路写死。
+ */
+export const readStyleTool: ToolDefinition = defineTool({
+	name: "read_style",
+	label: "Read Style",
+	description:
+		"读回这本书的**文风采样**(作者文风基准)全文:一段 300–500 字的代表性样本及其标注来源。**动笔写正文前先用这个工具取一次**,照它的语感与句式写;这是你校准风格的唯一依据。与 `style_update` 成对:那边写,这边读。",
+	parameters: Type.Object({}),
+	async execute(_callId) {
+		const dir = bookDirBase();
+		if (!dir) throw new Error("read_style 未配置书目录");
+		const world = await ensureWorld(dir);
+		const sample = world.styleSample;
+		const source = sample?.source?.trim() || "";
+		// 空采样也要回得像个工具结果 —— 见上方注释「没有采样时必须给出去路」。
+		// 两条分支的 details 形状保持一致(source 缺省为空串),否则返回类型会被
+		// 推断成互斥的联合、过不了 ToolDefinition 的 details 参数。
+		const text = sample && sample.text.trim().length > 0
+			? [
+					`【文风采样】(来源: ${source || "未标注来源"}${styleSampleAt(sample.updatedAt)}；只模仿语感与句式，不抄写、不复用原文)`,
+					sample.text,
+				].join("\n")
+			: [
+					"这本书还没有文风采样 —— 也就没有「作者的语感」可以模仿。两条出路:",
+					"①向用户要一段他自己写的文字(300–500 字)当样本,拿到后用 style_update 的 update_style_sample 存下来;",
+					"②用户说「先按你判断的写」时,照你已掌握的本书调性写,但要在回复里说明「还没有采样,语感是我暂定的」。",
+					"**不要自己编一段、然后声称那是用户写的采样。**",
+				].join("\n");
+		return {
+			content: [{ type: "text", text }],
+			details: { hasSample: Boolean(sample && sample.text.trim().length > 0), source },
+		};
+	},
+});
+
+function styleSampleAt(updatedAt: unknown): string {
+	if (typeof updatedAt !== "number" || !Number.isFinite(updatedAt) || updatedAt <= 0) return "";
+	return `，更新于 ${new Date(updatedAt).toISOString().slice(0, 10)}`;
+}
+
+/**
  * 编剧的写作风格窄通道(见 StyleUpdateOp 的注释:为什么给窄工具而不是放开 world_update)。
  *
  * **不写世界书编辑记录**(`stage/last-world-edit.json`):那个记录只有**舞台页**在消费

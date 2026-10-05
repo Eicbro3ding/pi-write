@@ -17,7 +17,7 @@
  * **例外**:`chatAndWait` 永远按**章节键**取宿主,不受 conversationScope 影响 ——
  * 收幕成文天然要落某一章的正文,它不能跑进一段与章节无关的自由对话。
  *
- * 上下文注入分两类:**稳定块**(世界观概述/世界书条目/文风采样/写作约束)按
+ * 上下文注入分两类:**稳定块**(世界观概述/世界书条目/写作约束)按
  * 指纹持久化进会话(nextTurn custom 消息,内容变化才重注入,可缓存前缀的一部分);
  * **易变块**(当前章节草稿 + 发展线 + Notice 备忘录 + 最近一幕舞台转录)经
  * context 钩子每次调用前追加在消息尾部——编剧据此讨论行文/取舍/评戏/维护 advice.md。
@@ -74,7 +74,7 @@ import { buildStorylineView, constraintTargetMatches, NOTICE_INJECT_LIMIT } from
 import { buildEditorSystemPrompt, buildWriterSystemPrompt, writerShellLine } from "../prompt.ts";
 import type { ShellDialect } from "../shell-kind.ts";
 import type { ConversationScope } from "../writer-settings.ts";
-import { readChapterTool, styleUpdateTool, wordCountTool, worldFindTool, worldUpdateTool } from "../tools.ts";
+import { readChapterTool, readStyleTool, styleUpdateTool, wordCountTool, worldFindTool, worldUpdateTool } from "../tools.ts";
 import { createAskUserTool, settleDanglingAskParts } from "../ask-user.ts";
 
 /**
@@ -99,9 +99,12 @@ export function writerToolset(opts: { classicMode: boolean; mcpTools: ToolDefini
 	// read_chapter(2026-10-04)两种形态都给:它是**只读**的,不触碰世界书/人物/关系,
 	// 因此不破坏上面这条边界。反过来,编剧写剧本、审校、提意见时**必须**能读到整章
 	// 正文——而内置 read 会在 2000 行/50KB 处静默截断,恰好在长章节上失效。
+	// read_style(2026-10-05)同理:只读回文风采样。以前它是常驻在稳定块里的,而按
+	// 提示词纪律「每写一章就可能换一次采样」—— 采样一变稳定块的指纹就变、就重注一份,
+	// 成了版本堆叠的第二大来源。改成按需取,顺手把那条触发也拆了。
 	return opts.classicMode
-		? [wordCountTool, worldUpdateTool, worldFindTool, readChapterTool, askUserTool, ...opts.mcpTools]
-		: [worldFindTool, styleUpdateTool, readChapterTool, askUserTool, ...opts.mcpTools];
+		? [wordCountTool, worldUpdateTool, worldFindTool, readChapterTool, readStyleTool, askUserTool, ...opts.mcpTools]
+		: [worldFindTool, styleUpdateTool, readChapterTool, readStyleTool, askUserTool, ...opts.mcpTools];
 }
 import { SessionHost } from "./session-host.ts";
 import { formatStageLines } from "../stage/assembler.ts";
@@ -131,7 +134,9 @@ const CLASSIC_ACTIVE_TOOLS = ["read", "write", "edit", "grep", "find", "ls"];
 /** 注入块长度上限(草稿/世界书正文截断,防上下文膨胀)。 */
 const DRAFT_LIMIT = 4000;
 const WORLD_LIMIT = 3000;
-const STYLE_LIMIT = 800;
+// 2026-10-05:原名 STYLE_LIMIT —— 那时它管的是常驻的文风采样块。采样改由 `read_style`
+// 按需取之后,采样本身不再有「注入截断」这回事,这个上限只剩世界观概述在用,名字跟着改。
+const SUMMARY_LIMIT = 800;
 
 /**
  * 稳定上下文条目的识别标记(见 `countStableContextInLeaf`)。
@@ -685,7 +690,8 @@ export class WriterHost {
 		return `${base}\n\n# 外部命令\n\n${writerShellLine(this.shellDialect)}`;
 	}
 
-	/** 会话装配工厂(与 stage 角色同款样板;context 钩子注入本会话章节/世界书/文风采样)。
+	/** 会话装配工厂(与 stage 角色同款样板;context 钩子注入本会话章节/世界书/写作约束;
+	 *  文风采样不再注入,由 `read_style` 按需取 —— 见 stableContext 的注释)。
 	 *  经典模式走「写作 agent」装配(全量工具 + writer-main 提示,见类注释)。
 	 *
 	 *  @param key - 对话键(会话文件/事件归属);chapter 模式下它就是章节文件名。
@@ -813,17 +819,18 @@ export class WriterHost {
 		return [...messages, { role: "user", content: blocks.join("\n\n"), timestamp: Date.now() }];
 	}
 
-	/** 稳定块上下文(世界观概述/世界书角色条目/文风采样/写作约束;截断保护同易变块)。
+	/** 稳定块上下文(世界观概述/世界书角色条目/写作约束;截断保护同易变块)。
+	 *  **文风采样已不在其中**(2026-10-05):改由 `read_style` 按需读取,见下方注释。
 	 *  与易变块分离:syncStableContext 按指纹持久化进会话,内容不变不重注入,
 	 *  省掉每轮数 k token 的全价未缓存输入(2026-08-22 缓存命中优化)。 */
 	private async stableContext(slug: string): Promise<string> {
 		const blocks: string[] = [];
 		try {
 			const world = await ensureWorld(getBookDir(slug));
-			// 简要世界观概述(常驻,与写作会话同款语义;为空跳过,截断保护同采样)
+			// 简要世界观概述(常驻,与写作会话同款语义;为空跳过,超长截断)
 			const summary = world.worldSummary?.trim();
 			if (summary && summary.length > 0) {
-				const body = summary.length > STYLE_LIMIT ? `${summary.slice(0, STYLE_LIMIT)}\n…(截断)` : summary;
+				const body = summary.length > SUMMARY_LIMIT ? `${summary.slice(0, SUMMARY_LIMIT)}\n…(截断)` : summary;
 				blocks.push(`【世界观概述】\n${body}`);
 			}
 			const chars = world.entries
@@ -834,11 +841,11 @@ export class WriterHost {
 				const body = chars.length > WORLD_LIMIT ? `${chars.slice(0, WORLD_LIMIT)}\n…(截断)` : chars;
 				blocks.push(`【世界书】\n${body}`);
 			}
-			const style = world.styleSample?.text;
-			if (style && style.trim().length > 0) {
-				const body = style.length > STYLE_LIMIT ? `${style.slice(0, STYLE_LIMIT)}…(截断)` : style;
-				blocks.push(`【文风采样】（作者文风基准：模仿语感与句式，不抄写、不复用具体内容）\n${body}`);
-			}
+			// 文风采样**刻意不在这里**(2026-10-05):它是 `read_style` 的按需读取对象,
+			// 不再常驻。两个原因 —— ① 按提示词纪律「明显变化则换新,从当前章草稿选
+			// 300–500 字」,采样每写一章就可能换一次,而它一变稳定块指纹就变、就要重注
+			// 一份(见 countStableContextInLeaf),它是版本堆叠的第二大来源;
+			// ② 讨论轮根本不动笔,用不上采样,却照样为它付了 token。
 			// 写作约束(按 target 过滤:编剧收 writer/main——酒馆式规则包,2026-08-12;
 			// 经典模式是单一写作 agent,writer 与 main 两类目标的约束都该生效)
 			const editorConstraints = world.constraints.filter(

@@ -13,24 +13,24 @@ function ctx(sections: ContextSection[], trimmed: TrimRecord[] = []): Pick<Chapt
 
 const SEC_ENTRIES: ContextSection = { id: "entries", label: "世界书·本章相关", tokens: 400, count: 5 };
 const SEC_MEMORY: ContextSection = { id: "memory", label: "记忆", tokens: 100, count: 1 };
-const SEC_SAMPLE: ContextSection = { id: "sample", label: "文风采样", tokens: 300, count: 1 };
+const SEC_SUMMARY: ContextSection = { id: "summary", label: "世界观概述", tokens: 300, count: 1 };
 
 describe("buildInspectReport（T5 上下文检视）", () => {
 	it("分段按占用降序 —— 用户先看到「谁在吃预算」", () => {
 		const r = buildInspectReport({
 			slug: "fog-harbor",
 			chapterFile: "ch01.jsonl",
-			context: ctx([SEC_MEMORY, SEC_ENTRIES, SEC_SAMPLE]),
+			context: ctx([SEC_MEMORY, SEC_ENTRIES, SEC_SUMMARY]),
 			settings: settings({ contextBudget: 2000 }),
 		});
-		expect(r.sections.map((s) => s.id)).toEqual(["entries", "sample", "memory"]);
+		expect(r.sections.map((s) => s.id)).toEqual(["entries", "summary", "memory"]);
 	});
 
 	it("used 是各段之和,percent 按预算折算", () => {
 		const r = buildInspectReport({
 			slug: "s",
 			chapterFile: "ch01.jsonl",
-			context: ctx([SEC_ENTRIES, SEC_MEMORY, SEC_SAMPLE]),
+			context: ctx([SEC_ENTRIES, SEC_MEMORY, SEC_SUMMARY]),
 			settings: settings({ contextBudget: 1000 }),
 		});
 		expect(r.used).toBe(800);
@@ -51,13 +51,13 @@ describe("buildInspectReport（T5 上下文检视）", () => {
 		const r = buildInspectReport({
 			slug: "s",
 			chapterFile: "ch01.jsonl",
-			context: ctx([SEC_MEMORY, SEC_ENTRIES, SEC_SAMPLE]),
+			context: ctx([SEC_MEMORY, SEC_ENTRIES, SEC_SUMMARY]),
 			settings: settings(),
 		});
 		const byId = Object.fromEntries(r.sections.map((s) => [s.id, s.trimmable]));
 		expect(byId.memory).toBe(false); // 记忆不参与裁剪
 		expect(byId.entries).toBe(true);
-		expect(byId.sample).toBe(true);
+		expect(byId.summary).toBe(true);
 	});
 
 	it("被省略的每条都带「丢了会怎样」—— 只给数字等于没说", () => {
@@ -68,7 +68,7 @@ describe("buildInspectReport（T5 上下文检视）", () => {
 				[SEC_ENTRIES],
 				[
 					{ kind: "entry", label: "林婉", tokens: 120 },
-					{ kind: "sample", label: "文风采样", tokens: 900 },
+					{ kind: "summary", label: "世界观概述", tokens: 900 },
 					{ kind: "milestones", label: "发展线·已完成", tokens: 60 },
 				],
 			),

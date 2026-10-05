@@ -2,8 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyStyleUpdate, applyWorldUpdate, normalizeStyleUpdate, normalizeWorldUpdate, readChapterTool, setWordCountCwd, setWorldUpdateBookDir, styleUpdateTool, wordCountTool, worldFindTool, worldUpdateTool } from "../src/tools.ts";
-import { createEmptyWorld, ensureWorld, WorldValidationError } from "../src/world-data.ts";
+import { applyStyleUpdate, applyWorldUpdate, normalizeStyleUpdate, normalizeWorldUpdate, readChapterTool, readStyleTool, setWordCountCwd, setWorldUpdateBookDir, styleUpdateTool, wordCountTool, worldFindTool, worldUpdateTool } from "../src/tools.ts";
+import { createEmptyWorld, ensureWorld, saveWorld, WorldValidationError } from "../src/world-data.ts";
 
 type ToolParams = Parameters<typeof wordCountTool.execute>[1];
 type ToolContext = Parameters<typeof wordCountTool.execute>[4];
@@ -635,3 +635,107 @@ describe("world_update/style_update 参数 schema 压平", () => {
 		}
 	});
 });
+
+/**
+ * read_style(2026-10-05):文风采样从「稳定块常驻」改成「工具按需取」。
+ *
+ * 两个动机各有对应的验收点:
+ *  - **够得着**:采样此前只能靠 `read world.json` 拿到(整本世界书倒进上下文)——
+ *    `world_find` 只回 id/type/title/status,连条目 body 都不给,采样更是顶层字段而非条目。
+ *  - **不再堆叠**:采样一变,稳定块指纹就变、就重注一份(见 stable-context 那轮的 16 份)。
+ *
+ * 没有采样时的「出路」也要钉住:空结果会让模型以为可以随手起调子,文风静默漂移。
+ */
+describe("read_style（文风采样按需读取）", () => {
+	type StyleResult = Awaited<ReturnType<typeof readStyleTool.execute>>;
+	function runStyle(): Promise<StyleResult> {
+		return readStyleTool.execute("call", {}, undefined, undefined, {} as ToolContext);
+	}
+
+	/** 直接把一份 world.json 落到 tmp 书目录里(绕开工具,只测读)。 */
+	async function seedWorld(mutate: (w: ReturnType<typeof createEmptyWorld>) => void): Promise<void> {
+		const world = createEmptyWorld();
+		mutate(world);
+		await saveWorld(tmp, world);
+		setWorldUpdateBookDir(tmp);
+	}
+
+	afterEach(() => {
+		setWorldUpdateBookDir(null);
+	});
+
+	it("有采样时回全文 + 出处,而不是「采样已存在」这种占位", async () => {
+		const text = "雾从河面涨上来，把煤烟按在屋檐底下。他数着第三声汽笛，知道自己又晚了一班。";
+		await seedWorld((w) => {
+			w.styleSample = { text, source: "用户提供", updatedAt: Date.UTC(2026, 9, 5) };
+		});
+		const result = await runStyle();
+		const out = resultText(result);
+		expect(out).toContain(text);
+		expect(out).toContain("来源: 用户提供");
+		expect(out).toContain("2026-10-05");
+		expect(out).toContain("不抄写");
+		expect((result.details as { hasSample: boolean }).hasSample).toBe(true);
+	});
+
+	it("没标出处时回「未标注来源」,不把空来源渲染成空白", async () => {
+		await seedWorld((w) => {
+			w.styleSample = { text: "夜色沉到街心里。", source: "", updatedAt: 0 };
+		});
+		const out = resultText(await runStyle());
+		expect(out).toContain("未标注来源");
+		expect(out).not.toContain("更新于");
+	});
+
+	it("没有采样时给两条出路,而不是一个空结果", async () => {
+		// 空回执的代价是模型自己起调子、且无从察觉。这里要求回执里必须有下一步。
+		await seedWorld(() => {
+			/* styleSample 保持 null */
+		});
+		const result = await runStyle();
+		const out = resultText(result);
+		expect(out).toContain("还没有文风采样");
+		expect(out).toContain("style_update");
+		expect(out).toContain("不要自己编一段");
+		expect((result.details as { hasSample: boolean }).hasSample).toBe(false);
+	});
+
+	it("空白正文视同没有采样(写了 '   ' 也算没写)", async () => {
+		await seedWorld((w) => {
+			w.styleSample = { text: "   \n\t ", source: "用户提供", updatedAt: 0 };
+		});
+		expect((await runStyle()).details as { hasSample: boolean }).toMatchObject({ hasSample: false });
+	});
+
+	it("与 style_update 成对:那边写进 world.json,这边读得回来", async () => {
+		setWorldUpdateBookDir(tmp);
+		try {
+			const text = "姐姐把灯芯剪短一截，屋里便矮了半尺。";
+			await styleUpdateTool.execute(
+				"call",
+				{ update: { op: "update_style_sample", text, source: "ch01 收尾自取" } } as never,
+				undefined,
+				undefined,
+				{} as ToolContext,
+			);
+			const out = resultText(await runStyle());
+			expect(out).toContain(text);
+			expect(out).toContain("ch01 收尾自取");
+		} finally {
+			setWorldUpdateBookDir(null);
+		}
+	});
+
+	it("没有必填参数(desc 说了切身就可以调,不该被 schema 卡住)", () => {
+		const schema = readStyleTool.parameters as { required?: string[]; properties?: Record<string, unknown> };
+		expect(schema.required).toBeUndefined();
+		expect(Object.keys(schema.properties ?? {})).toEqual([]);
+		expect(readStyleTool.name).toBe("read_style");
+	});
+
+	it("描述里写明动笔前要取一次(补决提示词没说的那半句)", () => {
+		// 工具 schema 随请求发给模型,这是「它会不会想起用」的第一现场
+		expect(readStyleTool.description).toContain("动笔写正文前");
+	});
+});
+
