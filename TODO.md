@@ -26,16 +26,6 @@
 
 ### 中
 
-- [ ] **`delete_relation` 也是静默无操作**(`src/tools.ts:729`)
-  - 来源:2026-10-05 世界书写入审计。上一轮修了 `delete_constraint` / `notice_delete`,
-    这条是**同类的漏网**。
-  - 现状:`next.relations = next.relations.filter((x) => x.id !== update.id)`,传错 id
-    不报错、静默返回成功。
-  - 口径不一致:同文件 `delete_entry`(:573/:583)、`notice_delete`(:636)、
-    `delete_constraint`(:685)、以及关系侧的另一处(:704)都有
-    `throw new WorldValidationError("…不存在")`,**唯独这一处没有**。
-  - 修法:仿 `delete_constraint` 先 `find` 再判空抛错(文案带「(未删除任何内容)」)。
-
 - [ ] **采样单源护栏的白名单掩盖了真实注入点**(`test/world-context.test.ts`)
   - 来源:2026-10-05 源码审计。
   - 现状:护栏断言「【文风采样】」只出现在 `src/tools.ts` 与 `src/stage/orchestrator.ts`,
@@ -84,6 +74,11 @@
 
 ## 已完成
 
+- [x] **`delete_relation` 静默无操作** —— 本轮
+      (`next.relations.filter(...)` 传错 id 不报错;补 `find` + 抛 `WorldValidationError
+      ("关系不存在: …(未删除任何内容)")`,与 `delete_constraint`/`notice_delete` 口径一致。
+      测试补齐:`test/tools.test.ts` 的「删除类 op 不静默无操作」组新增 1 例,该组注释原写
+      「三个 op 本轮补齐」而实际只补了两个 —— 这是漏网的第三个。已反证:退回旧实现 → 测试红)
 - [x] 工具清单护栏补洞:子串匹配改**清单内定位** —— `2f1ef05`
       (原 `expect(main).toContain(name)` 在整份提示词上子串匹配,`read` 是 `read_chapter`/
        `read_style` 的前缀、`write` 在散文里随处可见;改为只认清单条目形状:行首 `- ` +

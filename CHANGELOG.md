@@ -1,5 +1,12 @@
 # Changelog
 
+`delete_relation` 补上静默无操作:世界书写入里最后一个漏网。
+
+- [fix] **`delete_relation` 传错 id 静默成功**(`src/tools.ts`)。`next.relations.filter((x) => x.id !== update.id)` 把一个不存在的 id filter 掉,照样回「已更新世界书」——模型据此以为关系已删、继续推理,而用户关系图上那条线还在。**关系是双向可见的数据,比约束/待办更隐蔽**:约束在文风块里迟早会被下一轮读到,关系图不会。已改为与 `delete_constraint` / `notice_delete` 同口径:先 `find` 判存在,不存在则抛 `WorldValidationError("关系不存在: <id>(未删除任何内容)")`。属上轮(`bf0d215`)修同批静默时的漏网。
+- [test] 「删除类 op 不静默无操作」组新增 1 例(正删通过 + 错 id 抛错 + 文案含「未删除任何内容」)。**已反证**:退回旧实现 → 该例变红。
+
+**验证**:typecheck 0 错误;全量 **91 文件 / 1605 例通过** / 2 skipped(较上轮 +1,即本例)。
+
 文档与 skill 同步:T11(依赖化)与 T9-A(MCP 换上游)之后,知识文档还停在 vendor 时代。
 
 - [docs] **skill 知识地图(`.agents/skills/pi-writer/`)整轮校准** —— 它此前系统性描述的是一个**已不存在的仓库**:
