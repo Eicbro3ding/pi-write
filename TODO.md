@@ -15,15 +15,6 @@
 
 ### 高
 
-- [ ] **工具清单护栏有洞:用子串匹配定位工具名**(`test/prompt-tools.test.ts`)
-  - 来源:2026-10-05 源码审计(护栏强度专项)。
-  - 现状:`expect(main).toContain(name)` 在**整份提示词文本**上做子串匹配。`read` 是
-    `read_chapter` / `read_style` 的**前缀**,`write` 在正文散文里随处可见 —— 只要该词
-    在任意一句话里出现过一次就通过。
-  - 为什么是洞:把某工具从「基础工具清单」表格里删掉、但留一句散文提到它,护栏照样绿。
-    这正是 `read_chapter` 死代码事故的复发路径(清单里有 vs 散文里提到,是两回事)。
-  - 修法:换成「清单内定位」(解析提示词里那张清单的结构后断言),而非全文子串。
-
 - [ ] **记忆锚与压缩补偿仍只挂在 TUI 路径** —— **需用户拍板**
   - 来源:2026-10-05 护栏统一注入时发现(本轮**有意未搬**,见 CHANGELOG 已知边界)。
   - 现状:`before_agent_start` 记忆锚(memory/Notice/发展线注入 systemPrompt)与
@@ -35,17 +26,15 @@
 
 ### 中
 
-- [ ] **`delete_relation` 也是静默无操作**(`src/tools.ts`)
+- [ ] **`delete_relation` 也是静默无操作**(`src/tools.ts:729`)
   - 来源:2026-10-05 世界书写入审计。上一轮修了 `delete_constraint` / `notice_delete`,
     这条是**同类的漏网**。
-  - 现状:`next.relations = next.relations.filter(...)`,传错 id 不报错。
-  - 与同文件 `delete_entry` / `notice_update` 口径不一致 —— 那两处都有存在性校验。
-
-- [ ] **反向护栏只读 `writer-main.md`,漏 `writer-editor.md`**(`test/prompt-tools.test.ts`)
-  - 来源:2026-10-05 源码审计。
-  - 现状:「提示词点名了却没装配」的反向断言 `loadPromptText("writer-main.md")` 只看主提示词。
-  - 后果:在 `writer-editor.md` 里写一个不存在/未装配的工具名,模型调了只会拿到
-    「工具不存在」,护栏不报。注释却宣称「任一侧新增都不放过」。
+  - 现状:`next.relations = next.relations.filter((x) => x.id !== update.id)`,传错 id
+    不报错、静默返回成功。
+  - 口径不一致:同文件 `delete_entry`(:573/:583)、`notice_delete`(:636)、
+    `delete_constraint`(:685)、以及关系侧的另一处(:704)都有
+    `throw new WorldValidationError("…不存在")`,**唯独这一处没有**。
+  - 修法:仿 `delete_constraint` 先 `find` 再判空抛错(文案带「(未删除任何内容)」)。
 
 - [ ] **采样单源护栏的白名单掩盖了真实注入点**(`test/world-context.test.ts`)
   - 来源:2026-10-05 源码审计。
@@ -56,10 +45,12 @@
 
 ### 低
 
-- [ ] **`writer-host.ts` 的过期 JSDoc**(`src/web/writer-host.ts` 的 `editorContext`)
+- [ ] **`writer-host.ts:753` 的过期 JSDoc**(`src/web/writer-host.ts`)
   - 来源:2026-10-05 采样收口后**我漏改的一处**。
-  - 现状:注释仍写「稳定块(世界观概述/世界书条目/**文风采样**/写作约束)」,
-    而采样早已移出稳定块(同文件 `stableContext` 处已更正)。同一文件内前后矛盾。
+  - 现状:753 行注释仍写「稳定块(世界观概述/世界书条目/**文风采样**/写作约束)」,
+    而采样早已移出稳定块 —— 同文件 :677 / :803 / :824 三处都已更正,**同文件内前后矛盾**。
+  - 修法:删掉该行注释里的「文风采样/」,与 :824 的口径对齐。
+  - 注:为一行注释单开提交不划算,可搭下一次触碰 `writer-host.ts` 的改动顺带修。
 
 - [ ] **`@modelcontextprotocol/sdk` 成孤儿依赖**(T9-A 副作用)
   - 来源:2026-10-05 文档/skill 同步时发现。
@@ -81,23 +72,6 @@
   - ③ **`exposure` 默认值的双写**:迁移写 `direct`,而前端新建服务器默认也是 `direct`
     (`McpServerList.tsx`)。两个默认值分散在两处,将来改一处会不一致。
 
-- [x] **`npm run build` 不产 `dist/web/server.cjs`,但 `npm run web` 依赖它** —— `3536d21` 后续
-  - 来源:2026-10-05 T13 端到端排查(误跑过期产物一度误判「迁移没生效」)。
-  - **已修**:新增 `scripts/check-web-fresh.mjs`(比源码与产物 mtime,过期打醒目警告 +
-    给出正确命令,`exit 0` 不阻断启动),挂在 `web` 脚本前置:
-    `"web": "node scripts/check-web-fresh.mjs && node dist/web/server.cjs"`。
-  - **护栏**:`test/build-scripts.test.ts` 三例钉住(web 脚本必须含自检且顺序在先 /
-    自检脚本存在 / `build` 与 `build:web` 是两个产物这个事实本身)。已反证:
-    把 web 脚本改回旧形态 → 测试红。
-  - 未做的取舍:**没让 `build` 顺带产 `server.cjs`** —— 那会把 esbuild 全量打包
-    塞进每次 build(含前端 vite),启动路径变慢;警告方案代价低且足够。
-
-  - 来源:2026-10-05 源码审计。
-  - 现状:`tsgo -p tsconfig.build.json && shx chmod +x dist/cli.js`,但 `rootDir:"."` +
-    `outDir:"dist"` 产出的是 `dist/src/cli.js`(`bin` 字段也这么写)。`dist/cli.js` 不存在。
-  - 注:**TUI 已冻结**(2026-10-05 用户决定,冻结不删),这条的价值随之下降 ——
-    但 `npm run build` / `prepublishOnly` 仍会因此失败,若要发版仍需修。
-
 ## 明确不做(附理由,避免被重新提出)
 
 - **条目删除不加硬拦**。它与「空内容 `write`」不是一类:模型删条目时**意图明确**
@@ -109,6 +83,32 @@
   而下一次保存会覆盖它)。这是另一个量级的工程,需要时单独评估。
 
 ## 已完成
+
+- [x] 工具清单护栏补洞:子串匹配改**清单内定位** —— `2f1ef05`
+      (原 `expect(main).toContain(name)` 在整份提示词上子串匹配,`read` 是 `read_chapter`/
+       `read_style` 的前缀、`write` 在散文里随处可见;改为只认清单条目形状:行首 `- ` +
+       反引号包裹的工具名)
+- [x] 反向护栏补 `writer-editor.md` —— `3631674`
+      (原「提示词点名了却未装配」的反向断言只看 `writer-main.md`,现在两侧都查)
+- [x] **`npm run build` 不产 `dist/cli.js`(`bin` 指向它)** —— `10e5d63`
+  - 来源:2026-10-05 源码审计。原 `build` 为 `tsgo -p tsconfig.build.json && shx chmod +x
+    dist/cli.js`,但 `rootDir:"."` + `outDir:"dist"` 实际产出 `dist/src/cli.js`,
+    `dist/cli.js` 根本不存在 —— `npm run build` / `prepublishOnly` 必失败。
+  - 已修:改为 `tsc -p tsconfig.build.json --emitDeclarationOnly --sourceMap false &&
+    node scripts/build-cli.mjs`(esbuild 单独打一个自包含 `dist/cli.js`,699KB 可执行,与
+    `bin.pi-writer` 一致);另有 `10e5d63` 同批修「npm 包的 CLI 真的能跑」。
+  - 注:TUI 已冻结(2026-10-05 用户决定,冻结不删),但发版路径依赖这条,已随之解除。
+
+- [x] **`npm run build` 不产 `dist/web/server.cjs`,但 `npm run web` 依赖它** —— `3594590`
+  - 来源:2026-10-05 T13 端到端排查(误跑过期产物一度误判「迁移没生效」)。
+  - **已修**:新增 `scripts/check-web-fresh.mjs`(比源码与产物 mtime,过期打醒目警告 +
+    给出正确命令,`exit 0` 不阻断启动),挂在 `web` 脚本前置:
+    `"web": "node scripts/check-web-fresh.mjs && node dist/web/server.cjs"`。
+  - **护栏**:`test/build-scripts.test.ts` 三例钉住(web 脚本必须含自检且顺序在先 /
+    自检脚本存在 / `build` 与 `build:web` 是两个产物这个事实本身)。已反证:
+    把 web 脚本改回旧形态 → 测试红。
+  - 未做的取舍:**没让 `build` 顺带产 `server.cjs`** —— 那会把 esbuild 全量打包
+    塞进每次 build(含前端 vite),启动路径变慢;警告方案代价低且足够。
 
 - [x] MCP 从自研切换为上游扩展(决策 D1 改判 B)—— `305038e`
       (删 manager/tools/config 共 843 行,新增 extension/migrate/host 三处胶水;
