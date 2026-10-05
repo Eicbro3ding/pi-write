@@ -40,6 +40,7 @@ import {
 	resetReadRails,
 	writeDeltaLine,
 } from "./tool-rails.ts";
+import { detectSessionMode, modeAnchorLine, type SessionMode } from "./session-mode.ts";
 import { readWriterSettings, type WriterSettings } from "./writer-settings.ts";
 import { buildInspectReport, inspectHeadline, openInspectPanel, type InspectReport } from "./inspect/index.ts";
 import { buildWriterTheme } from "./writer-theme.ts";
@@ -159,7 +160,12 @@ export function echoUserMessages(messages: readonly AgentMessage[]): string {
 	return `【压缩前的用户原话 · 按时间顺序,较新的在后】以下是被本次压缩丢弃的对话里用户说过的话,原样保留。与后续内容冲突时以较新的为准,但不要丢弃早期给出的长期设定:\n${lines.join("\n")}`;
 }
 
-export async function buildMemoryAnchor(slug: string, chapterFile: string | undefined): Promise<string> {	const bookDir = getBookDir(slug);
+export async function buildMemoryAnchor(
+	slug: string,
+	chapterFile: string | undefined,
+	mode?: SessionMode,
+): Promise<string> {
+	const bookDir = getBookDir(slug);
 	const settings = await readWriterSettings();
 	const blocks: string[] = [];
 	try {
@@ -191,8 +197,11 @@ export async function buildMemoryAnchor(slug: string, chapterFile: string | unde
 	} catch {
 		/* 世界书缺失:跳过 */
 	}
-	if (blocks.length === 0) return "";
-	const head = chapterFile ? `当前章节: ${chapterFile}\n` : "";
+	// 模式行放在最前 —— 它是这一轮最优先的约束(能不能碰文件)。
+	// 独立于 blocks 之外:即使这本书还没有任何世界状态,讨论态的约束也必须在。
+	const modeLine = mode ? `${modeAnchorLine(mode)}\n` : "";
+	if (modeLine.length === 0 && blocks.length === 0) return "";
+	const head = `${modeLine}${chapterFile ? `当前章节: ${chapterFile}\n` : ""}`;
 	return `【常驻记忆锚 · 每轮刷新】以下事实跨轮次、跨压缩恒定;与你的印象冲突时以这里为准,需要更多细节就 read 对应文件(memory.md / world.json)。\n${head}${blocks.join("\n\n")}`;
 }
 
@@ -453,7 +462,8 @@ function writerFactory(pi: ExtensionAPI): void {
 			const sessionFile = ctx.sessionManager.getSessionFile() ?? undefined;
 			const slug = bookSlugFromSessionFile(sessionFile);
 			if (!slug) return;
-			const anchor = await buildMemoryAnchor(slug, chapterFileFromSessionFile(sessionFile));
+			const mode = detectSessionMode(event.prompt);
+			const anchor = await buildMemoryAnchor(slug, chapterFileFromSessionFile(sessionFile), mode);
 			if (!anchor) return;
 			return { systemPrompt: `${event.systemPrompt}\n\n${anchor}` };
 		} catch {

@@ -72,6 +72,32 @@ describe("buildMemoryAnchor(每轮记忆锚)", () => {
 		expect(anchor).toContain("抵达雾港"); // 已完成里程碑出现在「勿重复」列表
 	});
 
+	it("会话模式行进锚,且独立于世界状态 —— 空书也拿得到「不要写文件」的约束", async () => {
+		// 关键判据:模式约束不能挂在「这本书有没有写 memory.md」上。
+		// 用户喊停最常发生在刚开章、世界书还空着的时候,那时恰恰最需要这条约束。
+		await mkdir(getBookDir("fog-harbor"), { recursive: true });
+		const anchor = await buildMemoryAnchor("fog-harbor", "ch01.jsonl", "discussing");
+		expect(anchor).toContain("【当前模式】讨论态");
+		expect(anchor).toContain("不要创建、写入、清空或覆盖任何文件");
+		expect(anchor).toContain("当前章节: ch01.jsonl");
+	});
+
+	it("模式行排在记忆锚最前(先看到能不能写,再看世界状态)", async () => {
+		const slug = "fog-harbor";
+		const bookDir = getBookDir(slug);
+		await mkdir(bookDir, { recursive: true });
+		await writeFile(join(bookDir, "memory.md"), "- 一条记忆", "utf8");
+		const anchor = await buildMemoryAnchor(slug, "ch02.jsonl", "writing");
+		expect(anchor).toContain("【当前模式】写作态");
+		expect(anchor.indexOf("【当前模式】")).toBeLessThan(anchor.indexOf("跨章节记忆"));
+		expect(anchor.indexOf("【当前模式】")).toBeLessThan(anchor.indexOf("当前章节"));
+	});
+
+	it("不传模式时保持旧行为(世界状态为空 → 空串,钩子据此跳过注入)", async () => {
+		await mkdir(getBookDir("fog-harbor"), { recursive: true });
+		expect(await buildMemoryAnchor("fog-harbor", "ch01.jsonl")).toBe("");
+	});
+
 	it("无当前章节(book 模式未声明)也可注入,只是省略章节行", async () => {
 		const slug = "fog-harbor";
 		const bookDir = getBookDir(slug);

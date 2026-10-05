@@ -132,6 +132,14 @@ const CLASSIC_ACTIVE_TOOLS = ["read", "write", "edit", "grep", "find", "ls"];
 const DRAFT_LIMIT = 4000;
 const WORLD_LIMIT = 3000;
 const STYLE_LIMIT = 800;
+
+/**
+ * 稳定上下文条目的识别标记(见 `countStableContextInLeaf`)。
+ *
+ * 用标题里的固定字样而不是 customType:`world-context` 是所有注入共用的类型,
+ * 切成章背景包 / 压缩补偿都会用到它;稳定上下文有自己的文案前缀,按它数才准。
+ */
+const STABLE_CONTEXT_MARKER = "稳定上下文";
 const STAGE_LIMIT = 8000;
 
 /** 无章节/无对话时的兜底对话 id:会话文件 writer-default.jsonl(与改动前一致)。 */
@@ -863,7 +871,9 @@ export class WriterHost {
 			this.stableInjected.set(key, fp);
 			return;
 		}
-		await host.injectContext(`【${this.classicMode ? "写作" : "编剧"}稳定上下文 · 指纹 ${fp}】以下是世界观与写作基准,长期有效:\n\n${stable}`);
+		// 版本号 = 已有份数 + 1:已经注入过的那些不会消失,新版本必须能盖过它们。
+		const version = countStableContextInLeaf(slug, conversationId) + 1;
+		await host.injectContext(renderStableContext(this.classicMode, stable, version));
 		this.stableInjected.set(key, fp);
 	}
 
@@ -1257,6 +1267,63 @@ export function conversationTitleText(text: string): string {
 	const source = skill ? [skill.name, skill.userMessage ?? ""].filter((s) => s.length > 0).join(" · ") : text;
 	const flat = source.replace(/\s+/g, " ").trim();
 	return flat.length > TITLE_LIMIT ? flat.slice(0, TITLE_LIMIT) : flat;
+}
+
+/**
+ * 渲染稳定上下文的注入文本(纯函数,单测直接钉)。
+ *
+ * 三个必须同在这条标题里的东西,少一个都会出事:
+ * - **指纹**:`sessionLeafHasFingerprint` 靠 `指纹 ${fp}` 认出「已经注入过这一版」,
+ *   服务重启后能只补记账不重注入。去掉它,每次重启都白付一次全价未缓存输入。
+ * - **版本号**:见 {@link countStableContextInLeaf},旧版本不会消失,必须有可比的序号。
+ * - **取代声明**:只给版本号不给作废语义的话,模型看到多份「长期有效」仍会自己挑。
+ *
+ * @param classicMode true = 写作 agent,false = 编剧(两者的稳定块内容口径不同)
+ */
+export function renderStableContext(classicMode: boolean, stable: string, version: number): string {
+	const role = classicMode ? "写作" : "编剧";
+	return [
+		`【${role}稳定上下文 · 第 ${version} 版 · 取代此前所有同名条目】`,
+		"以下是世界观与写作基准,长期有效。",
+		"",
+		"**这份是当前唯一有效的版本。** 本书设定每次改动我都会重新整理一份注入到这里,而更早的那些条目**不会消失**,它们是被改动之前的旧快照 —— 名字一样、内容可能已经不同。多条内容冲突时,只以**版本号最大**的这一条为准,其余一律作废。",
+		"",
+		stable,
+	].join("\n");
+}
+
+/**
+ * 当前 leaf 分支上已有的稳定上下文版本数(0 = 还没注入过)。
+ *
+ * 为什么需要它:只要世界书改一次,`stableContext` 的内容就变、指纹就变,于是
+ * **又注入一份**。旧的那份留在该 leaf 链上没人删 —— 真实会话
+ * `writer-c-v05ij1` 里堆到 **16 份**(760 → 3885 字),每一份都自称「长期有效」,
+ * 可第 1 份和第 16 份对同一个人的写法已经不同了。用户抱怨「我不是曾经介绍过
+ * 本我侵蚀吗」「笔记里不都有吗」,就是因为模型对着十几份互相打架的设定不知道
+ * 该信哪一份 —— **这是「背景包堆叠」真正的代价,不是占了多少 token。**
+ *
+ * 为什么不去删旧条目:custom 消息已经落进会话树并被 ack,parentId 链不能断。
+ * 于是退一步 —— 在新版本上标清楚自己是第几版、旧的是废的。移不掉就挂牌子。
+ */
+export function countStableContextInLeaf(slug: string, conversationId: string | null): number {
+	try {
+		const sessionsDir = getBookSessionsDir(slug);
+		const abs = join(sessionsDir, writerSessionFile(conversationId));
+		if (!existsSync(abs)) return 0;
+		// 只读读取器(与 sessionLeafHasFingerprint 同一套,见那里的注释)
+		const sm = readSessionFile(abs, sessionsDir, getBookDir(slug));
+		if (!sm) return 0;
+		const leafId = sm.getLeafId();
+		if (!leafId) return 0;
+		let n = 0;
+		for (const e of sm.getBranch(leafId) as SessionEntry[]) {
+			if (e.type !== "custom_message") continue;
+			if (JSON.stringify(e).includes(STABLE_CONTEXT_MARKER)) n++;
+		}
+		return n;
+	} catch {
+		return 0;
+	}
 }
 
 /** FNV-1a 8 位十六进制指纹(稳定块内容);不引 crypto,防碰撞能力对「内容变没变」判断足够。 */
