@@ -22,11 +22,11 @@
 | `src/world-data.ts` | `world.json` 唯一真相源:校验 / 规范化 / 原子写 / md 视图导出;`WORLD_FILES` 文件布局表 |
 | `src/world-context.ts` | 上下文注入:背景包组装、激活引擎(关键词 + 关联激活)、记忆裁剪 |
 | `src/tools.ts` | 自定义工具:`world_update`(唯一变更通道)/ `world_find` / `word_count` |
-| `src/pi-adapter/` | **防腐层**:自研代码与 pi 框架之间的唯一接触面。自研侧**零 vendor 直接引用**(见 §9) |
+| `src/pi-adapter/` | **防腐层**:自研代码与 pi 框架之间的唯一接触面。自研侧**零 pi 包直接引用**(见 §9;唯一例外 `src/mcp/`) |
 | `src/util/uuid.ts` | 通用工具(时间有序 UUID v7)。**注意它不属于 adapter** —— 见 §9 的归属说明 |
-| `src/mcp/` | MCP 配置(typebox 校验)/ 连接管理 / 工具适配 |
+| `src/mcp/` | MCP:**装配上游 `createMcpExtension`**(`extension.ts` 做目录重定向 / 命令 / 一次性迁移)、旧配置迁移(`migrate.ts`)、web 设置页配置读写面(`host.ts`)。**没有自研连接管理**——连接、重连、工具桥接、OAuth 全在上游 |
 | `src/stage/` | 舞台多 Agent 共演:orchestrator / assembler / script-store / stage-store / cast / stage-extension |
-| `vendor/` | pi 核心包源码(内部 import 已重写为相对路径,零 `@earendil-works` npm 依赖) |
+| `patches/` | 对 pi npm 包的本地补丁(`apply-patches.mjs` 在 `postinstall` 施加);**不再有 `vendor/` 目录**——pi 六包已改 npm 依赖(2026-10-05 T11) |
 | `web/` | React 前端(vite):舞台 / 编辑 / 世界书 / 设置四页 |
 | `electron/` | Electron 壳(进程内起服务 + 窗口,关窗停服退出) |
 | `skills/` | 打包的写作技能:outline / critique / revise / stage-scripting |
@@ -59,7 +59,7 @@
 ## 3. 会话与事件链
 
 ```
-agent 会话事件(pi vendor AgentSessionEvent)
+agent 会话事件(pi 的 AgentSessionEvent)
   → session-host 转发(message_end 附加 entryId)
   → server broadcast()
   → SSE(data: <json>)
@@ -71,10 +71,11 @@ agent 会话事件(pi vendor AgentSessionEvent)
 
 ## 4. 工具系统
 
-- **装配**:`createSessionRuntimeFactory`(src/session-factory.ts,唯一入口)。用 `excludeTools` 黑名单 + `initialActiveToolNames`,**不用** `tools` 白名单——那是白名单语义,会把不在名单的 MCP customTools 滤掉。
-- **系统提示**:`buildWriterSystemPrompt(customTools, shell, scope)` 动态生成(文末追加 MCP 工具清单,shell 行按方言注入 `none/bash/pwsh/powershell`);静态 override 会整个替换 pi 的动态工具段。第三个参数是**对话范围**(`conversationScope`):`prompts/writer-main.md` / `writer-editor.md` 里随范围变的事实(会话是否绑章、正文落点、白名单是否开)全写成占位,值只放 `src/prompt.ts` 的 `SCOPE_VARS`(**唯一实现**),编剧那份走 `buildEditorSystemPrompt(scope)`。chapter 一列是解耦前原话、`SCOPE_SECTION` 渲染为空串 → **默认(绑定章节)的提示词逐字节不变**;哪个宿主用哪套由 `web/writer-host.ts` 的 `hostPromptScope(conversationScope, key)` 定(key 为 `<id>.jsonl` = 绑章;分离模式下收幕成文仍按章节键建宿主,所以它按绑章叙述)。
+- **装配**:`createSessionRuntimeFactory`(src/session-factory.ts,唯一入口)。用 `excludeTools` 黑名单 + `initialActiveToolNames`,**不用** `tools` 白名单——那是白名单语义,会把不在名单的工具滤掉。
+- **MCP**(2026-10-05 T9-A,决策 D1 改判 B):不再自研管理器,`extensionFactories` 里直接装 `createWriterMcpExtension()`(包装上游 `createMcpExtension`)。三处胶水:① `PI_CODING_AGENT_DIR` 指向 `~/.pi/writer/agent`(上游 `getAgentDir()` 靠它定位 `mcp.json`);② 首次会话时把旧形状配置迁移成上游的 `mcpServers` + `transport` 判别形状(带 `.bak-<ts>` 备份、幂等);③ web 设置页走 `McpHost` 读写配置,工具清单用 `pi.getAllTools()`(上游包入口未导出 config 函数,故自实现读-改-写)。**SSE 不再支持**(上游只有 stdio + streamable HTTP),旧 sse 条目迁移时降级为 http;重连是上游的懒重连,不再有退避钩子。MCP 工具清单也不再由 `buildWriterSystemPrompt` 手工拼——上游经 `before_agent_start` 注入 `sections["mcp_servers"]`(结构化增量,**不受 `systemPromptOverride` 影响**)。
+- **系统提示**:`buildWriterSystemPrompt(customTools, shell, scope)` 动态生成(shell 行按方言注入 `none/bash/pwsh/powershell`);静态 override 会整个替换 pi 的动态工具段。第三个参数是**对话范围**(`conversationScope`):`prompts/writer-main.md` / `writer-editor.md` 里随范围变的事实(会话是否绑章、正文落点、白名单是否开)全写成占位,值只放 `src/prompt.ts` 的 `SCOPE_VARS`(**唯一实现**),编剧那份走 `buildEditorSystemPrompt(scope)`。chapter 一列是解耦前原话、`SCOPE_SECTION` 渲染为空串 → **默认(绑定章节)的提示词逐字节不变**;哪个宿主用哪套由 `web/writer-host.ts` 的 `hostPromptScope(conversationScope, key)` 定(key 为 `<id>.jsonl` = 绑章;分离模式下收幕成文仍按章节键建宿主,所以它按绑章叙述)。
 - **提问卡片**(`ask_user`,2026-09-21):`src/ask-user.ts` 提供阻塞式闸门 `AskUserGate` + 工具工厂;工具在 `execute` 里挂起,`POST /api/ask-user/answer|cancel` 结算,中断本轮时 `cancelAll`。前端不新增事件类型 —— 卡片以 `ask_user` 工具块为宿主(`result === null` 即等待中,见 `web/src/ask-user.ts` 的 `findPendingAsk`)。
-- **shell 与方言**(2026-09-18,2026-09-20 增 auto):`resolveWriterShell`(src/shell-kind.ts)把设置解析成「方言 + 可执行文件路径」;`shellKind` 缺省 `auto` = 按平台识别(Windows 优先 PowerShell,其余平台 bash),经 `settingsManager.shellPath` 交给 vendor(spawn 形态 `{shell, args:["-c"]}`);vendor 的工具 schema 固定叫 `bash`,故方言只改**执行哪个可执行文件**与**提示词怎么叙述**,不改工具名。解析不到(选了 pwsh 但本机没装)→ `dialect: "none"`:不激活 bash 工具 + 提示词如实说没有 shell。web 缺省不给 shell,由设置项 `enableShell` 显式放开(见 security.md)。
+- **shell 与方言**(2026-09-18,2026-09-20 增 auto):`resolveWriterShell`(src/shell-kind.ts)把设置解析成「方言 + 可执行文件路径」;`shellKind` 缺省 `auto` = 按平台识别(Windows 优先 PowerShell,其余平台 bash),经 `settingsManager.shellPath` 交给 pi(spawn 形态 `{shell, args:["-c"]}`);pi 的工具 schema 固定叫 `bash`,故方言只改**执行哪个可执行文件**与**提示词怎么叙述**,不改工具名。解析不到(选了 pwsh 但本机没装)→ `dialect: "none"`:不激活 bash 工具 + 提示词如实说没有 shell。web 缺省不给 shell,由设置项 `enableShell` 显式放开(见 security.md)。
 - **世界书**:`world_update` 是唯一变更通道(提示词禁止 edit/write 直改);`applyWorldUpdate` 纯函数(判别联合 → clone → mutate → validateWorld),`withWorldLock` 串行化读-改-写(进程内;跨进程并发仍需外部文件锁)。
 - **守卫**:`installToolPathGuard(bookDir, readOnlyDirs)` 把文件工具限制在书目录内,`skills/` 目录只读放行;Web 多会话下通过 `AsyncLocalStorage` 按当前会话读取书目录 / 只读目录 / 正文白名单,避免并发会话互相覆盖。
 
@@ -140,11 +141,11 @@ agent 会话事件(pi vendor AgentSessionEvent)
 - `/chapter <搜索>`:章节列表来自 `bookDetail.chapters`,选中后按需 `GET /api/draft` 注入某一章原文;
 - `/compact [附加要求]`:调用后端手动压缩当前会话上下文。
 
-命令是前端声明 + 受信任执行器,渲染进程不执行用户任意 JS。未来用户插件先以 `src/plugins.ts` 的 `PluginManifest`(声明式 `slashCommands`)接入;后端插件使用 vendor `ExtensionAPI`(注入 `createSessionRuntimeFactory.extensionFactories`),HTTP 扩展用 `WriterServerOptions.extraRoutes` + `broadcastEvent()`。
+命令是前端声明 + 受信任执行器,渲染进程不执行用户任意 JS。未来用户插件先以 `src/plugins.ts` 的 `PluginManifest`(声明式 `slashCommands`)接入;后端插件使用 pi 的 `ExtensionAPI`(注入 `createSessionRuntimeFactory.extensionFactories`),HTTP 扩展用 `WriterServerOptions.extraRoutes` + `broadcastEvent()`。
 
 ### 7.3 上下文占用与压缩
 
-- 后端:`SessionHost.getContextUsage()`(vendor `getContextUsage`)与 `SessionHost.compact()`(vendor `compact`,自动 abort 当前回合 → 模型总结 → append 压缩条目)。
+- 后端:`SessionHost.getContextUsage()`(转发 pi 的 `getContextUsage`)与 `SessionHost.compact()`(pi 的 `compact`,自动 abort 当前回合 → 模型总结 → append 压缩条目)。
 - 端点:`GET /api/writer/:slug/context`;`POST /api/writer/:slug/compact`;舞台侧走 `POST /api/stage/:slug/command { cmd: "compact" }`,快照携带 `directorUsage`。
 - 前端:`compaction_start/end` 经 writer/director 事件流到达,MessageList 显示「正在压缩上下文」;占用 ≥80% 时输入框上方提示「建议 /compact」(`web/src/context-usage.ts`)。
 
@@ -161,7 +162,7 @@ agent 会话事件(pi vendor AgentSessionEvent)
 | 跨窗口同步 | `web/src/cross-window-sync.ts` |
 | `/` 命令注册表 | `web/src/slash-commands.ts`(InputBar 消费) |
 | 上下文占用提示 | `web/src/context-usage.ts`(阈值 80%) |
-| 手动压缩 | `src/web/session-host.ts` → vendor `AgentSession.compact` |
+| 手动压缩 | `src/web/session-host.ts` → pi 的 `AgentSession.compact` |
 | 上下文检视面板 | `src/inspect/`(TUI 面板 + report)/ `web/src/` 对应面板 |
 | 防腐层 | `src/pi-adapter/`(见 §9) |
 
@@ -171,26 +172,26 @@ agent 会话事件(pi vendor AgentSessionEvent)
 
 ### 它解决什么问题
 
-自研代码原先**直接** `import { ... } from "../vendor/pi-coding-agent/src/index.ts"`——分布在全项目 **51 处 / 30 个文件**。上游一旦改名、挪包或升级大版本,这 30 个文件**同时编译失败**,而其中大多数和「写作」毫无关系(UI 组件、编辑器、MCP、世界书……)。
+自研代码原先**直接** `import { ... } from "../vendor/pi-coding-agent/src/index.ts"`(vendor 时代;vendor 已于 2026-10-05 T11 移除)——分布在全项目 **51 处 / 30 个文件**。上游一旦改名、挪包或升级大版本,这 30 个文件**同时编译失败**,而其中大多数和「写作」毫无关系(UI 组件、编辑器、MCP、世界书……)。
 
 这正是升 pi 1.0 的最大障碍:升级动作从「手工拷源码」变成「一次 install」时,失败面会一次铺开。
 
 ### 三条铁律
 
-1. **对外 API 必须是写作领域形状**,不是 vendor 形状的透传。
-   例:打开会话对外叫 `openSession(file)`,不叫 `SessionManager.open(file, dir, cwd)`;成本拆分对外叫 `UsageCostRow`,不叫 vendor 的 `UsageCostBreakdown`。
-2. **厚度控制**。只包「自研真的用到、且位置不稳定」的那部分 vendor 面,**不做无差别转发**。
+1. **对外 API 必须是写作领域形状**,不是 pi 形状的透传。
+   例:打开会话对外叫 `openSession(file)`,不叫 `SessionManager.open(file, dir, cwd)`;成本拆分对外叫 `UsageCostRow`,不叫 pi 的 `UsageCostBreakdown`。
+2. **厚度控制**。只包「自研真的用到、且位置不稳定」的那部分 pi 面,**不做无差别转发**。
    例:`pi-tui` 的 index 有 138 行导出,`tui.ts` 只收自研真用到的 13 个。多收一个符号 = 将来上游改它时多一处要跟着动。
    它**不该变成第二个框架**。
-3. **单向依赖**:`自研 → pi-adapter → vendor`,不可回流。
+3. **单向依赖**:`自研 → pi-adapter → pi 包`,不可回流。
    `pi-adapter/*` 内**禁止** import `src/` 下的业务模块。
 
 ### 模块分工
 
-| 文件 | 承载 | vendor 依赖形态 |
+| 文件 | 承载 | pi 依赖形态 |
 |---|---|---|
 | `domain.ts` | 自研自定义接口 + **不透明句柄**类型 | **零**(刻意的) |
-| `types.ts` | **vendor 类型别名**(改名字,不改结构) | `import type` |
+| `types.ts` | **pi 类型别名**(改名字,不改结构) | `import type` |
 | `guard.ts` | 工具路径守卫 | **深层路径**(唯一) |
 | `usage.ts` | 成本拆分投影 | **深层路径**(唯一) |
 | `session.ts` | 句柄 ↔ 实体造型 | 包的 `index.ts` |
@@ -229,8 +230,17 @@ export type SessionEntity = ReturnType<typeof fromHandle>;
    正解是 re-export:`export { Theme };` —— 原样保留双身份。
    > **判据**:class / enum / namespace 用 `export { X }`;函数与常量才用 `export const X: typeof VendorX = VendorX`。
 
-2. **`src/` 二级目录到 adapter 是 `../../src/pi-adapter`,不是 `../../pi-adapter`。**
-   `vendor/` 在**仓库根**,`pi-adapter/` 在 **`src/` 下** —— 层级不同。
+2. **`src/` 二级目录到 adapter 是 `../../src/pi-adapter`。**
+   `pi-adapter/` 在 **`src/` 下**,二级目录(`src/web/`、`src/stage/` 等)要上跳两级。
+   (vendor 时代那条「`vendor/` 在仓库根、所以层级不同」的说明已随 T11 失效 —— 现在只有一条路径规则。)
+
+3. **`src/mcp/` 是防腐层外的例外,别再往里加 pi 的 import。**
+   `extension.ts` / `host.ts` / `migrate.ts` 都**从包名根 import**(`createMcpExtension` /
+   `loadExtensions` 与 `ToolInfo` 类型),没走 `pi-adapter`——因为 adapter 的职责是
+   「写作领域形状」,MCP 装配函数不是领域形状。代价是这三处将来要跟着上游 `extensions/mcp`
+   的导出面走。`test/pi-adapter.test.ts` 的 `T7_DELIVERED` 清单里记着它们就是为此。
+   **深层路径仍禁止**(`@earendil-works/pi-coding-agent/dist/extensions/mcp/config.js` 这类),
+   上游没导出 `addMcpServerConfig`,所以 `host.ts` 才自己实现了读-改-写。
 
 ### 上游升级时改哪里
 
@@ -249,13 +259,13 @@ export type SessionEntity = ReturnType<typeof fromHandle>;
 
 `test/pi-adapter.test.ts`,关键三条:
 
-- **全局断言(无白名单)**:自研业务代码零 vendor 直接引用。允许的例外只有 `pi-adapter/` 自身与 `util/uuid.ts`,且必须显式列出。
+- **全局断言(无白名单)**:自研业务代码零 pi 包直接引用。允许的例外只有 `pi-adapter/` 自身、`util/uuid.ts` 与 `src/mcp/`,且必须显式列出。
 - **26 个交付文件逐一点名**:不受全局断言将来放宽的影响。
-- **单向依赖不回流**:`pi-adapter/*` 只允许 import vendor 与 adapter 自身。
+- **单向依赖不回流**:`pi-adapter/*` 只允许 import pi 包与 adapter 自身。
 
 ```bash
 # 手工核对
-grep -rn "vendor/pi-" src/ --exclude-dir=pi-adapter
+grep -rn '@earendil-works/pi-' src/ --exclude-dir=pi-adapter --exclude-dir=mcp
 ```
 
 ### 一条归属判断(易错)

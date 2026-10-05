@@ -432,12 +432,30 @@ describe("删除类 op 不静默无操作（2026-10-05）", () => {
 		expect(() => applyWorldUpdate(a, { op: "notice_delete", id: `${id}-typo` })).toThrow(/Notice 待办不存在/);
 	});
 
+	it("delete_relation 传错 id 报错而不是静默无操作", () => {
+		// 这条是本组最后一个漏网(前两个在 bf0d215 修掉,关系侧漏了)。关系是**双向可见**
+		// 的数据:模型以为删了、用户关系图上仍连着,比约束/待办更隐蔽。
+		const w = createEmptyWorld();
+		const a = applyWorldUpdate(w, { op: "upsert_entry", type: "character", title: "林昭", body: "刀客。" });
+		const b = applyWorldUpdate(a, { op: "upsert_entry", type: "character", title: "萧彻", body: "书生。" });
+		const [x, y] = [b.entries[0]!.id, b.entries[1]!.id];
+		const c = applyWorldUpdate(b, { op: "upsert_relation", from: x, to: y, type: "rival" });
+		const rid = c.relations[0]!.id;
+		// 正确 id:正常删除
+		expect(applyWorldUpdate(c, { op: "delete_relation", id: rid }).relations).toHaveLength(0);
+		// 错 id:必须抛错(原先返回「已更新世界书」但关系还在)
+		expect(() => applyWorldUpdate(c, { op: "delete_relation", id: `${rid}-typo` })).toThrow(WorldValidationError);
+		expect(() => applyWorldUpdate(c, { op: "delete_relation", id: "不存在的关系" })).toThrow(/关系不存在/);
+	});
+
 	it("报错文案说明「未删除任何内容」(让模型知道世界没变)", () => {
 		const w = createEmptyWorld();
 		const a = applyWorldUpdate(w, { op: "upsert_constraint", name: "C", text: "t" });
 		expect(() => applyWorldUpdate(a, { op: "delete_constraint", id: "x" })).toThrow(/未删除任何内容/);
 		const b = applyWorldUpdate(w, { op: "notice_append", text: "n" });
 		expect(() => applyWorldUpdate(b, { op: "notice_delete", id: "x" })).toThrow(/未删除任何内容/);
+		// 关系侧同样
+		expect(() => applyWorldUpdate(a, { op: "delete_relation", id: "x" })).toThrow(/未删除任何内容/);
 	});
 });
 

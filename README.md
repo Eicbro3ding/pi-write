@@ -50,17 +50,17 @@ pi-writer 探索的是:**Agent 如何在一个持续存在的创作世界里工�
 
 | 能力 | 说明 |
 |------|------|
-| 三种界面,一份数据 | 全屏 TUI / 本地 Web GUI(默认 `127.0.0.1:8811`)/ Electron 桌面壳,共用 `~/.pi/writer` 数据,可并行运行 （真的有人用TUI吗🤔）|
+| 三种界面,一份数据 | 终端交互 / 本地 Web GUI(默认 `127.0.0.1:8811`)/ Electron 桌面壳,共用 `~/.pi/writer` 数据,可并行运行 |
 | 结构化的世界管理 | `world_update` 结构化更新(条目 / 关系 / 约束 / 发展线 / 时间线 / 采样 / 世界观概述),`world_find` 只读检索;详细操作见 [docs/architecture.md](docs/architecture.md) |
 | 上下文激活引擎 | 关键词命中 + 关联激活(深度内多源 BFS、强关联优先),预算内注入 |
-| 内置编辑器 | TUI 全屏编辑器(vim 可选)+ Web CodeMirror 6(正文常驻 + 右栏对话) |
+| 内置编辑器 | 终端全屏编辑器(vim 可选)+ Web CodeMirror 6(正文常驻 + 右栏对话) |
 | 关系图 | 人物 / 世界关系图,布局与视口持久化,可标记强关联 |
 | 写作技能 | `onboarding`(上手引导:讲清心智模型、动笔前把风格定下来、按卡点讲功能)/ 网文方法论按阶段拆四个:`craft-outline`(选题结构/大纲/32 张题材卡)/ `craft-prose`(正文技法/人物)/ `craft-deslop`(去 AI 味/文风)/ `craft-review`(审稿清单与平台评分)—— 76 份原样收录的第三方方法论,每个技能自带路由表 / `outline` / `critique` / `revise` / `stage-scripting` |
 | 分支会话 | 章节会话支持撤回、编辑重发、分支切换 |
 | 经典模式(单 Agent,默认) | 去掉舞台,编辑页的 AI 换成带全量工具直接写的写作 agent;与舞台多 Agent 形态在设置「高级 → Agent 形态」/ 首启向导「创作方式」步一键互切 |
 | 工作区面板 | AI 产出的中间产物(资料 / 笔记 / 草稿 / 图片)按语义分组列出 + 只读预览;`outline.md` 这类世界书导出镜像不进清单,权威视图仍在世界书页 |
 | 外部命令(可选) | 默认关闭;开启后 agent 可执行 shell 命令,**命令与输出实时显示在对话里**。方言可选 bash 或 PowerShell:Windows 上不必装 Git Bash 也能用 |
-| MCP 扩展 | 通过 Model Context Protocol 接入外部工具(stdio / http / sse) |
+| MCP 扩展 | 通过 Model Context Protocol 接入外部工具(stdio / streamable HTTP);设置页可配「暴露策略」(直接可见 / 按需加载 / 隐藏) |
 
 ## 基于 Pi 构建
 
@@ -71,6 +71,9 @@ pi-writer 探索的是:**Agent 如何在一个持续存在的创作世界里工�
 - 长篇记忆(跨章节 `memory.md`);
 - 创作工作流(背景包注入、预览卡、舞台共演)。
 
+MCP 直接装配上游扩展(不再自研管理器),仅在装配处做三件胶水:`PI_CODING_AGENT_DIR`
+重定向、旧配置迁移、web 设置页的配置读写面 —— 详见 [NOTICE-pi.md](NOTICE-pi.md) §4.1。
+
 pi-writer所有配置独立存放于 `~/.pi/writer`,不读取 Pi coding-agent 的配置。
 
 ## 快速开始
@@ -79,10 +82,10 @@ pi-writer所有配置独立存放于 `~/.pi/writer`,不读取 Pi coding-agent �
 # 安装依赖
 npm install
 
-# TUI:新建一本书
+# 终端:新建一本书
 npx tsx src/cli.ts --new-book "我的小说"
 
-# TUI:打开已有书
+# 终端:打开已有书
 npx tsx src/cli.ts --book my-novel
 
 # Web GUI(默认 http://127.0.0.1:8811,自动开浏览器)
@@ -92,7 +95,7 @@ npx tsx src/cli.ts --web
 npm run build:web && npm run electron
 ```
 
-要求:Node.js ≥ 18.20.4;`npm run bundle`(TUI 单文件可执行)与 `npm run build:electron` 需要 [bun](https://bun.sh)。
+要求:Node.js ≥ 22.19.0(pi 1.0.2 的要求;低于此版本装完会在运行时崩);`npm run bundle`(终端单文件可执行)与 `npm run build:electron` 需要 [bun](https://bun.sh)。
 
 ## 文档
 

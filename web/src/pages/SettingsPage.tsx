@@ -70,7 +70,7 @@ const pluginCatPrefix = "plugin:";
 
 /** 各分类页面头。 */
 const CAT_HEAD: Record<string, { title: string; desc: string }> = {
-	model: { title: "模型", desc: "选择写作与演出使用的模型、思考强度与采样参数。修改都即时生效,无需保存。" },
+	model: { title: "模型", desc: "选择写作与演出使用的模型与思考强度。修改都即时生效,无需保存。" },
 	ui: { title: "界面", desc: "主题与日常偏好。会改变 AI 在你机器上行为的选项,已移到「高级」。" },
 	world: { title: "世界书", desc: "决定 AI 每次对话时自动带上哪些世界书内容。" },
 	integrations: { title: "集成", desc: "为 AI 接入外部工具与扩展写作能力。" },
@@ -84,7 +84,7 @@ const CAT_HEAD: Record<string, { title: string; desc: string }> = {
 /**
  * 手机端「一屏一件事」的页面表:索引行 → 桌面分类 + 这一页只显示的卡片 + 页头标题。
  *
- * 手机端不把桌面的「分类」当页面用:桌面一个分类里有四五张卡(模型 / 采样 / 思考 /
+ * 手机端不把桌面的「分类」当页面用:桌面一个分类里有四五张卡(模型 / 思考 /
  * 供应商),手机点一行进去看到一整张桌面页;而且桌面「标签 | 控件」的行在 393px 里
  * 会把标签挤成一列字。这里改成一行 = 一页 = 一张卡(`cards` 里可以有多张,比如
  * 「图片生成」带上「允许 AI 调用的时机」)。卡片 key 对应各 section 的 cardClass()。
@@ -93,7 +93,6 @@ const PHONE_PAGES: Record<string, { cat: string; cards: string[]; title: string 
 	"theme-css": { cat: "ui", cards: ["theme-css"], title: "自定义主题" },
 	model: { cat: "model", cards: ["model"], title: "默认模型" },
 	thinking: { cat: "model", cards: ["thinking"], title: "思考级别" },
-	sampling: { cat: "model", cards: ["sampling"], title: "采样参数" },
 	world: { cat: "world", cards: ["world"], title: "世界书注入" },
 	image: { cat: "experimental", cards: ["image", "image-when"], title: "图片生成" },
 	shell: { cat: "advanced", cards: ["shell"], title: "执行命令" },
@@ -348,8 +347,6 @@ export function SettingsPage({
 	const [thinkingHosts, setThinkingHosts] = useState<ThinkingHostResult[] | null>(null);
 	/** 上一次请求的思考档位被模型能力回落到别的档位(非 null = 要解释一句)。 */
 	const [thinkingClamped, setThinkingClamped] = useState<string | null>(null);
-	const [temperature, setTemperature] = useState<string>("");
-	const [topP, setTopP] = useState<string>("");
 	const [loadErr, setLoadErr] = useState<string | null>(null);
 	const [actErr, setActErr] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
@@ -385,27 +382,21 @@ export function SettingsPage({
 	/** 最近一次加载/保存成功时磁盘 world.json mtime(If-Match 条件写;0 = 未知)。 */
 	const lastWorldMtimeRef = useRef(0);
 
-	/** 拉取模型列表/当前模型/思考等级/采样参数并归一;返回解析结果供调用方直接使用。 */
+	/** 拉取模型列表/当前模型/思考等级并归一;返回解析结果供调用方直接使用。 */
 	const load = useCallback(async (): Promise<{
 		models: ModelInfo[];
 		current: string | null;
 		thinking: string | null;
-		temperature: number | null;
-		topP: number | null;
 	}> => {
 		const r = await client.getModels();
 		const models = extractModels(r.models);
 		const current = modelRef(r.current);
 		const thinking = typeof r.thinking === "string" ? r.thinking : null;
-		const temperature = typeof r.temperature === "number" ? r.temperature : null;
-		const topP = typeof r.topP === "number" ? r.topP : null;
 		setModels(models);
 		setCurrent(current);
 		setThinking(thinking);
 		setThinkingLevels(Array.isArray(r.thinkingLevels) && r.thinkingLevels.length > 0 ? r.thinkingLevels : null);
-		setTemperature(temperature === null ? "" : String(temperature));
-		setTopP(topP === null ? "" : String(topP));
-		return { models, current, thinking, temperature, topP };
+		return { models, current, thinking };
 	}, [client]);
 
 	// 挂载时加载
@@ -754,75 +745,9 @@ export function SettingsPage({
 		}
 	}
 
-	/** 一键恢复模型默认温度:清除全局与所有演员(含当前舞台 cast.json)的 temperature 覆盖。 */
-	async function resetTemperature() {
-		if (busy) return;
-		setBusy(true);
-		setActErr(null);
-		try {
-			await client.setSampling({ temperature: null });
-			await load();
-			setNotice("已恢复模型默认温度：所有 agent（含演员）不再修改 temperature");
-		} catch (e) {
-			setActErr(`恢复默认温度失败: ${friendlyError(e)}`);
-		} finally {
-			setBusy(false);
-		}
-	}
-
 	/**
-	 * 设置采样参数:温度/top_p 至少填一个(留空=不修改)。
+	 * 设置思考档位。
 	 *
-	 * 2026-10 审计 BUG-016:此前只验 NaN,越界值( temperature 3 / topP 2 )会发到服务端
-	 * 被拒,用户看到的是通用「设置失败」。这里按后端同一套范围就地校验并给字段级提示
-	 * (temperature 0..2、topP 0..1),后端保留边界校验作为安全边界。
-	 */
-	async function changeSampling() {
-		if (busy) return;
-		const rawT = temperature.trim();
-		const rawP = topP.trim();
-		const parseField = (raw: string): { ok: true; value: number | undefined } | { ok: false; message: string } => {
-			if (raw === "") return { ok: true, value: undefined };
-			const n = Number(raw);
-			if (!Number.isFinite(n)) return { ok: false, message: "必须是数字" };
-			return { ok: true, value: n };
-		};
-		const pt = parseField(rawT);
-		if (!pt.ok) {
-			setActErr(`temperature ${pt.message}`);
-			return;
-		}
-		const pp = parseField(rawP);
-		if (!pp.ok) {
-			setActErr(`topP ${pp.message}`);
-			return;
-		}
-		const t = pt.value;
-		const p = pp.value;
-		if (t === undefined && p === undefined) {
-			setActErr("请至少填写 temperature 或 topP 之一");
-			return;
-		}
-		if (t !== undefined && (t < 0 || t > 2)) {
-			setActErr("temperature 必须在 0..2 之间");
-			return;
-		}
-		if (p !== undefined && (p < 0 || p > 1)) {
-			setActErr("topP 必须在 0..1 之间");
-			return;
-		}
-		setBusy(true);
-		setActErr(null);
-		try {
-			await client.setSampling({ ...(t !== undefined ? { temperature: t } : {}), ...(p !== undefined ? { topP: p } : {}) });
-			await load();
-			setNotice("采样参数已保存");
-		} catch (e) {
-			setActErr(`采样参数设置失败: ${friendlyError(e)}`);
-		} finally {
-			setBusy(false);
-		}
-	}
 
 	/** 联网刷新模型目录:远程 catalog / 动态 provider 重新拉取,成功后刷新前端模型列表。 */
 	async function refreshModelList() {
@@ -1080,7 +1005,6 @@ export function SettingsPage({
 			rows: [
 				{ key: "model", icon: "layers", label: "默认模型", value: current ?? "未选择", page: "model" },
 				{ key: "thinking", icon: "sparkles", label: "思考级别", value: thinking ? (THINKING_LABELS[thinking] ?? thinking) : "默认", page: "thinking" },
-				{ key: "sampling", icon: "shuffle", label: "采样参数", sub: "temperature · top_p", page: "sampling" },
 				{
 					key: "provider",
 					icon: "key-round",
@@ -1327,52 +1251,6 @@ export function SettingsPage({
 									</div>
 								</section>
 
-								{/* 采样参数:temperature / top_p + 应用 / 恢复默认 */}
-								<section className={cardClass("sampling")}>
-									<div className="s-card-head">采样参数</div>
-									<div className="s-card-desc">留空表示沿用模型默认值。</div>
-									<div className="s-field-grid">
-										<div className="s-field">
-											<label className="s-field-label">temperature</label>
-											<input
-												className="s-input st-input-full"
-												placeholder="默认"
-												type="number"
-												min="0"
-												max="2"
-												step="0.1"
-												value={temperature}
-												disabled={busy}
-												onChange={(e) => setTemperature(e.target.value)}
-											/>
-										</div>
-										<div className="s-field">
-											<label className="s-field-label">top_p</label>
-											<input
-												className="s-input st-input-full"
-												placeholder="默认"
-												type="number"
-												min="0"
-												max="1"
-												step="0.05"
-												value={topP}
-												disabled={busy}
-												onChange={(e) => setTopP(e.target.value)}
-											/>
-										</div>
-									</div>
-									<div className="st-actions">
-										<button type="button" className="wz-primary st-btn-apply" disabled={busy} onClick={() => void changeSampling()}>
-											{busy ? "设置中…" : "应用"}
-										</button>
-										<button type="button" className="btn-ghost" disabled={busy} onClick={() => void resetTemperature()}>
-											{busy ? "处理中…" : "恢复默认采样参数"}
-										</button>
-									</div>
-									<div className="s-card-desc st-desc-tight">
-										「恢复默认采样参数」会清除全局与所有演员的 temperature 覆盖,所有 agent 恢复 provider 默认;top_p 不受影响。
-									</div>
-								</section>
 							</div>
 
 							<aside className="st-col-side">

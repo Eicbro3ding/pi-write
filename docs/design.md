@@ -150,3 +150,56 @@ AI 在岔路口不该替你决定,也不该写一段「你可以选 A,也可以�
 ### 回车键行为
 
 设置 → 界面偏好「回车直接发送」。**缺省仍是回车换行**(后加的开关不替老用户改键位);开启后回车发送、Shift+Enter 换行,Ctrl/Cmd+Enter 在任何设置下都发送。
+
+## 14. MCP 走上游扩展(2026-10-05,T9-A;决策 D1 改判 B)
+
+**决策过程值得留痕,因为它推翻了一次「看起来更稳妥」的初判。**
+
+升 pi 1.0 后,自研 MCP 的三个文件(`manager.ts` 399 行 + `tools.ts` 237 行 + `config.ts`)要不要留?
+初判(D1=A)是**留**:理由听上去成立——自研那套贴合写作场景(工具清单要进提示词、要有
+可见性开关),上游是通用实现。
+
+实读上游源码后推翻:**上游 `dist/extensions/mcp/` 有约 157KB**,stdio + streamable HTTP、
+OAuth、资源列表、`sections["mcp_servers"]` 提示词注入、`codemode` / `deferred` / `direct` /
+`hidden` 四档暴露策略全都现成。自研的 843 行里,**没有一行是上游做不到的**,只有三件事是
+上游不知道的——而那三件事加起来不到 200 行,且都是**一次性胶水,不是能力**。
+
+**改判 B:删自研,装上游。**判据写下来备用:
+
+> 重造一份「别人已经做完、且做完的比你好」的通用基础设施,不是"贴合场景",是**负债**——
+> 它让每次上游升级都要重放一遍,也让「为什么我的 MCP 行为跟文档不一样」变得无从排查。
+
+### 三个胶水点(仓库里保留的自研面)
+
+| 文件 | 干什么 | 不做的后果 |
+|---|---|---|
+| `extension.ts` | `pointUpstreamAtWriter()` 写 `PI_CODING_AGENT_DIR`;注册 `mcp` 命令;`session_start` 一次性迁移 | 上游读 `~/.pi/agent`(coding-agent 自己的目录),用户的 MCP 配置**整个看不见** |
+| `migrate.ts` | 旧形状 → `mcpServers` + `transport` 判别;`.bak-<ts>` 备份;幂等;SSE 降级 + 告警 | 老用户升级后 MCP 全部失效,且**无提示**(上游不认识旧字段,静默忽略) |
+| `host.ts` | 配置读写面给 web 设置页用;工具清单改用 `pi.getAllTools()` | 设置页读不到配置 |
+
+`host.ts` 自实现读-改-写而**不是**调用上游的 `addMcpServerConfig`——因为上游**包入口没导出**
+它(只在 `dist/extensions/mcp/config.js` 里),而 `pi-adapter` 护栏禁止深层 import。
+这是**护栏发挥了作用**的实例:它逼我们承认「上游没把这个当公开 API」,而不是偷偷钻进去。
+
+### 三处行为变化(都是有意为之)
+
+- **SSE 不再支持**。上游没有 SSE 传输。旧 `sse` 条目迁移时降级为 `http`,web 保存 `sse` 被 400 拒。
+  **这是能力收窄,不是 bug**,故写进 README 与 security.md。
+- **暴露策略默认 `direct`**。上游默认 `codemode`(工具不进模型声明,靠 `tool_search` 找),
+  但自研时代工具是**直接可见**的。迁移一律写 `direct` 以保持用户既有体验不变;
+  用户可自行改小。这是「**迁移不该改变既有行为**」原则的一次应用。
+- **重连改为懒重连**。自研的 3-30s 指数退避没了——上游在下次调用时按需重连。
+  `server.ts` 里的 `onReconnect` 钩子与 `mcpManager.close()` 随之删除(`close()` 还是
+  一次真实的资源泄漏修复:上游扩展自己管生命周期)。
+
+### 一个不显眼但关键的事实
+
+MCP 工具清单**不再由 `buildWriterSystemPrompt` 手工拼**。自研时代 `cli.ts` 要传
+`customTools: mcpManager.getTools()` 进去;现在上游经 `before_agent_start` 注入
+`sections["mcp_servers"]`。这两条通道的**关键差别**是:
+
+> `systemPromptOverride` 是**整体替换**,会盖掉上游所有动态段;而 `sections["mcp_servers"]`
+> 是**结构化增量**,不受 override 影响。
+
+所以「我们用了 override,上游的 MCP 段会不会被吃掉」这个担心不成立——**不会**。
+但反过来说,也**不能**靠 override 去改 MCP 段的措辞;要改就得碰上游的 section 渲染。

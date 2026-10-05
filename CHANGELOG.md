@@ -1,6 +1,145 @@
 # Changelog
 
-## [Unreleased]
+`delete_relation` 补上静默无操作:世界书写入里最后一个漏网。
+
+- [fix] **`delete_relation` 传错 id 静默成功**(`src/tools.ts`)。`next.relations.filter((x) => x.id !== update.id)` 把一个不存在的 id filter 掉,照样回「已更新世界书」——模型据此以为关系已删、继续推理,而用户关系图上那条线还在。**关系是双向可见的数据,比约束/待办更隐蔽**:约束在文风块里迟早会被下一轮读到,关系图不会。已改为与 `delete_constraint` / `notice_delete` 同口径:先 `find` 判存在,不存在则抛 `WorldValidationError("关系不存在: <id>(未删除任何内容)")`。属上轮(`bf0d215`)修同批静默时的漏网。
+- [test] 「删除类 op 不静默无操作」组新增 1 例(正删通过 + 错 id 抛错 + 文案含「未删除任何内容」)。**已反证**:退回旧实现 → 该例变红。
+
+**验证**:typecheck 0 错误;全量 **91 文件 / 1605 例通过** / 2 skipped(较上轮 +1,即本例)。
+
+文档与 skill 同步:T11(依赖化)与 T9-A(MCP 换上游)之后,知识文档还停在 vendor 时代。
+
+- [docs] **skill 知识地图(`.agents/skills/pi-writer/`)整轮校准** —— 它此前系统性描述的是一个**已不存在的仓库**:
+  - **开头段**:「核心包全部 vendor 在 `vendor/`,零 `@earendil-works` npm 依赖」→ 改为「四个 pi 包是 npm 依赖,锁精确 1.0.2,本地改动走 `patches/`,**不再有 `vendor/` 目录**」,并补 Node ≥22.19.0 与 `postinstall` 打补丁这两条上手前提;
+  - **布局表**:删 `vendor/` 行、加 `patches/` 与 `src/pi-adapter/` 行;`src/mcp/` 从「config/manager/tools 三件套」改写为「装配上游 `createMcpExtension` 的三个胶水文件」;`src/prompt.ts` 行去掉「手工拼 MCP 清单」;
+  - **新增 MCP 专节**:决策背景(为什么推翻「留自研」)、三个文件各自的「为什么必须自研」、**四条硬约束**(只有 stdio+http / `exposure` 默认 `direct` / 提示词段不再手工拼 / 上游懒重连),以及工具名 `mcp__<server>__<tool>` 的由来;
+  - **新增防腐层约定**:「pi 框架的 import 一律走 `src/pi-adapter/`」,并写明 `src/mcp/` 是唯一例外及理由;
+  - **构建命令整段重写**:删掉已不存在的 `tsconfig.tmp.json` / `vitest.tmp.config.ts`,改用仓库根真实配置;补 `npm run build` 与 `build:web` 的产物区别。
+- [docs] **`references/pitfalls.md` 换掉 3 条失效记录**:「tsc 的 vendor 类型错误」(vendor 已删)、「@modelcontextprotocol/sdk 顶层导出缺陷」(SDK 已无引用)删除,替换为两条**当前真实**的坑 ——「`npm run build` ≠ `npm run build:web`」(附 2026-10-05 的误判经过)与「改 pi 包要走 patches,别直接改 node_modules」(附路径守卫静默失效的判据)。`references/commands.md` / `architecture.md` 同步。
+- [docs] **项目文档**:`docs/development.md` 补「首次 clone 先 `npm install`」「`skipLibCheck` 是必需品」「`build`/`build:web` 两个产物」三处;`docs/architecture.md` 的 `vendor/` 表格行改为 `patches/`、§9 的层级说明随 vendor 移除简化、防腐层措辞从「零 vendor 直接引用」改为「零 pi 包直接引用」(并登记 `src/mcp/` 例外)。
+- [docs] `TODO.md` 记入一条 T9-A 副作用:**`@modelcontextprotocol/sdk` 已成孤儿依赖**(自研 MCP 删除后 `src/` 内无引用),建议后续移除。
+
+**验证**:typecheck 0 错误;全量 **91 文件 / 1604 例通过** / 2 skipped;skill 里新引用的 16 个文件路径逐条核实存在;`skill-references` / `skills-index` / `prompt` 三组护栏测试通过。
+
+T13 端到端收尾:用真实构建产物跑出的两处「迁移静默失败」。
+
+- [fix] **http 条目的 `env` 在迁移时丢失**。`legacyServerToUpstream` 的 stdio 分支带了 `env`,http 分支没带 —— `{"type":"http","url":...,"env":{"TOKEN":"abc"}}` 迁移后 `env` 直接消失,**不报错、不告警**,用户只能在工具连不上时反推。已补齐,并加两例断言(http 保留 env、sse 降级后同样保留)。
+- [fix] **web 启动丢弃迁移告警**。`web.ts` 调了 `ensureMigrated()` 却扔掉返回值,「SSE 已降级」与「字段不完整已跳过」两条告警全都不打。这两类恰是**静默失败**的典型:旧条目留在文件里不会报错,只是永远不生效 —— 现在逐条打到 stderr。
+- [fix] **`npm run web` 会静默跑在过期产物上**。`npm run build` 产的是 `dist/cli.js` / `dist/index.js`,而 `web` 脚本跑 **`dist/web/server.cjs`**(只由 `npm run build:web` 产出)。于是最自然的路径「改源码 → build → web」跑的是旧代码:旧文件还在、能正常启动、**不报任何错**。这正是本轮排查误判「迁移完全没生效」的原因(白查半小时)。新增 `scripts/check-web-fresh.mjs` 前置到 `web` 脚本:比源码与产物 mtime,过期就打醒目警告并给出正确命令,`exit 0` 不阻断启动(「跑旧产物看别的功能」有时是合理的)。**没让 `build` 顺带产 `server.cjs`** —— 那会把 esbuild 全量打包(含前端 vite)塞进每次 build。
+- [test] 新增 `test/build-scripts.test.ts`(**3 例**)钉住上面这条:web 脚本必须含自检且顺序在启动之前 / 自检脚本存在 / `build` 与 `build:web` 是两个产物这个事实本身。已**反证**:把 web 脚本改回旧形态 → 测试红。
+
+**验证(真实产物)**:typecheck 0 错误;全量 **91 文件 / 1604 例通过** / 2 skipped;端到端 —— 全新目录 + 旧形状配置 → 自动迁移 + `.bak` 备份 + 两条告警如期打 stderr + `/api/mcp` 读出上游 `mcpServers` 形状 + **二次启动幂等(不重复迁移、不新增备份)**;`POST` 新增 / `DELETE` / `/raw` / 重名拒绝 / `sse` 拒绝 / `exposure` 校验全通过。产物过期自检已正反两向验证(新鲜时静默、触碰源码后如期告警)。
+
+T9-A:MCP 不再自研,直接装配上游扩展(决策 D1 改判)。
+
+**升级影响(有,请读)**:① 配置**自动迁移**——首次启动把旧形状(`{name,type,command,args,env,url}`)改写为上游的 `mcpServers` + `transport` 判别形状,原文件留 `.bak-<时间戳>` 备份,重复启动幂等;② **SSE 服务器不再支持**——上游只实现 stdio 与 streamable HTTP,旧 `sse` 条目迁移时**自动降级为 http 并告警**,web 设置页再保存 `sse` 会被 400 拒绝;③ 新增「暴露策略」字段,迁移产生的新条目一律写 `direct`(与自研时代「工具直接可见」一致),可自行改为 `codemode`(按需加载)/`deferred`/`hidden`;④ **断线不再自动重连**(自研的 3-30s 退避取消,改为上游的懒重连:下次调用时按需连);⑤ OAuth 授权流改由上游扩展提供。以上四条同时写进 `README.md` 与 `docs/security.md`。
+
+- [refactor] **删掉自研 MCP 共 843 行**:`src/mcp/manager.ts`(399 行,连接管理 + 断线重连 + 工具桥接)、`src/mcp/tools.ts`(237 行,工具适配)、`src/mcp/config.ts`(typebox 校验,前置重构后已成死代码)。删掉的理由不是"自研不好",而是**上游 `dist/extensions/mcp/` 约 157KB 已经把同样的事做完且做得更全**(stdio + streamable HTTP、OAuth、资源列表、四档暴露策略、`mcp_servers` 提示词段)——继续维护一份平行实现,等于每次上游升级都要重放一遍。
+- [feat] **新增三个胶水文件**(上游替代不了的那部分,合计不到 200 行):`src/mcp/extension.ts`(`createWriterMcpExtension()` 包装上游扩展 —— 写 `PI_CODING_AGENT_DIR` 让上游读 `~/.pi/writer/agent` 而不是 `~/.pi/agent`;注册 `mcp` 命令查状态;`session_start` 时跑一次迁移)、`src/mcp/migrate.ts`(纯函数迁移层:旧形状 → 上游形状、`sse` 降级、备份、幂等)、`src/mcp/host.ts`(`McpHost`:给 web 设置页的配置读写面,工具清单改用 `pi.getAllTools()`)。
+- [fix] **`host.ts` 自实现读-改-写**而不是调用上游的 `addMcpServerConfig`——上游**包入口没导出**它(只在 `dist/extensions/mcp/config.js` 里),而 `test/pi-adapter.test.ts` 的护栏禁止深层 import。这是护栏起作用的实例:它逼我们承认"上游没把这个当公开 API",而不是绕过去偷用。
+- [refactor] **`cli.ts` / `web.ts` 改为装配 `extensionFactories`**,不再往 `customTools` 里灌 MCP 工具;`src/web/server.ts` 的 `mcpManager` 换 `mcpHost`,删掉 `onReconnect` 钩子(上游懒重连)与 `mcpManager.close()`(生命周期归上游管)。
+- [refactor] **`buildWriterSystemPrompt` 不再手工拼 MCP 清单**:MCP 工具的提示词段改由上游经 `before_agent_start` 注入 `sections["mcp_servers"]`。这与 `systemPromptOverride` 是**两条互不干扰的通道**(后者整体替换,前者结构化增量),所以"override 会不会吃掉 MCP 段"的担心不成立——不会。提示词标题随之从「外部工具(MCP)」改为「外部工具」。
+- [feat] **web 设置页适配**:服务器类型去 `sse`、新增「暴露策略」下拉(direct / codemode / deferred / hidden)与 `headers` / `enabled` / `description` 字段;保存 `sse` 时给出中文指引而不是静默失败。
+- [test] 新增 `test/mcp-migrate.test.ts`(**29 例**,含新旧形状判别、SSE 降级、备份、幂等、保真不覆盖用户 exposure)与 `test/mcp-host.test.ts`(**20 例**,含"原样保留 imports 形状");`test/mcp-api.test.ts` **重写**为真实 `McpHost` + 真实 http 监听(此前用 fake manager,"未装配 404 / sse 拒绝 / exposure 校验"这些路径根本没被覆盖);`test/pi-adapter.test.ts` 护栏清单更新;删除 4 个随自研实现一起作废的测试文件。净结果 **90 文件 / 1599 例通过**。
+
+**验证**:typecheck 0 错误;`npm run build:web` 成功;端到端冒烟 —— `GET /api/mcp` 正确读出上游 `mcpServers` 形状、`POST` 新增 http 服务器成功、`POST sse` 返回 400 并附中文提示、`GET /api/mcp/raw` 正确定位 `~/.pi/writer/agent/mcp.json`。
+
+T11 后续:`npm run build` 产物修复 —— npm 包的 CLI 现在真的能跑。
+
+- [fix] **tsc 不再 emit JS,只出声明**。261 处 `.ts` 相对 import 与 `allowImportingTsExtensions` 是绑死的,emit 出来的 `dist/src/*.js` 里 import 仍写 `.ts`,`node` 一跑就是 `ERR_MODULE_NOT_FOUND`。现在 tsc 只喂 `types`(`--emitDeclarationOnly`,顺带消掉 TS5096),可执行/可引用的 JS 交给 **esbuild** —— 与 `build:web` / `build:electron` 同一套做法。新增 `scripts/build-cli.mjs` 打两个产物,并**自检产物里不许残留 `.ts` 相对 import**:这是本次修复的核心,也是最容易悄悄退回的形态(哪天有人把 build 改回 tsc emit,编译照样"成功",只有用户启动时才炸)。
+- [fix] **bin 的 off-by-one**。`src/prompts.ts` 探测 prompts 的最后一态是 `join(here, "..", "prompts")`,`here` 是**模块所在目录**。产物放 `dist/src/cli.js` 时上跳一级是 `dist/prompts`(不存在),而 `files` 白名单里 prompts 在**包根** —— 装完一启动就「提示词文件缺失」。产物改放 `dist/cli.js`,上跳一级正好命中包根。`exports.import` 同步改指 `./dist/index.js`(放 `dist/src/` 会撞同一个坑,实测一 import 就抛)。
+- [fix] **首页 404**。`resolveWebDistDir` 的回退只写了 `here/../../web/dist`,而 `here` 的深度**随运行形态变化**:源码 `src/web`、tsc 产物 `dist/web`、esbuild 单文件 `dist` —— 单文件形态会跳过头,于是 API 全通、只有页面 404。改为**逐个候选**;`resolveBuiltinThemesDir` 同病同修。
+- [fix] **探测失败现在会喊**。静态目录找不到时启动即打一行红字(仅**自动探测**失败时 —— 显式传 `webDistDir` 而目录不存在,那是调用方的决定,测试常这么干)。否则「一半像好的一半像坏的」最难排查。已**反证**:移走 `web/dist` 后警告如期打出、首页 404。
+- [chore] `files` 加 `web/dist`(28M)。否则 `npx pi-writer --web` 服务起来了却是 404 —— 既然 `bin` 提供 `--web`,前端就得跟着走。
+- [env] 环境升到 **Node 22.19.0** 后,才第一次在「满足 `engines`」的前提下跑完验证 —— 此前所有验证都在 22.13.1(低于要求、靠 EBADENGINE 告警而非硬失败)上做的。
+
+**验证(Node 22.19.0)**:typecheck 0 错误;全量测试 **92 文件 / 1596 例通过**;`dist/cli.js --help` 正常(**版本号 0.1.2 正确** = prompts 探测命中,此前冒烟显示 0.0.0);`dist/index.js` 可 import(25 个符号);web 冒烟 `GET /` 200 + `/api/skills` 200;`build:web` 回归正常。
+
+T11 后续:路径守卫 patch 加固 —— 形状不对时**安装即炸**。
+
+- [fix] **`setToolPathGuard` 增加形状检查**。调用点写的是 `__piWritePathGuard?.(resolved, mode)`,而可选调用只防 `undefined`、**不防「传进来的是个对象」**。那种情况下每次解析路径都抛 `__piWritePathGuard is not a function`,而所有 `expect(...).toThrow()` 断言**照样通过** —— 又是一次「看起来拦住了」:实际是 TypeError 在顶替真实拦截(我在临时脚本里传错过一次,看到这句费解的错误才发现)。现在安装时就炸,并报出实到的类型。
+- [test] `test/tool-guard.test.ts` 新增一条断言钉住它(传对象 / 传字符串都要抛「路径守卫必须是」,传 `undefined` 不抛 —— 那是卸载语义)。`patches/README.md` 补为**错误形态三**,与前两种(只改 path-utils 不改调用方、只改 .js 不改 .d.ts)并列。
+- [验证] 重装依赖(`rm -rf node_modules/@earendil-works/pi-coding-agent && npm install`)确认新 patch 生效;`verify-pathguard-patch.mjs` 全通过(含反证);全量测试 **92 文件 / 1596 例通过**(+1 即本条断言)。
+
+T11 后续:Node 版本要求同步到 ≥22.19.0(原计划里的 T12,因依赖化而提前)。
+
+- [fix] **`engines` 与实际要求不符**。四个 pi 包(`pi-coding-agent` / `pi-ai` / `pi-tui` / `pi-agent-core`)的 `engines.node` 全是 **≥22.19.0**,而本项目 `package.json` 写的是 ≥18.20.4。vendor 时代源码随仓库编译,**根本不吃上游的 engines**;改成 npm 依赖后这条才第一次生效 —— `npm install` 会打 EBADENGINE 告警,**不看告警的人用 Node 18 装完会在运行时崩**。已同步四处:`package.json`、`package-lock.json`、`README.md`、`docs/development.md`。
+- [验证] `npm install` 后 `postinstall` 重新打 patch 仍然生效:守卫装得上,越权写被拦(见下一条的形状检查)。
+
+T9-B:TUI 代码保留,但不再对外提及。
+
+- [docs] **清理 11 处对外提及**(模型可见 + 用户可见):
+  - `prompts/writer-main.md` —— 最关键的一处。写作 agent 的**角色认知**里不该出现产品形态名(它只需要知道「有个常驻草稿面板」),原话「TUI 在聊天区右侧显示…」改为「界面里有一个常驻草稿面板(聊天区右侧 / 正文区,视界面而定)」。
+  - `skills/onboarding/references/feature-tour.md` ——「三个入口」→「两个入口」,删掉「终端界面(TUI)」整行,「三者共用同一份数据」→「两者」。
+  - `skills/onboarding/references/style-setup.md` —— 删掉范围表里的「(含 TUI)」。
+  - `README.md` ——「全屏 TUI」→「终端交互」、「TUI 全屏编辑器」→「终端全屏编辑器」、命令示例「`# TUI:`」→「`# 终端:`」、`bundle` 说明「TUI 单文件可执行」→「终端单文件可执行」(顺带去掉原先那句自问「真的有人用TUI吗🤔」)。
+  - `src/cli.ts` 的 `--help` 文案 —— `Commands inside the TUI` → `Commands inside the interactive session`。
+- [决策] **代码一行不动**。TUI 有用(终端交互、内置编辑器、草稿面板都在),要清的是**提及**,不是实现。因此 `docs/`、`.agents/`、代码注释里的 TUI 字样**一律保留** —— 那些说的是架构事实:代码还在,架构文档里写「有 TUI」是准确的;而角色提示词里写「TUI 在右侧显示草稿面板」是在教模型一个它本不该知道的产品形态。两者的分界是**谁在读、读了会拿它做什么**。
+
+**验证**:类型检查 0 错误;全量测试 **92 文件 / 1595 例通过**。
+
+T11 步骤 5:删除 vendor 目录 + 构建链收尾(T11 / D2 依赖化)。
+
+- [remove] **删除 `vendor/`(5.8M,6 个 pi 包源码)**,用 `git rm -r` 保留删除记录(将来要回看某条自研改动还有据可查)。删前先跑「运行时 vendor 引用」扫描:285 个文件、**零命中**才算过 —— 注释里的示例路径、以及 `test/pi-adapter.test.ts` 里那条 `t.includes("vendor/pi-")` **判据本身**不算(删它等于拆护栏)。
+- [fix] **两个 tsconfig 的 `include` 去掉 `vendor/**\/*.ts`**。顺带更正 `tsconfig.json` 的「已知噪音」一节:那 3 处错误(undici ×2、highlight.js ×1)随 vendor 一起消失,现在 **`tsc --noEmit` 的输出应当为空**;并写明 `skipLibCheck: true` 是依赖化后的**必需品**(`pi-ai` 在 NodeNext 下有约 30 个 TS1543),关掉它那 30 个噪音会淹掉真信号。
+- [fix] 🔴 **`npm run typecheck` 此前一直是假通过**。脚本写的是 `tsgo`,而这个环境里**根本没有 tsgo**(只有 `tsc` 5.9.3):`tsgo: not found` 进管道后 `grep -E '^src/'` 匹配不到,于是 `|| echo 'src/ 类型检查通过(0 错误)'` 打印「通过」—— **命令不存在被当成了检查通过**。这正是本项目反复踩的那一类坑:不是「检查说没问题」,而是「检查压根没跑」。`build` 脚本同样写 `tsgo`,直接失败。已改为 `tsc` 并去掉 `|| echo` 这层吞错;`build` 的 chmod 目标也从 `dist/cli.js` 修正为 `dist/src/cli.js`(与 `package.json` 的 `bin` 对齐)。**真实类型检查:0 错误**。
+
+**验证(删 vendor 之后)**:类型检查 0 错误;全量测试 **92 文件 / 1595 例通过**;`npm run build:web` 成功(`server.cjs` 15MB,629 处静态 require 全是 `node:` 内置或可选依赖 —— pi 包确实被完整内联);**CLI 冒烟**(esbuild 打包后跑 `--help`)正常启动,说明 pi 依赖与 patch 在**真实启动路径**上可用,不只是测试里可用。
+
+**发现一处既有破损,本次未修**:`npm run build` 的产物**不可用** —— tsc emit 出的 `dist/src/*.js` 里 import 仍带 `.ts`(源码里 261 处),`node dist/src/cli.js` 直接 `ERR_MODULE_NOT_FOUND`。根因是 `allowImportingTsExtensions`(tsc 因此报 TS5096)与「源码 import 写 `.ts` 扩展」绑死。真实发行走的是 bun / esbuild 单文件(`bundle`、`build:web`、`build:electron`),tsc 产物这条路径**依赖化前就是坏的**,不是 T11 引入的回归。修法二选一:① 261 处相对 import 改 `.js`(NodeNext 下 ESM 必须带扩展名,TS 会解析回 `.ts` 源文件);② `build` 不再 emit,只做类型检查与声明输出。**待定**。
+
+T11 步骤 4:构建链与打包适配(T11 / D2 依赖化)。
+
+改的是「按 vendor 路径取文件」的那几处 —— 它们**改错了不会报错**:`files` 里写个不存在的路径,npm 安静跳过;`shx cp` 一个不存在的 glob,安静地什么都不拷。发行物少了主题 json 或缺了 MIT 许可全文,要等用户装完跑起来才现形。
+
+- [fix] **`pi-coding-agent` 补锁精确版本**。`package.json` 里另外三个 pi 包都是 `1.0.2`,唯独它是 `^1.0.2` —— caret 会装到 1.0.3,而 patch 的靶心是 1.0.2 的 dist,且 1.0.3 的 pi-tui 有破坏性变更(前置核实时已踩过一次)。
+- [fix] **主题 json 改指 node_modules**:`bundle` 脚本 `vendor/pi-coding-agent/src/modes/interactive/theme/*.json` → `node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/*.json`。已确认包内含 `dark.json` / `light.json` / `theme-schema.json`。
+- [refactor] **pi 许可声明迁出 vendor**:`git mv vendor/LICENSE-pi.txt LICENSE-pi.txt`(保留历史便于追溯来源);`vendor/NOTICE.md` 改写为根目录 **`NOTICE-pi.md`** —— 内容从「vendored 源码声明」改成「**npm 依赖 + patch 声明**」:包与版本表、为什么不再 vendor、三条本地修改及各自为什么不能没有、被判定不重放的能力(`sidePanel` / `uiMode`)、升级时要看的地方。`package.json` 的 `files`、`electron-builder.yml` 的 `files`、`THIRD-PARTY.md` 三处白名单与措辞同步。
+- [test] **两处读 vendor 源码的测试改为读 npm 包**:`skill-invocation.test.ts` 展开态正则同源对照读 `node_modules/.../dist/core/agent-session.js`(**已验证**编译不改写正则字面量,与 vendor 逐字相同);`skill-references.test.ts` 的 `loadSkills` / `formatSkillsForPrompt` 改走**包主入口**(1.0.2 的 `dist/index.d.ts` 已导出这两个,无需新增子路径)。
+- [test] **`scripts/t11/verify-build-chain.mjs`(新增)**:把三处发行白名单 + 测试里的固定路径展开成**存在性断言**(34 条)。已做**反证测试** —— 往 `files` 里塞回失效的 `vendor/LICENSE-pi.txt`,脚本 exit 1 并点名该路径;还原后 exit 0。
+
+**验证**:`npm run typecheck` 0 错误(此时 vendor 仍在);全量测试 **92 文件 / 1595 例通过**。
+
+T11 步骤 3b / 3c:适配 pi-tui 1.0.x 类型 + 处置 vendor 自研能力(补记,提交 `8cb3cbd` / `2c82e2e`)。
+
+- [fix] **路径守卫在测试里一次都没拦** —— 双实例静默失效:测试 import vendor 的 `path-utils`,而守卫装到 npm 包那份上,两者是独立模块实例,10 条「应该抛错」的断言全部静默通过。**又是「能力在,不等于接对了」**:编译正常、运行无报错。改指包名后 17 例恢复。
+- [fix] **鼠标与主题类型适配**:新增 `src/editor/mouse.ts` 的 `sgrMouseFromUpstream`(上游 `TuiMouseEvent` 0-based / `type`+`wheelDelta` ↔ 自研 `SgrMouseEvent` 1-based / `kind`+`delta`),几何逻辑一行未动;`writer-theme.ts` 改用 `ConstructorParameters<typeof Theme>`(`Record<ThemeColor, string>` 与 `Record<keyof …>` **都会丢 `Partial`**);`cli.ts` `uiMode` → `tuiMode`;防腐层判据从「查 vendor 相对路径」升级为「查任何绕过包入口的 pi 深层引用」。
+- [refactor] **按「不影响 web 与整体核心功能的自研移除」处置 4 处差异**:`setToolPathGuard` 是安全边界保留(已 patch);`sidePanel` 只影响 TUI 横向分栏 → 改 `aboveEditor`;`uiMode` 跟随上游改名;`deepSeekDynamicModel` 修的是 BUG-003(新推理模型选不到思考档位),**属核心故迁到 `src/providers/deepseek-dynamic.ts`**。类型错误 13 → 2(剩余为 vendor 自身 undici,删 vendor 后消失)。
+
+T11 步骤 3:8 个文件 import 改写为 npm 包名(T11 / D2 依赖化)。
+
+- [refactor] **11 处 vendor import 改为 npm 包名**。`src/pi-adapter/*`(7 文件)+`src/util/uuid.ts`,共 11 处 import 语句:`../../vendor/pi-coding-agent/src/index.ts` → `@earendil-works/pi-coding-agent`,依次类推 pi-agent-core / pi-ai / pi-tui;两个深层路径 `src/core/tools/path-utils.ts` / `src/core/usage-totals.ts` 改为包内子路径。注释里的示例路径**不动**(那是文档)。
+- [feat] **依赖落地**:`@earendil-works/{pi-coding-agent,pi-agent-core,pi-ai,pi-tui}` 加为直接依赖,锁定精确版本 **1.0.2**(与探针报告、patch 靶心对齐);`typebox` 1.3.7 → **1.3.27**(与上游对齐,避免双实例)。
+- [feat] **`scripts/apply-patches.mjs`**:patch 应用脚本(应用 dist patch + 注入 exports 子路径),已挂 `postinstall`,幂等。`patches/pi-coding-agent-pathguard.patch` 更新为**5 文件**(4 个 `dist` + 1 个 `.d.ts`)。
+- [fix] **补 `.d.ts` 是 patch 的必要部分**。首轮只打 `.js`,TypeScript 报 `has no exported member 'setToolPathGuard'` —— 上游类型声明 `resolveToCwd(filePath, cwd)` 未含 `mode` 参数、且未声明 guard 函数。patch 必须同时改 `.d.ts`。此坑探针报告未覆盖,已补入 `patches/README.md` 的「错误形态二」。
+- [fix] **`package.json` 不进 patch**。首版把 exports 改动固化进 diff,导致 npm install 重写 package.json 后 hunk 失配。改为脚本注入,与版本解耦。
+- [docs] **实测:patch 的 5 个锚点在 1.0.2 与 1.0.3 上均命中** —— 二者 dist 结构一致,补丁版本间无变化。
+
+**遗留(净增 11 个类型错误,已知、非本步引入)**。类型检查基线(vendor import)为 **2** 个错误(均为 vendor 自身的 undici 问题);改用 npm 包后升至 **13** 个。净增 11 个全部是 **vendor 源码与 npm 发布版的 API 差异**,与 import 改写无关:
+
+| 文件 | 数 | 根因 | 归属 |
+|---|---|---|---|
+| `extension.ts` / `writer-theme.ts` / `draft-panel.ts` / `editor/vim-file-editor.ts` / `editor/index.ts` | 9 | `pi-tui` 发布版 TUI 类型(`TuiMouseEvent` 取代 `SgrMouseEvent`;主题色新增 `scrollbarTrack` / `scrollbarThumb` / `searchMatchText`) | **T9-B 待删代码** |
+| `cli.ts` | 1 | `InteractiveModeOptions.uiMode` → `tuiMode`(上游发布版改名;vendor 源码仍是 `uiMode`) | 独立小改 |
+| `ask-user.ts` | 1 | 上游 `details` 要求 `JsonObject`,`AskUserDetails` 缺索引签名 | 独立小改 |
+
+处置顺序:先做 **T9-B**(撤除自研全屏 TUI,消掉 9 个),再修 `cli.ts` / `ask-user.ts` 两处。
+
+T11 步骤 2:工具路径守卫的 npm 依赖 patch 落地(T11 / D2 依赖化)。
+
+- [feat] **`patches/pi-coding-agent@1.0.2-pathguard.patch`(5 文件 / 279 行)**。上游 1.0.2 未导出 `setToolPathGuard`,且 `exports` 未开 `./core/tools/*` 子路径,自研侧无法从包外接入,只能 patch 编译产物 `dist/*.js`。patch 内容:`path-utils.js` 注入 `pathGuard` 变量 + `setToolPathGuard` / `clearToolPathGuard` + `resolveToCwd` 加第 3 参数 `mode`;`write.js` / `edit.js` / `edit-diff.js` 三处调用方同步传 `"write"`;`package.json` 补 `./core/tools/path-utils` 与 `./core/usage-totals` 子路径。
+- [fix] **防「写入守卫静默失效」**。这是本次最大的坑:只 patch `path-utils.js` 而不改三个调用方,所有调用都会落到默认值 `"read"`(放行模式),越权写入悄悄成功且**编译通过、运行无报错**。`scripts/t11/verify-pathguard-patch.mjs` 里有一条**反证测试**专门锁住这个形态(在只拦写入的守卫下,不传 mode 时 `/etc/passwd` 写会被放行)。
+- [test] **真实越权读/写回归(不靠「编译通过」)**:书内读放行 / 书内写放行 / 越权读 `~/.pi/writer/agent/auth.json` 拦住 / 越权写 `/etc/passwd` 拦住 / 默认 read 语义下读 auth.json 拦住。全部在真实 1.0.2 包上执行,非静态断言。
+- [docs] **更正 patch 规模:9 文件 → 5 文件**。T11 探针 §3 曾列 9 个文件。实测确认 `read.js` / `grep.js` / `find.js` / `ls.js` **不用改**(走默认 `"read"`,语义本就正确),`usage-totals.js` **不用改**(`getUsageCostBreakdown` 上游本就已导出,只缺 `exports` 子路径)。
+
+移除采样参数调节(temperature / topP,D6)。
+
+- [remove] **删掉温度/top_p 的用户入口**:`--temperature` / `--top-p` 命令行长选项、`POST /api/sampling` 端点、设置页「采样参数」整块(滑块 + 手机页入口 + 分类索引)。`stage_cast` 工具也只再收 `model` / `thinking`。
+- [remove] **删掉三级覆盖链**:① 用户入口(CLI / web / 前端);② 舞台演员级覆盖(`cast.json` 的 `ActorSpec`、`orchestrator.updateActorSpec`、`setSamplingParameters`);③ host 与 session-factory 的透传层(`writer-host` / `stage-host` / `session-host` / `session-factory`)。`SessionHost.runtimeDefaults` 与 `captureRuntimeDefaults` / `applyRuntimeDefaults` 里采样那一路一并消失 —— 它只在 runtime 重建时用来恢复会话级设置,采样没了就没有存在意义。
+- [fix] **旧 `cast.json` 宽容忽略,不报错也不清理**。移除后旧书可能仍带 `temperature` / `topP`,且历史数据可能越界。`cast.ts` 的 `isActorSpec` 与 `validateCast` **刻意不再校验**这两个字段(删掉原「必须在 0..2 / 0..1」的越界检查),`saveCast` 也原样保留 —— 判据是「旧书必须还能打开」。用测试固化这条承诺(旧字段越界值 2.5 / 1.2 也 `validateCast() === []`)。
+- [docs] **更正一处归档错误**:T8 的 B 类审阅曾把 `agent-session.ts` / `sdk.ts` / `settings-manager.ts` 的采样参数列为「上游零命中 → 必须保留」。逐层追溯后确认**结论有误** —— `temperature` 是 `vendor/pi-ai` 里 **11 个 provider 适配器**共用的标准请求参数(`types.ts:117` 的 `Options.temperature` 是上游公开 API),上游全链路本来就有,我方只是在自研侧接了线。假阳性源于只 grep 了 `pi-coding-agent` 一个包、漏了 `pi-ai`。**净效果**:必须重放的 B 类改动从「约 147 行 / 4 文件」降到**约 24 行 / 1 文件**(只剩 `path-utils.ts` 的 `setToolPathGuard` 安全边界)。
+- [docs] **不动 vendor**。既然温度本就是上游能力(且 D2 已定 npm 依赖化,vendor 整体将被依赖替换),在其内部手工裁剪属纯浪费。本次 `vendor/` 零改动。
+- [test] 测试同步:`test/server.test.ts` 删 `/api/sampling` 两组用例与两个宿主 stub;`test/session-host.test.ts` 删转发用例、`reloadRuntime` 两组断言摘掉采样部分(BUG-009 的模型/档位恢复覆盖仍在);`test/stage-orchestrator.test.ts` 把采样用例改写成「模型/思考级别」+ 新增「旧字段宽容忽略」;`test/stage-cast.test.ts` 越界用例改写成兼容承诺;`test/web-cli.test.ts` 删 `--temperature`/`--top-p` 解析用例。**全量 92 文件 / 1595 例通过**,`src/` 与 `web/` 类型检查均 0 错误。
 
 世界书写入的安全性:补「静默无操作」与「静默清空」两处(`src/tools.ts`,P0-b/P1)。
 

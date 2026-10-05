@@ -23,7 +23,8 @@ import {
 	setCurrentChapter,
 } from "./book-manager.ts";
 import { writerExtension } from "./extension.ts";
-import { McpManager } from "./mcp/manager.ts";
+import { McpHost } from "./mcp/host.ts";
+import { createWriterMcpExtension } from "./mcp/extension.ts";
 import { loadPlugins } from "./plugin-loader.ts";
 import { createSessionRuntimeFactory } from "./session-factory.ts";
 // 2026-10-04(T6/T7):vendor 接入收口到 pi-adapter。`openSession` 打开会话文件
@@ -45,8 +46,6 @@ export interface WebCliOptions {
 	book: string | undefined; // --book <slug>:打开指定书(不存在则创建)
 	model: string | undefined; // --model <pattern>:模型指定
 	thinking: string | undefined; // --thinking <level>:思考等级
-	temperature: number | undefined; // --temperature <number>:采样温度
-	topP: number | undefined; // --top-p <number>:核采样概率
 	cacheRetention: string | undefined; // --cache-retention <short|long|none>:提示词缓存保留档位
 	/**
 	 * 前端静态目录(web/dist)显式路径。缺省时服务端按 resolveWebDistDir 探测
@@ -96,8 +95,6 @@ export function parseWebArgs(argv: string[]): WebCliOptions {
 		book: undefined,
 		model: undefined,
 		thinking: undefined,
-		temperature: undefined,
-		topP: undefined,
 		cacheRetention: undefined,
 	};
 	for (let i = 0; i < argv.length; i++) {
@@ -130,18 +127,6 @@ export function parseWebArgs(argv: string[]): WebCliOptions {
 			case "--thinking":
 				opts.thinking = next();
 				break;
-			case "--temperature": {
-				const v = Number(next());
-				if (Number.isNaN(v)) throw new Error(`Invalid temperature: ${argv[i]}`);
-				opts.temperature = v;
-				break;
-			}
-			case "--top-p": {
-				const v = Number(next());
-				if (Number.isNaN(v)) throw new Error(`Invalid top-p: ${argv[i]}`);
-				opts.topP = v;
-				break;
-			}
 			case "--cache-retention":
 				opts.cacheRetention = next();
 				applyCacheRetention(opts.cacheRetention);
@@ -234,11 +219,17 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 	const shellOn = shellEnabled && resolvedShell.dialect !== "none";
 	if (shellEnabled && resolvedShell.warning) process.stderr.write(`${resolvedShell.warning}\n`);
 	const sessionManager = openSession(chapterAbsPath, sessionsDir, bookDir);
-	// MCP 服务器:读 mcp.json → 连接各 server → 工具定义注入 createRuntime 的
-	// customTools(单个 server 失败隔离,状态经 /api/mcp 展示;配置变更后由
-	// server 端点触发 reload + 会话重建,新工具随之生效)
-	const mcpManager = new McpManager(agentDir);
-	await mcpManager.reload();
+	// MCP(T9-A):改用上游 createMcpExtension,工具经 `mcp__<server>__<tool>` 直接进
+	// 模型工具声明(exposure=direct)。McpHost 只是「配置 + 状态视图」的门面,
+	// 供 /api/mcp 端点读改写;连接本身由上游扩展在会话内完成。
+	const mcpHost = new McpHost(agentDir);
+	// 迁移告警必须打出来:SSE 降级与「字段不完整已跳过」都是用户**看不见就查不出来**的
+	// 静默失败(旧条目留在文件里也不会报错,只是永远不生效)。
+	{
+		const { warnings, errors } = await mcpHost.ensureMigrated();
+		for (const w of warnings) process.stderr.write(`[mcp] ${w}\n`);
+		for (const e of errors) process.stderr.write(`[mcp] 配置错误: ${e}\n`);
+	}
 
 	// 外部插件:扫描 ~/.pi/writer/plugins/<id>/ → jiti 动态 import 启用插件 →
 	// 工厂并入 extensionFactories(单个插件失败隔离,error 经 /api/plugins 展示)
@@ -250,29 +241,23 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 	const createRuntime = createSessionRuntimeFactory({
 		agentDir,
 		// 技能目录(自带 skills/ + 全局技能目录)由 session-factory 统一并入,调用方不必再传
-		// 系统提示必须动态生成:静态字符串会覆盖 pi 的动态工具段,
-		// MCP 外部工具对 agent 不可见(2026-08-08 根因)
-		systemPromptOverride: () =>
-			buildWriterSystemPrompt(
-				mcpManager.getTools().map((t) => ({ name: t.name, description: t.description })),
-				shellOn ? resolvedShell.dialect : "none",
-			),
-		extensionFactories: [writerExtension],
+		// 系统提示必须动态生成:静态字符串会覆盖 pi 的动态工具段。
+		// MCP 工具清单不再手工拼 —— 上游 mcp_servers 段/工具声明自动处理(见 prompt.ts 注释)
+		systemPromptOverride: () => buildWriterSystemPrompt([], shellOn ? resolvedShell.dialect : "none"),
+		extensionFactories: [writerExtension, createWriterMcpExtension({ agentDir })],
 		pluginFactories,
 		model: opts.model,
 		thinkingLevel: opts.thinking as ThinkingLevel | undefined,
-		temperature: opts.temperature,
-		topP: opts.topP,
 		// shell 方言:path 有值(pwsh/自定义)则写进 vendor settings;null = 清空让 vendor
 		// 走 bash 探测链(设置里从 pwsh 切回 bash 时必须清,否则提示词说 bash、实际跑 pwsh)
 		shellPath: resolvedShell.path ?? null,
 		// 黑名单禁 bash(web 子集;设置里放开「外部命令」后不再禁),显式激活内置工具;
-		// 白名单会滤掉 MCP customTools
+		// 白名单会滤掉扩展工具(MCP 工具经扩展注册,不走 customTools)
 		excludeTools: webExcludeTools(process.env, { shell: shellOn }),
 		initialActiveToolNames: webActiveTools(process.env, { shell: shellOn }),
-		// MCP 工具(经 customTools 注册;配置为空时是空数组,行为与之前一致)
-		// 主会话同样能用提问卡片(闸门是进程级单例,与编剧会话共用一张 pending 表)
-		customTools: [...mcpManager.getTools(), createAskUserTool()],
+		// 主会话同样能用提问卡片(闸门是进程级单例,与编剧会话共用一张 pending 表)。
+		// MCP 工具已改走上游扩展,不再进 customTools。
+		customTools: [createAskUserTool()],
 	});
 
 	const host = new SessionHost({
@@ -292,9 +277,9 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 	const writerHost = new WriterHost({
 		model: opts.model,
 		thinkingLevel: opts.thinking,
-		temperature: opts.temperature,
-		topP: opts.topP,
-		getMcpTools: () => mcpManager.getTools(),
+		// MCP 工具不再经此注入(T9-A):上游扩展已把 `mcp__<server>__<tool>` 注册进
+		// 会话工具声明,宿主提示词无需再手工复述。保留参数形状(可选),传空数组。
+		getMcpTools: () => [],
 		classicMode: writerSettings.classicMode,
 		// 对话与章节的关系(缺省 chapter = 一段对话绑一章);启动时读一次,
 		// 之后切换走 PUT /api/settings → setConversationScope
@@ -308,15 +293,15 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 	});
 	// 舞台区宿主:每本书每个章节一个编排器,惰性创建;model/thinking 复用 web 的 CLI 选项
 	// (stage 端点未装配时由 server 侧 404,与 MCP 同款);writerHost 注入用于收幕委托
-	// (常驻编剧 === 收幕编剧,2026-08-11)
-	const stageHost = new StageHost({ model: opts.model, thinkingLevel: opts.thinking, temperature: opts.temperature, topP: opts.topP, writerHost, getMcpTools: () => mcpManager.getTools() });
+	// (常驻编剧 === 收幕编剧,2026-08-11)。getMcpTools 同 writerHost:上游扩展已接管工具注册。
+	const stageHost = new StageHost({ model: opts.model, thinkingLevel: opts.thinking, writerHost, getMcpTools: () => [] });
 	// PI_WRITER_TOKEN:可选 Bearer token(Android 壳注入);未设置时与桌面版行为完全一致
 	const server = new WriterServer({
 		host: "127.0.0.1",
 		port: opts.port,
 		sessionHost: host,
 		authToken: process.env.PI_WRITER_TOKEN,
-		mcpManager,
+		mcpHost,
 		stageHost,
 		writerHost,
 		// Electron 壳显式传 asar 内前端目录;缺省探测(烘焙路径)在 CI 产物上会落空

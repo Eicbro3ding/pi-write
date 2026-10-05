@@ -4,8 +4,8 @@ import type { InspectReport } from "../src/inspect/report.ts";
 import { buildInspectReport } from "../src/inspect/report.ts";
 import type { ChapterContextResult, ContextSection, TrimRecord } from "../src/world-context.ts";
 import { defaultWriterSettings } from "../src/writer-settings.ts";
-import type { Theme } from "../vendor/pi-coding-agent/src/index.ts";
-import type { TUI } from "../vendor/pi-tui/src/index.ts";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { TUI } from "@earendil-works/pi-tui";
 
 /**
  * TUI 面板测试:只验「渲染出的文本对不对」与「键位有没有接上」。

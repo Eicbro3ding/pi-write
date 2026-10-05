@@ -8,7 +8,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveToCwd } from "../vendor/pi-coding-agent/src/core/tools/path-utils.ts";
+// 必须 import **包名**,不能 import vendor 源码 —— 两者是独立的模块实例。
+// 自研侧 installToolPathGuard 经 src/pi-adapter/guard.ts 装到 **npm 包那份**上;
+// 若这里读 vendor 那份,守卫会被装到别处,所有「应该抛错」的断言全部静默通过
+// (编译正常、运行无报错,但守卫实际一次都没拦)。
+import { resolveToCwd, setToolPathGuard } from "@earendil-works/pi-coding-agent/core/tools/path-utils";
 import {
 	assertPathWithinRoot,
 	dedupePaths,
@@ -89,6 +93,20 @@ describe("installToolPathGuard(与 vendor resolveToCwd 集成)", () => {
 		expect(() => resolveToCwd("../secret.json", bookDir)).toThrow("工具路径越界");
 		uninstallToolPathGuard();
 		expect(resolveToCwd("../secret.json", bookDir)).toBe(resolve(bookDir, "..", "secret.json"));
+	});
+});
+
+describe("守卫形状检查（2026-10-05）", () => {
+	it("传错形状时**安装即报错**，不是等某次文件操作才冒 TypeError", () => {
+		// patch 里的调用写作 `__piWritePathGuard?.(resolved, mode)` —— 可选调用只防
+		// `undefined`，**不防「传进来的是个对象」**。那种情况下每次解析路径都会抛
+		// "__piWritePathGuard is not a function"，而所有 `expect(...).toThrow()` 断言
+		// 照样通过 —— 又一次「看起来拦住了」（T11 期间我自己在临时脚本里就传错过一次，
+		// 拿到这句费解的错误才发现的）。所以在 setToolPathGuard 里就把它挡掉。
+		expect(() => setToolPathGuard({ isAllowed: () => true } as never)).toThrow(/路径守卫必须是/);
+		expect(() => setToolPathGuard("nope" as never)).toThrow(/路径守卫必须是/);
+		// undefined 是「卸载」语义，不该报错
+		expect(() => setToolPathGuard(undefined as never)).not.toThrow();
 	});
 });
 

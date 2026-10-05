@@ -12,7 +12,7 @@
  */
 
 // ★ 唯一的深层路径 import —— 上游若移动该文件,只改这一行
-import { getUsageCostBreakdown } from "../../vendor/pi-coding-agent/src/core/usage-totals.ts";
+import { getUsageCostBreakdown } from "@earendil-works/pi-coding-agent/core/usage-totals";
 
 /**
  * 成本拆分的一行:一个 provider/model 组合的累计消耗。

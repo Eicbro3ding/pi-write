@@ -115,8 +115,18 @@ export function writerShellLine(shell: ShellDialect): string {
 
 /**
  * 组装最终系统提示:基础提示(WRITER_SYSTEM_PROMPT,含 {SHELL_LINE} 与对话范围
- * 占位)+ 按运行环境注入 shell 行 + 按对话范围渲染绑定口径 + 文末追加外部工具
- * (MCP)清单。
+ * 占位)+ 按运行环境注入 shell 行 + 按对话范围渲染绑定口径。
+ *
+ * ## 关于 MCP 工具清单(T9-A,2026-10-05)
+ *
+ * 本函数**不再拼接 MCP 外部工具清单**。改用上游 `createMcpExtension` 后:
+ * - 迁移默认给每个服务器写 `exposure: "direct"`,`mcp__<server>__<tool>` 直接进
+ *   模型工具声明(含 name/description/schema),**无需**在提示词里复述一遍;
+ * - 若用户显式改用 `codemode`/`deferred`,上游经 `before_agent_start` 把
+ *   `mcp_servers` 段注入对话(`sections`,`agent-session.js:1272`),同样不经过本函数。
+ *
+ * 首参 `customTools` 保留(签名稳定,调用方传 `[]`)以兼容既有测试与 `writer-host`
+ * 的调用形状;它现在只用于「非 MCP 的额外工具说明」这一潜在场景。
  *
  * `scope` 缺省 `"chapter"`:TUI 与「绑定章节」模式必须拿到与解耦前逐字一致的
  * 提示词;只有分离模式(web 的自由对话)才换成不绑章节的叙述。
@@ -130,7 +140,7 @@ export function buildWriterSystemPrompt(customTools: WriterPromptTool[], shell: 
 			return `- \`${t.name}\` — ${desc}`;
 		})
 		.join("\n");
-	return `${base}\n\n# 外部工具(MCP)\n\n以下工具由 MCP 服务器提供,可直接调用(遵守同样的先读再写/失败静默重试纪律):\n${toolLines}`;
+	return `${base}\n\n# 外部工具\n\n以下工具可直接调用(遵守同样的先读再写/失败静默重试纪律):\n${toolLines}`;
 }
 
 /**

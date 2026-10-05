@@ -22,23 +22,31 @@ cd web && npx vite dev                    # vite 代理 /api → 8811,前端热�
 ## 测试与检查
 
 ```bash
-# 测试(仓库已补本地 vitest.base.ts,默认配置可用)
-npm test
-npx vitest run test/server.test.ts   # 单个文件
+# 测试
+npm test                              # = vitest --run(全量)
+npx vitest --run test/server.test.ts  # 单个文件
 
 # 类型检查
-npx tsc -p tsconfig.build.json --noEmit   # src+vendor;vendor 有既有错误,过滤 vendor/
+npm run typecheck                     # = tsc -p tsconfig.json --noEmit(全仓,含 test/)
 cd web && npx tsc --noEmit -p tsconfig.json   # 前端
 ```
+
+> `skipLibCheck: true` 是必需品(`pi-ai` 在 NodeNext 下有约 30 个 TS1543),别关掉。
 
 ## 构建与打包
 
 ```bash
-npm run build:web      # esbuild 打服务端 server.cjs + 主进程/preload + vite 前端;含自包含与导出契约检查;不依赖 bun
-npm run web            # node dist/web/server.cjs 直接跑服务端产物
+npm run build          # 只产 dist/cli.js + dist/index.js + 声明 —— **不产 server.cjs**!
+npm run build:web      # esbuild 打服务端 server.cjs + 主进程/preload + vite 前端;含自包含与导出契约检查
+npm run web            # 跑 dist/web/server.cjs(带产物新鲜度自检,过期会警告)
 npm run build:electron # 构建 Electron 产物
 npm run electron       # electron dist/electron/main.cjs 冒烟
-npm run bundle         # TUI 单文件 exe(需 bun)→ release/pi-writer.exe + skills/theme/文档复制
+```
+
+> **最常踩的坑**:`npm run build` **不产** `dist/web/server.cjs`(那只有 `build:web` 产)。「改源码 → `build` → `web`」会静默跑在旧产物上、不报错。`npm run web` 已前置 mtime 自检兜底。
+
+```bash
+npm run bundle                    # TUI 单文件 exe(需 bun)→ release/pi-writer.exe + skills/theme/文档复制
 npx electron-builder --win nsis   # 桌面安装包 → release/electron/pi-writer-web-<version>.exe(先 build:web)
 ```
 
@@ -66,8 +74,8 @@ const t = await (await fetch(B + "/api/session/tree")).json();     // branches: 
 await fetch(B + "/api/messages/retract", { method: "POST", headers: {"content-type":"application/json"}, body: JSON.stringify({ entryId, replacement? }) });
 await fetch(B + "/api/messages/branch",  { ... body: JSON.stringify({ entryId }) });
 await fetch(B + "/api/messages/navigate",{ ... body: JSON.stringify({ entryId }) });
-// MCP
-await fetch(B + "/api/mcp", { method: "POST", ... body: JSON.stringify({ name, type: "stdio"|"http"|"sse", command?, args?, url? }) });
+// MCP(类型只有 stdio / http;上游不支持 sse,传 sse 会被 400 拒绝)
+await fetch(B + "/api/mcp", { method: "POST", ... body: JSON.stringify({ name, type: "stdio"|"http", command?, args?, url?, headers?, exposure?, enabled?, description? }) });
 // If-Match 条件写
 await fetch(B + "/api/draft", { method: "PUT", headers: { "content-type":"application/json", "if-match": String(mtime) }, body: JSON.stringify({ file, text }) });
 ```

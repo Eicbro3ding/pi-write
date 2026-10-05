@@ -36,7 +36,7 @@ import {
 	setCurrentChapter,
 } from "./book-manager.ts";
 import { writerExtension } from "./extension.ts";
-import { McpManager } from "./mcp/manager.ts";
+import { createWriterMcpExtension } from "./mcp/extension.ts";
 import { loadPlugins } from "./plugin-loader.ts";
 import { buildWriterSystemPrompt } from "./prompt.ts";
 import { resolveWriterShell } from "./shell-kind.ts";
@@ -49,8 +49,6 @@ interface CliOptions {
 	chapter: string | undefined;
 	model: string | undefined;
 	thinking: string | undefined;
-	temperature: number | undefined;
-	topP: number | undefined;
 	cacheRetention: string | undefined;
 	prompt: string | undefined;
 	printMode: boolean;
@@ -70,8 +68,6 @@ function parseArgs(argv: string[]): CliOptions {
 		chapter: undefined,
 		model: undefined,
 		thinking: undefined,
-		temperature: undefined,
-		topP: undefined,
 		cacheRetention: undefined,
 		prompt: undefined,
 		printMode: false,
@@ -134,20 +130,6 @@ function parseArgs(argv: string[]): CliOptions {
 				opts.webExtra.push("--thinking", value);
 				break;
 			}
-			case "--temperature": {
-				const value = Number(next());
-				if (Number.isNaN(value)) throw new Error(`Invalid --temperature value: ${argv[i]}`);
-				opts.temperature = value;
-				opts.webExtra.push("--temperature", String(value));
-				break;
-			}
-			case "--top-p": {
-				const value = Number(next());
-				if (Number.isNaN(value)) throw new Error(`Invalid --top-p value: ${argv[i]}`);
-				opts.topP = value;
-				opts.webExtra.push("--top-p", String(value));
-				break;
-			}
 			case "--cache-retention": {
 				const value = next();
 				opts.cacheRetention = value;
@@ -199,8 +181,6 @@ Usage:
 Options:
   --model <pattern>                      model specifier (provider/id or pattern; --thinking <level>)
   --thinking <level>                      off | minimal | low | medium | high | xhigh | max
-  --temperature <number>                  sampling temperature (0..2)
-  --top-p <number>                        nucleus sampling probability mass (0..1)
   --cache-retention <mode>                prompt cache retention: short | long | none
                                           (long = Anthropic 1h TTL / OpenAI 24h; helps when
                                           pauses between scenes exceed the default 5min TTL)
@@ -209,7 +189,7 @@ Options:
   -v, --version                           show version
   -h, --help                              show this help
 
-Commands inside the TUI (writer-specific):
+Commands inside the interactive session (writer-specific):
   /chapters                switch to a chapter in the current book
   /new-chapter [title]     add a new chapter to the current book
   /rename-chapter T [L]    rename or relabel the current chapter
@@ -305,7 +285,7 @@ async function main(): Promise<void> {
 	if (opts.stage) {
 		// `pi-writer --stage`:舞台区共演 demo(导演/演员/编剧多 agent 编排),stdin 交互。
 		const { runStageCli } = await import("./stage/cli.ts");
-		await runStageCli({ slug: opts.book, model: opts.model, thinking: opts.thinking, temperature: opts.temperature, topP: opts.topP });
+		await runStageCli({ slug: opts.book, model: opts.model, thinking: opts.thinking });
 		return;
 	}
 	if (opts.web) {
@@ -383,10 +363,9 @@ async function main(): Promise<void> {
 	const shellOn = shell.dialect !== "none";
 	if (shell.warning) process.stderr.write(`${shell.warning}\n`);
 	const initialSessionManager = openSession(chapterAbsPath, sessionsDir, bookDir);
-	// MCP 服务器:与 web 模式共用 ~/.pi/writer/agent/mcp.json;启动时连接一次,
-	// 工具经 customTools 注入(配置变更需重启 TUI 生效)
-	const mcpManager = new McpManager(agentDir);
-	await mcpManager.reload();
+	// MCP 服务器:改用上游 createMcpExtension(见 src/mcp/extension.ts)。
+	// 配置在 ~/.pi/writer/agent/mcp.json(与 web 共用);旧形状会在会话启动时自动迁移。
+	const mcpExtension = createWriterMcpExtension({ agentDir });
 
 	// 外部插件:与 web 模式共用 ~/.pi/writer/plugins/(单个插件失败隔离,
 	// 错误经 listPlugins 展示;TUI 无管理 UI,启停走 plugin-state.json)
@@ -395,26 +374,19 @@ async function main(): Promise<void> {
 	const createRuntime = createSessionRuntimeFactory({
 		agentDir,
 		// 技能目录(自带 skills/ + 全局技能目录)由 session-factory 统一并入,调用方不必再传
-		// 系统提示动态生成:MCP 外部工具清单追加在文末,shell 行按方言注入
-		systemPromptOverride: () =>
-			buildWriterSystemPrompt(
-				mcpManager.getTools().map((t) => ({ name: t.name, description: t.description })),
-				shell.dialect,
-			),
-		extensionFactories: [writerExtension],
+		// 系统提示动态生成:shell 行按方言注入。MCP 外部工具清单不再手工拼 ——
+		// 上游 mcp_servers 段由扩展经 before_agent_start 自动注入(与 override 无关)
+		systemPromptOverride: () => buildWriterSystemPrompt([], shell.dialect),
+		extensionFactories: [writerExtension, mcpExtension],
 		pluginFactories,
 		model: opts.model,
 		thinkingLevel: opts.thinking as ThinkingLevel | undefined,
-		temperature: opts.temperature,
-		topP: opts.topP,
-		// 显式激活内置全量工具(不再用 tools 白名单——白名单会把 MCP customTools 滤掉,
-		// 见 src/web.ts webExcludeTools 注释;word_count 等扩展工具自动激活)
+		// 显式激活内置全量工具(不设白名单——白名单会把扩展工具滤掉)
 		initialActiveToolNames: ["read", "write", "edit", "grep", "find", "ls", ...(shellOn ? ["bash"] : [])],
 		// shell 方言:path 有值(pwsh/自定义)则写进 vendor settings;null = 清空让 vendor
 		// 走 bash 探测链(选了 bash 却留着上次的 pwsh 路径 = 提示词说 bash、实际跑 pwsh)
 		shellPath: shell.path ?? null,
 		...(shellOn ? {} : { excludeTools: ["bash"] }),
-		customTools: mcpManager.getTools(),
 	});
 
 	const runtime = await assembleRuntime({
@@ -439,7 +411,6 @@ async function main(): Promise<void> {
 		};
 		await runPrintMode(runtime, printOptions);
 		await runtime.dispose();
-		await mcpManager.close();
 		return;
 	}
 
@@ -455,11 +426,10 @@ async function main(): Promise<void> {
 		initialMessages: [],
 		verbose: opts.verbose,
 		// fullscreen(viewport)布局是 sidePanel 生效的前提:regular 模式只有纵向堆叠,无水平分栏。
-		uiMode: "fullscreen",
+		tuiMode: "fullscreen",
 	});
 	await mode.run();
 	await runtime.dispose();
-	await mcpManager.close();
 }
 
 main().catch((err: unknown) => {

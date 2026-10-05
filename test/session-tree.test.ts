@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { SessionManager, type SessionEntry, type SessionTreeNode } from "../vendor/pi-coding-agent/src/index.ts";
+import { SessionManager, type SessionEntry, type SessionTreeNode } from "@earendil-works/pi-coding-agent";
 import { buildSessionTree, type SessionTreeSource } from "../src/session-tree.ts";
 
 interface Row {

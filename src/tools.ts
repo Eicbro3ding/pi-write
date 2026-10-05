@@ -726,9 +726,14 @@ export function applyWorldUpdate(data: WorldData, update: WorldUpdateOp): WorldD
 			}
 			break;
 		}
-		case "delete_relation":
+		case "delete_relation": {
+			// 同 delete_constraint / notice_delete:原先 filter 掉一个不存在的 id 也不吭声,
+			// 模型据此以为「关系已删除」继续推理,而用户那边关系还在。
+			const rel = next.relations.find((x) => x.id === update.id);
+			if (!rel) throw new WorldValidationError(`关系不存在: ${update.id}(未删除任何内容)`);
 			next.relations = next.relations.filter((x) => x.id !== update.id);
 			break;
+		}
 	}
 	return validateWorld(next);
 }

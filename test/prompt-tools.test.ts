@@ -45,6 +45,37 @@ function namesOf(tools: readonly { name: string }[]): string[] {
 	return tools.map((t) => t.name);
 }
 
+/**
+ * 从提示词的「你拥有的工具」区块里抽出**清单条目**里的工具名。
+ *
+ * 为什么不能直接 `expect(prompt).toContain(name)`(2026-10-05 修):
+ * 那是在全份文本上做**子串**匹配,而 `read` 是 `read_chapter` / `read_style` 的**前缀**,
+ * `write` 在正文散文里随处可见 —— 只要该词在任意一句话里出现一次就通过。
+ * 于是把某工具从清单表格里删掉、只留一句散文顺带提到它,护栏照样绿 ——
+ * 这正是它要防的「read_chapter 死代码」事故的复发路径(清单里有 ≠ 散文里提到)。
+ *
+ * 这里改成**清单内定位**:只认清单条目的形状(行首 `- ` + 反引号包裹的工具名),
+ * 散文里顺带出现的同名词不算数。
+ *
+ * 返回的是条目里出现的**全部**反引号词(如 `` `read` / `write` / `edit` `` 一行三点),
+ * 供调用方做集合判断。
+ */
+export function toolClauseNames(prompt: string): Set<string> {
+	const out = new Set<string>();
+	// 只取「你拥有的工具」区块:从该标题到下一个 `# ` 标题为止
+	const start = prompt.indexOf("# 你拥有的工具");
+	if (start < 0) throw new Error('提示词里找不到「# 你拥有的工具」区块 —— 标题被改过,护栏失效');
+	const rest = prompt.slice(start + 1);
+	const nextHeading = rest.indexOf("\n# ");
+	const block = nextHeading >= 0 ? rest.slice(0, nextHeading) : rest;
+	for (const line of block.split("\n")) {
+		if (!line.startsWith("- ")) continue; // 只认条目行,不认区块里的说明段落
+		// 条目里出现的所有反引号词;`read` / `write` 这种一行多名的写法一并收进来
+		for (const m of line.matchAll(/`([a-z_][a-z0-9_]*)`/g)) out.add(m[1]);
+	}
+	return out;
+}
+
 /** 扫 writerFactory 里注册的自定义工具(它就是 TUI 主会话的唯一注册点)。 */
 function tuiMainSessionTools(): string[] {
 	const src = readFileSync(resolve(REPO_ROOT, "src/extension.ts"), "utf8");
@@ -78,19 +109,44 @@ describe("形态工具集 ⊆ 提示词工具清单(防 read_chapter 式死代�
 		}
 	});
 
-	it("写作 agent(经典模式):拿到的每个工具都写进了 writer-main.md", () => {
+	it("写作 agent(经典模式):拿到的每个工具都写进了 writer-main.md 的工具清单", () => {
+		// 2026-10-05:由全份文本子串匹配改为**清单内定位** —— 原写法里 `read` 会被
+		// `read_chapter` 的前缀满足,把工具从清单删掉只留一句散文也能过。见 toolClauseNames。
 		const tools = namesOf(writerToolset({ classicMode: true, mcpTools: [] }));
-		const main = loadPromptText("writer-main.md");
+		const listed = toolClauseNames(loadPromptText("writer-main.md"));
+		expect(listed.size, "没解析出任何清单条目 —— 提示词结构被改过,护栏失效").toBeGreaterThan(3);
 		for (const name of tools) {
-			expect(main, `writer-main.md 没提 ${name}`).toContain(name);
+			expect(listed, `writer-main.md 的工具清单里没有 ${name}(散文里提到不算)`).toContain(name);
 		}
 	});
 
-	it("TUI 主会话:注册的工具都写进了 writer-main.md", () => {
-		const main = loadPromptText("writer-main.md");
+	it("TUI 主会话:注册的工具都写进了 writer-main.md 的工具清单", () => {
+		const listed = toolClauseNames(loadPromptText("writer-main.md"));
 		for (const name of tuiMainSessionTools()) {
-			expect(main, `writer-main.md 没提 ${name}`).toContain(name);
+			expect(listed, `writer-main.md 的工具清单里没有 ${name}(散文里提到不算)`).toContain(name);
 		}
+	});
+
+	it("护栏本身有效:把工具从清单删掉、只留散文提到它 → 必须失败", () => {
+		// 这条是「测试的测试」:证明上两条的判据真的能区分「在清单里」与「散文里被提到」。
+		// 如果哪天 toolClauseNames 退化成子串匹配,这条会挂。
+		const prompt = loadPromptText("writer-main.md");
+		const listed = toolClauseNames(prompt);
+		// 构造一份「把 read_style 的清单条目删掉、散文里仍散落 read_style」的文本
+		const start = prompt.indexOf("# 你拥有的工具");
+		const rest = prompt.slice(start + 1);
+		const nextHeading = rest.indexOf("\n# ");
+		const blockEnd = nextHeading >= 0 ? start + 1 + nextHeading : prompt.length;
+		const block = prompt.slice(start, blockEnd);
+		const stripped = block
+			.split("\n")
+			.filter((l) => !(l.startsWith("- ") && l.includes("`read_style`")))
+			.join("\n");
+		expect(block).toContain("`read_style`"); // 前提:这一段里本来就有它
+		const mutated = prompt.slice(0, start) + stripped + prompt.slice(blockEnd);
+		expect(mutated).toContain("read_style"); // 散文里仍能搜到这个串
+		expect(toolClauseNames(mutated)).not.toContain("read_style"); // 但清单判据认得出它没了
+		expect(listed).toContain("read_style"); // 原文本里是在清单里的
 	});
 
 	it("反过来:提示词点名的自定义工具,至少一个形态真的装配了它", () => {

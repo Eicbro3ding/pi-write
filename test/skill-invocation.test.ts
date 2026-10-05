@@ -13,7 +13,7 @@ import type { AgentEventDto } from "../web/src/types.ts";
  * 现在解析成芯片 + 你自己那句话,正文折在展开里。
  *
  * 两条护栏:
- * ① 展开态的正则与 vendor 的 `parseSkillBlock` 逐字同形(web 包不能 import vendor,
+ * ① 展开态的正则与 pi 上游的 `parseSkillBlock` 逐字同形(web 包不能 import pi,
  *    只能各持一份拷贝 —— 用读源码比对把镜像关系钉住,做法同 motion/themes 测试);
  * ② 解析发生在 store 的**用户气泡唯一出生地**(processAgentEvent 的 message_start),
  *    历史水合与实时回显都走这里,所以只测这一处即可覆盖两条路径。
@@ -88,11 +88,11 @@ describe("skillCommandText:折叠形态可以原样重发", () => {
 	});
 });
 
-describe("与 vendor 的格式约定同源", () => {
-	it("展开态正则与 vendor parseSkillBlock 逐字一致", () => {
+describe("与 pi 上游的格式约定同源", () => {
+	it("展开态正则与 pi 上游 parseSkillBlock 逐字一致", () => {
 		const mine = skillRegexLiteral(readFileSync("web/src/skill-invocation.ts", "utf-8"));
-		const vendor = skillRegexLiteral(readFileSync("vendor/pi-coding-agent/src/core/agent-session.ts", "utf-8"));
-		expect(mine).toBe(vendor);
+		const upstream = skillRegexLiteral(readFileSync("node_modules/@earendil-works/pi-coding-agent/dist/core/agent-session.js", "utf-8"));
+		expect(mine).toBe(upstream);
 	});
 });
 

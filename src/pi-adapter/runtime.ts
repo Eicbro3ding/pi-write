@@ -43,7 +43,7 @@ import {
 	resolveCliModel,
 	runPrintMode as vendorRunPrintMode,
 	SessionManager,
-} from "../../vendor/pi-coding-agent/src/index.ts";
+} from "@earendil-works/pi-coding-agent";
 import type { SessionManagerHandle } from "./domain.ts";
 import { fromFactoryHandle, fromHandle, toHandle } from "./session.ts";
 

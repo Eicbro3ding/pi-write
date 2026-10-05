@@ -13,7 +13,7 @@
  * ## 厚度控制
  *
  * `pi-tui/src/index.ts` 有 138 行导出(几十个组件 + 键盘 + 布局工具)。这里
- * **只收自研真的用到的 13 个符号** —— 不做无差别转发。多收一个符号,将来上游
+ * **只收自研真的用到的符号** —— 不做无差别转发。多收一个符号,将来上游
  * 改它时你就多一处要跟着动,而那个符号你根本没用过。
  *
  * 需要新符号时:在这里显式加一行,并顺手想一下「是不是可以直接用 TUI 自带的」。
@@ -31,10 +31,12 @@ import {
 	matchesKey as vendorMatchesKey,
 	sliceByColumn as vendorSliceByColumn,
 	type TUI as VendorTUI,
+	type TuiMouseEvent as VendorTuiMouseEvent,
+	type TuiMouseEventResult as VendorTuiMouseEventResult,
 	truncateToWidth as vendorTruncateToWidth,
 	visibleWidth as vendorVisibleWidth,
 	wrapTextWithAnsi as vendorWrapTextWithAnsi,
-} from "../../vendor/pi-tui/src/index.ts";
+} from "@earendil-works/pi-tui";
 
 // `Theme` 实际上住在 pi-coding-agent 里(它是「主题」而不是通用 UI 原语),
 // 但用途纯粹是 TUI 渲染 —— 收在这里比收在 types.ts 更贴切。
@@ -43,7 +45,7 @@ import {
 	getMarkdownTheme as vendorGetMarkdownTheme,
 	Theme,
 	type ThemeColor as VendorThemeColor,
-} from "../../vendor/pi-coding-agent/src/index.ts";
+} from "@earendil-works/pi-coding-agent";
 
 // —— 类型 ——
 
@@ -58,6 +60,18 @@ export type TUI = VendorTUI;
 
 /** 主题的前景色键名(如 `"text"` / `"accent"`)。 */
 export type ThemeColor = VendorThemeColor;
+
+/**
+ * 上游派发的**归一化鼠标事件**(0-based 组件局部坐标)。
+ *
+ * 与自研的 SGR 解析(`src/editor/mouse.ts`)是两条链路:上游在组件树上做命中
+ * 测试后派发本类型,自研编辑器则在 `handleInput` 里自己解析原始转义序列。
+ * 需要跨用时用 `sgrMouseFromUpstream` 折算。
+ */
+export type TuiMouseEvent = VendorTuiMouseEvent;
+
+/** 上游鼠标处理器的返回值(handled / capture / focus / render)。 */
+export type TuiMouseEventResult = VendorTuiMouseEventResult;
 
 // —— 值 ——
 //

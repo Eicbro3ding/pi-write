@@ -9,8 +9,7 @@
 		"sourceMap": true
 	},
 	"include": [
-		"src/**/*.ts",
-		"vendor/**/*.ts"
+		"src/**/*.ts"
 	],
 	"exclude": [
 		"node_modules",

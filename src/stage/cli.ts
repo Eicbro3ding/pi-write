@@ -26,8 +26,6 @@ export interface StageCliOptions {
 	slug?: string;
 	model?: string;
 	thinking?: string;
-	temperature?: number;
-	topP?: number;
 }
 
 const HELP = `舞台区命令：
@@ -65,8 +63,6 @@ export async function runStageCli(opts: StageCliOptions): Promise<void> {
 		agentDir: getAgentDir(),
 		model: opts.model,
 		thinkingLevel: opts.thinking,
-		temperature: opts.temperature,
-		topP: opts.topP,
 		onEvent: (event) => {
 			if (event.type === "stage") {
 				const text = event.entry.content.map((b) => b.text).join("");

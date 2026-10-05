@@ -32,7 +32,7 @@
  */
 
 // ★ 唯一的 vendor 引用 —— 上游若移动该函数,只改这一行
-import { uuidv7 as vendorUuidv7 } from "../../vendor/pi-ai/src/index.ts";
+import { uuidv7 as vendorUuidv7 } from "@earendil-works/pi-ai";
 
 /** 时间有序的 UUID(v7):按生成时间自然排序,适合做会话/条目标识。 */
 export const uuidv7: typeof vendorUuidv7 = vendorUuidv7;

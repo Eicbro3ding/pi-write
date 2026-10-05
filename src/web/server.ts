@@ -74,8 +74,7 @@ import { extractMessagesFromManager, usableModelRef, type ThinkingSummary } from
 import { askUserGate } from "../ask-user.ts";
 import { readSessionFile, type SessionEntry } from "../pi-adapter/index.ts";
 import { ProviderAuthError, sortProviders, type ProviderListItem } from "./provider-auth.ts";
-import type { McpManager, McpServerStatus } from "../mcp/manager.ts";
-import { getMcpConfigPath, type McpServerConfig } from "../mcp/config.ts";
+import type { McpHost, McpServerConfig, McpServerStatus } from "../mcp/host.ts";
 import { WorldWatcher } from "./file-watcher.ts";
 import { StageCommandError, type StageHost } from "./stage-host.ts";
 import { WriterHost, isSafeSessionId } from "./writer-host.ts";
@@ -103,8 +102,8 @@ export interface WriterServerOptions {
 	webDistDir?: string;
 	/** 可选 Bearer token 鉴权(Android 壳注入):未配置时行为与桌面版完全一致(全部放行)。 */
 	authToken?: string;
-	/** MCP 服务器管理器(web.ts 装配);未配置时 /api/mcp 端点保持 404(MCP 未启用)。 */
-	mcpManager?: McpManager;
+	/** MCP 配置门面(web.ts 装配);未配置时 /api/mcp 端点保持 404(MCP 未启用)。 */
+	mcpHost?: McpHost;
 	/** 舞台区宿主(web.ts 装配);未配置时 /api/stage 端点保持 404(舞台区未启用)。 */
 	stageHost?: StageHost;
 	/** 常驻编剧宿主(web.ts 装配);未配置时 /api/writer 端点保持 404(编辑 agent 未启用)。 */
@@ -160,9 +159,20 @@ function contentTypeFor(file: string): string {
  * 探测 web/dist 静态目录(生产模式 Electron/浏览器直接加载页面),参考
  * resolveSkillsDir 的 env 覆盖 + exeDir/source 双路径:PI_WRITER_WEB_DIR 优先
  * (Android 壳注入,烘焙的 import.meta.url 路径在 Android 上不可用);其次 bun
- * 单文件 exe 旁的 web/dist;回退源码树 src/web/../../web/dist(tsc 产物
- * dist/web/server.js 同样适用)。均不存在返回 null(静态服务关闭,非 /api
- * 保持 404)。
+ * 单文件 exe 旁的 web/dist;回退源码树。均不存在返回 null(静态服务关闭,
+ * 非 /api 保持 404)。
+ *
+ * ⚠️ 回退**必须逐个候选**而不是只算一条路径:`here`(模块所在目录)的**深度**
+ * 随运行形态变化 ——
+ *
+ * | 形态 | here | 正确的回退 |
+ * |---|---|---|
+ * | 源码(`tsx src/web/server.ts`) | `<root>/src/web` | `../../web/dist` |
+ * | tsc 产物(`dist/web/server.js`) | `<root>/dist/web` | `../../web/dist` |
+ * | **esbuild 单文件 CLI**(`dist/cli.js`) | `<root>/dist` | **`../web/dist`** |
+ *
+ * 只写 `../../web/dist` 时第三种形态会跳过头，于是 `pi-writer --web` 起来后
+ * API 全通、唯独**首页 404** —— 服务和页面一个像好的一个像坏的，最难排查的那种。
  */
 function resolveWebDistDir(env: Record<string, string | undefined> = process.env): string | null {
 	const override = env.PI_WRITER_WEB_DIR;
@@ -170,8 +180,12 @@ function resolveWebDistDir(env: Record<string, string | undefined> = process.env
 	const exeDist = join(dirname(process.execPath), "web", "dist");
 	if (isDirectory(exeDist)) return exeDist;
 	const here = dirname(fileURLToPath(import.meta.url));
-	const srcDist = join(here, "..", "..", "web", "dist");
-	if (isDirectory(srcDist)) return srcDist;
+	for (const candidate of [
+		join(here, "..", "..", "web", "dist"), // 源码 / tsc 产物
+		join(here, "..", "web", "dist"), // esbuild 单文件 CLI（dist/cli.js）
+	]) {
+		if (isDirectory(candidate)) return candidate;
+	}
 	return null;
 }
 
@@ -203,8 +217,11 @@ export function resolveBuiltinThemesDir(
 	if (resPath) candidates.push(join(resPath, "app.asar", "web", "dist", "themes"));
 	candidates.push(join(dirname(process.execPath), "web", "dist", "themes"));
 	const here = dirname(fileURLToPath(import.meta.url));
-	candidates.push(join(here, "..", "..", "web", "public", "themes"));
+	// `here` 的深度随运行形态变化（见 resolveWebDistDir 的表），两种都要试
+	candidates.push(join(here, "..", "..", "web", "public", "themes")); // 源码 / tsc 产物
 	candidates.push(join(here, "..", "..", "web", "dist", "themes"));
+	candidates.push(join(here, "..", "web", "public", "themes")); // esbuild 单文件 CLI
+	candidates.push(join(here, "..", "web", "dist", "themes"));
 	for (const c of candidates) if (isDirectory(c)) return c;
 	return null;
 }
@@ -341,14 +358,6 @@ function optionalBoolean(body: unknown, key: string): boolean | undefined {
 	const value = (body as Record<string, unknown> | null)?.[key];
 	if (value === undefined) return undefined;
 	if (typeof value !== "boolean") throw new HttpError(400, "bad_request", `字段 ${key} 必须是布尔值`);
-	return value;
-}
-
-/** 取可选数字或 null 字段;null 表示恢复模型默认。 */
-function optionalNumberOrNull(body: unknown, key: string): number | null | undefined {
-	const value = (body as Record<string, unknown> | null)?.[key];
-	if (value === undefined || value === null) return value;
-	if (typeof value !== "number" || !Number.isFinite(value)) throw new HttpError(400, "bad_request", `字段 ${key} 必须是数字或 null`);
 	return value;
 }
 
@@ -691,18 +700,25 @@ export class WriterServer {
 				this.broadcastWriterEvent(slug, chapterFile, event, conversation);
 			});
 		}
-		// watchdog 重连成功后重建会话:新工具快照注入(与配置变更的 handleMcpReload 一致)
-		if (options.mcpManager) {
-			options.mcpManager.onReconnect = (name) => {
-				void this.handleMcpReload().catch((err) => {
-					process.stderr.write(`[server] MCP 重连后重建会话失败: ${err instanceof Error ? err.message : String(err)}\n`);
-				});
-			};
-		}
+		// MCP(T9-A):不再有 watchdog/onReconnect —— 上游扩展是**懒重连**(调用发现
+		// 断开时才重连),不需要「重连后重建会话」这条自研专有链路。配置变更仍走
+		// handleMcpReload(重建会话让新工具生效)。
 		// 显式注入优先;缺省自动探测,目录不存在则静态服务关闭
 		this.staticRoot = options.webDistDir
 			? (isDirectory(options.webDistDir) ? options.webDistDir : null)
 			: resolveWebDistDir();
+		// ⚠️ **自动探测**不到必须说出来。否则服务起来了、API 全通、只有首页 404 ——
+		// 「一半像好的一半像坏的」最难排查。宁可启动时多一行红字。
+		// 只在**没显式传** webDistDir 时才说：显式注入一个不存在的目录是调用方自己的
+		// 决定（测试就常这么干，见 test/server.test.ts 的 no-such-dist），不该替它喊。
+		if (!this.staticRoot && options.webDistDir === undefined) {
+			const here = dirname(fileURLToPath(import.meta.url));
+			process.stderr.write(
+				`[server] 未找到前端静态目录(web/dist),页面无法访问,仅 API 可用。` +
+					`先跑 npm run build:web;或用 PI_WRITER_WEB_DIR 显式指定。` +
+					`(探测起点: ${here})\n`,
+			);
+		}
 		// 外部变更 → 广播(带 mtime:前端干净时重载、脏时提示冲突)
 		this.watcher = new WorldWatcher((kind, rel, mtime) => {
 			const slug = this.options.sessionHost.getState().bookSlug;
@@ -749,7 +765,6 @@ export class WriterServer {
 			{ method: "DELETE", segments: ["models", "custom"], handler: (ctx) => this.handleDeleteModelCustom(ctx) },
 			{ method: "POST", segments: ["model"], handler: (ctx) => this.handlePostModel(ctx) },
 			{ method: "POST", segments: ["thinking"], handler: (ctx) => this.handlePostThinking(ctx) },
-			{ method: "POST", segments: ["sampling"], handler: (ctx) => this.handlePostSampling(ctx) },
 			{ method: "GET", segments: ["providers"], handler: (ctx) => this.handleGetProviders(ctx) },
 			{ method: "POST", segments: ["providers", "custom"], handler: (ctx) => this.handlePostProviderCustom(ctx) },
 			{ method: "GET", segments: ["providers", ":id"], handler: (ctx) => this.handleGetProviderDetail(ctx) },
@@ -861,7 +876,6 @@ export class WriterServer {
 		await this.options.writerHost?.disposeAll();
 		for (const client of this.sseClients) client.end();
 		this.sseClients.clear();
-		await this.options.mcpManager?.close();
 		await new Promise<void>((r) => this.httpServer.close(() => r()));
 	}
 
@@ -1092,18 +1106,25 @@ export class WriterServer {
 	/**
 	 * 校验 MCP 服务器配置体(name/type/command/url 等),返回规范化配置。
 	 *
-	 * 2026-10 审计 BUG-019:`type` 此前只接受 stdio / sse,而共享 schema
-	 * (src/mcp/config.ts 的 ServerSchema)、McpManager 连接层与前端选项都支持
-	 * `http`(streamable HTTP,现行标准)—— 前端选 http 保存必然 400,功能不可用。
-	 * 三种类型统一走这里:stdio 要 command;sse / http 要合法 URL。
+	 * T9-A(2026-10-05):改用上游 `createMcpExtension` 后,支持的传输是
+	 * **stdio + streamable HTTP** —— 上游**不支持 SSE**。旧的 sse 条目在迁移时
+	 * 已自动降级为 http(见 src/mcp/migrate.ts);此处对前端仍然提交 sse 的
+	 * 情况明确拒绝,并给出可执行提示(而不是静默写下一个连不上的条目)。
 	 */
 	private readMcpServerBody(body: unknown): McpServerConfig {
 		const record = body as Record<string, unknown> | null;
 		if (!record || typeof record !== "object") throw new HttpError(400, "bad_request", "缺少服务器配置");
 		const name = requireString(body, "name");
 		const type = requireString(body, "type");
-		if (type !== "stdio" && type !== "sse" && type !== "http") {
-			throw new HttpError(400, "bad_request", "type 必须是 stdio、sse 或 http");
+		if (type === "sse") {
+			throw new HttpError(
+				400,
+				"bad_request",
+				"上游 MCP 不支持 SSE 传输,请改用 http(streamable HTTP)端点;已存在的 sse 条目会在迁移时自动降级",
+			);
+		}
+		if (type !== "stdio" && type !== "http") {
+			throw new HttpError(400, "bad_request", "type 必须是 stdio 或 http");
 		}
 		const server: McpServerConfig = { name: name.trim(), type };
 		const command = optionalString(body, "command");
@@ -1124,7 +1145,27 @@ export class WriterServer {
 		}
 		const url = optionalString(body, "url");
 		if (url !== undefined) server.url = url;
-		// 必填项按类型校验(与 src/mcp/config.ts 的 validateMcpConfig 同一套语义)
+		const headers = record["headers"];
+		if (headers !== undefined) {
+			if (headers === null || typeof headers !== "object" || Array.isArray(headers)) {
+				throw new HttpError(400, "bad_request", "headers 必须是对象");
+			}
+			server.headers = headers as Record<string, string>;
+		}
+		const exposure = optionalString(body, "exposure");
+		if (exposure !== undefined) {
+			if (!["codemode", "deferred", "direct", "hidden"].includes(exposure)) {
+				throw new HttpError(400, "bad_request", "exposure 必须是 codemode、deferred、direct 或 hidden");
+			}
+			server.exposure = exposure as McpServerConfig["exposure"];
+		}
+		if (record["enabled"] !== undefined) {
+			if (typeof record["enabled"] !== "boolean") throw new HttpError(400, "bad_request", "enabled 必须是布尔值");
+			server.enabled = record["enabled"] as boolean;
+		}
+		const description = optionalString(body, "description");
+		if (description !== undefined) server.description = description;
+		// 必填项按类型校验(与 src/mcp/migrate.ts 的迁移校验同一套语义)
 		if (type === "stdio" && !server.command?.trim()) throw new HttpError(400, "bad_request", "stdio 类型必须提供 command");
 		if (type !== "stdio" && !server.url?.trim()) throw new HttpError(400, "bad_request", `${type} 类型必须提供 url`);
 		if (type !== "stdio" && !/^https?:\/\//.test(server.url!.trim())) {
@@ -1645,8 +1686,6 @@ export class WriterServer {
 			models,
 			current,
 			thinking: state.thinkingLevel,
-			temperature: state.temperature,
-			topP: state.topP,
 			// 2026-10 审计 BUG-017:历史 models.json 里的重复模型条目只**报告**不静默删除
 			// (vendor 合成目录按首项替换,第二条是隐藏/歧义配置)。前端可选择提示。
 			configWarnings: await modelsConfigWarnings(),
@@ -1675,8 +1714,6 @@ export class WriterServer {
 			models,
 			current,
 			thinking: state.thinkingLevel,
-			temperature: state.temperature,
-			topP: state.topP,
 			// 2026-09-23:改成结构化 —— 前端「测试连接」要按 provider 过滤,
 			// 之前只有一句拼好的字符串(`DeepSeek models request failed: 401 …`),
 			// 只能靠包含匹配 provider 名,脆且容易错判。map 的 key 是 provider id
@@ -2042,34 +2079,6 @@ export class WriterServer {
 	}
 
 	/**
-	 * POST /api/sampling {temperature?, topP?}:切换采样参数;null 表示恢复模型默认。
-	 *
-	 * 2026-10 审计 BUG-007:此前按主会话 → 编剧 → 舞台顺序直接调用,任一前置宿主抛错会
-	 * 中断后面所有宿主(已经改了的保持新值、没轮到的保持旧值,响应还只说"失败")。
-	 * 现在走 applyToAllSessions 的逐宿主容错:全部尝试,失败项统一报出。
-	 */
-	private async handlePostSampling(ctx: RouteContext): Promise<void> {
-		const body = await readJsonBody(ctx.req);
-		const temperature = optionalNumberOrNull(body, "temperature");
-		const topP = optionalNumberOrNull(body, "topP");
-		if (temperature === undefined && topP === undefined) {
-			throw new HttpError(400, "bad_request", "至少提供 temperature、topP 或 null 之一");
-		}
-		if (temperature !== null && temperature !== undefined && (temperature < 0 || temperature > 2)) {
-			throw new HttpError(400, "bad_request", "temperature 必须在 0..2 之间");
-		}
-		if (topP !== null && topP !== undefined && (topP < 0 || topP > 1)) {
-			throw new HttpError(400, "bad_request", "topP 必须在 0..1 之间");
-		}
-		await this.applyToAllSessions("切换采样参数", [
-			["主会话", () => this.options.sessionHost.setSamplingParameters(temperature, topP)],
-			["编剧会话", () => this.options.writerHost?.setSamplingParameters(temperature, topP)],
-			["舞台会话", () => this.options.stageHost?.setSamplingParameters(temperature, topP)],
-		]);
-		this.send(ctx.res, 200, { ok: true });
-	}
-
-	/**
 	 * GET /api/providers:全部 provider + 认证状态(已配置置顶,排序在 SessionHost)。
 	 *
 	 * 2026-09:models.json 里刚建好、**还没有加模型**的自定义供应商不会出现在
@@ -2290,7 +2299,7 @@ export class WriterServer {
 
 	/** GET /api/mcp:服务器配置 + 连接状态(设置页渲染列表;未装配时 404)。 */
 	private async handleGetMcp(ctx: RouteContext): Promise<void> {
-		const mgr = this.options.mcpManager;
+		const mgr = this.options.mcpHost;
 		if (!mgr) throw new HttpError(404, "not_found", "MCP 未启用");
 		const servers = await mgr.listConfig();
 		this.send(ctx.res, 200, { servers: servers.servers, status: mgr.getStatus() });
@@ -2298,7 +2307,7 @@ export class WriterServer {
 
 	/** POST /api/mcp {server}:新增服务器 → 重连 + 重建会话(新工具生效)。 */
 	private async handlePostMcp(ctx: RouteContext): Promise<void> {
-		const mgr = this.options.mcpManager;
+		const mgr = this.options.mcpHost;
 		if (!mgr) throw new HttpError(404, "not_found", "MCP 未启用");
 		const body = await readJsonBody(ctx.req);
 		const server = this.readMcpServerBody(body);
@@ -2315,11 +2324,11 @@ export class WriterServer {
 
 	/** GET /api/mcp/raw:mcp.json 原始文本(「直接编辑文件」预填;不存在返回空配置)。 */
 	private async handleGetMcpRaw(ctx: RouteContext): Promise<void> {
-		const mgr = this.options.mcpManager;
+		const mgr = this.options.mcpHost;
 		if (!mgr) throw new HttpError(404, "not_found", "MCP 未启用");
 		let text = "";
 		try {
-			text = await readFile(getMcpConfigPath(mgr.getAgentDir()), "utf-8");
+			text = await readFile(join(mgr.getAgentDir(), "mcp.json"), "utf-8");
 		} catch {
 			text = "";
 		}
@@ -2328,7 +2337,7 @@ export class WriterServer {
 
 	/** PUT /api/mcp/raw {text}:原样保存 mcp.json(校验后落盘 + 重连 + 重建会话)。 */
 	private async handlePutMcpRaw(ctx: RouteContext): Promise<void> {
-		const mgr = this.options.mcpManager;
+		const mgr = this.options.mcpHost;
 		if (!mgr) throw new HttpError(404, "not_found", "MCP 未启用");
 		const body = await readJsonBody(ctx.req);
 		const text = requireString(body, "text");
@@ -2344,7 +2353,7 @@ export class WriterServer {
 
 	/** PUT /api/mcp/:name {server}:更新服务器(重连 + 重建会话)。 */
 	private async handlePutMcpServer(ctx: RouteContext): Promise<void> {
-		const mgr = this.options.mcpManager;
+		const mgr = this.options.mcpHost;
 		if (!mgr) throw new HttpError(404, "not_found", "MCP 未启用");
 		const name = ctx.params.name!;
 		const body = await readJsonBody(ctx.req);
@@ -2361,7 +2370,7 @@ export class WriterServer {
 
 	/** DELETE /api/mcp/:name:删除服务器(重连 + 重建会话)。 */
 	private async handleDeleteMcpServer(ctx: RouteContext): Promise<void> {
-		const mgr = this.options.mcpManager;
+		const mgr = this.options.mcpHost;
 		if (!mgr) throw new HttpError(404, "not_found", "MCP 未启用");
 		try {
 			await mgr.removeServer(ctx.params.name!);

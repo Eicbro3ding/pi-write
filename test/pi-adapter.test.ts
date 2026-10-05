@@ -7,6 +7,25 @@ import { projectUsageCost } from "../src/pi-adapter/usage.ts";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = path.join(ROOT, "src");
 
+/**
+ * 一条 import 语句是否非法地**绕过 pi-adapter 直插 pi 内部**。
+ *
+ * 依赖化(T11 / D2)之后,vendor 源码不再是唯一的引用形式 —— 直接按
+ * `@earendil-works/pi-coding-agent/core/...` 点进包内深层路径同样绕开了收口,
+ * 而且**更隐蔽**:它在编译期完全合法,只是把上游的日常挪动变成了我们的运行时风险。
+ *
+ * 所以判据从「不许出现 vendor 里的 pi 相对路径」升级成
+ * 「**不许出现任何非包入口的 pi 引用**」:
+ *   - `vendor/pi-xxx/src/` 开头             —— 依赖化前的形态(应已清零)
+ *   - `@earendil-works/pi-xxx/` 后跟子路径   —— 依赖化后的形态(只有 pi-adapter 可用)
+ * 合法形式只有 `@earendil-works/pi-*` **包入口本身**。
+ */
+function isDeepPiImport(statement: string): boolean {
+	if (/vendor\/pi-[\w-]+\/src\//.test(statement)) return true;
+	// 形如 "@earendil-works/pi-coding-agent/core/tools/path-utils"
+	return /@earendil-works\/pi-[\w-]+\/.+/.test(statement);
+}
+
 /** 递归收集 src/ 下的 .ts/.tsx(跳过 pi-adapter 自身)。 */
 function walk(dir: string, out: string[] = []): string[] {
 	for (const name of readdirSync(dir)) {
@@ -32,19 +51,19 @@ describe("pi-adapter 契约（T6 防腐层）", () => {
 			for (const line of text.split("\n")) {
 				const trimmed = line.trim();
 				if (!trimmed.startsWith("import ")) continue;
-				if (/vendor\/pi-[\w-]+\/src\/.+\//.test(trimmed) && !trimmed.includes("/src/index.ts")) {
+				if (isDeepPiImport(trimmed)) {
 					offenders.push(`${path.relative(ROOT, file)}: ${trimmed}`);
 				}
 			}
 		}
-		expect(offenders, `这些文件绕过了 pi-adapter 直插 vendor 内部:\n${offenders.join("\n")}`).toEqual([]);
+		expect(offenders, `这些文件绕过了 pi-adapter 直插 pi 内部:\n${offenders.join("\n")}`).toEqual([]);
 	});
 
 	it("guard.ts / usage.ts 各自保留唯一的深层 import（收口有效但不能为空）", () => {
 		const guard = readFileSync(path.join(SRC, "pi-adapter/guard.ts"), "utf-8");
 		const usage = readFileSync(path.join(SRC, "pi-adapter/usage.ts"), "utf-8");
-		expect(guard).toContain("vendor/pi-coding-agent/src/core/tools/path-utils.ts");
-		expect(usage).toContain("vendor/pi-coding-agent/src/core/usage-totals.ts");
+		expect(guard).toContain("@earendil-works/pi-coding-agent/core/tools/path-utils");
+		expect(usage).toContain("@earendil-works/pi-coding-agent/core/usage-totals");
 	});
 
 	it("domain.ts 不 import 任何 vendor 模块（类型层零耦合）", () => {
@@ -52,7 +71,7 @@ describe("pi-adapter 契约（T6 防腐层）", () => {
 		for (const line of text.split("\n")) {
 			const t = line.trim();
 			if (t.startsWith("import ") || t.startsWith("export type {")) {
-				expect(t).not.toContain("vendor/");
+				expect(isDeepPiImport(t)).toBe(false);
 			}
 		}
 	});
@@ -98,7 +117,7 @@ describe("pi-adapter 契约（T7 批 2）", () => {
 			const text = readFileSync(path.join(SRC, rel), "utf-8");
 			for (const line of text.split("\n")) {
 				const t = line.trim();
-				if (t.startsWith("import ")) expect(t).not.toContain("vendor/pi-");
+				if (t.startsWith("import ")) expect(isDeepPiImport(t)).toBe(false);
 			}
 		}
 	});
@@ -111,7 +130,7 @@ describe("pi-adapter 契约（T7 批 2）", () => {
 			const text = readFileSync(path.join(SRC, rel), "utf-8");
 			for (const line of text.split("\n")) {
 				const t = line.trim();
-				if (t.startsWith("import ")) expect(t).not.toContain("vendor/pi-");
+				if (t.startsWith("import ")) expect(isDeepPiImport(t)).toBe(false);
 			}
 		}
 	});
@@ -167,7 +186,9 @@ describe("pi-adapter 契约（T7 批 2）", () => {
 			"extension.ts",
 			"inspect/index.ts",
 			"inspect/panel.ts",
-			"mcp/tools.ts",
+			"mcp/extension.ts",
+			"mcp/host.ts",
+			"mcp/migrate.ts",
 			"stage/orchestrator.ts",
 			"startup-header.ts",
 			"writer-theme.ts",
@@ -176,7 +197,6 @@ describe("pi-adapter 契约（T7 批 2）", () => {
 			// —— 批 4 ——
 			"ask-user.ts",
 			"book-manager.ts",
-			"mcp/manager.ts",
 			"plugin-loader.ts",
 			"skills-index.ts",
 			"stage/stage-extension.ts",
@@ -190,17 +210,17 @@ describe("pi-adapter 契约（T7 批 2）", () => {
 			const text = readFileSync(path.join(SRC, rel), "utf-8");
 			for (const line of text.split("\n")) {
 				const t = line.trim();
-				if ((t.startsWith("import ") || t.startsWith("} from")) && t.includes("vendor/pi-")) {
+				if ((t.startsWith("import ") || t.startsWith("} from")) && isDeepPiImport(t)) {
 					offenders.push(`${rel}: ${t}`);
 				}
 			}
 		}
-		expect(offenders, `批 3 目标文件出现 vendor 回退:\n${offenders.join("\n")}`).toEqual([]);
+		expect(offenders, `批 3 目标文件出现 pi 深层引用回退:\n${offenders.join("\n")}`).toEqual([]);
 	});
 
 	it("domain.ts 仍然零 vendor（批 2 新增了 types.ts，不该顺手污染 domain）", () => {
 		const text = readFileSync(path.join(SRC, "pi-adapter/domain.ts"), "utf-8");
-		expect(text).not.toContain("vendor/pi-");
+		expect(isDeepPiImport(text)).toBe(false);
 	});
 
 	it("types.ts 的 vendor 引用**全部是 import type**（编译后不产生运行期 import）", () => {
@@ -211,7 +231,7 @@ describe("pi-adapter 契约（T7 批 2）", () => {
 		// 的假象。T7 批 3 踩过这个坑:断言 `length > 0` 直接把自己暴露了。
 		const text = readFileSync(path.join(SRC, "pi-adapter/types.ts"), "utf-8");
 		const statements = text.match(/^import[^;]*?from\s+"[^"]+"\s*;/gm) ?? [];
-		const vendorImports = statements.filter((s) => s.includes("vendor/"));
+		const vendorImports = statements.filter((s) => s.includes("@earendil-works/pi-"));
 		expect(vendorImports.length).toBeGreaterThan(0);
 		for (const stmt of vendorImports) {
 			expect(stmt.replace(/\s+/g, " "), "这个 import 会变成运行期依赖").toMatch(/^import type /);

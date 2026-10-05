@@ -46,10 +46,12 @@ shell 方言(bash / PowerShell)只改变执行哪个可执行文件与提示词�
 
 ## MCP 安全
 
-- 配置在本地 `~/.pi/writer/agent/mcp.json`(被 gitignore,密钥不提交);
+- 配置在本地 `~/.pi/writer/agent/mcp.json`(被 gitignore,密钥不提交);`env` / `headers` 里放的值与 API 密钥同等对待;
 - stdio 服务器即本地进程——只挂可信的、最小权限的服务器;
-- 断线自动重连(3-30s 退避);stdio 失败带 stderr 尾部;
-- OAuth 授权流**未实现**,遇到 OAuth 端点明确报错提示,不做静默降级。
+- 传输只支持 **stdio 与 streamable HTTP**;上游不实现 SSE,配置里写 `sse` 会被拒(迁移时自动降级为 http 并告警);
+- 「暴露策略」(`exposure`)控制工具是否进模型声明:`direct`(直接可见,迁移默认)/ `codemode`(上游默认,不进声明)/ `deferred`(按需加载)/ `hidden`(不可达)。**给不受信任的服务器用 `direct` 等于把它的工具描述直接喂给模型**,按需选小;
+- **无退避重连**:连接失败后不再自动重试,而是在下次调用时按需重连。stdio 失败仍带 stderr 尾部;
+- OAuth 授权流由**上游扩展**提供(pi-writer 侧不再自研);遇到需要授权的服务器按其提示走。
 
 ## 数据与密钥
 

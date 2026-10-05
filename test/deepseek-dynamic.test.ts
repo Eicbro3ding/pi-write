@@ -6,7 +6,9 @@
  * off)。现在按 id 命名约定确认(纯函数,不联网)。
  */
 import { describe, expect, it } from "vitest";
-import { deepSeekDynamicModel } from "../vendor/pi-ai/src/providers/deepseek.ts";
+// 能力已从 vendor 迁到自研侧(`src/providers/deepseek-dynamic.ts`)—— 它是 BUG-003
+// 的修复(新推理模型选不到思考档位),属于核心,不随依赖化丢弃。
+import { deepSeekDynamicModel } from "../src/providers/deepseek-dynamic.ts";
 
 describe("deepSeekDynamicModel(未收录模型的保守能力推断)", () => {
 	it("reasoner / reasoning / think 命名 → 确认支持思考,并带 DeepSeek 档位映射", () => {
