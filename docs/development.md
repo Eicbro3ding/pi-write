@@ -4,7 +4,7 @@
 
 ## 环境要求
 
-- Node.js ≥ 18.20.4
+- Node.js ≥ 22.19.0（pi 1.0.2 的硬性要求；写 18.x 会让人装完在运行时才崩）
 - 可选:[bun](https://bun.sh)——`npm run bundle`(TUI 单文件可执行与交叉编译)和 `npm run build:electron` 需要;`npm run build:web` 不需要
 
 ## 运行

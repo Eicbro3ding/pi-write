@@ -1,5 +1,10 @@
 # Changelog
 
+T11 后续:Node 版本要求同步到 ≥22.19.0(原计划里的 T12,因依赖化而提前)。
+
+- [fix] **`engines` 与实际要求不符**。四个 pi 包(`pi-coding-agent` / `pi-ai` / `pi-tui` / `pi-agent-core`)的 `engines.node` 全是 **≥22.19.0**,而本项目 `package.json` 写的是 ≥18.20.4。vendor 时代源码随仓库编译,**根本不吃上游的 engines**;改成 npm 依赖后这条才第一次生效 —— `npm install` 会打 EBADENGINE 告警,**不看告警的人用 Node 18 装完会在运行时崩**。已同步四处:`package.json`、`package-lock.json`、`README.md`、`docs/development.md`。
+- [验证] `npm install` 后 `postinstall` 重新打 patch 仍然生效:守卫装得上,越权写被拦(见下一条的形状检查)。
+
 T9-B:TUI 代码保留,但不再对外提及。
 
 - [docs] **清理 11 处对外提及**(模型可见 + 用户可见):

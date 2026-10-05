@@ -98,7 +98,7 @@
     "url": "git+https://github.com/Eicbro3ding/pi-writer.git"
   },
   "engines": {
-    "node": ">=18.20.4"
+    "node": ">=22.19.0"
   },
   "devDependencies": {
     "@types/busboy": "^1.5.4",

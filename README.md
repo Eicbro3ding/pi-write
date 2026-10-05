@@ -92,7 +92,7 @@ npx tsx src/cli.ts --web
 npm run build:web && npm run electron
 ```
 
-要求:Node.js ≥ 18.20.4;`npm run bundle`(终端单文件可执行)与 `npm run build:electron` 需要 [bun](https://bun.sh)。
+要求:Node.js ≥ 22.19.0(pi 1.0.2 的要求;低于此版本装完会在运行时崩);`npm run bundle`(终端单文件可执行)与 `npm run build:electron` 需要 [bun](https://bun.sh)。
 
 ## 文档
 
