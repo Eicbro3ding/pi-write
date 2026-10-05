@@ -1,5 +1,16 @@
 # Changelog
 
+T11 后续:`npm run build` 产物修复 —— npm 包的 CLI 现在真的能跑。
+
+- [fix] **tsc 不再 emit JS,只出声明**。261 处 `.ts` 相对 import 与 `allowImportingTsExtensions` 是绑死的,emit 出来的 `dist/src/*.js` 里 import 仍写 `.ts`,`node` 一跑就是 `ERR_MODULE_NOT_FOUND`。现在 tsc 只喂 `types`(`--emitDeclarationOnly`,顺带消掉 TS5096),可执行/可引用的 JS 交给 **esbuild** —— 与 `build:web` / `build:electron` 同一套做法。新增 `scripts/build-cli.mjs` 打两个产物,并**自检产物里不许残留 `.ts` 相对 import**:这是本次修复的核心,也是最容易悄悄退回的形态(哪天有人把 build 改回 tsc emit,编译照样"成功",只有用户启动时才炸)。
+- [fix] **bin 的 off-by-one**。`src/prompts.ts` 探测 prompts 的最后一态是 `join(here, "..", "prompts")`,`here` 是**模块所在目录**。产物放 `dist/src/cli.js` 时上跳一级是 `dist/prompts`(不存在),而 `files` 白名单里 prompts 在**包根** —— 装完一启动就「提示词文件缺失」。产物改放 `dist/cli.js`,上跳一级正好命中包根。`exports.import` 同步改指 `./dist/index.js`(放 `dist/src/` 会撞同一个坑,实测一 import 就抛)。
+- [fix] **首页 404**。`resolveWebDistDir` 的回退只写了 `here/../../web/dist`,而 `here` 的深度**随运行形态变化**:源码 `src/web`、tsc 产物 `dist/web`、esbuild 单文件 `dist` —— 单文件形态会跳过头,于是 API 全通、只有页面 404。改为**逐个候选**;`resolveBuiltinThemesDir` 同病同修。
+- [fix] **探测失败现在会喊**。静态目录找不到时启动即打一行红字(仅**自动探测**失败时 —— 显式传 `webDistDir` 而目录不存在,那是调用方的决定,测试常这么干)。否则「一半像好的一半像坏的」最难排查。已**反证**:移走 `web/dist` 后警告如期打出、首页 404。
+- [chore] `files` 加 `web/dist`(28M)。否则 `npx pi-writer --web` 服务起来了却是 404 —— 既然 `bin` 提供 `--web`,前端就得跟着走。
+- [env] 环境升到 **Node 22.19.0** 后,才第一次在「满足 `engines`」的前提下跑完验证 —— 此前所有验证都在 22.13.1(低于要求、靠 EBADENGINE 告警而非硬失败)上做的。
+
+**验证(Node 22.19.0)**:typecheck 0 错误;全量测试 **92 文件 / 1596 例通过**;`dist/cli.js --help` 正常(**版本号 0.1.2 正确** = prompts 探测命中,此前冒烟显示 0.0.0);`dist/index.js` 可 import(25 个符号);web 冒烟 `GET /` 200 + `/api/skills` 200;`build:web` 回归正常。
+
 T11 后续:路径守卫 patch 加固 —— 形状不对时**安装即炸**。
 
 - [fix] **`setToolPathGuard` 增加形状检查**。调用点写的是 `__piWritePathGuard?.(resolved, mode)`,而可选调用只防 `undefined`、**不防「传进来的是个对象」**。那种情况下每次解析路径都抛 `__piWritePathGuard is not a function`,而所有 `expect(...).toThrow()` 断言**照样通过** —— 又是一次「看起来拦住了」:实际是 TypeError 在顶替真实拦截(我在临时脚本里传错过一次,看到这句费解的错误才发现)。现在安装时就炸,并报出实到的类型。

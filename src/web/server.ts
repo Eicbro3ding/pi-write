@@ -160,9 +160,20 @@ function contentTypeFor(file: string): string {
  * 探测 web/dist 静态目录(生产模式 Electron/浏览器直接加载页面),参考
  * resolveSkillsDir 的 env 覆盖 + exeDir/source 双路径:PI_WRITER_WEB_DIR 优先
  * (Android 壳注入,烘焙的 import.meta.url 路径在 Android 上不可用);其次 bun
- * 单文件 exe 旁的 web/dist;回退源码树 src/web/../../web/dist(tsc 产物
- * dist/web/server.js 同样适用)。均不存在返回 null(静态服务关闭,非 /api
- * 保持 404)。
+ * 单文件 exe 旁的 web/dist;回退源码树。均不存在返回 null(静态服务关闭,
+ * 非 /api 保持 404)。
+ *
+ * ⚠️ 回退**必须逐个候选**而不是只算一条路径:`here`(模块所在目录)的**深度**
+ * 随运行形态变化 ——
+ *
+ * | 形态 | here | 正确的回退 |
+ * |---|---|---|
+ * | 源码(`tsx src/web/server.ts`) | `<root>/src/web` | `../../web/dist` |
+ * | tsc 产物(`dist/web/server.js`) | `<root>/dist/web` | `../../web/dist` |
+ * | **esbuild 单文件 CLI**(`dist/cli.js`) | `<root>/dist` | **`../web/dist`** |
+ *
+ * 只写 `../../web/dist` 时第三种形态会跳过头，于是 `pi-writer --web` 起来后
+ * API 全通、唯独**首页 404** —— 服务和页面一个像好的一个像坏的，最难排查的那种。
  */
 function resolveWebDistDir(env: Record<string, string | undefined> = process.env): string | null {
 	const override = env.PI_WRITER_WEB_DIR;
@@ -170,8 +181,12 @@ function resolveWebDistDir(env: Record<string, string | undefined> = process.env
 	const exeDist = join(dirname(process.execPath), "web", "dist");
 	if (isDirectory(exeDist)) return exeDist;
 	const here = dirname(fileURLToPath(import.meta.url));
-	const srcDist = join(here, "..", "..", "web", "dist");
-	if (isDirectory(srcDist)) return srcDist;
+	for (const candidate of [
+		join(here, "..", "..", "web", "dist"), // 源码 / tsc 产物
+		join(here, "..", "web", "dist"), // esbuild 单文件 CLI（dist/cli.js）
+	]) {
+		if (isDirectory(candidate)) return candidate;
+	}
 	return null;
 }
 
@@ -203,8 +218,11 @@ export function resolveBuiltinThemesDir(
 	if (resPath) candidates.push(join(resPath, "app.asar", "web", "dist", "themes"));
 	candidates.push(join(dirname(process.execPath), "web", "dist", "themes"));
 	const here = dirname(fileURLToPath(import.meta.url));
-	candidates.push(join(here, "..", "..", "web", "public", "themes"));
+	// `here` 的深度随运行形态变化（见 resolveWebDistDir 的表），两种都要试
+	candidates.push(join(here, "..", "..", "web", "public", "themes")); // 源码 / tsc 产物
 	candidates.push(join(here, "..", "..", "web", "dist", "themes"));
+	candidates.push(join(here, "..", "web", "public", "themes")); // esbuild 单文件 CLI
+	candidates.push(join(here, "..", "web", "dist", "themes"));
 	for (const c of candidates) if (isDirectory(c)) return c;
 	return null;
 }
@@ -695,6 +713,18 @@ export class WriterServer {
 		this.staticRoot = options.webDistDir
 			? (isDirectory(options.webDistDir) ? options.webDistDir : null)
 			: resolveWebDistDir();
+		// ⚠️ **自动探测**不到必须说出来。否则服务起来了、API 全通、只有首页 404 ——
+		// 「一半像好的一半像坏的」最难排查。宁可启动时多一行红字。
+		// 只在**没显式传** webDistDir 时才说：显式注入一个不存在的目录是调用方自己的
+		// 决定（测试就常这么干，见 test/server.test.ts 的 no-such-dist），不该替它喊。
+		if (!this.staticRoot && options.webDistDir === undefined) {
+			const here = dirname(fileURLToPath(import.meta.url));
+			process.stderr.write(
+				`[server] 未找到前端静态目录(web/dist),页面无法访问,仅 API 可用。` +
+					`先跑 npm run build:web;或用 PI_WRITER_WEB_DIR 显式指定。` +
+					`(探测起点: ${here})\n`,
+			);
+		}
 		// 外部变更 → 广播(带 mtime:前端干净时重载、脏时提示冲突)
 		this.watcher = new WorldWatcher((kind, rel, mtime) => {
 			const slug = this.options.sessionHost.getState().bookSlug;
