@@ -14,7 +14,7 @@
  */
 
 // ★ 唯一的深层路径 import —— 上游若移动该文件,只改这一行
-import { clearToolPathGuard, setToolPathGuard } from "../../vendor/pi-coding-agent/src/core/tools/path-utils.ts";
+import { clearToolPathGuard, setToolPathGuard } from "@earendil-works/pi-coding-agent/core/tools/path-utils";
 
 /**
  * 工具路径操作模式。

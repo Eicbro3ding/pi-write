@@ -1,0 +1,71 @@
+--- a/dist/core/tools/path-utils.js
++++ b/dist/core/tools/path-utils.js
+@@ -35,12 +35,18 @@
+ export function expandPath(filePath) {
+     return normalizePath(filePath, { normalizeUnicodeSpaces: true, stripAtPrefix: true });
+ }
++// __PI_WRITE_PATCH_PATH_UTILS__
++let __piWritePathGuard;
++export function setToolPathGuard(guard) { __piWritePathGuard = guard; }
++export function clearToolPathGuard() { __piWritePathGuard = undefined; }
+ /**
+  * Resolve a path relative to the given cwd.
+  * Handles ~ expansion and absolute paths.
+  */
+-export function resolveToCwd(filePath, cwd) {
+-    return resolvePath(filePath, cwd, { normalizeUnicodeSpaces: true, stripAtPrefix: true });
++export function resolveToCwd(filePath, cwd, mode = "read") {
++    const resolved = resolvePath(filePath, cwd, { normalizeUnicodeSpaces: true, stripAtPrefix: true });
++    __piWritePathGuard?.(resolved, mode);
++    return resolved;
+ }
+ export function resolveReadPath(filePath, cwd) {
+     const resolved = resolveToCwd(filePath, cwd);
+--- a/dist/core/tools/path-utils.d.ts
++++ b/dist/core/tools/path-utils.d.ts
+@@ -4,7 +4,10 @@
+  * Resolve a path relative to the given cwd.
+  * Handles ~ expansion and absolute paths.
+  */
+-export declare function resolveToCwd(filePath: string, cwd: string): string;
++/** 路径守卫：在解析绝对路径后回调，mode 区分读/写（pi-write patch） */
++export declare function setToolPathGuard(guard: (absolutePath: string, mode: "read" | "write") => void): void;
++export declare function clearToolPathGuard(): void;
++export declare function resolveToCwd(filePath: string, cwd: string, mode?: "read" | "write"): string;
+ export declare function resolveReadPath(filePath: string, cwd: string): string;
+ export declare function resolveReadPathAsync(filePath: string, cwd: string): Promise<string>;
+ //# sourceMappingURL=path-utils.d.ts.map
+\ No newline at end of file
+--- a/dist/core/tools/write.js
++++ b/dist/core/tools/write.js
+@@ -28,7 +28,7 @@
+         parameters: writeSchema,
+         constrainedSampling: { type: "json_schema", strict: "prefer" },
+         async execute(_toolCallId, { path, content }, signal, _onUpdate, ctx) {
+-            const absolutePath = resolveToCwd(path, ctx?.cwd || cwd);
++            const absolutePath = resolveToCwd(path, ctx?.cwd || cwd, "write");
+             const dir = dirname(absolutePath);
+             return withFileMutationQueue(absolutePath, async () => {
+                 // Do not reject from an abort event listener here: that would release the
+--- a/dist/core/tools/edit.js
++++ b/dist/core/tools/edit.js
+@@ -91,7 +91,7 @@
+         prepareArguments: prepareEditArguments,
+         async execute(_toolCallId, input, signal, _onUpdate, ctx) {
+             const { path, edits } = validateEditInput(input);
+-            const absolutePath = resolveToCwd(path, ctx?.cwd || cwd);
++            const absolutePath = resolveToCwd(path, ctx?.cwd || cwd, "write");
+             return withFileMutationQueue(absolutePath, async () => {
+                 // Do not reject from an abort event listener here: that would release the
+                 // mutation queue while an in-flight filesystem operation may still finish.
+--- a/dist/core/tools/edit-diff.js
++++ b/dist/core/tools/edit-diff.js
+@@ -388,7 +388,7 @@
+  * Used for preview rendering in the TUI before the tool executes.
+  */
+ export async function computeEditsDiff(path, edits, cwd) {
+-    const absolutePath = resolveToCwd(path, cwd);
++    const absolutePath = resolveToCwd(path, cwd, "write");
+     try {
+         // Check if file exists and is readable
+         try {

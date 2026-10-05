@@ -18,7 +18,7 @@
 import type {
 	CreateAgentSessionRuntimeFactory,
 	SessionManager,
-} from "../../vendor/pi-coding-agent/src/index.ts";
+} from "@earendil-works/pi-coding-agent";
 import type { RuntimeFactoryHandle, SessionManagerHandle } from "./domain.ts";
 
 /**

@@ -1,6 +1,23 @@
 # Changelog
 
-## [Unreleased]
+T11 步骤 3:8 个文件 import 改写为 npm 包名(T11 / D2 依赖化)。
+
+- [refactor] **11 处 vendor import 改为 npm 包名**。`src/pi-adapter/*`(7 文件)+`src/util/uuid.ts`,共 11 处 import 语句:`../../vendor/pi-coding-agent/src/index.ts` → `@earendil-works/pi-coding-agent`,依次类推 pi-agent-core / pi-ai / pi-tui;两个深层路径 `src/core/tools/path-utils.ts` / `src/core/usage-totals.ts` 改为包内子路径。注释里的示例路径**不动**(那是文档)。
+- [feat] **依赖落地**:`@earendil-works/{pi-coding-agent,pi-agent-core,pi-ai,pi-tui}` 加为直接依赖,锁定精确版本 **1.0.2**(与探针报告、patch 靶心对齐);`typebox` 1.3.7 → **1.3.27**(与上游对齐,避免双实例)。
+- [feat] **`scripts/apply-patches.mjs`**:patch 应用脚本(应用 dist patch + 注入 exports 子路径),已挂 `postinstall`,幂等。`patches/pi-coding-agent-pathguard.patch` 更新为**5 文件**(4 个 `dist` + 1 个 `.d.ts`)。
+- [fix] **补 `.d.ts` 是 patch 的必要部分**。首轮只打 `.js`,TypeScript 报 `has no exported member 'setToolPathGuard'` —— 上游类型声明 `resolveToCwd(filePath, cwd)` 未含 `mode` 参数、且未声明 guard 函数。patch 必须同时改 `.d.ts`。此坑探针报告未覆盖,已补入 `patches/README.md` 的「错误形态二」。
+- [fix] **`package.json` 不进 patch**。首版把 exports 改动固化进 diff,导致 npm install 重写 package.json 后 hunk 失配。改为脚本注入,与版本解耦。
+- [docs] **实测:patch 的 5 个锚点在 1.0.2 与 1.0.3 上均命中** —— 二者 dist 结构一致,补丁版本间无变化。
+
+**遗留(净增 11 个类型错误,已知、非本步引入)**。类型检查基线(vendor import)为 **2** 个错误(均为 vendor 自身的 undici 问题);改用 npm 包后升至 **13** 个。净增 11 个全部是 **vendor 源码与 npm 发布版的 API 差异**,与 import 改写无关:
+
+| 文件 | 数 | 根因 | 归属 |
+|---|---|---|---|
+| `extension.ts` / `writer-theme.ts` / `draft-panel.ts` / `editor/vim-file-editor.ts` / `editor/index.ts` | 9 | `pi-tui` 发布版 TUI 类型(`TuiMouseEvent` 取代 `SgrMouseEvent`;主题色新增 `scrollbarTrack` / `scrollbarThumb` / `searchMatchText`) | **T9-B 待删代码** |
+| `cli.ts` | 1 | `InteractiveModeOptions.uiMode` → `tuiMode`(上游发布版改名;vendor 源码仍是 `uiMode`) | 独立小改 |
+| `ask-user.ts` | 1 | 上游 `details` 要求 `JsonObject`,`AskUserDetails` 缺索引签名 | 独立小改 |
+
+处置顺序:先做 **T9-B**(撤除自研全屏 TUI,消掉 9 个),再修 `cli.ts` / `ask-user.ts` 两处。
 
 T11 步骤 2:工具路径守卫的 npm 依赖 patch 落地(T11 / D2 依赖化)。
 

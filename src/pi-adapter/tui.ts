@@ -34,7 +34,7 @@ import {
 	truncateToWidth as vendorTruncateToWidth,
 	visibleWidth as vendorVisibleWidth,
 	wrapTextWithAnsi as vendorWrapTextWithAnsi,
-} from "../../vendor/pi-tui/src/index.ts";
+} from "@earendil-works/pi-tui";
 
 // `Theme` 实际上住在 pi-coding-agent 里(它是「主题」而不是通用 UI 原语),
 // 但用途纯粹是 TUI 渲染 —— 收在这里比收在 types.ts 更贴切。
@@ -43,7 +43,7 @@ import {
 	getMarkdownTheme as vendorGetMarkdownTheme,
 	Theme,
 	type ThemeColor as VendorThemeColor,
-} from "../../vendor/pi-coding-agent/src/index.ts";
+} from "@earendil-works/pi-coding-agent";
 
 // —— 类型 ——
 

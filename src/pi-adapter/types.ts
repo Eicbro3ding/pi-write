@@ -60,17 +60,17 @@ import type {
 	SessionTreeNode as VendorSessionTreeNode,
 	ToolDefinition as VendorToolDefinition,
 	ToolResultEvent as VendorToolResultEvent,
-} from "../../vendor/pi-coding-agent/src/index.ts";
+} from "@earendil-works/pi-coding-agent";
 import type {
 	AgentMessage as VendorAgentMessage,
 	ThinkingLevel as VendorThinkingLevel,
-} from "../../vendor/pi-agent-core/src/index.ts";
+} from "@earendil-works/pi-agent-core";
 import type {
 	AuthInteraction as VendorAuthInteraction,
 	AuthPrompt as VendorAuthPrompt,
 	Provider as VendorProvider,
 	Usage as VendorUsage,
-} from "../../vendor/pi-ai/src/index.ts";
+} from "@earendil-works/pi-ai";
 
 // —— pi-coding-agent ——
 

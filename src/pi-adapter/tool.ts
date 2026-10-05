@@ -13,7 +13,7 @@
  * 或挪个位置,改动点在这里一行,而不是散在 5 个文件里。
  */
 
-import { defineTool as vendorDefineTool } from "../../vendor/pi-coding-agent/src/index.ts";
+import { defineTool as vendorDefineTool } from "@earendil-works/pi-coding-agent";
 
 /**
  * 定义一个工具。
