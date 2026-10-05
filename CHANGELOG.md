@@ -1,5 +1,17 @@
 # Changelog
 
+T9-B:TUI 代码保留,但不再对外提及。
+
+- [docs] **清理 11 处对外提及**(模型可见 + 用户可见):
+  - `prompts/writer-main.md` —— 最关键的一处。写作 agent 的**角色认知**里不该出现产品形态名(它只需要知道「有个常驻草稿面板」),原话「TUI 在聊天区右侧显示…」改为「界面里有一个常驻草稿面板(聊天区右侧 / 正文区,视界面而定)」。
+  - `skills/onboarding/references/feature-tour.md` ——「三个入口」→「两个入口」,删掉「终端界面(TUI)」整行,「三者共用同一份数据」→「两者」。
+  - `skills/onboarding/references/style-setup.md` —— 删掉范围表里的「(含 TUI)」。
+  - `README.md` ——「全屏 TUI」→「终端交互」、「TUI 全屏编辑器」→「终端全屏编辑器」、命令示例「`# TUI:`」→「`# 终端:`」、`bundle` 说明「TUI 单文件可执行」→「终端单文件可执行」(顺带去掉原先那句自问「真的有人用TUI吗🤔」)。
+  - `src/cli.ts` 的 `--help` 文案 —— `Commands inside the TUI` → `Commands inside the interactive session`。
+- [决策] **代码一行不动**。TUI 有用(终端交互、内置编辑器、草稿面板都在),要清的是**提及**,不是实现。因此 `docs/`、`.agents/`、代码注释里的 TUI 字样**一律保留** —— 那些说的是架构事实:代码还在,架构文档里写「有 TUI」是准确的;而角色提示词里写「TUI 在右侧显示草稿面板」是在教模型一个它本不该知道的产品形态。两者的分界是**谁在读、读了会拿它做什么**。
+
+**验证**:类型检查 0 错误;全量测试 **92 文件 / 1595 例通过**。
+
 T11 步骤 5:删除 vendor 目录 + 构建链收尾(T11 / D2 依赖化)。
 
 - [remove] **删除 `vendor/`(5.8M,6 个 pi 包源码)**,用 `git rm -r` 保留删除记录(将来要回看某条自研改动还有据可查)。删前先跑「运行时 vendor 引用」扫描:285 个文件、**零命中**才算过 —— 注释里的示例路径、以及 `test/pi-adapter.test.ts` 里那条 `t.includes("vendor/pi-")` **判据本身**不算(删它等于拆护栏)。

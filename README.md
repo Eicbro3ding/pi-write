@@ -50,10 +50,10 @@ pi-writer 探索的是:**Agent 如何在一个持续存在的创作世界里工�
 
 | 能力 | 说明 |
 |------|------|
-| 三种界面,一份数据 | 全屏 TUI / 本地 Web GUI(默认 `127.0.0.1:8811`)/ Electron 桌面壳,共用 `~/.pi/writer` 数据,可并行运行 （真的有人用TUI吗🤔）|
+| 三种界面,一份数据 | 终端交互 / 本地 Web GUI(默认 `127.0.0.1:8811`)/ Electron 桌面壳,共用 `~/.pi/writer` 数据,可并行运行 |
 | 结构化的世界管理 | `world_update` 结构化更新(条目 / 关系 / 约束 / 发展线 / 时间线 / 采样 / 世界观概述),`world_find` 只读检索;详细操作见 [docs/architecture.md](docs/architecture.md) |
 | 上下文激活引擎 | 关键词命中 + 关联激活(深度内多源 BFS、强关联优先),预算内注入 |
-| 内置编辑器 | TUI 全屏编辑器(vim 可选)+ Web CodeMirror 6(正文常驻 + 右栏对话) |
+| 内置编辑器 | 终端全屏编辑器(vim 可选)+ Web CodeMirror 6(正文常驻 + 右栏对话) |
 | 关系图 | 人物 / 世界关系图,布局与视口持久化,可标记强关联 |
 | 写作技能 | `onboarding`(上手引导:讲清心智模型、动笔前把风格定下来、按卡点讲功能)/ 网文方法论按阶段拆四个:`craft-outline`(选题结构/大纲/32 张题材卡)/ `craft-prose`(正文技法/人物)/ `craft-deslop`(去 AI 味/文风)/ `craft-review`(审稿清单与平台评分)—— 76 份原样收录的第三方方法论,每个技能自带路由表 / `outline` / `critique` / `revise` / `stage-scripting` |
 | 分支会话 | 章节会话支持撤回、编辑重发、分支切换 |
@@ -79,10 +79,10 @@ pi-writer所有配置独立存放于 `~/.pi/writer`,不读取 Pi coding-agent �
 # 安装依赖
 npm install
 
-# TUI:新建一本书
+# 终端:新建一本书
 npx tsx src/cli.ts --new-book "我的小说"
 
-# TUI:打开已有书
+# 终端:打开已有书
 npx tsx src/cli.ts --book my-novel
 
 # Web GUI(默认 http://127.0.0.1:8811,自动开浏览器)
@@ -92,7 +92,7 @@ npx tsx src/cli.ts --web
 npm run build:web && npm run electron
 ```
 
-要求:Node.js ≥ 18.20.4;`npm run bundle`(TUI 单文件可执行)与 `npm run build:electron` 需要 [bun](https://bun.sh)。
+要求:Node.js ≥ 18.20.4;`npm run bundle`(终端单文件可执行)与 `npm run build:electron` 需要 [bun](https://bun.sh)。
 
 ## 文档
 

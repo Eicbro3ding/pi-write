@@ -189,7 +189,7 @@ Options:
   -v, --version                           show version
   -h, --help                              show this help
 
-Commands inside the TUI (writer-specific):
+Commands inside the interactive session (writer-specific):
   /chapters                switch to a chapter in the current book
   /new-chapter [title]     add a new chapter to the current book
   /rename-chapter T [L]    rename or relabel the current chapter
