@@ -23,8 +23,22 @@
 
 import { readdir, stat, lstat, readFile, realpath } from "node:fs/promises";
 import type { Dirent } from "node:fs";
-import { join, sep } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import { WORLD_FILES } from "./world-data.ts";
+
+/**
+ * 从章节会话文件的绝对路径推导书 slug。
+ *
+ * 2026-10-05 从 `extension.ts` 上移到这里:原先它是 TUI 扩展的私有函数,但
+ * 工具护栏(`write-rails-extension.ts`)同样需要它 —— 而护栏必须在**所有**
+ * 会调 write/read 的会话里生效,不能依赖扩展文件。放在路径工具模块里两边共用。
+ *
+ * 结构依据:`<booksRoot>/<slug>/sessions/<chapter>.jsonl` → 取会话文件的祖父目录名。
+ */
+export function bookSlugFromSessionFile(sessionFile: string | undefined): string | undefined {
+	if (!sessionFile) return undefined;
+	return basename(dirname(sessionFile));
+}
 
 /** 文件分组 id;前端按此顺序渲染。 */
 export type BookFileGroup = "draft" | "notes" | "image" | "other";

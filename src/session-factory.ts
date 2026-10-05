@@ -28,6 +28,7 @@ import {
 import { resolveExtraSkillsDirs, resolveSkillsDir } from "./config.ts";
 import { dedupePaths, installToolPathGuard, skillDirsOf } from "./tool-guard.ts";
 import { setWordCountCwd, setWorldUpdateBookDir } from "./tools.ts";
+import { writeRailsExtension } from "./write-rails-extension.ts";
 
 type CliModel = ResolveCliModelResult["model"];
 
@@ -146,9 +147,19 @@ export function createSessionRuntimeFactory(opts: SessionFactoryOptions): Runtim
 				noSkills: false,
 				noContextFiles: true,
 				...(skillPaths.length > 0 ? { additionalSkillPaths: skillPaths } : {}),
-				extensionFactories: opts.pluginFactories?.length
-					? [...opts.extensionFactories, ...opts.pluginFactories]
-					: opts.extensionFactories,
+				// 写作运行时护栏(write 拦空内容 / read 拦循环 / 写后字数对比)在这里
+				// **统一并入**,而不是由各装配点自己传 —— 与上面 sessionSkillDirs 同款
+				// 教训:需要每个调用方记得传的东西迟早会漏,而「漏了护栏」是静默的
+				// (会话照跑,只是保护不在)。2026-10-05 的实证:该护栏原先只挂在
+				// writerExtension 上,而 writerExtension 只装配 cli(TUI)与 web 主会话,
+				// 真正写正文的 writer-host 编剧 agent 与 stage 角色全都没有 ——
+				// 于是 writer-c-v05ij1 那次「空内容清空 2824 字」在护栏上线后依然可达。
+				// 放在第一位:护栏是「保护性」的,应先于业务扩展生效(plugin 更靠后)。
+				extensionFactories: [
+					writeRailsExtension,
+					...opts.extensionFactories,
+					...(opts.pluginFactories ?? []),
+				],
 			},
 		});
 		// 技能放行的**权威来源是实际加载到的技能**:vendor 除 sessionSkillDirs 给的目录

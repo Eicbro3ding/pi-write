@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+护栏统一注入:上一轮那次工具护栏修复其实**没生效过**(TUI 冻结后的收口,P0)。
+
+- [fix] **护栏只挂在 TUI,真正出事的会话全都没有。** `write` 拦空内容 / `read` 拦循环的护栏注册在 `writerExtension`(`extension.ts`)上,而 `writerExtension` 只在**两处**装配:`cli.ts`(TUI 主会话)与 `web.ts`(web 主会话)。真正会调 `write` 写正文的会话是另两类 —— `writer-host.ts` 的**编剧/编辑 agent**(`initialActiveToolNames` 含 write/read)与 `stage-extension.ts` 的**导演/演员/收幕编剧**(`activeTools` 含 write),它们的 `extensionFactories` 里都没有 `writerExtension`。而 `writer-c-v05ij1` 那次「空内容把 2824 字第二章清零」的事故**恰恰发生在编剧会话**——护栏上线后原事故可原样复现,连「2824 字掉到 0」的字数告警也一起缺席(那条也在同一个钩子里)。
+- [feat] **抽出 `writeRailsExtension`,由 `createSessionRuntimeFactory` 统一并入**(新增 `src/write-rails-extension.ts`)。把与 UI 无关的三个钩子(`tool_call` 拦空内容/读循环、`tool_result` 字数与丢内容告警、`before_agent_start` 读取护栏按轮重置)从 `writerFactory` 里抽出,改由 `session-factory` 在所有装配点统一注入,排在调用方扩展之前(保护性扩展先生效)。与 `sessionSkillDirs` 同款教训 —— 那处注释早就记着「需要每个调用方记得传的东西迟早会漏,漏传就是静默故障」,这次是同一个坑的第二次。
+- [refactor] **`bookSlugFromSessionFile` 上移到 `book-files.ts`**(`src/book-files.ts`)。它原先是 `extension.ts` 的私有函数,而新抽出的护栏扩展同样需要它 —— 护栏必须在所有会话里生效,不能依赖某个扩展文件,故放到路径工具模块两边共用。
+- [docs] **TUI 冻结**:本次**不删**任何 TUI 代码、不改其行为,只在装配层面换接线方式;TUI 的 UI 钩子(`session_start` / `turn_end` / `model_select`)原样保留在 `extension.ts`。记忆锚与 `session_before_compact` 仍只在 TUI 路径(本轮有意未搬,见下)。
+- [test] `test/rails-wiring.test.ts`(5 例)**装配防回归**:断言 session-factory 确实并入了 `writeRailsExtension` 且排在调用方扩展之前、护栏文件自己声明了三个运行时钩子、**四个装配点都不得自行补装**(避免两套机制并存)、护栏已从 `extension.ts` 移出但 TUI 的 UI 钩子仍在。已用变异测试验证过有效性(移除统一注入后 2 例立即失败)。
+
+**已知边界(本轮故意没做)**:记忆锚(`before_agent_start` 注入 memory/Notice/发展线)与 `session_before_compact`(压缩保用户原话)**仍只挂在 TUI 路径** —— web 编剧会话同样没有它们。它们会改变 web 会话的 prompt 内容,影响面比工具护栏大,留作下一轮单独评估。
+
 文风采样从「到处注入」收口成「只有一个入口」:`read_style` 按需读(`src/tools.ts`,P1-3)。
 
 - [feat] **新增 `read_style` 工具**(`style_update` 的**读**对偶)。此前文风采样虽然存在数据里,模型手上却**没有任何把柄够得着它**:`world_find` 只回 id/type/title/status(连条目 body 都不给),采样更是 world.json 的**顶层字段**而不是条目,导出视图 `.writer/` 只有 characters / world / timeline 三份——剩下的唯一办法是 `read world.json`,那会把整本世界书倒进上下文,比常驻还亏。这是第二个 `read_chapter` 式处境:东西在系统里,可用的人拿不到。

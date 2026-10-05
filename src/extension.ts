@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { copyFile, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 // 2026-10-04(T7 批 3):vendor 类型改从 pi-adapter 取(ExtensionAPI / 上下文 / 事件)
 import type {
 	AgentMessage,
@@ -22,29 +22,20 @@ import {
 	setCurrentChapter,
 	updateChapter,
 } from "./book-manager.ts";
+import { bookSlugFromSessionFile } from "./book-files.ts";
 import { APP_TITLE, getBookDir } from "./config.ts";
 import { autoSaveConflicts, DraftEditorPanel } from "./draft-panel.ts";
 import { type ChatApi, type ChatMessage, openFileEditor, parseEditArgs } from "./editor/index.ts";
 import { createWriterStartupHeader, type WriterHeaderContext } from "./startup-header.ts";
-import { applyWorldUpdate, readChapterTool, readCountsForFile, readStyleTool, wordCountTool, worldFindTool, worldUpdateTool } from "./tools.ts";
+import { applyWorldUpdate, readChapterTool, readStyleTool, wordCountTool, worldFindTool, worldUpdateTool } from "./tools.ts";
 import { flattenWorldTree, renderWorldTree, renderWorldTreeFromData } from "./world-tree.ts";
 import { ensureWorld, type WorldData } from "./world-data.ts";
 import { chatTextOfMessage } from "./session-text.ts";
 import { buildChapterContext, buildStorylineView, type ChapterContextResult, summarizeTrim, trimMemory, WORLD_CONTEXT_TYPE } from "./world-context.ts";
-import {
-	absOf,
-	guardRead,
-	guardWrite,
-	isDraftRel,
-	relOf,
-	resetReadRails,
-	writeDeltaLine,
-} from "./tool-rails.ts";
 import { detectSessionMode, modeAnchorLine, type SessionMode } from "./session-mode.ts";
 import { readWriterSettings, type WriterSettings } from "./writer-settings.ts";
 import { buildInspectReport, inspectHeadline, openInspectPanel, type InspectReport } from "./inspect/index.ts";
 import { buildWriterTheme } from "./writer-theme.ts";
-import { pathWithinRoot } from "./tool-guard.ts";
 import { countWriting, WriterFooter, WriterInfoBar, type WriterUiState } from "./writer-ui.ts";
 
 /**
@@ -116,12 +107,6 @@ async function recentUserMessagesFromSessionFile(absPath: string, count = 2): Pr
 	} catch {
 		return [];
 	}
-}
-
-/** Derive the book slug from an absolute chapter session file path. */
-function bookSlugFromSessionFile(sessionFile: string | undefined): string | undefined {
-	if (!sessionFile) return undefined;
-	return basename(dirname(sessionFile));
 }
 
 /**
@@ -310,51 +295,8 @@ async function refreshStatus(ctx: ExtensionContext): Promise<void> {
 	ctx.ui.setStatus(WRITER_SLOT, `📖 《${book.title}》· ${ch?.id ?? file} · ${ch?.title ?? file}${label}`);
 }
 
-/**
- * write/edit 落在正文(draft/*.md)时,算一次字数并返回要追加的文本行。
- *
- * 只在正文上生效:world.json / memory.md / notes 的字数对创作节奏没有意义,
- * 每次都附一行反而把工具结果淹了。
- *
- * 返回值设计成「一行」而不是结构化 details:这行文字直接进模型的工具结果,
- * 越短越不容易干扰它对"写入是否成功"的判断。
- */
-/**
- * write 执行**前**采样的字数,按 toolCallId 暂存,供 tool_result 阶段做前后对比。
- * 为什么必须在调用前采样:write 执行完文件已经是新内容,拿不到"写入前多少字",
- * 也就无从判断这一写是正常重写还是把正文写没了。
- */
-const writeBefore = new Map<string, { rel: string; cnChars: number }>();
-
-interface DraftCounts {
-	rel: string;
-	cnChars: number;
-	paragraphs: number;
-}
-
-async function countsAfterWrite(ctx: ExtensionContext, event: ToolResultEvent): Promise<DraftCounts | null> {
-	const raw = event.input?.path;
-	if (typeof raw !== "string" || raw.length === 0) return null;
-
-	// 会话文件 → 书 slug → 书目录(与其余命令的推导方式一致,见 bookSlugFromSessionFile)
-	const slug = bookSlugFromSessionFile(ctx.sessionManager.getSessionFile() ?? undefined);
-	if (!slug) return null;
-	const bookDir = getBookDir(slug);
-
-	// 工具入参可能是相对书目录的路径,也可能是绝对路径;归一化后判断是否落在 draft/
-	const abs = isAbsolute(raw) ? raw : resolve(bookDir, raw);
-	if (!pathWithinRoot(abs, bookDir)) return null;
-	const rel = relative(bookDir, abs);
-	if (!rel.startsWith(`draft${sep}`)) return null;
-
-	try {
-		const counts = await readCountsForFile(abs);
-		return { rel, cnChars: counts.cnChars, paragraphs: counts.paragraphs };
-	} catch {
-		// 计数失败(文件被并发删掉/读权限等)不阻断写入结果 —— 字数只是附带信息
-		return null;
-	}
-}
+// write/edit 的字数与前后对比、以及 read 的循环拦截,已随护栏一起抽到
+// `src/write-rails-extension.ts`(由 session-factory 统一注入所有会话)。
 
 function writerFactory(pi: ExtensionAPI): void {
 	// Register the writer-only custom tools.
@@ -458,9 +400,6 @@ function writerFactory(pi: ExtensionAPI): void {
 	// 世界状态会注意力衰减;锚让这些事实每轮都在上下文最前。web 侧经同一
 	// extensionFactories 装配(TUI/Web 同款行为)。失败静默跳过,不阻塞对话。
 	pi.on("before_agent_start", async (event, ctx) => {
-		// 读取护栏按轮重置(tool-rails):「这一轮内有没有重复读」才是判据,
-		// 跨轮累积会让长会话后期什么都读不了。
-		resetReadRails();
 		try {
 			const sessionFile = ctx.sessionManager.getSessionFile() ?? undefined;
 			const slug = bookSlugFromSessionFile(sessionFile);
@@ -520,70 +459,10 @@ function writerFactory(pi: ExtensionAPI): void {
 		await refreshStatus(ctx);
 	});
 
-	// 工具护栏(2026-10-05):把两条「只写在提示词里拦不住」的规则下沉到工具层。
-	//
-	// 复盘 writer-c-v05ij1:提示词写着「write 会整体替换,优先用 edit」「一眼只读
-	// 一次」,模型照样用空内容把 2824 字的第二章清零、用 read 带 offset 把同一章
-	// 翻了 91 次。提示词约束的是**愿意遵守**的模型;这两条一旦发生就是事故
-	// (静默清空 / 上下文被翻页结果灌爆),必须在工具层兜底。
-	//
-	// 每条拦截都带**出路**(该换哪个工具),否则模型只会换个 offset 继续绕。
-	pi.on("tool_call", async (event, ctx) => {
-		if (event.toolName !== "write" && event.toolName !== "read") return;
-		const slug = bookSlugFromSessionFile(ctx.sessionManager.getSessionFile() ?? undefined);
-		if (!slug) return;
-		const bookDir = getBookDir(slug);
-
-		if (event.toolName === "write") {
-			const reason = guardWrite(event.input as { path?: unknown; content?: unknown }, bookDir);
-			if (reason) return { block: true, reason };
-			// 放行前采样字数:draft/ 下已存在且有内容才记,供 tool_result 做前后对比
-			const rel = relOf(event.input?.path, bookDir);
-			const abs = absOf(event.input?.path, bookDir);
-			if (rel && abs && isDraftRel(rel)) {
-				try {
-					const before = await readCountsForFile(abs);
-					if (before.cnChars > 0) writeBefore.set(event.toolCallId, { rel, cnChars: before.cnChars });
-				} catch {
-					/* 文件不存在/读不了:不采样,对比自然跳过 */
-				}
-			}
-			return;
-		}
-
-		const reason = guardRead(event.input as { path?: unknown; offset?: unknown; limit?: unknown }, bookDir);
-		if (reason) return { block: true, reason };
-		return;
-	});
-
-	// 写入正文后把字数附在工具返回值里(2026-10-04)。
-	//
-	// 为什么用钩子而不是让 AI 调 word_count:字数从来不是用户想问 AI 的问题,
-	// 而是 AI 写完一章之后**必须知道**的客观事实。让模型主动去查,等于把「记得
-	// 查」的责任推给一个不擅长计数的东西 —— 它经常不查,或者眼估一个数报出来。
-	// 挂在 tool_result 上之后,字数与「写入成功」在同一条返回值里,模型下一轮
-	// 必然看到,且与实际落盘内容同源(不是模型自己算的)。
-	//
-	// 为什么选 tool_result 而不是包一层 write 工具:pi 的 extension 设计意图就是
-	// 「react to session events」,声明式的钩子不会遗忘;而且 write/edit 是内置
-	// 工具,包装它们要复制一份 schema 与渲染逻辑,钩子只需改写返回值。
-	pi.on("tool_result", async (event, ctx) => {
-		if (event.toolName !== "write" && event.toolName !== "edit") return;
-		if (event.isError) return;
-		const counts = await countsAfterWrite(ctx, event);
-		if (!counts) return;
-		const parts = [`${counts.cnChars} 字`];
-		if (counts.paragraphs > 0) parts.push(`${counts.paragraphs} 段`);
-		const texts = [`【本章字数】${parts.join(" · ")}`];
-		// 写入前后对比:整体重写合法,但**静默丢内容**必须显性化
-		const before = writeBefore.get(event.toolCallId);
-		if (before) {
-			writeBefore.delete(event.toolCallId);
-			const delta = writeDeltaLine(before.rel, before.cnChars, counts.cnChars);
-			if (delta) texts.push(delta);
-		}
-		return { content: [...event.content, ...texts.map((text) => ({ type: "text" as const, text }))] };
-	});
+	// 工具护栏(2026-10-05)已抽到 `src/write-rails-extension.ts`,由
+	// `createSessionRuntimeFactory` 统一并入**所有**会话 —— 原先它只挂在本扩展上,
+	// 而本扩展只装配 TUI 主会话与 web 主会话;真正写正文的 web 编剧 / 舞台角色
+	// 全都没有护栏。详见该文件头注释。
 
 	pi.registerCommand("chapters", {
 		description: "列出本书所有章节并切换",
