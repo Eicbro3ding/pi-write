@@ -98,7 +98,11 @@ function legacyServerToUpstream(server: LegacyServer, warnings: string[]): Upstr
 				`MCP 服务器 "${server.name}":上游不支持 SSE 传输,已降级为 http(URL 不变)。若连不上,请改用该服务的 streamable HTTP 端点或 wait 上游支持。`,
 			);
 		}
-		return { type: "http", url: server.url, exposure: "direct" };
+		const out: UpstreamServer = { type: "http", url: server.url, exposure: "direct" };
+		// env 在 http 传输下同样有意义(上游会把它并入请求环境 / 供自定义客户端读取),
+		// 旧配置里写了就带过去 —— 丢掉等于静默改用户的配置。
+		if (server.env && Object.keys(server.env).length > 0) out.env = server.env;
+		return out;
 	}
 	return null;
 }

@@ -223,7 +223,13 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 	// 模型工具声明(exposure=direct)。McpHost 只是「配置 + 状态视图」的门面,
 	// 供 /api/mcp 端点读改写;连接本身由上游扩展在会话内完成。
 	const mcpHost = new McpHost(agentDir);
-	await mcpHost.ensureMigrated();
+	// 迁移告警必须打出来:SSE 降级与「字段不完整已跳过」都是用户**看不见就查不出来**的
+	// 静默失败(旧条目留在文件里也不会报错,只是永远不生效)。
+	{
+		const { warnings, errors } = await mcpHost.ensureMigrated();
+		for (const w of warnings) process.stderr.write(`[mcp] ${w}\n`);
+		for (const e of errors) process.stderr.write(`[mcp] 配置错误: ${e}\n`);
+	}
 
 	// 外部插件:扫描 ~/.pi/writer/plugins/<id>/ → jiti 动态 import 启用插件 →
 	// 工厂并入 extensionFactories(单个插件失败隔离,error 经 /api/plugins 展示)

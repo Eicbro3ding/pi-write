@@ -79,6 +79,27 @@ describe("migrateMcpConfig · 旧形状迁移", () => {
 		expect(r.config.mcpServers.e?.env).toEqual({ TOKEN: "abc" });
 	});
 
+	// 端到端冒烟发现的真实漏洞:http 分支漏带 env,旧配置里的值**静默消失**。
+	// 这类"迁移丢字段"不会报错、不会告警,用户只能在工具连不上时反推。
+	it("http 带 env 时也保留 env(与 stdio 分支对齐)", async () => {
+		const legacy = JSON.stringify({
+			servers: [{ name: "h", type: "http", url: "https://x.example/mcp", env: { TOKEN: "abc" } }],
+		});
+		const r = await migrateMcpConfig(legacy);
+		expect(r.config.mcpServers.h?.env).toEqual({ TOKEN: "abc" });
+		expect(r.config.mcpServers.h?.type).toBe("http");
+	});
+
+	it("sse 降级为 http 时同样保留 env", async () => {
+		const legacy = JSON.stringify({
+			servers: [{ name: "s", type: "sse", url: "https://x.example/sse", env: { K: "V" } }],
+		});
+		const r = await migrateMcpConfig(legacy);
+		expect(r.config.mcpServers.s?.type).toBe("http");
+		expect(r.config.mcpServers.s?.env).toEqual({ K: "V" });
+		expect(r.warnings).toHaveLength(1);
+	});
+
 	it("字段不完整的条目跳过并告警,不整体失败", async () => {
 		const legacy = JSON.stringify({
 			servers: [
