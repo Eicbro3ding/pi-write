@@ -8,14 +8,16 @@ import { Lu } from "./Lu.tsx";
 /** 表单草稿:与 McpServerInfo 一致,args/env 在表单层用逗号分隔字符串。 */
 interface Draft {
 	name: string;
-	type: "stdio" | "sse" | "http";
+	type: "stdio" | "http";
 	command: string;
 	args: string;
 	env: string;
 	url: string;
+	/** 工具暴露策略(T9-A 新增);空串 = 不指定,由服务端/上游按默认处理。 */
+	exposure: "" | "codemode" | "deferred" | "direct" | "hidden";
 }
 
-const EMPTY_DRAFT: Draft = { name: "", type: "stdio", command: "", args: "", env: "", url: "" };
+const EMPTY_DRAFT: Draft = { name: "", type: "stdio", command: "", args: "", env: "", url: "", exposure: "" };
 
 function draftFromServer(s: McpServerInfo): Draft {
 	return {
@@ -27,6 +29,7 @@ function draftFromServer(s: McpServerInfo): Draft {
 			.map(([k, v]) => `${k}=${v}`)
 			.join(","),
 		url: s.url ?? "",
+		exposure: s.exposure ?? "",
 	};
 }
 
@@ -52,12 +55,13 @@ function draftToServer(d: Draft): McpServerInfo {
 	} else {
 		base.url = d.url.trim();
 	}
+	if (d.exposure !== "") base.exposure = d.exposure;
 	return base;
 }
 
 /**
  * MCP 服务器管理区:服务器列表(名称 + 类型 + 连接状态/工具数)+
- * 行内表单(新增/编辑,字段按类型切换 stdio/sse)+ 删除确认。
+ * 行内表单(新增/编辑,字段按类型切换 stdio/http + 暴露策略)+ 删除确认。
  * 保存/删除后服务端会重连并重建会话,新工具即时生效——提示文案随之说明。
  */
 export function McpServerList({ client }: { client: ApiClient }) {
@@ -115,7 +119,7 @@ export function McpServerList({ client }: { client: ApiClient }) {
 			return;
 		}
 		if (server.type !== "stdio" && server.url?.length === 0) {
-			setRowErr("http/sse 类型必须填写 URL");
+			setRowErr("http 类型必须填写 URL");
 			return;
 		}
 		setBusy(true);
@@ -219,7 +223,9 @@ export function McpServerList({ client }: { client: ApiClient }) {
 			{loadErr && <div className="notice err">{loadErr}</div>}
 			{rowErr && <div className="notice err">{rowErr}</div>}
 			<div className="s-hint">
-				MCP 服务器为 AI 提供外部工具(stdio 本地命令 / http、sse 远端)。保存后立即重连并重建会话，新工具即时生效；连接意外断开会自动重连。
+				MCP 服务器为 AI 提供外部工具(stdio 本地命令 / http 远端)。保存后立即重连并重建会话，新工具即时生效。
+				<br />
+				暴露策略 <code>direct</code> 让工具直接进入模型工具声明(默认)；<code>codemode</code>/<code>deferred</code> 则按需加载、不占工具位。
 			</div>
 			{!hasServers && !formOpen && (
 				<div className="s-empty-state">
@@ -286,11 +292,10 @@ export function McpServerList({ client }: { client: ApiClient }) {
 						<Select
 							className="s-input"
 							value={draft.type}
-							onChange={(v) => setDraft({ ...draft, type: v === "stdio" ? "stdio" : v === "sse" ? "sse" : "http" })}
+							onChange={(v) => setDraft({ ...draft, type: v === "stdio" ? "stdio" : "http" })}
 							options={[
 								{ value: "stdio", label: "stdio(本地命令)" },
 								{ value: "http", label: "http(streamable，现行标准)" },
-								{ value: "sse", label: "sse(旧版，兼容)" },
 							]}
 						/>
 						{draft.type === "stdio" ? (
@@ -302,6 +307,18 @@ export function McpServerList({ client }: { client: ApiClient }) {
 						) : (
 							<input className="s-input" placeholder="URL，如 http://localhost:8765/mcp" value={draft.url} onChange={(e) => setDraft({ ...draft, url: e.target.value })} />
 						)}
+						<Select
+							className="s-input"
+							value={draft.exposure}
+							onChange={(v) => setDraft({ ...draft, exposure: v as Draft["exposure"] })}
+							options={[
+								{ value: "", label: "暴露策略：默认(direct，工具直接可用)" },
+								{ value: "direct", label: "direct(工具直接进模型声明)" },
+								{ value: "codemode", label: "codemode(仅脚本可调，不占工具位)" },
+								{ value: "deferred", label: "deferred(由 tool_search 按需加载)" },
+								{ value: "hidden", label: "hidden(注册但不可达)" },
+							]}
+						/>
 					<div>
 						<button className="btn-ghost" disabled={busy} onClick={() => void save()}>
 							{busy ? "保存中…" : "保存"}

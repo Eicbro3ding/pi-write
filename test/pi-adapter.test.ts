@@ -186,7 +186,9 @@ describe("pi-adapter 契约（T7 批 2）", () => {
 			"extension.ts",
 			"inspect/index.ts",
 			"inspect/panel.ts",
-			"mcp/tools.ts",
+			"mcp/extension.ts",
+			"mcp/host.ts",
+			"mcp/migrate.ts",
 			"stage/orchestrator.ts",
 			"startup-header.ts",
 			"writer-theme.ts",
@@ -195,7 +197,6 @@ describe("pi-adapter 契约（T7 批 2）", () => {
 			// —— 批 4 ——
 			"ask-user.ts",
 			"book-manager.ts",
-			"mcp/manager.ts",
 			"plugin-loader.ts",
 			"skills-index.ts",
 			"stage/stage-extension.ts",

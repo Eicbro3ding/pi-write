@@ -140,6 +140,13 @@ describe("McpHost · 原样保存", () => {
 		await host.saveRawConfig(text);
 		expect(readFileSync(join(tmp, "mcp.json"), "utf-8")).toBe(text);
 	});
+
+	it("saveRawConfig 原样保留 imports 与 mcpServers 形状(所见即所得)", async () => {
+		// 对应原 config.ts 的 saveRawMcpConfig 契约:不清洗用户写的 Claude 形状
+		const text = JSON.stringify({ mcpServers: { a: { command: "x" } }, imports: ["claude-code"] }, null, 2);
+		await host.saveRawConfig(text);
+		expect(readFileSync(join(tmp, "mcp.json"), "utf-8")).toBe(text);
+	});
 });
 
 describe("McpHost · 迁移", () => {

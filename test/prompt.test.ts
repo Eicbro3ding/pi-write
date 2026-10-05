@@ -40,7 +40,7 @@ describe("buildWriterSystemPrompt", () => {
 		expect(buildWriterSystemPrompt([], "none")).not.toContain("访问网络");
 	});
 
-	it("外部工具清单追加在文末,名称+单行描述", () => {
+	it("额外工具清单追加在文末,名称+单行描述", () => {
 		const prompt = buildWriterSystemPrompt(
 			[
 				{ name: "tavily_search", description: "网络搜索,查资料用" },
@@ -48,11 +48,13 @@ describe("buildWriterSystemPrompt", () => {
 			],
 			"none",
 		);
-		expect(prompt).toContain("# 外部工具(MCP)");
+		// T9-A:标题去掉了「(MCP)」—— MCP 工具改由上游扩展注册进工具声明,
+		// 本段现在只服务「非 MCP 的额外工具说明」这一潜在场景(见 prompt.ts 注释)
+		expect(prompt).toContain("# 外部工具");
 		expect(prompt).toContain("`tavily_search` — 网络搜索,查资料用");
 		expect(prompt).toContain("`fetch_url` — 抓取网页 支持多行描述");
 		// 追加在提示词末尾(基础提示之后)
-		expect(prompt.indexOf("外部工具(MCP)")).toBeGreaterThan(prompt.indexOf("你绝不做的事"));
+		expect(prompt.indexOf("# 外部工具")).toBeGreaterThan(prompt.indexOf("你绝不做的事"));
 	});
 
 	it("占位符被替换,不残留 {SHELL_LINE}", () => {

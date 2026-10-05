@@ -966,20 +966,34 @@ export interface SetupStateDto {
 	};
 }
 
-/** MCP 服务器配置条目(与 src/mcp/config.ts 的 McpServerConfig 对齐)。 */
+/**
+ * MCP 服务器配置条目(与 src/mcp/host.ts 的 McpServerConfig 对齐)。
+ *
+ * T9-A(2026-10-05):改用上游 `createMcpExtension` 后,**不再支持 sse**
+ * (上游只有 stdio + streamable HTTP),并新增上游的 `exposure` / `enabled` /
+ * `description` / `headers` 字段。
+ */
 export interface McpServerInfo {
 	name: string;
-	type: "stdio" | "sse" | "http";
+	type: "stdio" | "http";
 	command?: string;
 	args?: string[];
 	env?: Record<string, string>;
 	url?: string;
+	/** http 服务器的自定义请求头。 */
+	headers?: Record<string, string>;
+	/** 工具暴露策略:direct = 直接进模型工具声明(迁移默认);codemode/deferred = 按需加载。 */
+	exposure?: "codemode" | "deferred" | "direct" | "hidden";
+	/** 是否连接(false 时保留条目但不连)。 */
+	enabled?: boolean;
+	/** 一句话说明。 */
+	description?: string;
 }
 
-/** /api/mcp 返回的连接状态(与 src/mcp/manager.ts 的 McpServerStatus 对齐)。 */
+/** /api/mcp 返回的连接状态(与 src/mcp/host.ts 的 McpServerStatus 对齐)。 */
 export interface McpServerStatus {
 	name: string;
-	type: "stdio" | "sse" | "http";
+	type: "stdio" | "http";
 	ok: boolean;
 	tools: number;
 	error?: string;

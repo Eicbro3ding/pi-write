@@ -21,7 +21,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { atomicWriteFile } from "../atomic-write.ts";
 
-/** agentDir 下的配置文件名(与 config.ts 的 MCP_CONFIG_FILE 一致)。 */
+/** agentDir 下的配置文件名。 */
 export const MCP_CONFIG_FILE = "mcp.json";
 
 /** 自研形状的单条服务器(迁移输入)。 */
