@@ -442,14 +442,27 @@ export function applyStyleUpdate(data: WorldData, update: StyleUpdateOp): WorldD
 			return applyWorldUpdate(data, { op: "delete_constraint", id: existing.id });
 		}
 		case "update_style_sample":
+			// 空采样一律拒绝(2026-10-05)。采样是**作者文风基准**,是本产品最核心的
+			// 用户资产之一,而这条 op 是它唯一的写入路径、且刻意不写编辑记录(见
+			// world_update 的 last-world-edit 说明)—— 前端连预览卡都不弹。模型一旦
+			// 传空(常见于它以为自己拿到了内容、实际拼出空串),采样就静默归零,
+			// 用户要过很久才发现「AI 写得不像我了」。
+			//
+			// 注意这不是「禁止清空」:要清空采样是合法意图,但那应当由用户明确要求,
+			// 而不是模型一次参数失误的副作用 —— 真有此需求让用户直接改 world.json。
+			// 读侧(read_style)已为「没有采样」写了护栏,这里把写侧补上,两侧对称。
+			if (update.text.trim().length === 0) {
+				throw new WorldValidationError(
+					"update_style_sample 的 text 是空的 —— 文风采样是作者文风基准,空值会把它清掉,而这条写入不产生编辑记录。若你确实没有采样内容:①向用户要一段他写的文字(300–500 字)再存;②用户说「先按你判断的写」时照你已掌握的调性写,并在回复里说明语感是你暂定的。不要用空串占位。",
+				);
+			}
 			return applyWorldUpdate(data, { op: "update_style_sample", text: update.text, source: update.source });
 		case "set_world_summary":
 			return applyWorldUpdate(data, { op: "set_world_summary", text: update.text });
 	}
 }
 
-/** 按传入字段更新条目(仅覆盖显式提供的字段,其余保留);更新 updatedAt。 */
-function updateEntryFields(e: WorldEntry, update: Extract<WorldUpdateOp, { op: "upsert_entry" }>, now: number): void {
+/** 按传入字段更新条目(仅覆盖显式提供的字段,其余保留);更新 updatedAt。 */function updateEntryFields(e: WorldEntry, update: Extract<WorldUpdateOp, { op: "upsert_entry" }>, now: number): void {
 	if (update.title !== undefined) e.title = update.title;
 	if (update.type !== undefined) e.type = update.type;
 	if (update.keys !== undefined) e.keys = update.keys;
@@ -614,9 +627,16 @@ export function applyWorldUpdate(data: WorldData, update: WorldUpdateOp): WorldD
 			it.updatedAt = now;
 			break;
 		}
-		case "notice_delete":
+		case "notice_delete": {
+			// 存在性校验(2026-10-05):原先直接 filter,传错 id 是**静默无操作** ——
+			// 工具回「已更新世界书」,模型以为删掉了、用户还看见那条待办。
+			// 与 notice_update / notice_set_done 的口径对齐,也符合本文件的
+			// 「不静默无操作,报错原样进上下文让模型自我纠正」(见 narrowOp 注释)。
+			const it = next.notice.items.find((x) => x.id === update.id);
+			if (!it) throw new WorldValidationError(`Notice 待办不存在: ${update.id}(未删除任何内容)`);
 			next.notice.items = next.notice.items.filter((x) => x.id !== update.id);
 			break;
+		}
 		case "advance_storyline": {
 			const n = next.storyline.nodes.find((x) => x.id === update.id);
 			if (!n) {
@@ -658,9 +678,14 @@ export function applyWorldUpdate(data: WorldData, update: WorldUpdateOp): WorldD
 			}
 			break;
 		}
-		case "delete_constraint":
+		case "delete_constraint": {
+			// 同 notice_delete:原先 filter 掉一个不存在的 id 也不吭声,
+			// 模型据此以为「约束已删除」继续推理,而用户那边规矩还在。
+			const c = next.constraints.find((x) => x.id === update.id);
+			if (!c) throw new WorldValidationError(`约束不存在: ${update.id}(未删除任何内容)`);
 			next.constraints = next.constraints.filter((x) => x.id !== update.id);
 			break;
+		}
 		case "update_style_sample":
 			next.styleSample = { text: update.text, source: update.source ?? "", updatedAt: now };
 			break;
@@ -885,13 +910,40 @@ export const worldUpdateTool: ToolDefinition = defineTool({
 			} catch {
 				/* 记录写失败不影响世界书更新(卡片只是展示,world.json 已落盘) */
 			}
+			// 条目正文被清空时附一行提示(2026-10-05)。
+			//
+			// 与 writeDeltaLine 同一个思路:**不阻止,但让损失可见**。「把条目正文清空」
+			// 本身可能是合法意图(占位条目、废弃设定),硬拦会挡住正常操作;但
+			// 非空 → 空 这个跃迁最常见的成因是模型漏带内容 —— 它以为自己写了小传,
+			// 实际传了空串,而工具只回「已更新世界书」,看起来完全正常。
+			const emptied = emptiedEntryBodies(world, next);
+			const notice = emptied.length > 0
+				? `\n⚠️ 本次把 ${emptied.map((t) => `「${t}」`).join("、")} 的正文清空了(原非空 → 现为空)。如果这是有意为之就忽略本条;如果不是,你多半漏带了 body —— 用 world_find 复查后再 upsert_entry 补回。`
+				: "";
 			return {
-				content: [{ type: "text", text: `已更新世界书(${update.op})${echo}。` }],
+				content: [{ type: "text", text: `已更新世界书(${update.op})${echo}。${notice}` }],
 				details: { op: update.op },
 			};
 		});
 	},
 });
+
+/**
+ * 找出「正文从非空变成空」的条目(返回标题,供 world_update 附提示行)。
+ *
+ * 为什么只报「非空 → 空」而不报「本来就空」:前者是**损失**,后者无变化。
+ * 为什么用标题而不是 id:提示行是给模型看的,标题是它认识的名字(与 read_chapter
+ * 的拦截理由写法一致)。
+ */
+export function emptiedEntryBodies(before: WorldData, after: WorldData): string[] {
+	const byId = new Map(before.entries.map((e) => [e.id, e]));
+	const out: string[] = [];
+	for (const e of after.entries) {
+		const prev = byId.get(e.id);
+		if (prev && prev.body.trim().length > 0 && e.body.trim().length === 0) out.push(e.title);
+	}
+	return out;
+}
 
 /**
  * read_style —— 读回文风采样(`style_update` 的**读**对偶)。

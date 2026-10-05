@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyStyleUpdate, applyWorldUpdate, normalizeStyleUpdate, normalizeWorldUpdate, readChapterTool, readStyleTool, setWordCountCwd, setWorldUpdateBookDir, styleUpdateTool, wordCountTool, worldFindTool, worldUpdateTool } from "../src/tools.ts";
+import { applyStyleUpdate, applyWorldUpdate, emptiedEntryBodies, normalizeStyleUpdate, normalizeWorldUpdate, readChapterTool, readStyleTool, setWordCountCwd, setWorldUpdateBookDir, styleUpdateTool, wordCountTool, worldFindTool, worldUpdateTool } from "../src/tools.ts";
 import { createEmptyWorld, ensureWorld, saveWorld, WorldValidationError } from "../src/world-data.ts";
 
 type ToolParams = Parameters<typeof wordCountTool.execute>[1];
@@ -407,6 +407,69 @@ describe("applyWorldUpdate", () => {
 	});
 });
 
+describe("删除类 op 不静默无操作（2026-10-05）", () => {
+	// 这一组盯的是「传错 id → filter 掉一个不存在的元素 → 回『已更新』」的踢皮球:
+	// 模型据此以为删掉了、继续推理,而用户那边东西还在。同文件 narrowOp 的注释写着
+	// 「不静默无操作,报错原样进上下文让模型自我纠正」—— delete_entry / notice_update
+	// 一直是这么做的,下面三个 op 原先没有,本轮补齐。
+
+	it("delete_constraint 传错 id 报错而不是静默无操作", () => {
+		const w = createEmptyWorld();
+		const a = applyWorldUpdate(w, { op: "upsert_constraint", name: "对话风格", text: "对话不用引号。" });
+		const id = a.constraints[0]!.id;
+		// 正确 id:正常删除
+		expect(applyWorldUpdate(a, { op: "delete_constraint", id }).constraints).toHaveLength(0);
+		// 错 id:必须抛错(原先返回「已更新世界书」但什么都没删)
+		expect(() => applyWorldUpdate(a, { op: "delete_constraint", id: `${id}-typo` })).toThrow(WorldValidationError);
+		expect(() => applyWorldUpdate(a, { op: "delete_constraint", id: "不存在的约束" })).toThrow(/约束不存在/);
+	});
+
+	it("notice_delete 传错 id 报错而不是静默无操作", () => {
+		const w = createEmptyWorld();
+		const a = applyWorldUpdate(w, { op: "notice_append", text: "记得回收伏笔" });
+		const id = a.notice.items[0]!.id;
+		expect(applyWorldUpdate(a, { op: "notice_delete", id }).notice.items).toHaveLength(0);
+		expect(() => applyWorldUpdate(a, { op: "notice_delete", id: `${id}-typo` })).toThrow(/Notice 待办不存在/);
+	});
+
+	it("报错文案说明「未删除任何内容」(让模型知道世界没变)", () => {
+		const w = createEmptyWorld();
+		const a = applyWorldUpdate(w, { op: "upsert_constraint", name: "C", text: "t" });
+		expect(() => applyWorldUpdate(a, { op: "delete_constraint", id: "x" })).toThrow(/未删除任何内容/);
+		const b = applyWorldUpdate(w, { op: "notice_append", text: "n" });
+		expect(() => applyWorldUpdate(b, { op: "notice_delete", id: "x" })).toThrow(/未删除任何内容/);
+	});
+});
+
+describe("emptiedEntryBodies —— 条目正文清空可见化（2026-10-05）", () => {
+	// 与 writeDeltaLine 同思路:不阻止,但让损失可见。「清空条目正文」可能是合法意图,
+	// 但「非空 → 空」最常见的成因是模型漏带 body,而工具只回「已更新世界书」。
+
+	it("非空 → 空:回报标题", () => {
+		const w = createEmptyWorld();
+		const a = applyWorldUpdate(w, { op: "upsert_entry", type: "character", title: "林昭", body: "旧城最好的刀客。" });
+		const b = applyWorldUpdate(a, { op: "upsert_entry", type: "character", title: "林昭", body: "" });
+		expect(emptiedEntryBodies(a, b)).toEqual(["林昭"]);
+	});
+
+	it("本来就空 / 变长 / 纯空白不再变空:都不报", () => {
+		const w = createEmptyWorld();
+		const a = applyWorldUpdate(w, { op: "upsert_entry", type: "character", title: "甲" }); // body 缺省空
+		const b = applyWorldUpdate(a, { op: "upsert_entry", type: "character", title: "甲", body: "" });
+		expect(emptiedEntryBodies(a, b)).toEqual([]);
+
+		const c = applyWorldUpdate(a, { op: "upsert_entry", type: "character", title: "乙", body: "有内容" });
+		const d = applyWorldUpdate(c, { op: "upsert_entry", type: "character", title: "乙", body: "更长的内容" });
+		expect(emptiedEntryBodies(c, d)).toEqual([]);
+	});
+
+	it("新建的空条目不算「被清空」", () => {
+		const w = createEmptyWorld();
+		const a = applyWorldUpdate(w, { op: "upsert_entry", type: "world", title: "此地" });
+		expect(emptiedEntryBodies(w, a)).toEqual([]);
+	});
+});
+
 describe("upsert_entry 图片字段", () => {
 	it("新建条目带 avatar/images", () => {
 		const world = applyWorldUpdate(createEmptyWorld(), {
@@ -548,6 +611,18 @@ describe("applyStyleUpdate（编剧窄通道）", () => {
 		expect(w.styleSample?.source).toBe("用户提供");
 		const w2 = applyStyleUpdate(w, { op: "set_world_summary", text: "都市脑洞轻喜剧。" });
 		expect(w2.worldSummary).toBe("都市脑洞轻喜剧。");
+	});
+
+	it("update_style_sample 拒绝空值(2026-10-05)", () => {
+		// 采样是作者文风基准,而这是它唯一的写入路径、且不产生编辑记录(前端无预览卡),
+		// 空值会静默把它清掉。读侧(read_style)已为「没有采样」写了护栏,这里补齐写侧。
+		const w = applyStyleUpdate(createEmptyWorld(), { op: "update_style_sample", text: "暮色如旧。" });
+		expect(() => applyStyleUpdate(w, { op: "update_style_sample", text: "" })).toThrow(WorldValidationError);
+		expect(() => applyStyleUpdate(w, { op: "update_style_sample", text: "   \n  " })).toThrow(WorldValidationError);
+		// 拦截理由要给出去路(否则模型只会把空串换个写法再来一次)
+		expect(() => applyStyleUpdate(w, { op: "update_style_sample", text: "" })).toThrow(/300–500 字/);
+		// 原采样必须还在(不是「清空后报错」)
+		expect(w.styleSample?.text).toBe("暮色如旧。");
 	});
 
 	it("碰不到条目/关系/时间线/发展线(窄通道的参数 schema 只有四个 op)", () => {
