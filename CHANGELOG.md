@@ -1,5 +1,15 @@
 # Changelog
 
+T11 步骤 5:删除 vendor 目录 + 构建链收尾(T11 / D2 依赖化)。
+
+- [remove] **删除 `vendor/`(5.8M,6 个 pi 包源码)**,用 `git rm -r` 保留删除记录(将来要回看某条自研改动还有据可查)。删前先跑「运行时 vendor 引用」扫描:285 个文件、**零命中**才算过 —— 注释里的示例路径、以及 `test/pi-adapter.test.ts` 里那条 `t.includes("vendor/pi-")` **判据本身**不算(删它等于拆护栏)。
+- [fix] **两个 tsconfig 的 `include` 去掉 `vendor/**\/*.ts`**。顺带更正 `tsconfig.json` 的「已知噪音」一节:那 3 处错误(undici ×2、highlight.js ×1)随 vendor 一起消失,现在 **`tsc --noEmit` 的输出应当为空**;并写明 `skipLibCheck: true` 是依赖化后的**必需品**(`pi-ai` 在 NodeNext 下有约 30 个 TS1543),关掉它那 30 个噪音会淹掉真信号。
+- [fix] 🔴 **`npm run typecheck` 此前一直是假通过**。脚本写的是 `tsgo`,而这个环境里**根本没有 tsgo**(只有 `tsc` 5.9.3):`tsgo: not found` 进管道后 `grep -E '^src/'` 匹配不到,于是 `|| echo 'src/ 类型检查通过(0 错误)'` 打印「通过」—— **命令不存在被当成了检查通过**。这正是本项目反复踩的那一类坑:不是「检查说没问题」,而是「检查压根没跑」。`build` 脚本同样写 `tsgo`,直接失败。已改为 `tsc` 并去掉 `|| echo` 这层吞错;`build` 的 chmod 目标也从 `dist/cli.js` 修正为 `dist/src/cli.js`(与 `package.json` 的 `bin` 对齐)。**真实类型检查:0 错误**。
+
+**验证(删 vendor 之后)**:类型检查 0 错误;全量测试 **92 文件 / 1595 例通过**;`npm run build:web` 成功(`server.cjs` 15MB,629 处静态 require 全是 `node:` 内置或可选依赖 —— pi 包确实被完整内联);**CLI 冒烟**(esbuild 打包后跑 `--help`)正常启动,说明 pi 依赖与 patch 在**真实启动路径**上可用,不只是测试里可用。
+
+**发现一处既有破损,本次未修**:`npm run build` 的产物**不可用** —— tsc emit 出的 `dist/src/*.js` 里 import 仍带 `.ts`(源码里 261 处),`node dist/src/cli.js` 直接 `ERR_MODULE_NOT_FOUND`。根因是 `allowImportingTsExtensions`(tsc 因此报 TS5096)与「源码 import 写 `.ts` 扩展」绑死。真实发行走的是 bun / esbuild 单文件(`bundle`、`build:web`、`build:electron`),tsc 产物这条路径**依赖化前就是坏的**,不是 T11 引入的回归。修法二选一:① 261 处相对 import 改 `.js`(NodeNext 下 ESM 必须带扩展名,TS 会解析回 `.ts` 源文件);② `build` 不再 emit,只做类型检查与声明输出。**待定**。
+
 T11 步骤 4:构建链与打包适配(T11 / D2 依赖化)。
 
 改的是「按 vendor 路径取文件」的那几处 —— 它们**改错了不会报错**:`files` 里写个不存在的路径,npm 安静跳过;`shx cp` 一个不存在的 glob,安静地什么都不拷。发行物少了主题 json 或缺了 MIT 许可全文,要等用户装完跑起来才现形。

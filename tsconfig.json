@@ -14,23 +14,30 @@
 	// 这三类都是「跑构建才现形」的问题,而构建脚本在此之前从未被当作检查手段
 	// 跑过。加上本文件后,`npm run typecheck` 才真的等于「类型没问题」。
 	//
-	// ## 范围
-	//
-	// - **含 src/** 与 vendor/(口径与 tsconfig.build.json 对齐)
-	// - **不含 test/** —— 纳入后有 200 个既有错误(测试从未做过类型检查:
-	//   隐式 any、DTO 形状对不上、缺 --jsx 等)。那是独立一笔债,混进来会把
-	//   「本次改动有没有引入新错误」这个信号淹掉。收 test 需单独一批。
-	// - **不含 web/** —— 它是独立的 Vite 工程,有自己的 tsconfig
-	//
-	// ## 已知噪音
-	//
-	// vendor/ 下有 3 处既有错误(undici 用法 ×2、highlight.js 缺类型 ×1),
-	// 都是上游代码,本仓库不可修。判读时看 `npm run typecheck` 的过滤输出。
+// ## 范围
+//
+// - **只含 src/**(口径与 tsconfig.build.json 对齐)
+// - **不含 test/** —— 纳入后有 200 个既有错误(测试从未做过类型检查:
+//   隐式 any、DTO 形状对不上、缺 --jsx 等)。那是独立一笔债,混进来会把
+//   「本次改动有没有引入新错误」这个信号淹掉。收 test 需单独一批。
+// - **不含 web/** —— 它是独立的 Vite 工程,有自己的 tsconfig
+//
+// ## 已知噪音:现已归零
+//
+// 2026-10-05(T11)之前 `include` 里还有 `vendor/**\/*.ts`,而 vendored 的 pi 源码
+// 自带 3 处类型错误(undici 用法 ×2、highlight.js 缺类型 ×1)—— 上游代码,本仓库
+// 不可修,只能靠 `npm run typecheck` 的 `grep -E '^src/'` 过滤掉。pi 改为 npm 依赖
+// 后这三类噪音随 vendor 一起消失,**过滤也就不再是必需品**:现在 `tsgo -p tsconfig.json
+// --noEmit` 的输出应当为空,任何一行输出都是真错误。
+//
+// 注意 `skipLibCheck: true`(在 tsconfig.base.json)是依赖化后的**必需品**:
+// pi-ai 在 NodeNext 下有约 30 个 TS1543。有人想「提高检查强度」把它关掉时,
+// 先想清楚那 30 个噪音会淹掉真正的信号。
 	"extends": "./tsconfig.base.json",
 	"compilerOptions": {
 		"noEmit": true,
 		"composite": false
 	},
-	"include": ["src/**/*.ts", "vendor/**/*.ts"],
+	"include": ["src/**/*.ts"],
 	"exclude": ["node_modules", "dist", "web", "test"]
 }
