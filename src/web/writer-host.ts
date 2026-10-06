@@ -128,6 +128,23 @@ export function hostPromptScope(conversationScope: ConversationScope, key: strin
 	return key.endsWith(".jsonl") ? "chapter" : "book";
 }
 
+/**
+ * 「这个 id 是不是一个章节」—— resolveRef 的章节语义判据,**唯一实现**。
+ *
+ * `resolveRef` 返回的 `chapter` 会被 editorContext 拼成 `draft/<chapter>.md` 注入。
+ * 只有章节文件名形态(`<id>.jsonl`)才认;不透明对话 id(`c-xxxxxx` / `default`)
+ * 一律归 null(= 这次调用没有章节语义)。
+ *
+ * 判据与 hostPromptScope **同源**(都看 `.jsonl` 后缀):提示词说「正文不锁在某一章」
+ * 与注入的正文必须一致,分开写就会出现「提示词说分离、正文却按某一章注入」。
+ *
+ * 与 chapter 模式下 `key.endsWith(".jsonl")` 的内联写法本是同一件事:抽出来是为了
+ * 两个模式共用一条判据 —— 2026-10-05 修的就是 book 模式漏了这条校验。
+ */
+export function chapterSemantic(id: string | null | undefined): string | null {
+	return typeof id === "string" && id.endsWith(".jsonl") ? id : null;
+}
+
 /** 经典模式(单 agent)的内置工具:web 无 bash,其余全量(与 webActiveTools 同集)。 */
 const CLASSIC_ACTIVE_TOOLS = ["read", "write", "edit", "grep", "find", "ls"];
 
@@ -551,7 +568,12 @@ export class WriterHost {
 			// 传了(哪怕是空值)就按传的来 —— 空值表示"没在看任何章节"
 			if (chapterFile !== undefined) this.viewChapter.set(slug, chapter);
 			const key = conv ?? this.currentConversation.get(slug) ?? DEFAULT_CONVERSATION_ID;
-			return { key, chapter: this.viewChapter.get(slug) ?? null };
+			// 形态校验与下面 chapter 模式**同一条判据**(chapterSemantic):viewChapter 里
+			// 存的就是章节文件名经 normalizeId 的结果,但调用方(HTTP 边界 / 前端)可能
+			// 把不透明对话 id 当 chapterFile 递进来 —— 不校验就会拼成 draft/c-abc123.md,
+			// editorContext 走 else 分支把这条不存在的路径当「约定落点」教给模型,
+			// 模型照着写、前端永远读不到。
+			return { key, chapter: chapterSemantic(this.viewChapter.get(slug) ?? null) };
 		}
 		// chapter 模式:章节即会话(沿用今天的回落链)
 		if (record) {
@@ -561,7 +583,7 @@ export class WriterHost {
 		const key = conv ?? chapter ?? this.currentChapter.get(slug) ?? DEFAULT_CONVERSATION_ID;
 		// 只有章节文件形态的 key 才是"这一章的对话";不透明 id(自由对话)在 chapter 模式下
 		// 不设正文白名单 —— 否则白名单会算成 c-xxxxxx.md,AI 静默写不了任何章节
-		return { key, chapter: key.endsWith(".jsonl") ? key : null };
+		return { key, chapter: chapterSemantic(key) };
 	}
 
 	/**
@@ -750,7 +772,7 @@ export class WriterHost {
 
 	/** 上下文注入(易变块,每次调用追加在消息尾部):当前章节草稿 + 发展线 +
 	 *  Notice 备忘录 + 最近一幕舞台转录。
-	 *  稳定块(世界观概述/世界书条目/文风采样/写作约束)不在这里逐轮注入——
+	 *  稳定块(世界观概述/世界书条目/写作约束)不在这里逐轮注入——
 	 *  它们变化很少,逐轮注入等于每轮都付一笔全价未缓存输入;改为
 	 *  syncStableContext 按「指纹」持久化进会话(chat/chatAndWait 前调用),
 	 *  内容变化才重注入。chapter 模式下章节随会话固定(切章后新会话注入新章,

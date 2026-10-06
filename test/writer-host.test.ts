@@ -493,3 +493,60 @@ describe("hostPromptScope（该按哪一套对话范围叙述提示词）", () =
 		expect(hostPromptScope("chapter", "c-abc123")).toBe("book");
 	});
 });
+
+/**
+ * resolveRef 的「章节语义」形态校验(2026-10-05)。
+ *
+ * `resolveRef` 返回的 `chapter` 决定 editorContext 注入哪份正文(拼成
+ * `draft/<chapter>.md`)。**只有章节文件名形态(`<id>.jsonl`)才认** —— 否则不透明
+ * 对话 id(`c-xxxxxx` / `default`)会被当成章节名,拼出 `draft/c-abc123.md`,
+ * editorContext 走 else 分支把这个不存在的路径当「约定落点」教给模型。
+ *
+ * 两个模式**必须同一条判据** —— 分开写就是「切一次模式就换一种行为」。
+ */
+describe("resolveRef（章节语义的形态校验，两模式同一条判据）", () => {
+	/** private 方法:JS 运行时无访问限制,按仓库既有约定直接原型调用。 */
+	function makeResolver(scope: "chapter" | "book") {
+		const host = Object.create(WriterHost.prototype) as never as {
+			conversationScope: string;
+			currentConversation: Map<string, string>;
+			viewChapter: Map<string, string | null>;
+			currentChapter: Map<string, string>;
+			resolveRef(slug: string, chapterFile?: string | null, conversation?: string | null, record?: boolean): {
+				key: string;
+				chapter: string | null;
+			};
+		};
+		host.conversationScope = scope;
+		host.currentConversation = new Map();
+		host.viewChapter = new Map();
+		host.currentChapter = new Map();
+		return host;
+	}
+
+	it("chapter 模式:章节文件名认,不透明 id 不认(既有一致性)", () => {
+		const h = makeResolver("chapter");
+		expect(h.resolveRef("b", "ch01.jsonl", null).chapter).toBe("ch01.jsonl");
+		expect(h.resolveRef("b", null, "c-abc123").chapter).toBe(null);
+	});
+
+	it("book 模式:chapterFile 是章节文件名才提正文,不透明 id 不提", () => {
+		const h = makeResolver("book");
+		// 「正在看的章节」是章节名 —— 提这一章正文
+		expect(h.resolveRef("b", "ch01.jsonl", null).chapter).toBe("ch01.jsonl");
+		// 前端把对话 id 误当 chapterFile 传(或书里存了个不透明 id):不许拼成
+		// draft/c-abc123.md —— 那会走「尚未创建,请写入此路径」分支,把模型引到
+		// 一个前端永远读不到的落点
+		expect(h.resolveRef("b", "c-abc123", null).chapter).toBe(null);
+		// 不传 chapterFile(只声明对话身份):同样不提正文
+		expect(h.resolveRef("b", undefined, "c-abc123").chapter).toBe(null);
+		// 显式 null(用户没在看任何章节):不提正文
+		expect(h.resolveRef("b", null, null).chapter).toBe(null);
+	});
+
+	it("book 模式:身份仍是不透明对话 id(形态校验只作用于 chapter)", () => {
+		const h = makeResolver("book");
+		expect(h.resolveRef("b", "c-abc123", null).key).toBe("default");
+		expect(h.resolveRef("b", undefined, "c-abc123").key).toBe("c-abc123");
+	});
+});
