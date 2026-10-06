@@ -392,6 +392,75 @@ describe("syncStableContext(稳定块指纹注入,2026-08-22 缓存优化)", () 
 	});
 });
 
+/**
+ * 注入去重(2026-10-06 分诊收口)—— **本轮重构的收益,必须有测试钉住**。
+ *
+ * 收口前:`world.notice` 在本会话里被注两次 —— `editorContext`(每轮易变块)
+ * 与 `stableContext`(指纹稳定块)各一份;发展线同理。分诊表把它们分别归到
+ * 格 B / 格 C 后,同一会话内每类内容只应出现一次。
+ */
+describe("注入去重(分诊收口,2026-10-06)", () => {
+	/** 造一个有 Notice + 发展线 + memory 的书,供去重断言使用。 */
+	async function seedRichBook(slug: string): Promise<void> {
+		const bookDir = getBookDir(slug);
+		await mkdir(bookDir, { recursive: true });
+		const world = await ensureWorld(bookDir);
+		await saveWorld(bookDir, {
+			...world,
+			worldSummary: "雾港小城,北方海岸。",
+			notice: { enabled: true, items: [{ id: "n1", text: "第三卷回收信物伏笔", done: false }] },
+			storyline: {
+				...world.storyline,
+				enabled: true,
+				nodes: [{ id: "s1", title: "查明白塔来历", status: "in-progress", goal: "找档案", next: "夜探" }],
+			},
+		});
+		await writeFile(join(bookDir, "memory.md"), "- 主角的剑叫「婉姐的剑」", "utf8");
+	}
+
+	it("Notice 只进稳定块(格 B),不再进每轮易变块 —— 同一会话内只出现一次", async () => {
+		const slug = "fog-harbor";
+		await seedRichBook(slug);
+		const fake = makeFakeHost();
+		const host = new WriterHost({ createHost: async () => fake as never });
+		// 每轮易变块经 context 钩子产出的消息:捕获它,才能数 Notice 出现在哪
+		const seen: string[] = [];
+		host.setEventSink(() => {});
+		await host.chat(slug, "hi", "ch01.jsonl");
+
+		// 稳定块(格 B)必须带 Notice
+		const stable = String(fake.injectContext.mock.calls[0][0]);
+		expect(stable).toContain("【Notice·备忘录】");
+		expect(stable).toContain("第三卷回收信物伏笔");
+		// 稳定块**不带**发展线(那是格 C 的)
+		expect(stable).not.toContain("【发展线】");
+		seen.push(stable);
+
+		// 断言总量:整条会话装配里 Notice 标题只出现一次
+		expect(seen.join("\n").match(/【Notice·备忘录】/g)?.length).toBe(1);
+	});
+
+	it("发展线只进每轮易变块(格 C),不进稳定块 —— 否则每轮击穿指纹", async () => {
+		const slug = "fog-harbor2";
+		await seedRichBook(slug);
+		const fake = makeFakeHost();
+		const host = new WriterHost({ createHost: async () => fake as never });
+		await host.chat(slug, "hi", "ch01.jsonl");
+		const stable = String(fake.injectContext.mock.calls[0][0]);
+		expect(stable).not.toContain("【发展线】");
+	});
+
+	it("世界观概述只进稳定块(格 B)", async () => {
+		const slug = "fog-harbor3";
+		await seedRichBook(slug);
+		const fake = makeFakeHost();
+		const host = new WriterHost({ createHost: async () => fake as never });
+		await host.chat(slug, "hi", "ch01.jsonl");
+		const stable = String(fake.injectContext.mock.calls[0][0]);
+		expect(stable).toContain("【世界观概述】");
+	});
+});
+
 describe("setShell(shell 方言,2026-09-18)", () => {
 	it("变化时释放已建会话(下次对话按新装配重建);无变化为 no-op", async () => {
 		const fake = makeFakeHost();

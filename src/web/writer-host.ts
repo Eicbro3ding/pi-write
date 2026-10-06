@@ -69,8 +69,12 @@ import {
 	type ThinkingLevel,
 	type ToolDefinition,
 } from "../pi-adapter/index.ts";
-import { ensureWorld, newId } from "../world-data.ts";
-import { buildStorylineView, constraintTargetMatches, NOTICE_INJECT_LIMIT } from "../world-context.ts";
+import { createEmptyWorld, ensureWorld, newId, type WorldData } from "../world-data.ts";
+// 记忆锚:格 D 的 IO shell(读 memory.md)。拼装口径在 inject-plan 的分诊层里
+// —— web 编剧会话与 TUI 共用同一实现(before_agent_start 各注册一次)。
+import { buildMemoryAnchor } from "../extension.ts";
+import { planPerTurnBlocks, planStableBlocks } from "../inject-plan.ts";
+import { detectSessionMode } from "../session-mode.ts";
 import { buildEditorSystemPrompt, buildWriterSystemPrompt, writerShellLine } from "../prompt.ts";
 import type { ShellDialect } from "../shell-kind.ts";
 import type { ConversationScope } from "../writer-settings.ts";
@@ -148,12 +152,8 @@ export function chapterSemantic(id: string | null | undefined): string | null {
 /** 经典模式(单 agent)的内置工具:web 无 bash,其余全量(与 webActiveTools 同集)。 */
 const CLASSIC_ACTIVE_TOOLS = ["read", "write", "edit", "grep", "find", "ls"];
 
-/** 注入块长度上限(草稿/世界书正文截断,防上下文膨胀)。 */
-const DRAFT_LIMIT = 4000;
-const WORLD_LIMIT = 3000;
-// 2026-10-05:原名 STYLE_LIMIT —— 那时它管的是常驻的文风采样块。采样改由 `read_style`
-// 按需取之后,采样本身不再有「注入截断」这回事,这个上限只剩世界观概述在用,名字跟着改。
-const SUMMARY_LIMIT = 800;
+// 注入块的长度上限(DRAFT_LIMIT / WORLD_LIMIT / SUMMARY_LIMIT)已随 2026-10-06 分诊收口
+// 迁到 `src/inject-plan.ts` —— 与产出那些块的函数放在一起,免得改上限要跨文件找。
 
 /**
  * 稳定上下文条目的识别标记(见 `countStableContextInLeaf`)。
@@ -742,6 +742,28 @@ export class WriterHost {
 							const result = await inject(event.messages);
 							return result ? { messages: result } : undefined;
 						});
+						// 记忆锚(= 分诊表的格 D):跨轮次恒定但**必须抗压缩、抗注意力衰减**的事实
+						// —— 模式行 / 当前章节 / memory.md,经 systemPrompt 尾部每轮追加。
+						//
+						// 2026-10-06 从 TUI 搬来:此前它只注册在 `writerExtension` 里(extension.ts),
+						// 而 web 编剧会话不装配那个扩展 —— 与刚修的工具护栏是**同一个坑**:
+						// 真正写正文的会话反而没有护栏/锚。搬后 web 与 TUI 行为一致。
+						//
+						// 内容口径由分诊层决定(见 src/inject-plan.ts):Notice 与**发展线不再进锚**
+						// —— 它们分别归格 B(稳定块)与格 C(每轮易变块),放在锚里等于每轮重付一次。
+						// 锚只承载「丢了就会写错、且变化极少」的那几项,以保住缓存友好性。
+						pi.on("before_agent_start", async (event) => {
+							try {
+								// book 模式的章节是易变上下文,必须现读 viewChapter(不能闭包捕获)——
+								// 与上方 inject 同一个理由(见其注释)。
+								const anchorChapter = bookScope ? this.viewChapter.get(slug) ?? null : chapter;
+								const anchor = await buildMemoryAnchor(slug, anchorChapter ?? undefined, detectSessionMode(event.prompt));
+								if (!anchor) return;
+								return { systemPrompt: `${event.systemPrompt}\n\n${anchor}` };
+							} catch {
+								return;
+							}
+						});
 					},
 				},
 			],
@@ -770,96 +792,68 @@ export class WriterHost {
 		});
 	}
 
-	/** 上下文注入(易变块,每次调用追加在消息尾部):当前章节草稿 + 发展线 +
-	 *  Notice 备忘录 + 最近一幕舞台转录。
-	 *  稳定块(世界观概述/世界书条目/写作约束)不在这里逐轮注入——
+	/** 上下文注入(易变块 = 分诊表的**格 C**,每次调用追加在消息尾部):
+	 *  当前章节草稿 + 发展线 + 最近一幕舞台转录。
+	 *
+	 *  **Notice 已移出本方法**(2026-10-06 收口):它原先在这里与本会话的稳定块
+	 *  (`stableContext`)各注一遍 —— 同一份 `world.notice` 每轮出现两次。按分诊表
+	 *  归**格 B(指纹去重)**,`stableContext` 是它现在唯一的出处。见 `src/inject-plan.ts`。
+	 *
+	 *  **格 B**(世界观概述/世界书条目/写作约束/Notice)不在这里逐轮注入——
 	 *  它们变化很少,逐轮注入等于每轮都付一笔全价未缓存输入;改为
 	 *  syncStableContext 按「指纹」持久化进会话(chat/chatAndWait 前调用),
 	 *  内容变化才重注入。chapter 模式下章节随会话固定(切章后新会话注入新章,
 	 *  旧会话不再被使用);book 模式下 chapterFile 由调用方在每次调用前现读 viewChapter
 	 *  (见 roleFactory 的 inject)。 */
 	private async editorContext(slug: string, chapterFile: string | null, messages: AgentMessage[]): Promise<AgentMessage[] | undefined> {
-		const blocks: string[] = [];
-		if (chapterFile) {
-			const file = `draft/${chapterFile.replace(/\.jsonl$/, ".md")}`;
-			const draft = await readTextSafe(join(getBookDir(slug), file));
-			if (draft !== null && draft.trim().length > 0) {
-				const body = draft.length > DRAFT_LIMIT ? `${draft.slice(0, DRAFT_LIMIT)}\n…(截断)` : draft;
-				blocks.push(`【当前正文 · ${file}】\n${body}`);
-			} else {
-				// 正文文件不存在/为空:仍注入路径约定——信息缺失是 agent 自创文件名
-				// (draft/第一章.md)导致前端按约定路径读到空的根因(2026-08-11)
-				blocks.push(`【当前正文 · ${file}】尚未创建——你的写作/修改请用 write 工具写入此文件(路径如上),不要自创其他文件名`);
-			}
-		}
+		let world: WorldData | null = null;
 		try {
-			const world = await ensureWorld(getBookDir(slug));
-			// 发展线视图(当前目标 + 已完成列表)——编剧成文/讨论时不重复推进已完成
-			// 目标(借鉴 AI-Novel completedMilestones 守卫,2026-08-12)
-			const view = buildStorylineView(world);
-			if (view) {
-				const lines: string[] = [];
-				if (view.currentTitle) lines.push(`当前位置: ${view.currentTitle}`);
-				if (view.completed.length > 0) lines.push(`已完成(禁止重复追求/推进): ${view.completed.join("、")}`);
-				if (lines.length > 0) blocks.push(`【发展线】\n${lines.join("\n")}`);
-			}
-			// 全局备忘录(Notice 待办,未完成项)——编剧要遵守/续写埋伏笔(2026-08-12 回到初衷)
-			const noticeOpen = world.notice.items.filter((i) => !i.done).slice(0, NOTICE_INJECT_LIMIT);
-			if (world.notice.enabled && noticeOpen.length > 0) {
-				blocks.push(`【Notice·备忘录】\n${noticeOpen.map((i) => `- [ ] ${i.text}`).join("\n")}`);
-			}
+			world = await ensureWorld(getBookDir(slug));
 		} catch {
-			/* 世界书缺失:跳过注入,不阻断对话 */
+			/* 世界书缺失:跳过需要它的块,不阻断对话 */
 		}
+		// 格 C 的块由分诊层产出(见 src/inject-plan.ts 的 EDITOR_ROUTING)。
+		// 正文用 readTextSafe 现读:null 表示文件不存在,由分诊层转成「尚未创建」落点提示。
+		const draftFile = chapterFile ? `draft/${chapterFile.replace(/\.jsonl$/, ".md")}` : null;
+		const draft = draftFile ? await readTextSafe(join(getBookDir(slug), draftFile)) : null;
 		// 最近一幕舞台转录(评戏与 advice.md 的依据;收幕委托回合消息内已含【舞台转录】,
 		// 此处会重复注入同源内容——截断上限兜底,可接受)。
 		// 经典模式无舞台(页面隐藏、不会有新一幕),不注入:省 token,也避免单 agent
 		// 上下文里出现它无从操作的概念。
 		const transcript = this.classicMode ? null : await latestStageTranscript(getBookDir(slug));
-		if (transcript) blocks.push(`【最近一幕舞台转录】\n${transcript}`);
+		const blocks = planPerTurnBlocks({
+			// 世界书读失败时不产出需要它的块(发展线),正文与转录仍照常
+			world: world ?? createEmptyWorld(),
+			draft,
+			draftFile,
+			transcript,
+		});
 		if (blocks.length === 0) return undefined;
 		return [...messages, { role: "user", content: blocks.join("\n\n"), timestamp: Date.now() }];
 	}
 
-	/** 稳定块上下文(世界观概述/世界书角色条目/写作约束;截断保护同易变块)。
+	/** 稳定块上下文 = 分诊表的**格 B**:世界观概述 / 世界书角色条目 / 写作约束 / **Notice**。
+	 *
+	 *  **Notice 自 2026-10-06 起归此格**(原先它在 `editorContext` 与本方法各注一遍)。
+	 *  归属理由见 `src/inject-plan.ts` 的 EDITOR_ROUTING:Notice 变化频率低、内容稳定,
+	 *  正是指纹去重的适用场景;放在每轮注入只是每轮重付一次 token。
+	 *
 	 *  **文风采样已不在其中**(2026-10-05):改由 `read_style` 按需读取,见下方注释。
 	 *  与易变块分离:syncStableContext 按指纹持久化进会话,内容不变不重注入,
 	 *  省掉每轮数 k token 的全价未缓存输入(2026-08-22 缓存命中优化)。 */
 	private async stableContext(slug: string): Promise<string> {
-		const blocks: string[] = [];
 		try {
 			const world = await ensureWorld(getBookDir(slug));
-			// 简要世界观概述(常驻,与写作会话同款语义;为空跳过,超长截断)
-			const summary = world.worldSummary?.trim();
-			if (summary && summary.length > 0) {
-				const body = summary.length > SUMMARY_LIMIT ? `${summary.slice(0, SUMMARY_LIMIT)}\n…(截断)` : summary;
-				blocks.push(`【世界观概述】\n${body}`);
-			}
-			const chars = world.entries
-				.filter((e) => e.type === "character" || e.type === "world")
-				.map((e) => `【${e.title}】${e.body}`)
-				.join("\n");
-			if (chars.trim().length > 0) {
-				const body = chars.length > WORLD_LIMIT ? `${chars.slice(0, WORLD_LIMIT)}\n…(截断)` : chars;
-				blocks.push(`【世界书】\n${body}`);
-			}
 			// 文风采样**刻意不在这里**(2026-10-05):它是 `read_style` 的按需读取对象,
 			// 不再常驻。两个原因 —— ① 按提示词纪律「明显变化则换新,从当前章草稿选
 			// 300–500 字」,采样每写一章就可能换一次,而它一变稳定块指纹就变、就要重注
 			// 一份(见 countStableContextInLeaf),它是版本堆叠的第二大来源;
 			// ② 讨论轮根本不动笔,用不上采样,却照样为它付了 token。
-			// 写作约束(按 target 过滤:编剧收 writer/main——酒馆式规则包,2026-08-12;
-			// 经典模式是单一写作 agent,writer 与 main 两类目标的约束都该生效)
-			const editorConstraints = world.constraints.filter(
-				(c) => c.enabled && (constraintTargetMatches(c.target, "writer") || (this.classicMode && constraintTargetMatches(c.target, "main"))),
-			);
-			if (editorConstraints.length > 0) {
-				blocks.push(`【写作约束】\n${editorConstraints.map((c) => `- ${c.name}: ${c.text}`).join("\n")}`);
-			}
+			return planStableBlocks({ world, classicMode: this.classicMode }).join("\n\n");
 		} catch {
 			/* 世界书缺失:跳过注入 */
+			return "";
 		}
-		return blocks.join("\n\n");
 	}
 
 	/**

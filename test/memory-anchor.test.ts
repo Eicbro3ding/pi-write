@@ -35,7 +35,7 @@ describe("buildMemoryAnchor(每轮记忆锚)", () => {
 		expect(await buildMemoryAnchor("fog-harbor", "ch01.jsonl")).toBe("");
 	});
 
-	it("memory.md 内容进锚;Notice 只带未完成项;发展线带当前位置与目标", async () => {
+	it("memory.md 内容进锚;**Notice 与发展线不进锚** —— 它们已归格 B / 格 C", async () => {
 		const slug = "fog-harbor";
 		const bookDir = getBookDir(slug);
 		await mkdir(bookDir, { recursive: true });
@@ -65,11 +65,12 @@ describe("buildMemoryAnchor(每轮记忆锚)", () => {
 		expect(anchor).toContain("当前章节: ch03.jsonl");
 		expect(anchor).toContain("林婉");
 		expect(anchor).toContain("战斗场面不写血腥细节");
-		expect(anchor).toContain("回收「信物」伏笔");
-		expect(anchor).not.toContain("主角受设定"); // done 项不注入
-		expect(anchor).toContain("当前位置: 查明白塔的来历");
-		expect(anchor).toContain("目标: 找到塔内档案");
-		expect(anchor).toContain("抵达雾港"); // 已完成里程碑出现在「勿重复」列表
+		// 2026-10-06 分诊收口:锚只装跨轮恒定的事实(模式行/章节/memory.md)。
+		// Notice 归格 B(稳定块)、发展线归格 C(每轮易变块)—— 锚是每轮注入,
+		// 把它们放这里等于每轮重付一次,且会破坏锚「内容稳定可缓存」的前提。
+		expect(anchor).not.toContain("回收「信物」伏笔");
+		expect(anchor).not.toContain("当前位置: 查明白塔的来历");
+		expect(anchor).not.toContain("抵达雾港");
 	});
 
 	it("会话模式行进锚,且独立于世界状态 —— 空书也拿得到「不要写文件」的约束", async () => {
@@ -93,9 +94,30 @@ describe("buildMemoryAnchor(每轮记忆锚)", () => {
 		expect(anchor.indexOf("【当前模式】")).toBeLessThan(anchor.indexOf("当前章节"));
 	});
 
-	it("不传模式时保持旧行为(世界状态为空 → 空串,钩子据此跳过注入)", async () => {
+	it("不传模式 + 空世界 → 空串(章节行单独不构成锚,钩子据此跳过注入)", async () => {
+		// 判据与 2026-10-06 收口前逐字一致:只有模式行或块才算内容。
+		// 只有章节名而无任何记忆/模式时注入锚 = 纯噪声,且每轮白付一次未缓存输入。
 		await mkdir(getBookDir("fog-harbor"), { recursive: true });
 		expect(await buildMemoryAnchor("fog-harbor", "ch01.jsonl")).toBe("");
+	});
+
+	it("有 Notice/发展线但无 memory.md、无模式 → 仍为**空串**(那两块已不归锚)", async () => {
+		// 这条钉住分诊收口的一个边界:过去 Notice/发展线能单独撑起一个锚,
+		// 现在它们归格 B/C —— 锚这边什么都不剩,必须老实返回空串。
+		const slug = "fog-harbor";
+		const bookDir = getBookDir(slug);
+		await mkdir(bookDir, { recursive: true });
+		const world = await ensureWorld(bookDir);
+		await saveWorld(bookDir, {
+			...world,
+			notice: { enabled: true, items: [{ id: "n1", text: "一条待办", done: false }] },
+			storyline: {
+				...world.storyline,
+				enabled: true,
+				nodes: [{ id: "s1", title: "目标", status: "in-progress", goal: "", next: "" }],
+			},
+		});
+		expect(await buildMemoryAnchor(slug, "ch01.jsonl")).toBe("");
 	});
 
 	it("无当前章节(book 模式未声明)也可注入,只是省略章节行", async () => {

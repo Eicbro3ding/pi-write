@@ -295,10 +295,19 @@ export function planAnchorBlocks(input: AnchorPlanInput): { modeLine: string; he
  * 渲染完整的记忆锚文本;无内容时返回空串(调用方据此跳过注入)。
  *
  * 结构:`【常驻记忆锚 · 每轮刷新】` 总说明 → 模式行 → 当前章节 → memory.md。
+ *
+ * **空串判据(与收口前逐字一致,2026-10-06 复刻)**:只有「模式行」与「块」
+ * 参与判定 —— **章节行单独不构成锚**。
+ *
+ * 为什么章节行不算:锚的价值是把「丢了就会写错」的事实钉进 systemPrompt。
+ * 只有章节名而无任何记忆/模式时,注入一段开头「以下事实跨轮次、跨压缩恒定」
+ * 却只跟一句文件名的锚,是纯噪声 —— 且它每轮都会成为新的 systemPrompt 尾部,
+ * 白付一次全价未缓存输入。空书(刚建、还没世界状态也没 memory.md)必须走
+ * 空串分支,钩子据此跳过注入。
  */
 export function renderAnchor(input: AnchorPlanInput): string {
 	const { modeLine, head, blocks } = planAnchorBlocks(input);
-	if (modeLine.length === 0 && head.length === 0 && blocks.length === 0) return "";
+	if (modeLine.length === 0 && blocks.length === 0) return "";
 	return `${ANCHOR_HEADER}以下事实跨轮次、跨压缩恒定;与你的印象冲突时以这里为准,需要更多细节就 read 对应文件(memory.md / world.json)。\n${modeLine}${head}${blocks.join("\n\n")}`;
 }
 
