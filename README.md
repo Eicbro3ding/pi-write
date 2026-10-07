@@ -123,10 +123,11 @@ npm run build:web && npm run electron
 
 MIT License,Copyright (c) 2026 Eicbro3ding。
 
-基于 [Pi](https://pi.dev) 构建。部分组件衍生自 Pi,保留其原始许可证:`vendor/` 下的 pi 核心包来自
-[earendil-works/pi](https://github.com/earendil-works/pi)(MIT,Copyright (c) 2025 Mario Zechner),
-许可全文见 [`vendor/LICENSE-pi.txt`](vendor/LICENSE-pi.txt),来源与「本副本有修改」的说明见
-[`vendor/NOTICE.md`](vendor/NOTICE.md)。**第三方组件的完整清单、以及各发行物必须携带哪些声明,
+基于 [Pi](https://pi.dev) 构建。pi 核心包(`@earendil-works/pi-agent-core` / `pi-ai` /
+`pi-coding-agent` / `pi-tui`)以 [earendil-works/pi](https://github.com/earendil-works/pi)
+的 npm 依赖形式引入(MIT,Copyright (c) 2025 Mario Zechner),仓库内不再有 `vendor/` 副本;
+许可全文见 [`LICENSE-pi.txt`](LICENSE-pi.txt),来源与「本副本有修改」的说明见
+[`NOTICE-pi.md`](NOTICE-pi.md),对上游包打的补丁见 [`patches/`](patches/)。**第三方组件的完整清单、以及各发行物必须携带哪些声明,
 见 [`THIRD-PARTY.md`](THIRD-PARTY.md)。**
 
 四个 `craft-*` 技能(`craft-outline` / `craft-prose` / `craft-deslop` / `craft-review`)的创作方法论文库收录自 [oh-story-claudecode](https://github.com/zenstory-ai/oh-story-claudecode)(MIT License,Copyright (c) 2025-2026 oh-story-claudecode),原文逐字节保留、未做改写。MIT 的许可证全文随每份副本走——**四个技能目录各带一份**(见 [`skills/craft-outline/references/`](skills/craft-outline/references/)),来源 commit、收录与排除范围、以及再同步上游的步骤见同目录的 [`ATTRIBUTION.md`](skills/craft-outline/references/ATTRIBUTION.md)(四份内容相同,测试会断言一致)。
