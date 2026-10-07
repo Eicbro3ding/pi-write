@@ -513,13 +513,11 @@ describe("writerToolset（编剧 / 写作 agent 的权限边界）", () => {
 		expect(n).toContain("world_find");
 		expect(n).toContain("style_update");
 		expect(n).not.toContain("world_update");
-		expect(n).not.toContain("word_count");
 	});
 
-	it("经典模式的写作 agent:升到全量(world_update + word_count),不再需要窄通道", () => {
+	it("经典模式的写作 agent:升到全量(world_update),不再需要窄通道", () => {
 		const n = names(writerToolset({ classicMode: true, mcpTools: [] }));
 		expect(n).toContain("world_update");
-		expect(n).toContain("word_count");
 		expect(n).not.toContain("style_update");
 	});
 

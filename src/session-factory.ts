@@ -116,7 +116,7 @@ export function createSessionRuntimeFactory(opts: SessionFactoryOptions): Runtim
 	// 工厂体内部需要 vendor 的 `CreateAgentSessionRuntimeFactory` 形状(它就是
 	// **被 vendor 调用**的那个函数)。这里是唯一的收窄点:紧贴实现,不外漏。
 	const factory: CreateAgentSessionRuntimeFactory = async ({ cwd, sessionManager, sessionStartEvent }) => {
-		// word_count/world_update 以会话 cwd(书目录)为路径基准,切书时随工厂重建更新
+		// 工具以会话 cwd(书目录)为路径基准,切书时随工厂重建更新
 		setWordCountCwd(cwd);
 		setWorldUpdateBookDir(cwd);
 		// 文件工具路径守卫:书目录内可读写;readOnlyDirs(skills 等)只读放行;

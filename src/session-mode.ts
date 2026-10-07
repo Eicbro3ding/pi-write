@@ -3,7 +3,7 @@
  *
  * 为什么需要(真实会话 `writer-c-v05ij1` 复盘):
  *
- *   L118 `word_count` 计到 2824 字 → **L121 用户说「我还没叫你开始写」**
+ *   L118 模型数到 2824 字 → **L121 用户说「我还没叫你开始写」**
  *   → L123 立刻 `write(draft/ch02.md, content="")` 把那一章清零。
  *
  * 同样的事一轮里发生了 **5 次**:用户喊停,模型照跑。根子不是「没听见」——那些话就在
@@ -161,9 +161,9 @@ export function modeLabel(mode: SessionMode): string {
 export function modeAnchorLine(mode: SessionMode): string {
 	switch (mode) {
 		case "writing":
-			return `【当前模式】${modeLabel(mode)} —— 用户这一轮要产出新正文。可以按场景节奏动手写草稿(read_chapter 读全文 → write/edit → word_count),一轮一个场景,写完停下等确认。`;
+			return `【当前模式】${modeLabel(mode)} —— 用户这一轮要产出新正文。可以按场景节奏动手写草稿(read_chapter 读全文 → write/edit),一轮一个场景,写完停下等确认。`;
 		case "revising":
-			return `【当前模式】${modeLabel(mode)} —— 用户要改已经有了的正文。先用 read_chapter 读全文,再外科式地改(read_chapter → edit → word_count);不要急于重写未提及的段落。`;
+			return `【当前模式】${modeLabel(mode)} —— 用户要改已经有了的正文。先用 read_chapter 读全文,再外科式地改(read_chapter → edit);不要急于重写未提及的段落。`;
 		default:
 			return `【当前模式】${modeLabel(mode)} —— 用户这一轮没有要你动笔。**不要创建、写入、清空或覆盖任何文件**(含 draft/ 草稿);直接回答或接着讨论,需要沉淀的结论用 world_update 落盘。`;
 	}

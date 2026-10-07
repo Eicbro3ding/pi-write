@@ -19,7 +19,7 @@ Activates when the user wants real, surgical edits applied to a draft file — n
 3. **Edit in surgical passes**, one concern at a time:
    - Use `edit` with the smallest precise `old_string` that contains the change. Do not replace whole paragraphs when one sentence is the fix.
    - Group related edits, but never batch unrelated concerns — if the model mixes voice fixes with continuity fixes, stop and split.
-4. **After every pass**, run `word_count` if length was a concern, and re-read the changed region to confirm the edit landed cleanly and reads in context.
+4. **After every pass**, re-read the changed region to confirm the edit landed cleanly and reads in context. If length was a concern, the fresh character count comes back with the edit itself — no separate counting call.
 5. **Report at the end**:
    - what changed (per concern),
    - what was deliberately left alone (often more important),

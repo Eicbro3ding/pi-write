@@ -1,11 +1,10 @@
-import type { Stats } from "node:fs";
-import { readdir, readFile, stat } from "node:fs/promises";
-import { join, relative, resolve, sep } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { defineTool, type ToolDefinition } from "./pi-adapter/index.ts";
 import { Type, type TSchema } from "typebox";
 import { cjkCount } from "./cjk.ts";
 import { ensureWorld, newId, saveWorld, validateWorld, writeWorldEditRecord, WorldValidationError, type ConstraintTarget, type EntryStatus, type EntryType, type RelationArrow, type StoryNodeStatus, type WorldData, type WorldEntry } from "./world-data.ts";
-import { pathWithinRoot, toolGuardContext } from "./tool-guard.ts";
+import { toolGuardContext } from "./tool-guard.ts";
 import { withWorldLock } from "./world-lock.ts";
 import { classifyBookFileKind, MAX_READ_BYTES, readWorkspaceText } from "./book-files.ts";
 
@@ -68,20 +67,13 @@ function narrowOp<T>(raw: unknown, required: Record<string, string[]>, label: st
 }
 
 /**
- * word_count tool — accurate length metrics for writer drafts.
- *
- * The model is reliably bad at counting; this tool gives it a deterministic
- * fallback rather than letting it hallucinate chapter length.
- */
-
-/**
  * 工具解析相对路径的基准目录。会话创建时由 createRuntime 工厂注入
  * (cli.ts / web.ts 的 cwd = 书目录),避免误用服务进程的 process.cwd()
  * (web 模式服务从项目根启动,相对路径会解析到错误位置)。
  */
 let wordCountCwd: string | null = null;
 
-/** 设置 word_count 的路径基准(会话书目录);null 回退 process.cwd()。 */
+/** 设置工具路径基准(会话书目录);null 回退 process.cwd()。 */
 export function setWordCountCwd(dir: string | null): void {
 	wordCountCwd = dir;
 }
@@ -98,33 +90,12 @@ type CountMetric = (typeof COUNT_METRICS)[number];
 // 受限解码 / 只读首分支的 provider 会把它塌成 "cn_chars" 一种(与 world_update 同源问题)。
 const CountModeEnum = Type.String({ enum: [...COUNT_METRICS, "all"] });
 
-const wordCountParameters = Type.Object({
-	path: Type.String({
-		description:
-			"File or directory to count. Relative to the book working directory. Directories are walked for *.md recursively.",
-	}),
-	modes: Type.Optional(
-		Type.Array(CountModeEnum, {
-			description:
-				'Which metrics to include. Defaults to ["all"]. "cn_chars" counts CJK ideographs; "en_words" counts Latin/number words; "sentences" counts terminal punctuation runs; "paragraphs" counts blank-line separated paragraphs.',
-		}),
-	),
-	target: Type.Optional(
-		Type.Number({
-			description:
-				"Optional target for the primary metric (cn_chars when present, otherwise en_words). Reports absolute and percentage delta.",
-		}),
-	),
-});
-
 interface FileCounts {
 	cnChars: number;
 	enWords: number;
 	sentences: number;
 	paragraphs: number;
 }
-
-const EMPTY: FileCounts = { cnChars: 0, enWords: 0, sentences: 0, paragraphs: 0 };
 
 /** 英文词字符:ASCII 字母/数字 + Latin-1 补充 + Latin Extended-A。 */
 function isWordChar(code: number): boolean {
@@ -140,8 +111,8 @@ function isWordChar(code: number): boolean {
 /**
  * 英文词计数:连续词字符为词;词内撇号(' 或 ')后跟词字符时不视为分隔
  * (don't、l'école)。手写扫描而非 `\p{L}` 正则:Android(nodejs-mobile)
- * 无 full ICU,`\p{` 正则禁用——word_count 在 web 工具集内,Android 上会执行
- * (2026-08-10 修复)。希腊/西里尔等字母未覆盖(中文写作场景英文词基本为 ASCII)。
+ * 无 full ICU,`\p{` 正则禁用(2026-08-10 修复)。希腊/西里尔等字母未覆盖
+ * (中文写作场景英文词基本为 ASCII)。
  */
 function countEnglishWords(text: string): number {
 	let words = 0;
@@ -168,8 +139,8 @@ function countEnglishWords(text: string): number {
  * 统计一段文本的字/词/句/段。
  *
  * 导出原因(2026-10-04):`tool_result` 钩子要在每次 write/edit 之后把字数
- * 附在工具返回值里(见 extension.ts 的 countAfterWriteHook),需要复用同一套
- * 计数口径 —— 两处口径一旦分叉,AI 看到的字数与 word_count 报的会对不上。
+ * 附在工具返回值里(见 write-rails-extension.ts),需要复用同一套
+ * 计数口径 —— 两处口径一旦分叉,AI 看到的字数与实际落盘内容会对不上。
  */
 export function countText(text: string): FileCounts {
 	// CJK 计数统一在 cjk.ts(码点范围含 Ext A/Compat,不用 \p{ 正则)
@@ -192,133 +163,11 @@ export function countText(text: string): FileCounts {
 	return { cnChars, enWords, sentences, paragraphs };
 }
 
-/** 读文件并计数(供 word_count 与 write/edit 后的字数钩子共用)。 */
+/** 读文件并计数(供 read_chapter 头部与 write/edit 后的字数钩子共用)。 */
 export async function readCountsForFile(filePath: string): Promise<FileCounts> {
 	const content = await readFile(filePath, "utf-8");
 	return countText(content);
 }
-
-async function listMarkdownFiles(dir: string, acc: string[]): Promise<void> {
-	const entries = await readdir(dir, { withFileTypes: true });
-	for (const entry of entries) {
-		const full = join(dir, entry.name);
-		if (entry.isDirectory()) {
-			await listMarkdownFiles(full, acc);
-		} else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
-			acc.push(full);
-		}
-	}
-}
-
-function pickPrimaryMetric(counts: FileCounts): { name: string; value: number } {
-	if (counts.cnChars > 0) return { name: "cn_chars", value: counts.cnChars };
-	return { name: "en_words", value: counts.enWords };
-}
-
-function perFileLine(fileRel: string, c: FileCounts, wanted: ReadonlySet<CountMetric>): string {
-	const parts: string[] = [];
-	if (wanted.has("cn_chars")) parts.push(`${c.cnChars} cn`);
-	if (wanted.has("en_words")) parts.push(`${c.enWords} en`);
-	if (wanted.has("sentences")) parts.push(`${c.sentences} 句`);
-	if (wanted.has("paragraphs")) parts.push(`${c.paragraphs} 段`);
-	return `  ${fileRel.split(sep).join("/")}: ${parts.join(" | ")}`;
-}
-
-function totalBlock(c: FileCounts, wanted: ReadonlySet<CountMetric>): string[] {
-	const out: string[] = [];
-	if (wanted.has("cn_chars")) out.push(`  cn_chars: ${c.cnChars}`);
-	if (wanted.has("en_words")) out.push(`  en_words: ${c.enWords}`);
-	if (wanted.has("sentences")) out.push(`  sentences: ${c.sentences}`);
-	if (wanted.has("paragraphs")) out.push(`  paragraphs: ${c.paragraphs}`);
-	return out;
-}
-
-export const wordCountTool: ToolDefinition = defineTool({
-	name: "word_count",
-	label: "Word Count",
-	description:
-		"Accurately count characters, words, sentences, and paragraphs in a draft file or directory. Use this whenever the user asks about length or pacing; never estimate by eye.",
-	parameters: wordCountParameters,
-	async execute(_callId, params) {
-		const modesParam = params.modes;
-		const requested = modesParam && modesParam.length > 0 ? modesParam : (["all"] as const);
-		const all = requested.includes("all");
-		const wanted: Set<CountMetric> = new Set(all ? COUNT_METRICS : (requested as CountMetric[]));
-
-		const base = cwdBase();
-		const targetPath = resolve(base, params.path);
-		// 路径守卫:注入书目录基准时,word_count 只能统计书目录内的文件
-		// (防越界探测 auth.json 等敏感文件);未注入时保持旧行为(进程 cwd 基准)。
-		// 生产装配(cli.ts / web.ts 工厂)总是注入,因此实际总是受限。
-		if (wordCountCwd !== null && !pathWithinRoot(targetPath, base)) {
-			throw new Error("工具路径越界:只能访问书目录内的文件");
-		}
-		let stats: Stats;
-		try {
-			stats = await stat(targetPath);
-		} catch {
-			throw new Error(`Path not found: ${params.path}`);
-		}
-
-		const files: string[] = [];
-		if (stats.isFile()) {
-			files.push(targetPath);
-		} else if (stats.isDirectory()) {
-			await listMarkdownFiles(targetPath, files);
-		}
-
-		if (files.length === 0) {
-			return {
-				content: [{ type: "text", text: `No .md files under ${params.path}.` }],
-				details: { found: 0 },
-			};
-		}
-
-		const perFile = await Promise.all(
-			files.map(async (f) => {
-				const counts = await readCountsForFile(f);
-				return { file: relative(base, f) || f, counts };
-			}),
-		);
-
-		const total = perFile.reduce<FileCounts>(
-			(acc, item) => {
-				acc.cnChars += item.counts.cnChars;
-				acc.enWords += item.counts.enWords;
-				acc.sentences += item.counts.sentences;
-				acc.paragraphs += item.counts.paragraphs;
-				return acc;
-			},
-			{ ...EMPTY },
-		);
-
-		const lines: string[] = [`Files: ${perFile.length}`];
-		if (perFile.length > 1) {
-			for (const item of perFile) lines.push(perFileLine(item.file, item.counts, wanted));
-			lines.push("Total:");
-		}
-		lines.push(...totalBlock(total, wanted));
-
-		const details: Record<string, unknown> = {
-			files: perFile.map((f) => ({ file: f.file, ...f.counts })),
-			total,
-		};
-
-		const target = params.target;
-		if (typeof target === "number" && target > 0) {
-			const primary = pickPrimaryMetric(total);
-			const delta = primary.value - target;
-			const pct = target > 0 ? Math.round((primary.value / target) * 100) : 0;
-			lines.push(`Target ${target} ${primary.name}: ${delta >= 0 ? "+" : ""}${delta} (${pct}%)`);
-			details.target = { metric: primary.name, value: primary.value, target, delta, pct };
-		}
-
-		return {
-			content: [{ type: "text", text: lines.join("\n") }],
-			details,
-		};
-	},
-});
 
 export type WorldUpdateOp =
 	| { op: "upsert_entry"; id?: string; type: EntryType; title: string; keys?: string[]; chapters?: string[]; status?: EntryStatus; parent?: string | null; body?: string; avatar?: string | null; images?: string[] }
@@ -814,7 +663,8 @@ export const worldFindTool: ToolDefinition = defineTool({
  * 真触到 512KB 说明这已经是「一本书塞进一个文件」,那种情况下**显式告知已
  * 截断**比悄悄给半截强 —— 用户和模型都能据此判断该怎么办。
  *
- * 与 word_count 的分工:word_count 回答「多长」,read_chapter 回答「写了什么」。
+ * 与字数钩子的分工:字数回答「多长」(由 write/edit 的返回值与本章头部自带),
+ * read_chapter 回答「写了什么」。
  */
 const readChapterParameters = Type.Object({
 	path: Type.String({
@@ -856,7 +706,7 @@ export const readChapterTool: ToolDefinition = defineTool({
 
 		const counts = countText(file.text);
 		// 头部元信息:模型拿到全文后仍需要知道「这是哪个文件、多长」——
-		// 尤其续写时要据字数判断节奏,不该再调一次 word_count。
+		// 尤其续写时要据字数判断节奏,不必再另起一次调用去数。
 		const head = `# ${file.path}(${counts.cnChars} 字${counts.paragraphs > 0 ? ` · ${counts.paragraphs} 段` : ""}${file.truncated ? ` · 文件共 ${Math.ceil(file.bytes / 1024)}KB` : ""})`;
 		const lines = [head, ""];
 		if (file.truncated) {

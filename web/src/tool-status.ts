@@ -17,7 +17,6 @@ export const TOOL_STATUS: Record<string, string> = {
 	grep: "正在搜索",
 	find: "正在查找",
 	ls: "正在查看",
-	word_count: "正在统计字数",
 	world_update: "正在更新世界书",
 	world_find: "正在查阅世界书",
 };
@@ -34,7 +33,6 @@ export const TOOL_FAIL: Record<string, string> = {
 	grep: "搜索失败",
 	find: "查找失败",
 	ls: "列出失败",
-	word_count: "统计失败",
 	world_update: "更新失败",
 	world_find: "查阅失败",
 };
@@ -48,14 +46,13 @@ export const TOOL_DONE: Record<string, string> = {
 	grep: "已搜索",
 	find: "已列出",
 	ls: "已列出",
-	word_count: "已统计",
 	world_update: "已更新世界书",
 	world_find: "已查阅世界书",
 };
 export const DEFAULT_TOOL_DONE = "已调用";
 
 /** 图标族:组件侧按它选一枚线性 SVG(不用 emoji)。 */
-export type ToolIcon = "read" | "edit" | "search" | "find" | "count" | "world" | "ask" | "other";
+export type ToolIcon = "read" | "edit" | "search" | "find" | "world" | "ask" | "other";
 
 /** 工具名 → 图标族。 */
 export function toolIcon(name: string): ToolIcon {
@@ -70,8 +67,6 @@ export function toolIcon(name: string): ToolIcon {
 		case "find":
 		case "ls":
 			return "find";
-		case "word_count":
-			return "count";
 		case "world_update":
 		case "world_find":
 			return "world";
@@ -144,7 +139,7 @@ export function toolActionRow(t: { name: string; args: string; result: string | 
  * - `action`:读取型工具,压成一行「动词 + 宾语」;
  * - `ask`:ask_user——提问卡片。**未回答时它自己就是弹窗**(见 AskUserCard),
  *   所以块内不渲染输入控件,只留一行「等待回答」占位;答完原地变成问答记录;
- * - `hidden`:word_count / world_find——既不产生编辑也没有值得看一眼的读取内容,
+ * - `hidden`:world_find——既不产生编辑也没有值得看一眼的读取内容,
  *   默认不占版面;**失败时强制露出**(静默会让「AI 好像什么都没干」,见 MessageList);
  * - `card`:原始完整卡(工具名 + 完整参数 + 完整结果),只在调试模式下出现。
  */
@@ -161,7 +156,6 @@ export function toolRenderForm(name: string, debug: boolean): ToolRenderForm {
 		case "world_update":
 		case "script_confirm":
 			return "preview";
-		case "word_count":
 		case "world_find":
 			return "hidden";
 		case "ask_user":

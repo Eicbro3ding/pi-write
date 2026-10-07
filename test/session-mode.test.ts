@@ -70,7 +70,7 @@ describe("modeAnchorLine(进记忆锚的那句话必须带约束)", () => {
 		expect(line).toContain("world_update"); // 给出路:结论还是可以落盘的
 	});
 
-	it("写作态指向场景节奏(read_chapter → write/edit → word_count)", () => {
+	it("写作态指向场景节奏(read_chapter → write/edit)", () => {
 		const line = modeAnchorLine("writing");
 		expect(line).toContain("写作态");
 		expect(line).toContain("read_chapter");

@@ -34,7 +34,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 /** vendor 内置的文件工具六件套 —— 主提示词必须让模型看见它们。 */
 const BUILTIN_FILE_TOOLS = ["read", "write", "edit", "ls", "grep", "find"] as const;
 
-/** 变量名(`wordCountTool`)→ 真实工具名(`word_count`),从导出对象上读,不猜。 */
+/** 变量名(`worldUpdateTool`)→ 真实工具名(`world_update`),从导出对象上读,不猜。 */
 const NAMED = new Map<string, string>(
 	Object.entries(toolObjects)
 		.filter((e): e is [string, { name: string }] => !!e[1] && typeof e[1] === "object" && typeof (e[1] as { name?: unknown }).name === "string")
@@ -98,7 +98,6 @@ describe("形态工具集 ⊆ 提示词工具清单(防 read_chapter 式死代�
 		expect(editor).toContain("style_update");
 		expect(editor).not.toContain("world_update"); // 权限边界:世界书改动归导演
 		expect(classic).toContain("world_update");
-		expect(classic).toContain("word_count");
 	});
 
 	it("编剧(舞台形态):拿到的每个工具都写进了 writer-editor.md", () => {

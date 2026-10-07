@@ -12,7 +12,7 @@ import {
 
 describe("TOOL_STATUS(工具名 → 中文进行时文案)", () => {
   it("覆盖 web 工具集全部工具", () => {
-    for (const tool of ["read", "write", "edit", "grep", "find", "ls", "word_count", "world_update", "world_find"]) {
+    for (const tool of ["read", "write", "edit", "grep", "find", "ls", "world_update", "world_find"]) {
       expect(TOOL_STATUS[tool]).toBeTruthy();
     }
   });
@@ -64,7 +64,6 @@ describe("工具动作流(03-组件规范/05:带宾语、完成的行留在流�
     expect(toolIcon("write")).toBe("edit");
     expect(toolIcon("grep")).toBe("search");
     expect(toolIcon("ls")).toBe("find");
-    expect(toolIcon("word_count")).toBe("count");
     expect(toolIcon("world_update")).toBe("world");
     expect(toolIcon("bash")).toBe("other");
   });

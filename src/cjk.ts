@@ -3,7 +3,7 @@
  *
  * 范围:Ext A (0x3400-0x4DBF) + Unified (0x4E00-0x9FFF) + Compat (0xF900-0xFAFF)。
  * 不用 `\p{Script=Han}` 正则:Android(nodejs-mobile)无 full ICU,`\p{` 正则禁用
- * (tools.ts word_count 曾因此存在 Android 崩溃风险,2026-08-10 收敛)。
+ * (早期字数统计曾因此存在 Android 崩溃风险,2026-08-10 收敛)。
  * 原 tools.ts / world-context.ts / stage/counters.ts 各持一份,现统一到此。
  */
 

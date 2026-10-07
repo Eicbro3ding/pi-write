@@ -66,7 +66,7 @@ pi-writer 探索的是:**Agent 如何在一个持续存在的创作世界里工�
 
 [Pi](https://pi.dev) 提供 Agent 运行时(会话、工具、事件、MCP)。pi-writer 在其上增加:
 
-- 面向写作的工具集(`world_update` / `world_find` / `word_count`);
+- 面向写作的工具集(`world_update` / `world_find` / `read_chapter` / `read_style`);
 - 世界状态管理(`world.json` 单一真相源 + 校验 / 原子写 / 视图导出);
 - 长篇记忆(跨章节 `memory.md`);
 - 创作工作流(背景包注入、预览卡、舞台共演)。

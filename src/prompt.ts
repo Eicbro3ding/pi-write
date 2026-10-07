@@ -8,7 +8,7 @@
  * pi 自动生成的动态工具段。
  *
  * 把 assistant 定位为创意写作伙伴,以书目录为工作区(outline、章节草稿、
- * notes、世界书)。工具限定为文件读写加 word_count;是否提供 shell 由运行环境与
+ * notes、世界书)。工具限定为文件读写;是否提供 shell 由运行环境与
  * 设置决定(web 默认无、TUI 有;方言见 shell-kind.ts)。
  *
  * 工具清单是**动态**的:writer-main.md 里的「你拥有的工具」是基础工具;MCP

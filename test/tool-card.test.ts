@@ -25,8 +25,7 @@ describe("toolRenderForm", () => {
 		}
 	});
 
-	it("word_count / world_find 默认不显示:没有编辑动作,也不是值得看一眼的读取", () => {
-		expect(toolRenderForm("word_count", false)).toBe("hidden");
+	it("world_find 默认不显示:没有编辑动作,也不是值得看一眼的读取", () => {
 		expect(toolRenderForm("world_find", false)).toBe("hidden");
 	});
 
@@ -39,7 +38,7 @@ describe("toolRenderForm", () => {
 	});
 
 	it("调试模式一切退回原始完整卡(排查工具调用要看原始参数与结果)", () => {
-		for (const name of ["bash", "write", "read", "word_count", "world_find", "mcp__x"]) {
+		for (const name of ["bash", "write", "read", "world_find", "mcp__x"]) {
 			expect(toolRenderForm(name, true)).toBe("card");
 		}
 	});

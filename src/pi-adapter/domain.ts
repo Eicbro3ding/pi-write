@@ -61,7 +61,7 @@ export interface SessionHostOptions {
 	cwd: string; // 书目录
 	agentDir: string;
 	sessionManager: SessionManagerHandle;
-	/** 工具路径守卫与 world_update/word_count 所需的会话上下文(readOnlyDirs/draftFile)。
+	/** 工具路径守卫所需的会话上下文(readOnlyDirs/draftFile)。
 	 *  缺省时仅使用 cwd 作为书目录,不额外放行只读目录、不限制正文白名单。 */
 	toolGuard?: { readOnlyDirs?: string[]; draftFile?: string };
 }

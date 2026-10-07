@@ -18,7 +18,6 @@ describe("classifyToolCall", () => {
 	it("非编辑工具 → null", () => {
 		expect(classifyToolCall("read", "draft/ch01.md")).toBeNull();
 		expect(classifyToolCall("edit", undefined)).toBeNull();
-		expect(classifyToolCall("word_count", undefined)).toBeNull();
 	});
 });
 

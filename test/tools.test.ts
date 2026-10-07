@@ -2,17 +2,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyStyleUpdate, applyWorldUpdate, emptiedEntryBodies, normalizeStyleUpdate, normalizeWorldUpdate, readChapterTool, readStyleTool, setWordCountCwd, setWorldUpdateBookDir, styleUpdateTool, wordCountTool, worldFindTool, worldUpdateTool } from "../src/tools.ts";
+import { applyStyleUpdate, applyWorldUpdate, emptiedEntryBodies, normalizeStyleUpdate, normalizeWorldUpdate, readChapterTool, readStyleTool, setWorldUpdateBookDir, styleUpdateTool, worldFindTool, worldUpdateTool } from "../src/tools.ts";
 import { createEmptyWorld, ensureWorld, saveWorld, WorldValidationError } from "../src/world-data.ts";
 
-type ToolParams = Parameters<typeof wordCountTool.execute>[1];
-type ToolContext = Parameters<typeof wordCountTool.execute>[4];
+type ToolContext = Parameters<typeof readChapterTool.execute>[4];
 
-function runTool(params: ToolParams): ReturnType<typeof wordCountTool.execute> {
-	return wordCountTool.execute("call", params, undefined, undefined, {} as ToolContext);
-}
-
-function resultText(result: Awaited<ReturnType<typeof wordCountTool.execute>>): string {
+function resultText(result: Awaited<ReturnType<typeof readChapterTool.execute>>): string {
 	return result.content
 		.filter((c): c is { type: "text"; text: string } => c.type === "text")
 		.map((c) => c.text)
@@ -27,79 +22,6 @@ beforeEach(() => {
 
 afterEach(() => {
 	rmSync(tmp, { recursive: true, force: true });
-});
-
-describe("wordCountTool", () => {
-	it("counts CJK chars, words, sentences, and paragraphs", async () => {
-		const file = join(tmp, "draft.md");
-		writeFileSync(file, "第一章。\n\nHello world\n\n第二段。\n", "utf-8");
-
-		const result = await runTool({ path: file });
-		const text = resultText(result);
-		expect(text).toContain("cn_chars: 6");
-		expect(text).toContain("en_words: 2");
-		expect(text).toContain("sentences: 2");
-		expect(text).toContain("paragraphs: 3");
-	});
-
-	it("walks directories for markdown files and reports totals", async () => {
-		writeFileSync(join(tmp, "a.md"), "甲。", "utf-8");
-		writeFileSync(join(tmp, "b.md"), "乙。", "utf-8");
-		writeFileSync(join(tmp, "notes.txt"), "ignored", "utf-8");
-
-		const result = await runTool({ path: tmp });
-		const text = resultText(result);
-		expect(text).toContain("Files: 2");
-		expect(text).toContain("Total:");
-		expect(text).toContain("cn_chars: 2");
-	});
-
-	it("reports delta against a target", async () => {
-		const file = join(tmp, "draft.md");
-		writeFileSync(file, "第一章。", "utf-8");
-
-		const result = await runTool({ path: file, target: 100 });
-		const text = resultText(result);
-		expect(text).toContain("Target 100 cn_chars: -97 (3%)");
-	});
-
-	it("throws for missing paths", async () => {
-		await expect(runTool({ path: join(tmp, "nope.md") })).rejects.toThrow("Path not found");
-	});
-
-	it("resolves relative paths against the injected cwd(会话书目录)", async () => {
-		writeFileSync(join(tmp, "draft.md"), "第一章。", "utf-8");
-		setWordCountCwd(tmp);
-		try {
-			const result = await runTool({ path: "draft.md" });
-			expect(resultText(result)).toContain("cn_chars: 3");
-		} finally {
-			setWordCountCwd(null);
-		}
-	});
-
-	it("未注入 cwd 时回退 process.cwd()(绝对路径仍解析)", async () => {
-		// 与既有行为一致:绝对路径不受影响;未注入时相对路径按进程 cwd 解析
-		setWordCountCwd(null);
-		const file = join(tmp, "draft.md");
-		writeFileSync(file, "甲。", "utf-8");
-		const result = await runTool({ path: file });
-		expect(resultText(result)).toContain("cn_chars: 1");
-	});
-
-	it("拒绝书目录外的路径(../ 上溯与绝对路径逃逸)", async () => {
-		// 路径守卫:word_count 只能统计书目录内的文件,防越界探测 auth.json 等敏感文件
-		const bookDir = join(tmp, "book");
-		mkdirSync(bookDir, { recursive: true });
-		writeFileSync(join(tmp, "secret.json"), "sk-xxxx", "utf-8");
-		setWordCountCwd(bookDir);
-		try {
-			await expect(runTool({ path: "../secret.json" })).rejects.toThrow("工具路径越界");
-			await expect(runTool({ path: join(tmp, "secret.json") })).rejects.toThrow("工具路径越界");
-		} finally {
-			setWordCountCwd(null);
-		}
-	});
 });
 
 describe("read_chapter（整章全文读取）", () => {
@@ -131,7 +53,7 @@ describe("read_chapter（整章全文读取）", () => {
 		expect(result.details?.truncated).toBe(false);
 	});
 
-	it("头部带路径与字数,模型续写不必再调 word_count", async () => {
+	it("头部带路径与字数,模型续写不必另起一次调用去数", async () => {
 		seedChapter("第一章。\n\n第二段。\n");
 		const text = resultText(await runRead({ path: "draft/ch01.md" }));
 		expect(text).toContain("draft/ch01.md");
@@ -679,13 +601,6 @@ describe("world_update/style_update 参数 schema 压平", () => {
 		const flat = flatOf(styleUpdateTool);
 		expect(flat.anyOf).toBeUndefined();
 		expect(flat.required).toEqual(["op"]);
-	});
-
-	it("word_count 的 modes 用 string+enum,不再有 anyOf", () => {
-		const items = (wordCountTool.parameters as { properties: { modes: { items: { anyOf?: unknown; enum?: string[] } } } }).properties.modes.items;
-		expect(items.anyOf).toBeUndefined();
-		expect(items.enum).toContain("en_words");
-		expect(items.enum).toContain("all");
 	});
 
 	it("normalizeWorldUpdate 按 op 校验必填字段与未知 op", () => {

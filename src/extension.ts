@@ -27,7 +27,7 @@ import { APP_TITLE, getBookDir } from "./config.ts";
 import { autoSaveConflicts, DraftEditorPanel } from "./draft-panel.ts";
 import { type ChatApi, type ChatMessage, openFileEditor, parseEditArgs } from "./editor/index.ts";
 import { createWriterStartupHeader, type WriterHeaderContext } from "./startup-header.ts";
-import { applyWorldUpdate, readChapterTool, readStyleTool, wordCountTool, worldFindTool, worldUpdateTool } from "./tools.ts";
+import { applyWorldUpdate, readChapterTool, readStyleTool, worldFindTool, worldUpdateTool } from "./tools.ts";
 import { flattenWorldTree, renderWorldTree, renderWorldTreeFromData } from "./world-tree.ts";
 import { ensureWorld, type WorldData } from "./world-data.ts";
 import { chatTextOfMessage } from "./session-text.ts";
@@ -288,7 +288,9 @@ async function refreshStatus(ctx: ExtensionContext): Promise<void> {
 
 function writerFactory(pi: ExtensionAPI): void {
 	// Register the writer-only custom tools.
-	pi.registerTool(wordCountTool);
+	// word_count 已于 2026-10-07 摘除:字数改由 write/edit 后的 tool_result 钩子
+	// 与 read_chapter 头部自动带上(见 write-rails-extension.ts),模型不再需要
+	// 主动去数一次,工具本身成了多余的一步。
 	pi.registerTool(worldUpdateTool);
 	pi.registerTool(worldFindTool);
 	// read_chapter(2026-10-04):内置 read 在 2000 行/50KB 处静默截断,写正文时

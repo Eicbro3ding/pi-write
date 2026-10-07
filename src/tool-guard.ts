@@ -1,5 +1,5 @@
 /**
- * AI 工具路径守卫:把文件工具(read/write/edit/grep/find/ls/word_count)的
+ * AI 工具路径守卫:把文件工具(read/write/edit/grep/find/ls)的
  * 可访问路径限制在书目录内,防止提示注入等场景下工具读取书目录外的
  * 敏感文件(如 ~/.pi/writer/agent/auth.json 中的 provider API key)。
  *

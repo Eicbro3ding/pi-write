@@ -4,7 +4,7 @@ import { cjkCount } from "../cjk.ts";
 /**
  * 实时计数器——纯确定性计算(零模型调用),由编排器从舞台转录直接统计。
  * 计数块注入演员上下文最尾部(缓存纪律:每轮只失效尾部短段)。
- * CJK 字数与 tools.ts word_count 口径一致(统一在 cjk.ts)。
+ * CJK 字数与正文工具的字数口径一致(统一在 cjk.ts)。
  */
 
 export interface SceneCounts {

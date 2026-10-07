@@ -34,7 +34,7 @@
  * **经典模式(2026-09-18,classicMode = 单 agent)**:同一个会话宿主换成
  * 「写作 agent」装配——系统提示取 prompts/writer-main.md(buildWriterSystemPrompt,
  * 与 TUI/主会话同款),工具集配全(read/write/edit/grep/find/ls +
- * word_count/world_update/world_find + MCP;bash 在 web 一律禁用),且不再限制
+ * world_update/world_find + MCP;bash 在 web 一律禁用),且不再限制
  * 只能写当前章节草稿(要能写 outline.md / memory.md / notes/)。界面上只有编辑页,
  * 没有编剧/导演/演员之分。切换模式时已建会话全部释放,新工具集在下次对话时生效。
  */
@@ -78,7 +78,7 @@ import { detectSessionMode } from "../session-mode.ts";
 import { buildEditorSystemPrompt, buildWriterSystemPrompt, writerShellLine } from "../prompt.ts";
 import type { ShellDialect } from "../shell-kind.ts";
 import type { ConversationScope } from "../writer-settings.ts";
-import { readChapterTool, readStyleTool, styleUpdateTool, wordCountTool, worldFindTool, worldUpdateTool } from "../tools.ts";
+import { readChapterTool, readStyleTool, styleUpdateTool, worldFindTool, worldUpdateTool } from "../tools.ts";
 import { createAskUserTool, settleDanglingAskParts } from "../ask-user.ts";
 
 /**
@@ -93,7 +93,7 @@ const askUserTool = createAskUserTool();
  * 非经典(舞台形态)下编剧只有:`world_find`(只读检索世界书)+ `style_update`
  * (只写写作约束 / 文风采样 / 世界观概述的窄通道)。人物 / 关系 / 时间线 / 大纲 /
  * 发展线 / Notice 一律改不了——那是导演的活,这条边界是刻意的。
- * 经典模式换成单一写作 agent,才补上 `world_update` 与 `word_count`(完整写作工具集)。
+ * 经典模式换成单一写作 agent,才补上 `world_update`(完整写作工具集)。
  *
  * 抽成纯函数是为了让单测直接钉住这条边界:`style_update` 是 2026-10-01 才补的——
  * 此前编剧连「以后别用破折号」都只能写 advice.md 等导演下次开会话落盘,
@@ -107,7 +107,7 @@ export function writerToolset(opts: { classicMode: boolean; mcpTools: ToolDefini
 	// 提示词纪律「每写一章就可能换一次采样」—— 采样一变稳定块的指纹就变、就重注一份,
 	// 成了版本堆叠的第二大来源。改成按需取,顺手把那条触发也拆了。
 	return opts.classicMode
-		? [wordCountTool, worldUpdateTool, worldFindTool, readChapterTool, readStyleTool, askUserTool, ...opts.mcpTools]
+		? [worldUpdateTool, worldFindTool, readChapterTool, readStyleTool, askUserTool, ...opts.mcpTools]
 		: [worldFindTool, styleUpdateTool, readChapterTool, readStyleTool, askUserTool, ...opts.mcpTools];
 }
 import { SessionHost } from "./session-host.ts";

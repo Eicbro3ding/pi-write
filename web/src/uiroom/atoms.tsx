@@ -626,7 +626,7 @@ function PagerDisabled() {
    foldable-pre —— 折叠长文本
    ════════════════════════════════════════════════════════════════ */
 
-const SHORT_TEXT = ["read draft/ch01.md", "edit draft/ch01.md(3 处替换)", "word_count draft/ch01.md → 1,284 字"].join("\n");
+const SHORT_TEXT = ["read draft/ch01.md", "edit draft/ch01.md(3 处替换)", "# draft/ch01.md(1,284 字 · 9 段)"].join("\n");
 
 const LONG_DIFF = [
 	"--- a/draft/ch01.md",

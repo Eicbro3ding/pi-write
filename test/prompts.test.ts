@@ -72,10 +72,11 @@ describe("中间产物纪律", () => {
  * 三个入口都要"提一次",但落盘能力不同——这里把三边都钉住,免得日后改提示词时漏掉某一路,
  * 或者更糟:让编剧谎称自己已经写进世界书。
  */
-describe("开场纪律(新书还没定风格时的一次性提议)", () => {
+describe("开篇纪律(新书还没定风格时的一次性提议)", () => {
 	it("写作 agent:触发条件 + 只提一次 + 指向 onboarding 剧本", () => {
 		const main = loadPromptText("writer-main.md");
-		expect(main).toContain("开场纪律");
+		expect(main).toContain("开篇纪律");
+		expect(main).toContain("还没定风格");
 		expect(main).toContain("【写作约束】");
 		// 2026-10-05:采样已移出所有上下文块,判断「有没有」的唯一入口是 read_style
 		// ——原先这里断言的是 `【文风采样】` 那个块名,而它现在不该出现在这个入口的判据里了。
@@ -105,16 +106,16 @@ describe("开场纪律(新书还没定风格时的一次性提议)", () => {
 		expect(editor).toContain("先一句话说清再开始");
 	});
 
-	it("导演:开场纪律 + 落盘纪律 + 剧本路径占位", () => {
+	it("导演:开篇纪律 + 落盘纪律 + 剧本路径占位", () => {
 		const director = loadPromptText("director.md");
-		expect(director).toContain("开场纪律");
+		expect(director).toContain("开篇纪律");
 		expect(director).toContain("{STYLE_SETUP_PATH}");
 		expect(director).toContain("长期偏好必须落盘");
 	});
 
 	it("编剧:提议后当场用 style_update 落盘(不再只是写 advice.md 等导演)", () => {
 		const editor = loadPromptText("writer-editor.md");
-		expect(editor).toContain("开场纪律");
+		expect(editor).toContain("开篇纪律");
 		expect(editor).toContain("style_update");
 		expect(editor).toContain("不要谎称已经写进世界书");
 		// 边界仍在:人物/关系/时间线/发展线不归它,建议走 advice.md
@@ -156,7 +157,8 @@ describe("开场纪律(新书还没定风格时的一次性提议)", () => {
 describe("起笔纪律(世界书/大纲/约束都没有时先问再写)", () => {
 	it("写作 agent:三样都空才触发 + 先问再写 + 具体到点", () => {
 		const main = loadPromptText("writer-main.md");
-		expect(main).toContain("起笔纪律");
+		expect(main).toContain("开篇纪律");
+		expect(main).toContain("还没有可依的设定");
 		expect(main).toContain("都没有内容");
 		expect(main).toContain("世界书");
 		expect(main).toContain("发展线");
@@ -168,15 +170,16 @@ describe("起笔纪律(世界书/大纲/约束都没有时先问再写)", () => 
 
 	it("不阻塞动笔:用户说直接写就写,且同一场对话不再提", () => {
 		const main = loadPromptText("writer-main.md");
-		expect(main).toContain("用户说直接写就写");
+		// 2026-10-07:开篇纪律合并后,共同前提提到节首,措辞为「用户让你直接写就写」
+		expect(main).toContain("用户让你直接写就写");
 		expect(main).toContain("同一场对话里不许再提");
 		// 三样里任何一样有内容都不提(免得每本书都被问一遍)
 		expect(main).toContain("任意一样有内容");
 	});
 
-	it("与开场纪律合并成一次问询(新书不会被连问两轮)", () => {
+	it("与开篇纪律里的风格提议并成一次问询(新书不会被连问两轮)", () => {
 		const main = loadPromptText("writer-main.md");
-		expect(main).toContain("合并成一次问询");
+		expect(main).toContain("就并成一次问询");
 	});
 
 	it("编剧:同一条纪律按它的权限改写(设定归导演,建议走 advice.md)", () => {

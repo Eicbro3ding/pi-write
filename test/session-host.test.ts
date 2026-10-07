@@ -524,13 +524,13 @@ describe("SessionHost retractMessage", () => {
 		const host = makeHost(fake);
 		await host.start();
 
-		pushMessage(sm, "user", "统计一下");
+		pushMessage(sm, "user", "查一下设定");
 		sm.appendMessage({
 			role: "assistant",
-			content: [{ type: "toolCall", id: "c1", name: "word_count", arguments: {} }],
+			content: [{ type: "toolCall", id: "c1", name: "world_find", arguments: {} }],
 			timestamp: Date.now(),
 		} as never);
-		pushToolResult(sm, "c1", "3,200 字");
+		pushToolResult(sm, "c1", "匹配 1 条");
 
 		const msgs = host.getState().messages;
 		expect(msgs).toHaveLength(2);

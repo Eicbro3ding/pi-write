@@ -86,7 +86,7 @@ export default async function myPlugin(pi) { ... }  // 异步亦可
 
 ## 4. 开发工具(registerTool)
 
-工具定义的结构与 pi-writer 内部工具(`src/tools.ts` 的 `word_count` 等)一致:
+工具定义的结构与 pi-writer 内部工具(`src/tools.ts` 的 `world_find` 等)一致:
 
 ```js
 pi.registerTool({
