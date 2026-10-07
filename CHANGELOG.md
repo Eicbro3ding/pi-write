@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.2.0] - 2026-10-07
+
 `delete_relation` 补上静默无操作:世界书写入里最后一个漏网。
 
 - [fix] **`delete_relation` 传错 id 静默成功**(`src/tools.ts`)。`next.relations.filter((x) => x.id !== update.id)` 把一个不存在的 id filter 掉,照样回「已更新世界书」——模型据此以为关系已删、继续推理,而用户关系图上那条线还在。**关系是双向可见的数据,比约束/待办更隐蔽**:约束在文风块里迟早会被下一轮读到,关系图不会。已改为与 `delete_constraint` / `notice_delete` 同口径:先 `find` 判存在,不存在则抛 `WorldValidationError("关系不存在: <id>(未删除任何内容)")`。属上轮(`bf0d215`)修同批静默时的漏网。
