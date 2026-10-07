@@ -392,6 +392,75 @@ describe("syncStableContext(稳定块指纹注入,2026-08-22 缓存优化)", () 
 	});
 });
 
+/**
+ * 注入去重(2026-10-06 分诊收口)—— **本轮重构的收益,必须有测试钉住**。
+ *
+ * 收口前:`world.notice` 在本会话里被注两次 —— `editorContext`(每轮易变块)
+ * 与 `stableContext`(指纹稳定块)各一份;发展线同理。分诊表把它们分别归到
+ * 格 B / 格 C 后,同一会话内每类内容只应出现一次。
+ */
+describe("注入去重(分诊收口,2026-10-06)", () => {
+	/** 造一个有 Notice + 发展线 + memory 的书,供去重断言使用。 */
+	async function seedRichBook(slug: string): Promise<void> {
+		const bookDir = getBookDir(slug);
+		await mkdir(bookDir, { recursive: true });
+		const world = await ensureWorld(bookDir);
+		await saveWorld(bookDir, {
+			...world,
+			worldSummary: "雾港小城,北方海岸。",
+			notice: { enabled: true, items: [{ id: "n1", text: "第三卷回收信物伏笔", done: false }] },
+			storyline: {
+				...world.storyline,
+				enabled: true,
+				nodes: [{ id: "s1", title: "查明白塔来历", status: "in-progress", goal: "找档案", next: "夜探" }],
+			},
+		});
+		await writeFile(join(bookDir, "memory.md"), "- 主角的剑叫「婉姐的剑」", "utf8");
+	}
+
+	it("Notice 只进稳定块(格 B),不再进每轮易变块 —— 同一会话内只出现一次", async () => {
+		const slug = "fog-harbor";
+		await seedRichBook(slug);
+		const fake = makeFakeHost();
+		const host = new WriterHost({ createHost: async () => fake as never });
+		// 每轮易变块经 context 钩子产出的消息:捕获它,才能数 Notice 出现在哪
+		const seen: string[] = [];
+		host.setEventSink(() => {});
+		await host.chat(slug, "hi", "ch01.jsonl");
+
+		// 稳定块(格 B)必须带 Notice
+		const stable = String(fake.injectContext.mock.calls[0][0]);
+		expect(stable).toContain("【Notice·备忘录】");
+		expect(stable).toContain("第三卷回收信物伏笔");
+		// 稳定块**不带**发展线(那是格 C 的)
+		expect(stable).not.toContain("【发展线】");
+		seen.push(stable);
+
+		// 断言总量:整条会话装配里 Notice 标题只出现一次
+		expect(seen.join("\n").match(/【Notice·备忘录】/g)?.length).toBe(1);
+	});
+
+	it("发展线只进每轮易变块(格 C),不进稳定块 —— 否则每轮击穿指纹", async () => {
+		const slug = "fog-harbor2";
+		await seedRichBook(slug);
+		const fake = makeFakeHost();
+		const host = new WriterHost({ createHost: async () => fake as never });
+		await host.chat(slug, "hi", "ch01.jsonl");
+		const stable = String(fake.injectContext.mock.calls[0][0]);
+		expect(stable).not.toContain("【发展线】");
+	});
+
+	it("世界观概述只进稳定块(格 B)", async () => {
+		const slug = "fog-harbor3";
+		await seedRichBook(slug);
+		const fake = makeFakeHost();
+		const host = new WriterHost({ createHost: async () => fake as never });
+		await host.chat(slug, "hi", "ch01.jsonl");
+		const stable = String(fake.injectContext.mock.calls[0][0]);
+		expect(stable).toContain("【世界观概述】");
+	});
+});
+
 describe("setShell(shell 方言,2026-09-18)", () => {
 	it("变化时释放已建会话(下次对话按新装配重建);无变化为 no-op", async () => {
 		const fake = makeFakeHost();
@@ -491,5 +560,62 @@ describe("hostPromptScope（该按哪一套对话范围叙述提示词）", () =
 
 	it("章节模式里遗留的自由对话 id(book→chapter 切回):按分离叙述,不再谎称绑章", () => {
 		expect(hostPromptScope("chapter", "c-abc123")).toBe("book");
+	});
+});
+
+/**
+ * resolveRef 的「章节语义」形态校验(2026-10-05)。
+ *
+ * `resolveRef` 返回的 `chapter` 决定 editorContext 注入哪份正文(拼成
+ * `draft/<chapter>.md`)。**只有章节文件名形态(`<id>.jsonl`)才认** —— 否则不透明
+ * 对话 id(`c-xxxxxx` / `default`)会被当成章节名,拼出 `draft/c-abc123.md`,
+ * editorContext 走 else 分支把这个不存在的路径当「约定落点」教给模型。
+ *
+ * 两个模式**必须同一条判据** —— 分开写就是「切一次模式就换一种行为」。
+ */
+describe("resolveRef（章节语义的形态校验，两模式同一条判据）", () => {
+	/** private 方法:JS 运行时无访问限制,按仓库既有约定直接原型调用。 */
+	function makeResolver(scope: "chapter" | "book") {
+		const host = Object.create(WriterHost.prototype) as never as {
+			conversationScope: string;
+			currentConversation: Map<string, string>;
+			viewChapter: Map<string, string | null>;
+			currentChapter: Map<string, string>;
+			resolveRef(slug: string, chapterFile?: string | null, conversation?: string | null, record?: boolean): {
+				key: string;
+				chapter: string | null;
+			};
+		};
+		host.conversationScope = scope;
+		host.currentConversation = new Map();
+		host.viewChapter = new Map();
+		host.currentChapter = new Map();
+		return host;
+	}
+
+	it("chapter 模式:章节文件名认,不透明 id 不认(既有一致性)", () => {
+		const h = makeResolver("chapter");
+		expect(h.resolveRef("b", "ch01.jsonl", null).chapter).toBe("ch01.jsonl");
+		expect(h.resolveRef("b", null, "c-abc123").chapter).toBe(null);
+	});
+
+	it("book 模式:chapterFile 是章节文件名才提正文,不透明 id 不提", () => {
+		const h = makeResolver("book");
+		// 「正在看的章节」是章节名 —— 提这一章正文
+		expect(h.resolveRef("b", "ch01.jsonl", null).chapter).toBe("ch01.jsonl");
+		// 前端把对话 id 误当 chapterFile 传(或书里存了个不透明 id):不许拼成
+		// draft/c-abc123.md —— 那会走「尚未创建,请写入此路径」分支,把模型引到
+		// 一个前端永远读不到的落点
+		expect(h.resolveRef("b", "c-abc123", null).chapter).toBe(null);
+		// 不传 chapterFile(只声明对话身份):同样不提正文
+		expect(h.resolveRef("b", undefined, "c-abc123").chapter).toBe(null);
+		// 显式 null(用户没在看任何章节):不提正文
+		expect(h.resolveRef("b", null, null).chapter).toBe(null);
+	});
+
+	it("book 模式:身份仍是不透明对话 id(形态校验只作用于 chapter)", () => {
+		const h = makeResolver("book");
+		expect(h.resolveRef("b", "c-abc123", null).key).toBe("default");
+		expect(h.resolveRef("b", undefined, "c-abc123").key).toBe("c-abc123");
 	});
 });

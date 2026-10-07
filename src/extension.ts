@@ -31,8 +31,9 @@ import { applyWorldUpdate, readChapterTool, readStyleTool, wordCountTool, worldF
 import { flattenWorldTree, renderWorldTree, renderWorldTreeFromData } from "./world-tree.ts";
 import { ensureWorld, type WorldData } from "./world-data.ts";
 import { chatTextOfMessage } from "./session-text.ts";
-import { buildChapterContext, buildStorylineView, type ChapterContextResult, summarizeTrim, trimMemory, WORLD_CONTEXT_TYPE } from "./world-context.ts";
-import { detectSessionMode, modeAnchorLine, type SessionMode } from "./session-mode.ts";
+import { buildChapterContext, type ChapterContextResult, summarizeTrim, trimMemory, WORLD_CONTEXT_TYPE } from "./world-context.ts";
+import { renderAnchor } from "./inject-plan.ts";
+import { detectSessionMode, type SessionMode } from "./session-mode.ts";
 import { readWriterSettings, type WriterSettings } from "./writer-settings.ts";
 import { buildInspectReport, inspectHeadline, openInspectPanel, type InspectReport } from "./inspect/index.ts";
 import { buildWriterTheme } from "./writer-theme.ts";
@@ -110,7 +111,7 @@ async function recentUserMessagesFromSessionFile(absPath: string, count = 2): Pr
 }
 
 /**
- * 每轮记忆锚(2026-10-05 失忆修复):跨章记忆 / 活跃 Notice / 发展线当前位置,
+ * 每轮记忆锚(2026-10-05 失忆修复):跨章记忆 + 模式行 + 当前章节,
  * 经 before_agent_start 追加到 systemPrompt 尾部。
  *
  * 为什么走 systemPrompt 而不是消息:背景包是会话里的一条普通消息,会被压缩移出
@@ -118,9 +119,11 @@ async function recentUserMessagesFromSessionFile(absPath: string, count = 2): Pr
  * 长对话里开头的世界状态在注意力上等同消失(lost in the middle)。systemPrompt
  * 每轮都在最前,是唯一不依赖模型回忆的常驻通道。
  *
- * 为什么刻意**不**放:章节草稿全文(每轮都变,会击穿 prompt 缓存前缀)、世界书
- * 全量条目(体积大,那是背景包与按需 read 的职责)。锚只承载「丢了就会写错」的
- * 少量事实;内容只在 world_update / memory.md 更新时变化,缓存友好。
+ * **装哪些内容已收归分诊层**(见 `src/inject-plan.ts` 的 `planAnchorBlocks` /
+ * `renderAnchor`)。2026-10-06 收敛:**Notice 与发展线不再进锚** —— 它们分别归
+ * 格 B(稳定块,指纹去重)与格 C(每轮易变块);放在锚里等于每轮重付一次,
+ * 而锚的价值恰恰在于内容稳定、可缓存。本函数现在只负责**取 IO**
+ * (memory.md / 设置),拼装交给分诊层。
  */
 /** 压缩摘要里保留的用户原话上限(字符)。超出时保留**较新**的:最早的用户消息
  *  通常已沉淀进 memory.md / world.json(且记忆锚每轮都在),而近期指示往往还没落盘。 */
@@ -145,49 +148,34 @@ export function echoUserMessages(messages: readonly AgentMessage[]): string {
 	return `【压缩前的用户原话 · 按时间顺序,较新的在后】以下是被本次压缩丢弃的对话里用户说过的话,原样保留。与后续内容冲突时以较新的为准,但不要丢弃早期给出的长期设定:\n${lines.join("\n")}`;
 }
 
+/**
+ * 取 memory.md 并按预算裁剪(锚的输入之一)。
+ *
+ * 抽出来是因为它不止一个调用方:锚本身,以及 `session_before_compact` 把锚
+ * 写进压缩摘要的路径。失败一律返回空串(无 memory.md 不是错误)。
+ */
+export async function readAnchorMemory(bookDir: string): Promise<string> {
+	try {
+		const settings = await readWriterSettings();
+		return trimMemory(await readFile(join(bookDir, "memory.md"), "utf-8"), settings.memoryBudget);
+	} catch {
+		return "";
+	}
+}
+
+/**
+ * 每轮记忆锚(格 D)—— **shell 层**:取 IO,拼装交给分诊层。
+ *
+ * web 编剧会话直接调本函数(见 `src/web/writer-host.ts` 的 before_agent_start),
+ * TUI 经 `writerExtension` 调 —— 两处同一实现,不再各写一份。
+ */
 export async function buildMemoryAnchor(
 	slug: string,
 	chapterFile: string | undefined,
 	mode?: SessionMode,
 ): Promise<string> {
-	const bookDir = getBookDir(slug);
-	const settings = await readWriterSettings();
-	const blocks: string[] = [];
-	try {
-		const memory = trimMemory(await readFile(join(bookDir, "memory.md"), "utf-8"), settings.memoryBudget);
-		if (memory) blocks.push(`【跨章节记忆 memory.md】\n${memory}`);
-	} catch {
-		/* 无 memory.md:跳过 */
-	}
-	try {
-		const world = await ensureWorld(bookDir);
-		const noticeItems = world.notice.enabled
-			? world.notice.items.filter((i) => !i.done).slice(0, settings.noticeInjectLimit)
-			: [];
-		if (noticeItems.length > 0) {
-			blocks.push(`【Notice 备忘录 · 未完成】\n${noticeItems.map((i) => `- ${i.text}`).join("\n")}`);
-		}
-		const view = buildStorylineView(world, settings.completedMilestoneLimit);
-		if (view) {
-			const lines: string[] = [];
-			if (view.currentTitle) {
-				const cur = world.storyline.nodes.find((n) => n.status === "in-progress");
-				lines.push(`当前位置: ${view.currentTitle}`);
-				if (cur?.goal) lines.push(`目标: ${cur.goal}`);
-				if (cur?.next) lines.push(`下一步: ${cur.next}`);
-			}
-			if (view.completed.length > 0) lines.push(`已完成(勿重复推进): ${view.completed.join(" / ")}`);
-			if (lines.length > 0) blocks.push(`【发展线】\n${lines.join("\n")}`);
-		}
-	} catch {
-		/* 世界书缺失:跳过 */
-	}
-	// 模式行放在最前 —— 它是这一轮最优先的约束(能不能碰文件)。
-	// 独立于 blocks 之外:即使这本书还没有任何世界状态,讨论态的约束也必须在。
-	const modeLine = mode ? `${modeAnchorLine(mode)}\n` : "";
-	if (modeLine.length === 0 && blocks.length === 0) return "";
-	const head = `${modeLine}${chapterFile ? `当前章节: ${chapterFile}\n` : ""}`;
-	return `【常驻记忆锚 · 每轮刷新】以下事实跨轮次、跨压缩恒定;与你的印象冲突时以这里为准,需要更多细节就 read 对应文件(memory.md / world.json)。\n${head}${blocks.join("\n\n")}`;
+	const memory = await readAnchorMemory(getBookDir(slug));
+	return renderAnchor({ mode, chapterFile, memory });
 }
 
 /** Derive the chapter file basename from an absolute session file path. */
