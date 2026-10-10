@@ -24,6 +24,7 @@ import { FullScreenEditor } from "../components/FullScreenEditor.tsx";
 import { McpServerList } from "../components/McpServerList.tsx";
 import { PluginList } from "../components/PluginList.tsx";
 import { PluginSettings } from "../components/PluginSettings.tsx";
+import { PromptModal } from "../components/PromptModal.tsx";
 import { ProviderList } from "../components/ProviderList.tsx";
 import { SHELL_CHOICES, ShellCards } from "../components/ShellCards.tsx";
 import { SetupWizard } from "../components/SetupWizard.tsx";
@@ -143,6 +144,16 @@ export const SETTINGS_ENTRIES: readonly UIRoomEntry[] = [
 		symbols: ["ShellCards", "SHELL_CHOICES", "SHELL_CONFIRM_TEXT"],
 		note: "保持关闭 / 开启 shell 两选一(首启向导「执行命令」步)。风险确认条由调用方画,正文 `SHELL_CONFIRM_TEXT` 与设置页「执行命令」那一处共用一份 —— 改口径两处一起变。",
 		variants: ["保持关闭", "已开启"],
+	},
+	{
+		id: "prompt-modal",
+		group: "settings",
+		title: "系统提示词弹层",
+		module: "components/PromptModal.tsx",
+		symbols: ["PromptModal"],
+		note: "设置页「高级 › 系统提示词」的编辑位:只读态展示内置原文(可「载入编辑器」照抄改造),编辑态给 textarea + 还原/载入。860px 固定定位弹层,已加框。",
+		variants: ["只读预览", "编辑态"],
+		frame: "viewport",
 	},
 	{
 		id: "setup-wizard",
@@ -611,6 +622,69 @@ function WizardShell() {
 	return <WizardMount classicMode openSteps={3} />;
 }
 
+/** 展示用空函数:展项里的回调都不真跑(陈列室只看长相)。 */
+const noop = () => {};
+
+/** 弹层里那段「内置提示词」的假样本 —— 只求形似(带一级/二级标题与条款),不求内容属实。 */
+const DEMO_BUILTIN_PROMPT = [	"你是 pi·writer 的写作 agent。工作目录是当前书的目录。",
+	"",
+	"## 你的职责",
+	"1. 按用户的要求改写、续写、扩写正文,落点必须在 draft/ 下的章节文件里。",
+	"2. 改动前先读原文,不要凭记忆重写已经存在的段落。",
+	"3. 每次落笔都要给出改动理由,一句话说清你在解决什么问题。",
+	"",
+	"## 写作纪律",
+	"- 视角、时态、称谓与原文保持一致,不做无授权的叙事改造。",
+	"- 对白只写角色会说的话,不用旁白替他解释意图。",
+	"- 场景描写服务于此刻的情绪,不堆砌形容词。",
+	"",
+	"## 你绝不做的事",
+	"- 不删改用户没有提到的章节。",
+	"- 不在未经确认时改动世界书条目。",
+	"- 不把整章推倒重写来「优化」——除非用户明确要求。",
+].join("\n");
+
+/** 只读态:内置原文预览,脚部主按钮是「载入编辑器」。 */
+function PromptModalReadonly() {
+	return (
+		<PromptModal
+			open
+			mode="readonly"
+			title="主写作 agent"
+			stateLabel="内置 · 只读"
+			builtinText={DEMO_BUILTIN_PROMPT}
+			draft=""
+			onDraft={noop}
+			busy={false}
+			onClose={noop}
+			onLoadBuiltin={noop}
+			onReset={noop}
+			onSave={noop}
+		/>
+	);
+}
+
+/** 编辑态:草稿里有内容(看字数与还原/载入工具条)。 */
+function PromptModalEdit() {
+	const [draft, setDraft] = useState(() => `${DEMO_BUILTIN_PROMPT}\n\n## 本作附加要求\n- 每一章必须有至少一处环境细节承担情绪。`);
+	return (
+		<PromptModal
+			open
+			mode="edit"
+			title="主写作 agent"
+			stateLabel="已自定义"
+			builtinText={DEMO_BUILTIN_PROMPT}
+			draft={draft}
+			onDraft={setDraft}
+			busy={false}
+			onClose={noop}
+			onLoadBuiltin={() => setDraft(DEMO_BUILTIN_PROMPT)}
+			onReset={() => setDraft("")}
+			onSave={noop}
+		/>
+	);
+}
+
 export const SETTINGS_SECTION: UIRoomSection = {
 	"provider-list": [
 		{ label: "已连接", note: "真实 client:已配置的排前、带徽章", render: ProviderListLive },
@@ -666,5 +740,9 @@ export const SETTINGS_SECTION: UIRoomSection = {
 		{ label: "创作方式", note: "自动点到第 2 步:两张大卡,单 Agent 默认选中", render: WizardMode },
 		{ label: "对话范围", note: "自动点到第 3 步:绑定章节默认选中", render: WizardScope },
 		{ label: "执行命令", note: "自动点到第 4 步:保持关闭默认选中(点「开启」才弹确认条)", render: WizardShell },
+	],
+	"prompt-modal": [
+		{ label: "只读预览", note: "内置原文 + 右上「内置 · 只读」胶囊;脚部「载入编辑器」", render: PromptModalReadonly },
+		{ label: "编辑态", note: "草稿受控,工具条给「还原内置 / 载入内置原文」", render: PromptModalEdit },
 	],
 };

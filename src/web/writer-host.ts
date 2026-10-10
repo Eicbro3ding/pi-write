@@ -263,6 +263,13 @@ export interface WriterHostOptions {
 	 * 与设置项 enableImageGen 同源;切换时释放全部会话,否则关掉开关工具还在。
 	 */
 	enableImageGen?: boolean;
+	/**
+	 * 自定义系统提示词(2026-10-10):非空时**整段替换**内置的 writer-main.md /
+	 * writer-editor.md,空串 = 用内置。切换走 setCustomPrompt(释放已建会话)。
+	 * 与设置项 customWriterPrompt / customEditorPrompt 同源。
+	 */
+	customWriterPrompt?: string;
+	customEditorPrompt?: string;
 	/** 测试注入:自定义宿主工厂(缺省创建真实会话)。 */
 	createHost?: (slug: string) => Promise<SessionHost>;
 }
@@ -372,6 +379,10 @@ export class WriterHost {
 	private shellPath: string | null;
 	/** 图片生成(实验,0.1.0)是否启用:决定 `image_generate` 工具存不存在。 */
 	private imageGen: boolean;
+	/** 自定义主写作 agent 提示词;空串 = 用内置(见 WriterHostOptions.customWriterPrompt)。 */
+	private customWriterPrompt: string;
+	/** 自定义常驻编剧提示词;空串 = 用内置。 */
+	private customEditorPrompt: string;
 
 	constructor(options: WriterHostOptions) {
 		this.options = options;
@@ -383,6 +394,8 @@ export class WriterHost {
 		this.shellDialect = options.shellDialect ?? "none";
 		this.shellPath = options.shellPath ?? null;
 		this.imageGen = options.enableImageGen ?? false;
+		this.customWriterPrompt = options.customWriterPrompt ?? "";
+		this.customEditorPrompt = options.customEditorPrompt ?? "";
 	}
 
 	/**
@@ -446,6 +459,21 @@ export class WriterHost {
 		this.shellEnabled = next.enabled;
 		this.shellDialect = next.dialect;
 		this.shellPath = next.path;
+		await this.disposeAll();
+	}
+
+	/**
+	 * 设置自定义系统提示词(2026-10-10)。任一份变化都释放全部会话:提示词在会话
+	 * 创建时装配进 runtime,复用旧会话意味着「改了提示词但对话还是老提示词」——
+	 * 与 setClassicMode / setShell 同款(系统提示的变更必须在装配期生效)。
+	 *
+	 * 空串 = 用内置(不是「清空提示词」);调用方传的是已经过 clampPrompt 的值,
+	 * 这里只做「变了没」的比较。
+	 */
+	async setCustomPrompt(next: { writer: string; editor: string }): Promise<void> {
+		if (this.customWriterPrompt === next.writer && this.customEditorPrompt === next.editor) return;
+		this.customWriterPrompt = next.writer;
+		this.customEditorPrompt = next.editor;
 		await this.disposeAll();
 	}
 
@@ -688,9 +716,13 @@ export class WriterHost {
 	 * buildEditorSystemPrompt / hostPromptScope),因为正文落点规则两种范围下不同。
 	 * 放开外部命令后编剧**也**拿得到 shell 工具——不说清方言它会写 bash 语法,
 	 * 所以启用了 shell 就在文末追加同一行方言说明(与写作 agent 用的是同一份文案)。
+	 *
+	 * 用户写了自定义编剧提示词时它**整段接管**(见 buildEditorSystemPrompt 的
+	 * custom 参),shell 行同样不再追加 —— 那是用户逐字写的稿,不在里面插我们的字。
 	 */
 	private editorSystemPrompt(scope: ConversationScope): string {
-		const base = buildEditorSystemPrompt(scope);
+		const base = buildEditorSystemPrompt(scope, this.customEditorPrompt);
+		if (this.customEditorPrompt.trim().length > 0) return base;
 		if (!this.shellEnabled || this.shellDialect === "none") return base;
 		return `${base}\n\n# 外部命令\n\n${writerShellLine(this.shellDialect)}`;
 	}
@@ -732,6 +764,7 @@ export class WriterHost {
 							mcpTools.map((t) => ({ name: t.name, description: t.description })),
 							this.shellEnabled ? this.shellDialect : "none",
 							promptScope,
+							this.customWriterPrompt,
 						)
 				: () => this.editorSystemPrompt(promptScope),
 			extensionFactories: [

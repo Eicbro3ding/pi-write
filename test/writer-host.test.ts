@@ -497,6 +497,61 @@ describe("setShell(shell 方言,2026-09-18)", () => {
 	});
 });
 
+/** 自定义系统提示词(2026-10-10):非空整段替换内置;空 = 用内置。 */
+describe("setCustomPrompt(自定义系统提示词,2026-10-10)", () => {
+	it("变化时释放已建会话(下次对话按新提示词装配);无变化为 no-op", async () => {
+		const fake = makeFakeHost();
+		const fake2 = makeFakeHost();
+		const createHost = vi.fn(async () => (createHost.mock.calls.length === 1 ? fake : fake2) as never);
+		const host = new WriterHost({ createHost });
+		await host.chat("prompt-book", "hi", "ch01.jsonl");
+		expect(createHost).toHaveBeenCalledTimes(1);
+		// 无变化:两份都没动 → 不释放
+		await host.setCustomPrompt({ writer: "", editor: "" });
+		expect(fake.dispose).not.toHaveBeenCalled();
+		expect(createHost).toHaveBeenCalledTimes(1);
+		// 设了主提示词:释放已建会话;下次对话用新装配重建
+		await host.setCustomPrompt({ writer: "自定义主提示词", editor: "" });
+		expect(fake.dispose).toHaveBeenCalledTimes(1);
+		await host.chat("prompt-book", "hi again", "ch01.jsonl");
+		expect(createHost).toHaveBeenCalledTimes(2);
+		// 只改编剧那份同样释放(两份各自独立,任一变都换装配)
+		await host.setCustomPrompt({ writer: "自定义主提示词", editor: "自定义编剧" });
+		expect(fake2.dispose).toHaveBeenCalledTimes(1);
+	});
+
+	it("主写作 agent 侧:非空整段替换内置提示词(内置文本不再出现)", () => {
+		const plain = new WriterHost({ createHost: async () => makeFakeHost() as never, classicMode: true });
+		const builtin = (plain as unknown as { customWriterPrompt: string }).customWriterPrompt;
+		expect(builtin).toBe("");
+
+		const custom = new WriterHost({
+			createHost: async () => makeFakeHost() as never,
+			classicMode: true,
+			customWriterPrompt: "只写正文的自定义提示词",
+		});
+		expect((custom as unknown as { customWriterPrompt: string }).customWriterPrompt).toBe("只写正文的自定义提示词");
+	});
+
+	it("编剧侧:非空整段替换,且不再追加 shell 方言行", () => {
+		const builtinHost = new WriterHost({ createHost: async () => makeFakeHost() as never, enableShell: true, shellDialect: "pwsh" });
+		const builtin = (builtinHost as unknown as { editorSystemPrompt(s: string): string }).editorSystemPrompt("chapter");
+		expect(builtin).toContain("# 外部命令");
+		expect(builtin).toContain("PowerShell 7(pwsh)");
+
+		const customHost = new WriterHost({
+			createHost: async () => makeFakeHost() as never,
+			enableShell: true,
+			shellDialect: "pwsh",
+			customEditorPrompt: "你是编剧,只按指令改正文。",
+		});
+		const custom = (customHost as unknown as { editorSystemPrompt(s: string): string }).editorSystemPrompt("chapter");
+		expect(custom).toBe("你是编剧,只按指令改正文。");
+		// 自定义稿里不插我们的 shell 文案
+		expect(custom).not.toContain("# 外部命令");
+	});
+});
+
 /**
  * 权限边界唯一真相源:`writerToolset`(2026-10-01 从 roleFactory 内联里抽出来)。
  *

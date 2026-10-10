@@ -117,6 +117,19 @@ export function writerShellLine(shell: ShellDialect): string {
  * 组装最终系统提示:基础提示(WRITER_SYSTEM_PROMPT,含 {SHELL_LINE} 与对话范围
  * 占位)+ 按运行环境注入 shell 行 + 按对话范围渲染绑定口径。
  *
+ * ## 自定义提示词(2026-10-10)
+ *
+ * `custom` 非空时**整段替换**内置的 writer-main.md:不再渲染内置模板的占位符,
+ * 也不追加「# 外部工具」段 —— 用户接管了这份提示词的全部内容。空串/undefined =
+ * 用内置(默认路径逐字节不变,test/prompt.test.ts 钉住)。
+ *
+ * 为什么替换而不是拼接:内置提示词里的「你绝不做的事」「散文只有一个落点」是
+ * 防止 AI 越权的底线,拼接型覆盖会让用户误以为改掉了而实际还在;整段替换把
+ * 控制权交全。代价(用户删掉约束后行为不受保护)由设置页的说明承担。
+ *
+ * shell 行**不注入到自定义文本里**:自定义文本是用户逐字写的,往里塞一段我们
+ * 的文案等于在他稿子里插字。需要 shell 说明的人自己写。
+ *
  * ## 关于 MCP 工具清单(T9-A,2026-10-05)
  *
  * 本函数**不再拼接 MCP 外部工具清单**。改用上游 `createMcpExtension` 后:
@@ -131,7 +144,14 @@ export function writerShellLine(shell: ShellDialect): string {
  * `scope` 缺省 `"chapter"`:TUI 与「绑定章节」模式必须拿到与解耦前逐字一致的
  * 提示词;只有分离模式(web 的自由对话)才换成不绑章节的叙述。
  */
-export function buildWriterSystemPrompt(customTools: WriterPromptTool[], shell: ShellDialect, scope: ConversationScope = "chapter"): string {
+export function buildWriterSystemPrompt(
+	customTools: WriterPromptTool[],
+	shell: ShellDialect,
+	scope: ConversationScope = "chapter",
+	custom?: string,
+): string {
+	// 自定义提示词优先:非空即整段接管(连 shell 行与外部工具段都不追加)
+	if (custom !== undefined && custom.trim().length > 0) return custom;
 	const base = renderScoped(WRITER_SYSTEM_PROMPT, scope, { SHELL_LINE: writerShellLine(shell) });
 	if (customTools.length === 0) return base;
 	const toolLines = customTools
@@ -149,7 +169,36 @@ export function buildWriterSystemPrompt(customTools: WriterPromptTool[], shell: 
  * 编剧在两种范围下都可能出现:绑定章节时正文白名单锁在当前章;分离模式下白名单
  * 不设、可改任意章 —— 提示词必须跟着变,否则那句「写其他路径会被工具拒绝」在分离
  * 模式下就是一句与事实相反的假约束。shell 行由调用方另追加(见 writer-host)。
+ *
+ * `custom` 非空时整段替换(同 buildWriterSystemPrompt 的口径);调用方负责决定
+ * 是否还要在自定义文本之后追加 shell 行(见 writer-host 的 editorSystemPrompt)。
  */
-export function buildEditorSystemPrompt(scope: ConversationScope = "chapter"): string {
+export function buildEditorSystemPrompt(scope: ConversationScope = "chapter", custom?: string): string {
+	if (custom !== undefined && custom.trim().length > 0) return custom;
+	return renderScoped(EDITOR_SYSTEM_PROMPT, scope);
+}
+
+/** 「内置提示词原文」的两份角色(2026-10-10)。 */
+export type BuiltinPromptRole = "writer" | "editor";
+
+/**
+ * 取**内置提示词的原文**(渲染后),供设置页「查看内置」弹层展示(2026-10-10)。
+ *
+ * 与 buildWriterSystemPrompt / buildEditorSystemPrompt 走**同一套渲染**:
+ * - writer 的 `{SHELL_LINE}` 按当前 shell 方言替换(设置页展示的应是"AI 实际拿到的那句",
+ *   而不是带 `{SHELL_LINE}` 的模板原文 —— 用户照抄时不至于把占位符也抄走);
+ * - 两份提示词的对话范围占位(见 SCOPE_VARS)按当前 scope 渲染。
+ *
+ * 注意:这里给的是**基础提示**,不含 # 外部工具 段(那由 MCP 挂载决定,与"内置文案"
+ * 无关);也不含 buildWriterSystemPrompt 的自定义覆盖 —— 本函数的语义就是"内置长什么样"。
+ */
+export function buildBuiltinPromptText(
+	role: BuiltinPromptRole,
+	scope: ConversationScope = "chapter",
+	shell: ShellDialect = "none",
+): string {
+	if (role === "writer") {
+		return renderScoped(WRITER_SYSTEM_PROMPT, scope, { SHELL_LINE: writerShellLine(shell) });
+	}
 	return renderScoped(EDITOR_SYSTEM_PROMPT, scope);
 }

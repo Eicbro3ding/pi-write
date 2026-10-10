@@ -9,7 +9,7 @@ import { SetupWizard } from "./components/SetupWizard.tsx";
 import { WritePage, type HeaderInfo } from "./pages/WritePage.tsx";
 import { StagePage } from "./pages/StagePage.tsx";
 import { WorldPage } from "./pages/WorldPage.tsx";
-import { SettingsPage, type ImageSettingsSlice } from "./pages/SettingsPage.tsx";
+import { SettingsPage, type BudgetSettingsSlice, type CustomPromptsSlice, type ImageSettingsSlice } from "./pages/SettingsPage.tsx";
 import { UIRoom } from "./pages/UIRoom.tsx";
 import {
 	autoConfirmEditsEnabled,
@@ -240,6 +240,51 @@ export function App() {
 		});
 	}, []);
 	/**
+	 * 上下文预算(2026-10-10):五项数值设置,决定背景包/记忆装配时的裁剪上限。
+	 * 与图片生成同款 —— 权威值在服务端 settings.json,不落 localStorage,
+	 * 挂载后由 GET /api/settings 对账覆盖,其他窗口的改动经 settings_changed 同步。
+	 * 初值用服务端默认值(见 src/writer-settings.ts 的 defaultWriterSettings)。
+	 */
+	const [budgetSettings, setBudgetSettingsState] = useState<BudgetSettingsSlice>(() => ({
+		contextBudget: 2000,
+		memoryBudget: 1500,
+		activationDepth: 0,
+		noticeInjectLimit: 10,
+		completedMilestoneLimit: 6,
+	}));
+	const applyBudgetSettings = useCallback((settings: WriterSettingsDto) => {
+		setBudgetSettingsState({
+			contextBudget: settings.contextBudget,
+			memoryBudget: settings.memoryBudget,
+			activationDepth: settings.activationDepth,
+			noticeInjectLimit: settings.noticeInjectLimit,
+			completedMilestoneLimit: settings.completedMilestoneLimit,
+		});
+	}, []);
+	/**
+	 * 更新上下文预算:先乐观置位(输入框即时响应),再写服务端 —— 服务端会按与
+	 * parseWriterSettings 同一套规则钳制越界值,故以它返回的完整设置回写
+	 * (用户输入 50000 会显示成 20000,而不是显示 50000 却按 20000 装配)。
+	 * 失败回滚并把错误抛给设置页展示。
+	 *
+	 * 这类改动**不释放已建会话** —— 装配时现读设置(见 server.ts injectChapterContext),
+	 * 下一次注入即用新值,不像经典模式/提示词那样需要重建 agent。
+	 */
+	const changeBudgetSettings = useCallback(
+		async (patch: Partial<BudgetSettingsSlice>) => {
+			const prev = budgetSettings;
+			setBudgetSettingsState({ ...prev, ...patch });
+			try {
+				const { settings } = await client.putSettings(patch);
+				applyBudgetSettings(settings);
+			} catch (e) {
+				setBudgetSettingsState(prev);
+				throw e;
+			}
+		},
+		[client, budgetSettings, applyBudgetSettings],
+	);
+	/**
 	 * 更新图片生成设置:先乐观置位(开关即时响应),再写服务端 —— 服务端是权威值,
 	 * 以它返回的完整设置回写;失败回滚并把错误抛给设置页展示。
 	 */
@@ -256,6 +301,37 @@ export function App() {
 			}
 		},
 		[client, imageSettings, applyImageSettings],
+	);
+	/**
+	 * 自定义系统提示词(2026-10-10)。与服务端 settings.json 同源,不落 localStorage:
+	 * 它决定会话装配用的提示词文本,只有服务端那一份才算数。
+	 * 初值取空串(空 = 用内置),挂载后由 GET /api/settings 对账覆盖。
+	 */
+	const [customPrompts, setCustomPromptsState] = useState<CustomPromptsSlice>({ customWriterPrompt: "", customEditorPrompt: "" });
+	const applyCustomPrompts = useCallback((settings: WriterSettingsDto) => {
+		setCustomPromptsState({
+			customWriterPrompt: settings.customWriterPrompt,
+			customEditorPrompt: settings.customEditorPrompt,
+		});
+	}, []);
+	/**
+	 * 更新自定义提示词:先乐观置位(文本框即时响应),再写服务端 —— 服务端是权威值,
+	 * 以它返回的完整设置回写(它可能已经做了限长/纯空白归一);失败回滚并抛给设置页展示。
+	 * 服务端写入会释放已建会话,下次对话按新提示词装配。
+	 */
+	const changeCustomPrompts = useCallback(
+		async (patch: Partial<CustomPromptsSlice>) => {
+			const prev = customPrompts;
+			setCustomPromptsState({ ...prev, ...patch });
+			try {
+				const { settings } = await client.putSettings(patch);
+				applyCustomPrompts(settings);
+			} catch (e) {
+				setCustomPromptsState(prev);
+				throw e;
+			}
+		},
+		[client, customPrompts, applyCustomPrompts],
 	);
 	/**
 	 * 切换经典模式:先本地落盘 + 置位(开关即时响应),再写服务端;服务端是权威值,
@@ -332,6 +408,8 @@ export function App() {
 				applyShellEnabled(settings.enableShell);
 				applyShellSettings(settings, shell);
 				applyImageSettings(settings);
+				applyCustomPrompts(settings);
+				applyBudgetSettings(settings);
 			})
 			.catch(() => {
 				/* 读取失败:沿用本地缓存 */
@@ -343,6 +421,8 @@ export function App() {
 			applyShellEnabled(e.settings.enableShell);
 			applyShellSettings(e.settings);
 			applyImageSettings(e.settings);
+			applyCustomPrompts(e.settings);
+			applyBudgetSettings(e.settings);
 		});
 		return () => {
 			cancelled = true;
@@ -555,6 +635,10 @@ export function App() {
 							onShellSettingsChange={changeShellSettings}
 							image={imageSettings}
 							onImageChange={changeImageSettings}
+							customPrompts={customPrompts}
+							onCustomPromptsChange={changeCustomPrompts}
+							budget={budgetSettings}
+							onBudgetChange={changeBudgetSettings}
 							focusModelToken={settingsModelToken}
 							onRerunSetup={() => setRerunWizard(true)}
 							nav={{ view, onNavigate: (v) => setView(v as View) }}

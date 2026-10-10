@@ -5,7 +5,7 @@
  * 注意:本文件不得在 import 时触碰 DOM 专属 API(EventSource 只在 subscribeEvents 内使用),
  * 以兼容 node 环境的 vitest 单测。
  */
-import type { AgentEventDto, BookDetail, BookFileTextDto, BookFilesDto, BookMeta, ChapterRef, ContextUsageDto, ConversationDto, ConversationScopeDto, ImageProviderDto, ImageSizeDto, InspectReportDto, McpServerInfo, McpServerStatus, PluginInfoDto, PluginSettingsItemDto, ProviderDetailDto, ProviderInfo, ProviderRefreshError, ResolvedShellDto, SessionState, SessionUsageStatsDto, SessionTreeDto, SetupStateDto, SkillInfoDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, ThinkingHostResult, TrimSummaryDto, WorldDataDto, ShellKindDto, WriterSettingsDto, WriterStateDto } from "../types.ts";
+import type { AgentEventDto, BookDetail, BookFileTextDto, BookFilesDto, BookMeta, BuiltinPromptsDto, ChapterRef, ContextUsageDto, ConversationDto, ConversationScopeDto, ImageProviderDto, ImageSizeDto, InspectReportDto, McpServerInfo, McpServerStatus, PluginInfoDto, PluginSettingsItemDto, ProviderDetailDto, ProviderInfo, ProviderRefreshError, ResolvedShellDto, SessionState, SessionUsageStatsDto, SessionTreeDto, SetupStateDto, SkillInfoDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, ThinkingHostResult, TrimSummaryDto, WorldDataDto, ShellKindDto, WriterSettingsDto, WriterStateDto } from "../types.ts";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
 
 /** 图片访问 URL(同源相对路径;生产/Electron 同源,vite dev 经代理)。 */
@@ -424,6 +424,16 @@ export class ApiClient {
 		imageInReply?: boolean;
 		imageWorldbook?: boolean;
 		imageConfirmBeforeGen?: boolean;
+		// 自定义系统提示词(2026-10-10):非空 = 整段替换内置提示词
+		customWriterPrompt?: string;
+		customEditorPrompt?: string;
+		// 上下文预算(2026-10-10):改这几项不释放会话(装配时现读设置),
+		// 下一次注入即生效。越界值由服务端钳制到合法区间。
+		contextBudget?: number;
+		memoryBudget?: number;
+		activationDepth?: number;
+		noticeInjectLimit?: number;
+		completedMilestoneLimit?: number;
 	}): Promise<{ settings: WriterSettingsDto; shell: ResolvedShellDto }> {
 		return this.request<{ settings: WriterSettingsDto; shell: ResolvedShellDto }>("/api/settings", {
 			method: "PUT",
@@ -431,8 +441,18 @@ export class ApiClient {
 		});
 	}
 
-	/** 书目录文件清单(只读;按语义分组,见 src/book-files.ts)。 */
-	async getBookFiles(slug: string): Promise<BookFilesDto> {
+	/**
+	 * 两份内置提示词的渲染后原文(2026-10-10,只读)。
+	 *
+	 * 弹层「查看内置原文」用它:**先看见**内置长什么样再决定改不改。文本由服务端按当前
+	 * 设置(对话范围 / shell 方言)渲染,所以与「此刻 AI 收到的那份」逐字一致 ——
+	 * 前端不自己拼,避免两边渲染口径漂移。
+	 */
+	async getPromptDefaults(): Promise<BuiltinPromptsDto> {
+		return this.request<BuiltinPromptsDto>("/api/prompt-defaults");
+	}
+
+	/** 书目录文件清单(只读;按语义分组,见 src/book-files.ts)。 */	async getBookFiles(slug: string): Promise<BookFilesDto> {
 		return this.request<BookFilesDto>(`/api/books/${encodeURIComponent(slug)}/files`);
 	}
 

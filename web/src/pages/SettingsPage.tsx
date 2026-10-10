@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { ApiError, type ApiClient } from "../api/client.ts";
 import { formatProviderRefreshErrors, friendlyError } from "../errors.ts";
-import { IMAGE_SIZE_PX_TEXT, type ConversationScopeDto, type ThinkingHostResult, type ImageProviderDto, type ImageSizeDto, type PluginInfoDto, type ResolvedShellDto, type ShellDialectDto, type ShellKindDto, type UserThemeInfo, type WorldDataDto, type WriterSettingsDto } from "../types.ts";
+import { IMAGE_SIZE_PX_TEXT, type BuiltinPromptsDto, type ConversationScopeDto, type ThinkingHostResult, type ImageProviderDto, type ImageSizeDto, type PluginInfoDto, type ResolvedShellDto, type ShellDialectDto, type ShellKindDto, type UserThemeInfo, type WorldDataDto, type WriterSettingsDto } from "../types.ts";
 import type { EnterBehavior } from "../settings.ts";
 import { buildThemeFamilies, NIGHT_THEME, themeFamilyPick, themeLabelFromCss, themeStarterCss, USER_THEME_PREFIX, userThemeFile, type ThemeId } from "../themes.ts";
 import { applyTheme, currentTheme } from "../theme.ts";
@@ -12,6 +12,7 @@ import { SHELL_CONFIRM_TEXT } from "../components/ShellCards.tsx";
 import { McpServerList } from "../components/McpServerList.tsx";
 import { PluginList } from "../components/PluginList.tsx";
 import { PluginSettings } from "../components/PluginSettings.tsx";
+import { PromptModal, type PromptModalMode } from "../components/PromptModal.tsx";
 import { ToggleSwitch } from "../components/ToggleSwitch.tsx";
 import { Select } from "../components/Select.tsx";
 import { ThemeCardsFromManifest } from "../components/ThemeCards.tsx";
@@ -93,11 +94,13 @@ const PHONE_PAGES: Record<string, { cat: string; cards: string[]; title: string 
 	"theme-css": { cat: "ui", cards: ["theme-css"], title: "自定义主题" },
 	model: { cat: "model", cards: ["model"], title: "默认模型" },
 	thinking: { cat: "model", cards: ["thinking"], title: "思考级别" },
-	world: { cat: "world", cards: ["world"], title: "世界书注入" },
+	world: { cat: "world", cards: ["world", "budget"], title: "世界书注入" },
+	budget: { cat: "world", cards: ["budget"], title: "上下文预算" },
 	image: { cat: "experimental", cards: ["image", "image-when"], title: "图片生成" },
 	shell: { cat: "advanced", cards: ["shell"], title: "执行命令" },
 	agent: { cat: "advanced", cards: ["agent"], title: "Agent 形态" },
 	conversation: { cat: "advanced", cards: ["conversation"], title: "对话与章节" },
+	prompts: { cat: "advanced", cards: ["prompts"], title: "系统提示词" },
 	deps: { cat: "advanced", cards: ["deps", "wizard"], title: "依赖与配置向导" },
 	mcp: { cat: "integrations", cards: ["mcp"], title: "MCP 服务器" },
 	plugins: { cat: "integrations", cards: ["plugins"], title: "插件" },
@@ -131,9 +134,103 @@ export type ImageSettingsSlice = Pick<
 	| "imageConfirmBeforeGen"
 >;
 
+/**
+ * 自定义系统提示词的设置子集(2026-10-10)。与服务端 settings.json 同源;
+ * 空串 = 用内置 prompts/ 那份(不是「清空提示词」)。
+ */
+export type CustomPromptsSlice = Pick<WriterSettingsDto, "customWriterPrompt" | "customEditorPrompt">;
+
+/**
+ * 上下文预算的设置子集(2026-10-10 接上写路径)。五项数值都是"裁剪上限",
+ * 决定每轮注入给 AI 的背景包能装多少 —— 详见 BUDGET_FIELDS 的逐项说明。
+ * 用 Pick 从完整设置里取,服务端加字段时这里会跟着报类型错。
+ */
+export type BudgetSettingsSlice = Pick<
+	WriterSettingsDto,
+	"contextBudget" | "memoryBudget" | "activationDepth" | "noticeInjectLimit" | "completedMilestoneLimit"
+>;
+
+/**
+ * 五项预算的默认值(原 src/world-context.ts 的硬编码常量)。「全部还原默认」用,
+ * 也用于卡片上标注「默认 X」。与 src/writer-settings.ts 的 defaultWriterSettings
+ * **必须一致** —— 前端不 import src/,故此处单列一份。
+ */
+const BUDGET_DEFAULTS: Record<keyof BudgetSettingsSlice, number> = {
+	contextBudget: 2000,
+	memoryBudget: 1500,
+	activationDepth: 0,
+	noticeInjectLimit: 10,
+	completedMilestoneLimit: 6,
+};
+
+/**
+ * 五项预算的可调元数据 —— 字段名 / 标签 / 说明 / 范围 / 默认值。
+ *
+ * 集中成一张表而不是散在 JSX 里各写一遍:五项的结构完全相同(数字输入),
+ * 只差文案与范围;而且服务端 `budgetItems()`(src/inspect/report.ts)已经有一份
+ * 「字段 → 范围/作用」的表,这里的 range 与它**同一口径**(改一处记得改另一处)。
+ *
+ * `min`/`max` 只是前端输入框的软限制(`<input type="number">`),真正的钳制在
+ * 服务端(parseWriterSettings / updateWriterSettings 同参),两者越界口径一致。
+ */
+const BUDGET_FIELDS: ReadonlyArray<{
+	key: keyof BudgetSettingsSlice;
+	label: string;
+	unit: string;
+	min: number;
+	max: number;
+	step: number;
+	effect: string;
+}> = [
+	{
+		key: "contextBudget",
+		label: "背景包总量",
+		unit: "token",
+		min: 200,
+		max: 20000,
+		step: 100,
+		effect: "每次对话注入的历史与设定文本的总上限。超出就按下面的顺序裁:先丢世界观概述,再按优先级挤掉世界书条目。",
+	},
+	{
+		key: "memoryBudget",
+		label: "跨章节记忆",
+		unit: "token",
+		min: 100,
+		max: 20000,
+		step: 100,
+		effect: "memory.md(上一章留下的要点)注入前的裁剪上限。写长篇、需要长期记忆时调大。",
+	},
+	{
+		key: "activationDepth",
+		label: "关联激活深度",
+		unit: "层",
+		min: 0,
+		max: 5,
+		step: 1,
+		effect: "0 = 只带出正文里被关键词命中的设定;调高后,与命中设定「有关系」的邻居也会一并带出,最远 N 层。",
+	},
+	{
+		key: "noticeInjectLimit",
+		label: "Notice 注入条数",
+		unit: "条",
+		min: 0,
+		max: 50,
+		step: 1,
+		effect: "备忘录里最多带几条未完成事项给 AI。设 0 = 不带。",
+	},
+	{
+		key: "completedMilestoneLimit",
+		label: "已完成里程碑条数",
+		unit: "条",
+		min: 0,
+		max: 30,
+		step: 1,
+		effect: "发展线里最多带几条「已完成」目标进去(用于提醒 AI 别再推进)。设 0 = 不带。",
+	},
+];
+
 /** 出图尺寸档位选项(像素文案来自 IMAGE_SIZE_PX_TEXT,与服务端 IMAGE_SIZE_PX 对齐)。 */
 const IMAGE_SIZE_OPTIONS: ReadonlyArray<ImageSizeDto> = ["1:1", "3:2", "16:9"];
-
 /** 图片接口形态选项(目前只有一种)。 */
 const IMAGE_PROVIDER_OPTIONS: ReadonlyArray<{ value: ImageProviderDto; label: string }> = [
 	{ value: "openai-images", label: "OpenAI Images · 兼容" },
@@ -225,6 +322,10 @@ export function SettingsPage({
 	onRerunSetup,
 	image,
 	onImageChange,
+	customPrompts,
+	onCustomPromptsChange,
+	budget,
+	onBudgetChange,
 	focusModelToken,
 	nav,
 	appVersion,
@@ -277,6 +378,14 @@ export function SettingsPage({
 	image: ImageSettingsSlice;
 	/** 更新图片生成设置(写服务端并释放会话;失败抛出由本页展示)。 */
 	onImageChange: (patch: Partial<ImageSettingsSlice>) => Promise<void>;
+	/** 自定义系统提示词(2026-10-10):整段替换内置提示词;空 = 用内置。 */
+	customPrompts: CustomPromptsSlice;
+	/** 更新自定义系统提示词(写服务端并释放会话;失败抛出由本页展示)。 */
+	onCustomPromptsChange: (patch: Partial<CustomPromptsSlice>) => Promise<void>;
+	/** 上下文预算(2026-10-10):背景包/记忆装配时的裁剪上限,存服务端 settings.json。 */
+	budget: BudgetSettingsSlice;
+	/** 更新上下文预算(写服务端,下次注入即生效;失败抛出由本页展示)。 */
+	onBudgetChange: (patch: Partial<BudgetSettingsSlice>) => Promise<void>;
 	/**
 	 * 「切到模型分类」的信号(自增计数,值变化即生效)。
 	 *
@@ -557,6 +666,184 @@ export function SettingsPage({
 			setActErr(`图片生成设置未保存: ${friendlyError(e)}`);
 		} finally {
 			setImageBusy(false);
+		}
+	}
+
+	// —— 系统提示词(2026-10-10)——
+	/**
+	 * 提示词提交中(避免连点)。整份提示词数百行,每次保存都会写 settings.json
+	 * 并释放已建会话 —— 所以编辑一律进弹层、按「保存」才提交,不做逐键自动保存。
+	 */
+	const [customBusy, setCustomBusy] = useState(false);
+	/** 保存某一份提示词(空串 = 还原内置);失败走操作错误条,成功由 App 侧更新 settings。 */
+	async function saveCustomPrompt(key: keyof CustomPromptsSlice, value: string) {
+		setActErr(null);
+		setCustomBusy(true);
+		try {
+			await onCustomPromptsChange({ [key]: value });
+			// 写成功才关弹层:失败时窗口留着,用户改的文字还在,不至于白写
+			setPromptModal((m) => (m ? { ...m, open: false } : m));
+		} catch (e) {
+			setActErr(`系统提示词未保存: ${friendlyError(e)}`);
+		} finally {
+			setCustomBusy(false);
+		}
+	}
+
+	/**
+	 * 内置提示词原文(GET /api/prompt-defaults)。null = 还没拉到。
+	 * 进「高级」分类时按需拉一次并缓存 —— 不做全局常驻请求:绝大多数会话不会碰提示词。
+	 */
+	const [builtinPrompts, setBuiltinPrompts] = useState<BuiltinPromptsDto | null>(null);
+	/** 内置原文拉取失败的原因(卡片信息行与只读弹层降级显示)。 */
+	const [builtinError, setBuiltinError] = useState<string | null>(null);
+	/** 正在拉内置原文(避免重复请求;弹层会显示「读取中」)。 */
+	const builtinLoadingRef = useRef(false);
+	const ensureBuiltinPrompts = useCallback(async (): Promise<BuiltinPromptsDto | null> => {
+		if (builtinPrompts) return builtinPrompts;
+		if (builtinLoadingRef.current) return null;
+		builtinLoadingRef.current = true;
+		try {
+			const dto = await client.getPromptDefaults();
+			setBuiltinPrompts(dto);
+			setBuiltinError(null);
+			return dto;
+		} catch (e) {
+			setBuiltinError(`内置原文读取失败: ${friendlyError(e)}`);
+			return null;
+		} finally {
+			builtinLoadingRef.current = false;
+		}
+	}, [client, builtinPrompts]);
+
+	/**
+	 * 提示词弹层状态:null = 关着。`key` 决定改哪一份,`mode` 决定只读预览还是编辑。
+	 * 两个键共用一个弹层实例 —— 同一时刻只可能开一个窗口,分两套状态会多出一份
+	 * 「另一个还开着」的不可能态。
+	 */
+	const [promptModal, setPromptModal] = useState<{ key: keyof CustomPromptsSlice; mode: PromptModalMode; open: boolean } | null>(null);
+	/**
+	 * 编辑态草稿。打开弹层时以已保存值为起点;「载入内置原文」把它换成内置全文。
+	 * 只读态不看它。
+	 */
+	const [promptDraft, setPromptDraft] = useState("");
+	/** 弹层当前对应的卡片元数据(标题等);关窗后仍要渲染退场动画,故不能依赖 promptModal 是否存在。 */
+	const promptCard = PROMPT_CARDS.find((c) => c.key === promptModal?.key) ?? PROMPT_CARDS[0];
+	/** 该槽位的内置原文(没拉到就是 null,弹层显示读取中)。 */
+	const promptBuiltin = builtinPrompts?.[promptCard.slot] ?? null;
+
+	/**
+	 * 打开弹层并确保内置原文已就位。
+	 * 只读态**必须**等文本:一屏空白配「只读」徽标会让人以为内置提示词是空的。
+	 * 编辑态不等 —— 先把用户已经写好的内容亮出来,内置原文到了再按需「载入」。
+	 */
+	async function openPromptModal(key: keyof CustomPromptsSlice, mode: PromptModalMode) {
+		setActErr(null);
+		if (mode === "edit") setPromptDraft(customPrompts[key]);
+		setPromptModal({ key, mode, open: true });
+		if (!builtinPrompts) await ensureBuiltinPrompts();
+	}
+
+	/** 把内置原文灌进编辑草稿(只读态脚部的「载入编辑器」也走这里,顺便切到编辑态)。 */
+	function loadBuiltinToDraft() {
+		const text = promptBuiltin?.text ?? "";
+		if (!text) return;
+		setPromptDraft(text);
+		setPromptModal((m) => (m ? { ...m, mode: "edit", open: true } : m));
+	}
+
+	/**
+	 * 进「高级」分类时把内置原文拉一次(卡片信息行要显示「内置 · 312 字」)。
+	 * 放在分类变化上而不是挂载时:提示词卡片只在这个分类里,常驻挂载的设置页
+	 * 在别的分类白白拉两份数百行文本没意义。
+	 */
+	useEffect(() => {
+		if (cat !== "advanced") return;
+		void ensureBuiltinPrompts();
+	}, [cat, ensureBuiltinPrompts]);
+
+	// —— 上下文预算(2026-10-10)——
+	/** 预算写入中(避免连点)。 */
+	const [budgetBusy, setBudgetBusy] = useState(false);
+	/**
+	 * 预算输入框的本地草稿:打字时只改草稿(否则每敲一位数字就写一次磁盘并广播),
+	 * 失焦或点「保存」才提交。归一逻辑与 BUDGET_FIELDS 的 min/max 一致。
+	 */
+	const [budgetDraft, setBudgetDraft] = useState<Record<string, string>>(() =>
+		Object.fromEntries(BUDGET_FIELDS.map((f) => [f.key, String(budget[f.key])])),
+	);
+	// 外部值变化(对账拉回 / 另一窗口改了)时同步草稿 —— 但用户正在输入时不覆盖
+	// (由 dirtyKeys 判断),沿用编辑页「正在打字不被顶掉」的惯例。
+	const [budgetDirty, setBudgetDirty] = useState<ReadonlySet<string>>(new Set());
+	useEffect(() => {
+		setBudgetDraft((prev) => {
+			const next = { ...prev };
+			for (const f of BUDGET_FIELDS) {
+				if (budgetDirty.has(f.key)) continue;
+				next[f.key] = String(budget[f.key]);
+			}
+			return next;
+		});
+	}, [budget, budgetDirty]);
+
+	/** 归一草稿:非法/空 → null(不提交);合法则钳制到字段区间。 */
+	function normalizeBudgetField(key: keyof BudgetSettingsSlice, raw: string): number | null {
+		const field = BUDGET_FIELDS.find((f) => f.key === key);
+		if (!field) return null;
+		const n = Number.parseInt(raw, 10);
+		if (!Number.isFinite(n)) return null;
+		return Math.min(field.max, Math.max(field.min, n));
+	}
+
+	/** 提交单个预算字段:草稿归一后与当前值不同才写服务端,失败走操作错误条。 */
+	async function commitBudgetField(key: keyof BudgetSettingsSlice) {
+		const n = normalizeBudgetField(key, budgetDraft[key] ?? "");
+		// 非法输入:把草稿拉回当前值,不提交
+		if (n === null) {
+			setBudgetDraft((prev) => ({ ...prev, [key]: String(budget[key]) }));
+			setBudgetDirty((prev) => {
+				const next = new Set(prev);
+				next.delete(key);
+				return next;
+			});
+			return;
+		}
+		setBudgetDraft((prev) => ({ ...prev, [key]: String(n) }));
+		setBudgetDirty((prev) => {
+			const next = new Set(prev);
+			next.delete(key);
+			return next;
+		});
+		if (n === budget[key]) return;
+		setActErr(null);
+		setBudgetBusy(true);
+		try {
+			await onBudgetChange({ [key]: n });
+		} catch (e) {
+			setActErr(`上下文预算未保存: ${friendlyError(e)}`);
+			setBudgetDraft((prev) => ({ ...prev, [key]: String(budget[key]) }));
+		} finally {
+			setBudgetBusy(false);
+		}
+	}
+
+	/** 全部还原为默认值(原 world-context.ts 的硬编码常量)。 */
+	async function resetBudget() {
+		setActErr(null);
+		setBudgetBusy(true);
+		try {
+			await onBudgetChange({
+				contextBudget: 2000,
+				memoryBudget: 1500,
+				activationDepth: 0,
+				noticeInjectLimit: 10,
+				completedMilestoneLimit: 6,
+			});
+			setBudgetDirty(new Set());
+		} catch (e) {
+			setActErr(`上下文预算未还原: ${friendlyError(e)}`);
+		} finally {
+			setBudgetBusy(false);
 		}
 	}
 
@@ -1020,6 +1307,7 @@ export function SettingsPage({
 			title: "写作",
 			rows: [
 				{ key: "world", icon: "book-open", label: "世界书注入", value: world ? `${world.entries.length} 条目` : "…", page: "world" },
+				{ key: "budget", icon: "sliders-horizontal", label: "上下文预算", value: `${budget.contextBudget} token`, page: "budget" },
 			],
 		},
 		{
@@ -1048,6 +1336,17 @@ export function SettingsPage({
 					label: "对话与章节",
 					value: conversationScope === "book" ? "分离" : "绑定章节",
 					page: "conversation",
+				},
+				{
+					key: "prompts",
+					icon: "file-text",
+					label: "系统提示词",
+					// 摘要按两份里有没有自定义给:全内置说「内置」,有改的说改了几份
+					value: (() => {
+						const n = [customPrompts.customWriterPrompt, customPrompts.customEditorPrompt].filter((v) => v.trim().length > 0).length;
+						return n === 0 ? "内置" : `已自定义 ${n} 份`;
+					})(),
+					page: "prompts",
 				},
 				{ key: "deps", icon: "info", label: "依赖与配置向导", sub: "运行环境要求 · 重走一遍向导", page: "deps" },
 			],
@@ -1597,6 +1896,44 @@ export function SettingsPage({
 										busy={scopeBusy}
 									/>
 								</section>
+
+								{/* 系统提示词:整段替换内置提示词(2026-10-10)。卡片只负责**说明现状**
+								    与给入口,编辑一律进弹层 —— 卡片的模样不能像个输入框(设计稿 r9TyAM)。
+								    两张卡各自独立,形态随状态变:内置态给「查看内置原文 / 改为自定义」,
+								    自定义态多一个「还原内置」。 */}
+								<section className={cardClass("prompts")}>
+									<div className="st-card-head">
+										<span className="s-card-head">系统提示词</span>
+										<span className="st-chip st-chip-danger">⚠ 高风险</span>
+									</div>
+									<div className="s-card-desc">
+										默认用内置提示词。想改动先「查看内置原文」把它载入编辑器,再按需改 ——
+										保存后的内容会整段替换内置那一份,内置的角色设定、写作纪律与「你绝不做的事」
+										等硬约束都不会再注入。
+									</div>
+									<div className="st-warn">
+										⚠ 替换后 AI 的行为完全由你写的文字决定。删掉内置的落点与工具纪律,AI 可能写错文件位置或越权操作。
+									</div>
+									<div className="st-prompt-list">
+										{PROMPT_CARDS.map((c) => (
+											<PromptCard
+												key={c.key}
+												title={c.title}
+												desc={c.desc}
+												custom={customPrompts[c.key]}
+												builtin={builtinPrompts?.[c.slot] ?? null}
+												builtinError={builtinError}
+												busy={customBusy}
+												onView={() => void openPromptModal(c.key, "readonly")}
+												onEdit={() => void openPromptModal(c.key, "edit")}
+												onReset={() => void saveCustomPrompt(c.key, "")}
+											/>
+										))}
+									</div>
+									<div className="s-card-desc st-desc-tight">
+										提示词存在本机(~/.pi/writer/settings.json);若填写的仍是原始内置文本,与留空等价。
+									</div>
+								</section>
 							</div>
 
 							<aside className="st-col-side">
@@ -1666,6 +2003,79 @@ export function SettingsPage({
 											</div>
 										</div>
 									)}
+								</section>
+								{/* 上下文预算(2026-10-10):这五项此前只有读路径,只能手编 settings.json。
+								    单独成卡而不是塞进「世界书注入」:那两个是开关(要不要),
+								    这五个是刻度(装多少),混在一起会让"注入"这件事显得是一组同级选项。 */}
+								<section className={cardClass("budget")}>
+									<div className="st-card-head">
+										<span className="s-card-head">上下文预算</span>
+										<span className="st-chip">背景包</span>
+									</div>
+									<div className="s-card-desc">
+										AI 每次对话都不会看到你的全部设定 —— 它只看一份临时的「背景包」:
+										把世界观概述、本章相关设定、写作约束、Notice 备忘录、发展线、跨章节记忆
+										拼成一段文本塞进这一轮。这几项数字就是那份包的大小上限,单位是 token
+										(大致可当"字"来估,中文 1 字 ≈ 1 token)。
+									</div>
+									<div className="budget-explainer">
+										<div className="budget-explainer-title">超出上限时会怎样</div>
+										<ol className="budget-explainer-list">
+											<li>先整段丢掉「世界观概述」;</li>
+											<li>再按 人物人设 &gt; 世界设定 &gt; 时间线 &gt; 大纲 的顺序,把排在后面的世界书条目挤出去;</li>
+											<li>最后连发展线里的「已完成」清单也可能被丢掉。</li>
+										</ol>
+										<div className="budget-explainer-note">
+											被丢掉的内容不会消失(文件都还在,AI 需要时能自己读),但这一轮它就看不到了。
+											写作页的「上下文检视」会如实列出每一轮丢掉了什么 —— 觉得常被裁,就在这里调大。
+										</div>
+									</div>
+									<div className="s-pref-list">
+										{BUDGET_FIELDS.map((f) => (
+											<div className="s-pref-item" key={f.key}>
+												<div className="s-pref-text">
+													<div className="s-pref-title">
+														{f.label}
+														<span className="budget-default">默认 {BUDGET_DEFAULTS[f.key]}</span>
+													</div>
+													<div className="s-pref-desc">{f.effect}</div>
+													<div className="budget-range">
+														范围 {f.min} - {f.max} {f.unit}
+													</div>
+												</div>
+												<div className="budget-input">
+													<input
+														type="number"
+														inputMode="numeric"
+														min={f.min}
+														max={f.max}
+														step={f.step}
+														value={budgetDraft[f.key] ?? ""}
+														disabled={budgetBusy}
+														aria-label={f.label}
+														onChange={(e) => {
+															setBudgetDraft((prev) => ({ ...prev, [f.key]: e.target.value }));
+															setBudgetDirty((prev) => new Set(prev).add(f.key));
+														}}
+														onBlur={() => void commitBudgetField(f.key)}
+														onKeyDown={(e) => {
+															if (e.key === "Enter") {
+																e.preventDefault();
+																void commitBudgetField(f.key);
+															}
+														}}
+													/>
+													<span className="budget-unit">{f.unit}</span>
+												</div>
+											</div>
+										))}
+									</div>
+									<div className="budget-actions">
+										<button type="button" className="btn-ghost" onClick={() => void resetBudget()} disabled={budgetBusy}>
+											全部还原默认
+										</button>
+										<span className="budget-hint">改完失焦即保存,下一次对话生效。</span>
+									</div>
 								</section>
 							</div>
 							<aside className="st-col-side" />
@@ -1905,6 +2315,28 @@ export function SettingsPage({
 						})()}
 				</div>
 			</main>
+			{/* 系统提示词弹层(只读预览 / 编辑两形态共用外壳)。与两张卡片的入口联动,
+			    始终挂载以播退场动画 —— 关窗后 mounted 转 false 内部自行返回 null */}
+			<PromptModal
+				open={promptModal?.open ?? false}
+				mode={promptModal?.mode ?? "readonly"}
+				title={promptCard.title}
+				stateLabel={
+					promptModal?.mode === "readonly"
+						? "内置 · 只读"
+						: customPrompts[promptCard.key].trim().length > 0
+							? "已自定义"
+							: "未自定义"
+				}
+				builtinText={promptBuiltin?.text ?? (builtinError ? `${builtinError}` : "正在读取内置提示词…")}
+				draft={promptDraft}
+				onDraft={setPromptDraft}
+				busy={customBusy}
+				onClose={() => setPromptModal((m) => (m ? { ...m, open: false } : m))}
+				onLoadBuiltin={loadBuiltinToDraft}
+				onReset={() => setPromptDraft("")}
+				onSave={() => void saveCustomPrompt(promptCard.key, promptDraft.trim())}
+			/>
 			{/* 模型提供商管理悬浮层:双栏卡片(关闭即卸载,列表状态在下一次打开时重建) */}
 			{providersDialog}
 		</div>
@@ -1914,4 +2346,110 @@ export function SettingsPage({
 /** 分类页面头(插件分类用插件名占位,由内容区首行标题补足)。 */
 function headOf(cat: string): { title: string; desc: string } {
 	return CAT_HEAD[cat] ?? { title: "插件设置", desc: "该插件声明的设置项。" };
+}
+
+/** 两张提示词卡片的静态元数据(顺序即显示顺序)。 */
+const PROMPT_CARDS: ReadonlyArray<{
+	/** settings 里的字段名,同时也是保存/还原的键。 */
+	key: keyof CustomPromptsSlice;
+	/** GET /api/prompt-defaults 响应里的槽位。 */
+	slot: "writer" | "editor";
+	title: string;
+	desc: string;
+}> = [
+	{
+		key: "customWriterPrompt",
+		slot: "writer",
+		title: "主写作 agent",
+		desc: "经典模式下的写作 agent;多 Agent 模式下它是编辑页的对话 AI(writer-main.md)。",
+	},
+	{
+		key: "customEditorPrompt",
+		slot: "editor",
+		title: "常驻编剧",
+		desc: "多 Agent 模式下的编剧对话;经典模式不涉及(writer-editor.md)。",
+	},
+];
+
+/**
+ * 单份系统提示词的**信息块卡片**(2026-10-10,设计稿定稿版)。
+ *
+ * 刻意不做成输入框:卡片的职责是「说清现在用的是哪一份、多少字」并给两个入口,
+ * 编辑一律进弹层(PromptModal)—— 一张卡片长得像 textarea,用户就会以为改动即时生效,
+ * 而这东西保存一次要重建会话,必须有个明确的「保存」动作把承诺说清楚。
+ *
+ * 形态随状态变(内置态 / 自定义态):内置态给「查看内置原文 / 改为自定义」;
+ * 自定义态把胶囊换成琥珀「已自定义」,并多一个「还原内置」。两种形态共用同一套
+ * 排布(标题行 + 描述 + 信息行 + 脚部),只是文案与按钮不同 —— 避免卡片高度跳变。
+ */
+function PromptCard({
+	title,
+	desc,
+	custom,
+	builtin,
+	builtinError,
+	busy,
+	onView,
+	onEdit,
+	onReset,
+}: {
+	title: string;
+	desc: string;
+	/** 已保存的自定义文本;空 = 用内置。 */
+	custom: string;
+	/** 内置原文(还没拉到时为 null)。 */
+	builtin: { text: string; chars: number } | null;
+	/** 内置原文拉取失败的提示(卡片上的信息行降级显示)。 */
+	builtinError: string | null;
+	busy: boolean;
+	/** 打开只读弹层看内置原文。 */
+	onView: () => void;
+	/** 打开编辑弹层(内置态是「改为自定义」,自定义态是「编辑」)。 */
+	onEdit: () => void;
+	/** 清空自定义,回落内置。 */
+	onReset: () => void;
+}) {
+	const saved = custom.trim().length > 0;
+	// 信息行的字数:自定义态看自己的份量,内置态看内置的份量 —— 都是「现在 AI 收到多少字」
+	const chars = saved ? custom.trim().length : builtin?.chars;
+	const charsText = builtinError ? builtinError : chars === undefined ? "读取中…" : `${chars.toLocaleString()} 字`;
+	return (
+		<div className="st-prompt-card">
+			<div className="st-prompt-head">
+				<div className="st-prompt-title-row">
+					<span className="st-prompt-title">{title}</span>
+					<span className={`st-prompt-chip${saved ? " is-custom" : ""}`}>
+						<Lu icon={saved ? "pencil-line" : "lock"} size={11} />
+						{saved ? "已自定义" : "使用内置"}
+					</span>
+					<span className="st-prompt-spacer" />
+				</div>
+				<div className="st-prompt-desc">{desc}</div>
+			</div>
+
+			<div className={`st-prompt-meta${saved ? " is-custom" : ""}`}>
+				<Lu icon="file-text" size={13} className="st-prompt-meta-icon" />
+				<span className="st-prompt-meta-label">当前提示词</span>
+				<span className="st-prompt-meta-value">{saved ? `自定义 · ${charsText}` : `内置 · ${charsText}`}</span>
+			</div>
+
+			<div className="st-prompt-foot">
+				<button type="button" className="st-prompt-btn" disabled={busy} onClick={onView}>
+					<Lu icon="eye" size={13} />
+					查看内置原文
+				</button>
+				{saved && (
+					<button type="button" className="st-prompt-btn danger" disabled={busy} onClick={onReset}>
+						<Lu icon="rotate-ccw" size={13} />
+						还原内置
+					</button>
+				)}
+				<span className="st-prompt-spacer" />
+				<button type="button" className="st-prompt-btn is-primary" disabled={busy} onClick={onEdit}>
+					<Lu icon="pencil-line" size={13} />
+					{saved ? "编辑提示词" : "改为自定义"}
+				</button>
+			</div>
+		</div>
+	);
 }

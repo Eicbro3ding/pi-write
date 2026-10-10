@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	CUSTOM_PROMPT_MAX_CHARS,
 	WRITER_SETTINGS_VERSION,
 	defaultWriterSettings,
 	getWriterSettingsPath,
@@ -54,6 +55,9 @@ describe("parseWriterSettings", () => {
 			activationDepth: 0,
 			noticeInjectLimit: 10,
 			completedMilestoneLimit: 6,
+			// 自定义系统提示词(2026-10-10):默认空 = 用内置,未动过设置的行为逐字不变
+			customWriterPrompt: "",
+			customEditorPrompt: "",
 		});
 	});
 
@@ -173,6 +177,42 @@ describe("parseWriterSettings", () => {
 		// 小数取整
 		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, contextBudget: 2500.7 }).contextBudget).toBe(2500);
 	});
+
+	// —— 自定义系统提示词(2026-10-10)——
+	// 追加式字段:不递增 WRITER_SETTINGS_VERSION,旧文件缺字段 → 空串 → 用内置,
+	// 未动过设置的安装行为逐字不变。
+	it("自定义提示词缺省为空(= 用内置),旧文件缺字段同样为空", () => {
+		const d = defaultWriterSettings();
+		expect(d.customWriterPrompt).toBe("");
+		expect(d.customEditorPrompt).toBe("");
+		const old = parseWriterSettings({ version: WRITER_SETTINGS_VERSION });
+		expect(old.customWriterPrompt).toBe("");
+		expect(old.customEditorPrompt).toBe("");
+	});
+
+	it("自定义提示词按原文还原(不 trim —— 前导/尾随空白是用户排版的一部分)", () => {
+		const s = parseWriterSettings({
+			version: WRITER_SETTINGS_VERSION,
+			customWriterPrompt: "  你是写作助手。\n\n  第一行缩进\n",
+			customEditorPrompt: "编剧提示词",
+		});
+		expect(s.customWriterPrompt).toBe("  你是写作助手。\n\n  第一行缩进\n");
+		expect(s.customEditorPrompt).toBe("编剧提示词");
+	});
+
+	it("纯空白的自定义提示词归一到空串(清空 = 回到内置,而不是拿到一段空白提示词)", () => {
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, customWriterPrompt: "   \n\t  " }).customWriterPrompt).toBe("");
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, customEditorPrompt: "\n\n" }).customEditorPrompt).toBe("");
+	});
+
+	it("自定义提示词非字符串回落空,超长截断到上限", () => {
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, customWriterPrompt: 42 }).customWriterPrompt).toBe("");
+		expect(parseWriterSettings({ version: WRITER_SETTINGS_VERSION, customEditorPrompt: null }).customEditorPrompt).toBe("");
+		expect(
+			parseWriterSettings({ version: WRITER_SETTINGS_VERSION, customWriterPrompt: "x".repeat(CUSTOM_PROMPT_MAX_CHARS + 500) })
+				.customWriterPrompt,
+		).toHaveLength(CUSTOM_PROMPT_MAX_CHARS);
+	});
 });
 
 describe("settings.json 读写", () => {
@@ -229,8 +269,7 @@ describe("settings.json 读写", () => {
 		expect(off).toMatchObject({ enableImageGen: false, imageModel: "dall-e-3" });
 	});
 
-	it("图片生成字段的非法值被丢弃(回落默认),而旧文件缺字段也取默认", () => {
-		// 旧文件(0.0.x)没有这些字段:能力必须是关的,不能因为缺字段而默认打开
+	it("图片生成字段的非法值被丢弃(回落默认),而旧文件缺字段也取默认", () => {		// 旧文件(0.0.x)没有这些字段:能力必须是关的,不能因为缺字段而默认打开
 		const legacy = parseWriterSettings({ version: WRITER_SETTINGS_VERSION });
 		expect(legacy.enableImageGen).toBe(false);
 		expect(legacy.imageSize).toBe("3:2");
@@ -248,8 +287,60 @@ describe("settings.json 读写", () => {
 		expect(bad.imageModel).toBe("gpt-image-1");
 	});
 
-	it("shell 方言与路径可单独更新(与经典模式/外部命令互不干扰)", async () => {
+	it("上下文预算五项可单独更新(2026-10-10 补的写路径;此前只有读)", async () => {
+		// 改预算不影响任何开关
 		await updateWriterSettings({ classicMode: true });
+		const changed = await updateWriterSettings({
+			contextBudget: 8000,
+			memoryBudget: 4000,
+			activationDepth: 2,
+			noticeInjectLimit: 20,
+			completedMilestoneLimit: 12,
+		});
+		expect(changed).toMatchObject({
+			classicMode: true,
+			contextBudget: 8000,
+			memoryBudget: 4000,
+			activationDepth: 2,
+			noticeInjectLimit: 20,
+			completedMilestoneLimit: 12,
+		});
+		// 落盘 → 再读:往返一致(重启/其他窗口读到的是同一份,不是默认值)
+		expect(await readWriterSettings()).toEqual(changed);
+		// 只传一个字段不会把其余四个带跑
+		const oneOnly = await updateWriterSettings({ contextBudget: 3000 });
+		expect(oneOnly).toMatchObject({
+			contextBudget: 3000,
+			memoryBudget: 4000,
+			activationDepth: 2,
+			noticeInjectLimit: 20,
+			completedMilestoneLimit: 12,
+		});
+	});
+
+	it("预算越界值按 parseWriterSettings 同一套规则钳制(写进来的值 = 重启后解析出的值)", async () => {
+		// 关键不变量:updateWriterSettings 用 clampInt、parseWriterSettings 也用 clampInt 同参,
+		// 否则会出现「界面显示 50000、重启后变 20000」的显示与装配分叉
+		const clamped = await updateWriterSettings({
+			contextBudget: 999_999,
+			memoryBudget: 10,
+			activationDepth: 99,
+			noticeInjectLimit: -5,
+			completedMilestoneLimit: 1.9,
+		});
+		expect(clamped).toMatchObject({
+			contextBudget: 20_000, // 上限
+			memoryBudget: 100, // 下限
+			activationDepth: 5, // 上限
+			noticeInjectLimit: 0, // 下限
+			completedMilestoneLimit: 1, // 向下取整
+		});
+		// 落盘后用 parse 再解析一次:必须与写入时返回的完全相同
+		const reparsed = parseWriterSettings(JSON.parse(readFileSync(getWriterSettingsPath(), "utf8")));
+		expect(reparsed).toEqual(clamped);
+	});
+
+	it("shell 方言与路径可单独更新(与经典模式/外部命令互不干扰)", async () => {		await updateWriterSettings({ classicMode: true });
 		const withPwsh = await updateWriterSettings({ shellKind: "pwsh" });
 		expect(withPwsh).toMatchObject({ classicMode: true, shellKind: "pwsh", shellPath: "" });
 		const withPath = await updateWriterSettings({ shellPath: "C:\\Program Files\\PowerShell\\7\\pwsh.exe" });
@@ -264,5 +355,25 @@ describe("settings.json 读写", () => {
 		expect(withShell).toMatchObject({ classicMode: true, enableShell: true });
 		const shellOff = await updateWriterSettings({ enableShell: false });
 		expect(shellOff).toMatchObject({ classicMode: true, enableShell: false });
+	});
+
+	it("自定义提示词可单独更新并往返落盘,清空回内置", async () => {
+		await updateWriterSettings({ classicMode: true });
+		const set = await updateWriterSettings({ customWriterPrompt: "自定义主提示词", customEditorPrompt: "自定义编剧提示词" });
+		expect(set).toMatchObject({
+			classicMode: true,
+			customWriterPrompt: "自定义主提示词",
+			customEditorPrompt: "自定义编剧提示词",
+		});
+		// 落盘 → 再读:往返一致(重启后仍生效)
+		expect(await readWriterSettings()).toEqual(set);
+		expect(JSON.parse(readFileSync(getWriterSettingsPath(), "utf8"))).toMatchObject({ customWriterPrompt: "自定义主提示词" });
+		// 只改一份不影响另一份
+		const onlyEditor = await updateWriterSettings({ customEditorPrompt: "改过的编剧" });
+		expect(onlyEditor).toMatchObject({ customWriterPrompt: "自定义主提示词", customEditorPrompt: "改过的编剧" });
+		// 清空 = 回内置(不是把提示词清成空白)
+		const cleared = await updateWriterSettings({ customWriterPrompt: "", customEditorPrompt: "" });
+		expect(cleared.customWriterPrompt).toBe("");
+		expect(cleared.customEditorPrompt).toBe("");
 	});
 });

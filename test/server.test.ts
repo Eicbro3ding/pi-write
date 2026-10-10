@@ -1979,6 +1979,8 @@ describe("WriterServer · /api/settings(全局设置 · 经典模式)", () => {
 	const imageGenCalls: boolean[] = [];
 	/** 对话与章节的关系(conversationScope)的应用记录:切换同样要释放已建会话。 */
 	const scopeCalls: string[] = [];
+	/** 自定义系统提示词的应用记录(2026-10-10):改动要释放已建会话。 */
+	const customPromptCalls: Array<{ writer: string; editor: string }> = [];
 	/** SSE 广播帧(验证 settings_changed 会推给其他窗口)。 */
 	const events: Array<{ type: string; settings?: { classicMode: boolean; enableShell: boolean } }> = [];
 
@@ -2000,6 +2002,9 @@ describe("WriterServer · /api/settings(全局设置 · 经典模式)", () => {
 			},
 			setImageGen: async (enabled: boolean) => {
 				imageGenCalls.push(enabled);
+			},
+			setCustomPrompt: async (next: { writer: string; editor: string }) => {
+				customPromptCalls.push(next);
 			},
 		};
 		server = new WriterServer({
@@ -2195,6 +2200,130 @@ describe("WriterServer · /api/settings(全局设置 · 经典模式)", () => {
 			body: JSON.stringify({ enableImageGen: "yes" }),
 		});
 		expect(badToggle.status).toBe(400);
+	});
+
+	// —— 自定义系统提示词(2026-10-10)——
+	it("PUT 自定义提示词:原文落盘 + 应用到 WriterHost(要释放已建会话)", async () => {
+		const writerText = "  你是我的写手。\n\n第二行\n";
+		const res = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ customWriterPrompt: writerText, customEditorPrompt: "编剧提示词" }),
+		});
+		expect(res.status).toBe(200);
+		// 原文透传(不 trim)
+		expect(await res.json()).toMatchObject({
+			settings: { customWriterPrompt: writerText, customEditorPrompt: "编剧提示词" },
+		});
+		expect(customPromptCalls.at(-1)).toEqual({ writer: writerText, editor: "编剧提示词" });
+		const persisted = JSON.parse(readFileSync(join(getWriterDir(), "settings.json"), "utf8")) as { customWriterPrompt: string };
+		expect(persisted.customWriterPrompt).toBe(writerText);
+	});
+
+	it("清空自定义提示词 → 回落空串(= 用内置)", async () => {
+		const res = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ customWriterPrompt: "", customEditorPrompt: "" }),
+		});
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({ settings: { customWriterPrompt: "", customEditorPrompt: "" } });
+		expect(customPromptCalls.at(-1)).toEqual({ writer: "", editor: "" });
+	});
+
+	it("非字符串 customWriterPrompt / customEditorPrompt 返回 400", async () => {
+		const badWriter = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ customWriterPrompt: 42 }),
+		});
+		expect(badWriter.status).toBe(400);
+		const badEditor = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ customEditorPrompt: null }),
+		});
+		expect(badEditor.status).toBe(400);
+	});
+
+	// —— 内置提示词原文(2026-10-10:设置页「查看内置」弹层的数据来源)——
+	it("GET /api/prompt-defaults:返回两份内置原文 + 字符数", async () => {
+		const res = await fetch(`${base}/api/prompt-defaults`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			writer: { text: string; chars: number };
+			editor: { text: string; chars: number };
+		};
+		expect(typeof body.writer.text).toBe("string");
+		expect(body.writer.text.length).toBeGreaterThan(0);
+		expect(body.writer.chars).toBe(body.writer.text.length);
+		expect(body.editor.chars).toBe(body.editor.text.length);
+		// 与装配同源:chapter 缺省下写手内置提示不含占位符,且带 shell 行(none 方言)
+		expect(body.writer.text).not.toMatch(/\{[A-Za-z_]+\}/);
+		expect(body.editor.text).not.toMatch(/\{[A-Za-z_]+\}/);
+	});
+
+	it("GET /api/prompt-defaults:不含自定义文本(本接口语义就是「内置长什么样」)", async () => {
+		await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ customWriterPrompt: "我的私人写手提示词-XYZ" }),
+		});
+		const body = (await (await fetch(`${base}/api/prompt-defaults`)).json()) as {
+			writer: { text: string };
+		};
+		expect(body.writer.text).not.toContain("我的私人写手提示词-XYZ");
+		// 收尾:清掉自定义,避免影响后续用例
+		await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ customWriterPrompt: "" }),
+		});
+	});
+
+	// —— 上下文预算(2026-10-10:此前只有读路径,PUT 白名单里没有这五项)——
+	it("PUT 上下文预算:五项落盘并在响应里返回(不改经典模式)", async () => {
+		const before = classicCalls.at(-1);
+		const res = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ contextBudget: 5000, memoryBudget: 2500, activationDepth: 2 }),
+		});
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({
+			settings: { contextBudget: 5000, memoryBudget: 2500, activationDepth: 2 },
+		});
+		// 预算不改变 agent 装配(装配时现读设置)→ 不会翻经典模式;host 侧的
+		// setClassicMode 是无条件调用的幂等守卫(值没变就不释放会话),故断言的是值没变。
+		expect(classicCalls.at(-1)).toBe(before);
+		const persisted = JSON.parse(readFileSync(join(getWriterDir(), "settings.json"), "utf8")) as {
+			contextBudget: number;
+			memoryBudget: number;
+		};
+		expect(persisted).toMatchObject({ contextBudget: 5000, memoryBudget: 2500 });
+		// GET 也要能看到新值(前端对账来源)
+		expect(await (await fetch(`${base}/api/settings`)).json()).toMatchObject({
+			settings: { contextBudget: 5000, memoryBudget: 2500, activationDepth: 2 },
+		});
+	});
+
+	it("PUT 上下文预算:越界值被钳制而非拒绝(与手写文件同一口径)", async () => {
+		const res = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ contextBudget: 999_999, activationDepth: 99 }),
+		});
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({
+			settings: { contextBudget: 20_000, activationDepth: 5 },
+		});
+	});
+
+	it("非数字的预算字段返回 400(NaN/字符串/布尔/null)", async () => {
+		for (const body of [{ contextBudget: "5000" }, { memoryBudget: Number.NaN }, { activationDepth: true }, { noticeInjectLimit: null }]) {
+			const res = await fetch(`${base}/api/settings`, { method: "PUT", headers: json, body: JSON.stringify(body) });
+			expect(res.status, JSON.stringify(body)).toBe(400);
+		}
 	});
 });
 

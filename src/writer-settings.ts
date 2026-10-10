@@ -119,6 +119,20 @@ export interface WriterSettings {
 	noticeInjectLimit: number;
 	/** 已完成里程碑(发展线 done 节点)注入上限。 */
 	completedMilestoneLimit: number;
+
+	// —— 自定义系统提示词(2026-10-10)——
+	//
+	// 两段**整段替换**型覆盖:非空 = 完全顶替 prompts/ 里那份内置提示词;
+	// 空串(缺省)= 用内置的。为什么不做「追加一段」:内置提示词里
+	// 「你绝不做的事」「散文只有一个落点」这类硬约束是保证不越权的底线,
+	// 追加型覆盖会让用户以为自己能改而实际改不掉;整段替换把控制权交全,
+	// 代价是用户删掉约束后模型行为不受保护 —— 设置页的说明里写清这一点。
+	//
+	// 不递增 WRITER_SETTINGS_VERSION:旧文件缺字段 → 空串 → 走内置(行为不变)。
+	/** 主写作 agent(writer-main)的整段替换提示词;空 = 用内置。 */
+	customWriterPrompt: string;
+	/** 常驻编剧(writer-editor)的整段替换提示词;空 = 用内置。 */
+	customEditorPrompt: string;
 }
 
 /** 图片接口形态。目前只有一种;留成联合类型是为了加第二种时不必改调用方。 */
@@ -186,6 +200,9 @@ export function defaultWriterSettings(): WriterSettings {
 		activationDepth: 0,
 		noticeInjectLimit: 10,
 		completedMilestoneLimit: 6,
+		// 自定义系统提示词:默认空 = 用内置(未动过设置的安装行为逐字不变)
+		customWriterPrompt: "",
+		customEditorPrompt: "",
 	};
 }
 
@@ -197,6 +214,13 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
 	if (n > max) return max;
 	return n;
 }
+
+/**
+ * 自定义系统提示词的长度上限(字符)。20 万字符 ≈ 10 万 token 量级,远超任何
+ * 现实写法的提示词;设上限只为挡住手写文件/坏前端塞进来的超长值(它每轮都进
+ * 上下文,超长值会让每次对话都爆预算)。
+ */
+export const CUSTOM_PROMPT_MAX_CHARS = 200_000;
 
 /**
  * 解析 settings.json 内容:非对象/版本不符 → 默认值;逐字段类型校验,
@@ -234,7 +258,18 @@ export function parseWriterSettings(raw: unknown): WriterSettings {
 	out.activationDepth = clampInt(obj.activationDepth, 0, 5, 0);
 	out.noticeInjectLimit = clampInt(obj.noticeInjectLimit, 0, 50, 10);
 	out.completedMilestoneLimit = clampInt(obj.completedMilestoneLimit, 0, 30, 6);
+	// 自定义系统提示词:只认字符串并限长。**不做 trim 判空以外的事** ——
+	// 提示词里的前导/尾随空白是用户排版的一部分,裁掉等于改他的稿。
+	// 纯空白视为「没写」(否则用户清空后以为回到内置,实际拿到一段空白提示词)。
+	if (typeof obj.customWriterPrompt === "string") out.customWriterPrompt = clampPrompt(obj.customWriterPrompt);
+	if (typeof obj.customEditorPrompt === "string") out.customEditorPrompt = clampPrompt(obj.customEditorPrompt);
 	return out;
+}
+
+/** 自定义提示词的归一:超长截断;纯空白 → 空串(= 用内置)。 */
+function clampPrompt(value: string): string {
+	if (value.trim().length === 0) return "";
+	return value.length > CUSTOM_PROMPT_MAX_CHARS ? value.slice(0, CUSTOM_PROMPT_MAX_CHARS) : value;
 }
 
 /** settings.json 路径(~/.pi/writer/settings.json;PI_WRITER_DIR 可整体迁移)。 */
@@ -283,6 +318,21 @@ export async function updateWriterSettings(patch: Partial<Omit<WriterSettings, "
 		...(patch.imageWorldbook !== undefined ? { imageWorldbook: patch.imageWorldbook } : {}),
 		...(patch.imageConfirmBeforeGen !== undefined
 			? { imageConfirmBeforeGen: patch.imageConfirmBeforeGen }
+			: {}),
+		...(patch.customWriterPrompt !== undefined ? { customWriterPrompt: clampPrompt(patch.customWriterPrompt) } : {}),
+		...(patch.customEditorPrompt !== undefined ? { customEditorPrompt: clampPrompt(patch.customEditorPrompt) } : {}),
+		// 上下文预算(2026-10-10 补):此前这五项只有「读」没有「写」——parseWriterSettings
+		// 认它们、装配时消费它们,但 updateWriterSettings 的 patch 透传里漏了,
+		// 于是 PUT /api/settings 传进来也会被静默丢掉,用户只能手编 settings.json。
+		// 这里补上之后,**钳制与 parseWriterSettings 同一套**(clampInt 同参),
+		// 使「写进来的值」与「重启后解析出的值」逐字一致 —— 否则界面显示 50000、
+		// 重启后变 20000,就是又一处「显示与装配分叉」。
+		...(patch.contextBudget !== undefined ? { contextBudget: clampInt(patch.contextBudget, 200, 20000, 2000) } : {}),
+		...(patch.memoryBudget !== undefined ? { memoryBudget: clampInt(patch.memoryBudget, 100, 20000, 1500) } : {}),
+		...(patch.activationDepth !== undefined ? { activationDepth: clampInt(patch.activationDepth, 0, 5, 0) } : {}),
+		...(patch.noticeInjectLimit !== undefined ? { noticeInjectLimit: clampInt(patch.noticeInjectLimit, 0, 50, 10) } : {}),
+		...(patch.completedMilestoneLimit !== undefined
+			? { completedMilestoneLimit: clampInt(patch.completedMilestoneLimit, 0, 30, 6) }
 			: {}),
 	};
 	await writeWriterSettings(next);

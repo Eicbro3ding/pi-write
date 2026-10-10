@@ -576,6 +576,48 @@ export interface WriterSettingsDto {
 	imageWorldbook: boolean;
 	/** 每次生成前先确认。 */
 	imageConfirmBeforeGen: boolean;
+	// —— 自定义系统提示词(2026-10-10;与 src/writer-settings.ts 对齐)——
+	/**
+	 * 主写作 agent(writer-main)的**整段替换**提示词;空 = 用内置那份。
+	 * 非空时完全顶替内置提示词 —— 包括「你绝不做的事」这类硬约束也不再注入。
+	 */
+	customWriterPrompt: string;
+	/** 常驻编剧(writer-editor)的整段替换提示词;空 = 用内置。 */
+	customEditorPrompt: string;
+	// —— 上下文预算(2026-10-10 接上写路径;与 src/writer-settings.ts 对齐)——
+	//
+	// 这五项此前只有读与消费、没有写入口(PUT /api/settings 白名单缺它们),
+	// 用户只能手编 settings.json。现在设置页「世界书」分类下新增卡片可直接改。
+	/** 单次注入的背景包 token 预算(默认 2000;范围 200 - 20000)。 */
+	contextBudget: number;
+	/** 跨章节记忆 memory.md 注入的 token 预算(默认 1500;范围 100 - 20000)。 */
+	memoryBudget: number;
+	/** 关联激活深度(0 = 关闭,仅关键词命中;1-5 = 多源 BFS 展开邻居)。 */
+	activationDepth: number;
+	/** Notice 备忘录注入条数上限(默认 10;范围 0 - 50)。 */
+	noticeInjectLimit: number;
+	/** 已完成里程碑(发展线 done 节点)注入条数上限(默认 6;范围 0 - 30)。 */
+	completedMilestoneLimit: number;
+}
+
+/**
+ * 「内置提示词原文」接口返回(GET /api/prompt-defaults,2026-10-10)。
+ *
+ * 两份文本是服务端按**当前**设置(对话范围 / shell 方言)把 prompts/ 里的模板渲染
+ * 之后的结果 —— 也就是「此刻若不留自定义内容,AI 实际收到的那段」。前端只展示,
+ * 不参与渲染(渲染口径只在 src/prompt.ts 一处,避免两边拼法漂移)。
+ */
+export interface BuiltinPromptDto {
+	/** 渲染后的完整提示词文本。 */
+	text: string;
+	/** 字数(服务端算,卡片与弹层的「N 字」直接用它)。 */
+	chars: number;
+}
+
+/** GET /api/prompt-defaults 的响应:主写作 agent 与常驻编剧两份内置原文。 */
+export interface BuiltinPromptsDto {
+	writer: BuiltinPromptDto;
+	editor: BuiltinPromptDto;
 }
 
 /** 图片接口形态;目前只有一种,留联合类型便于以后加。 */

@@ -290,6 +290,10 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 		shellPath: resolvedShell.path ?? null,
 		// 图片生成(实验,0.1.0):启动时读一次;之后切换走 PUT /api/settings → setImageGen
 		enableImageGen: writerSettings.enableImageGen,
+		// 自定义系统提示词(2026-10-10):启动时读一次;之后切换走 PUT /api/settings
+		// → setCustomPrompt。空串 = 用内置 prompts/ 那份。
+		customWriterPrompt: writerSettings.customWriterPrompt,
+		customEditorPrompt: writerSettings.customEditorPrompt,
 	});
 	// 舞台区宿主:每本书每个章节一个编排器,惰性创建;model/thinking 复用 web 的 CLI 选项
 	// (stage 端点未装配时由 server 侧 404,与 MCP 同款);writerHost 注入用于收幕委托

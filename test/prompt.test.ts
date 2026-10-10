@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildEditorSystemPrompt, buildWriterSystemPrompt } from "../src/prompt.ts";
+import { buildBuiltinPromptText, buildEditorSystemPrompt, buildWriterSystemPrompt } from "../src/prompt.ts";
 
 describe("buildWriterSystemPrompt", () => {
 	it("无外部工具时只含基础提示,shell 行按方言注入", () => {
@@ -60,6 +60,97 @@ describe("buildWriterSystemPrompt", () => {
 	it("占位符被替换,不残留 {SHELL_LINE}", () => {
 		const prompt = buildWriterSystemPrompt([], "none");
 		expect(prompt).not.toContain("{SHELL_LINE}");
+	});
+});
+
+/**
+ * 自定义系统提示词(2026-10-10):非空**整段替换**内置提示词。
+ *
+ * 为什么钉这一组:覆盖必须是"整段接管"而不是"拼接"—— 内置的「你绝不做的事」
+ * 「散文只有一个落点」是防止 AI 越权的底线,拼接型覆盖会让用户以为改掉了而
+ * 实际还在。同时,空串必须走内置路径,否则未动过设置的安装行为会被悄悄改掉。
+ */
+describe("自定义系统提示词(整段替换)", () => {
+	it("空串/undefined/纯空白 → 走内置(默认行为逐字不变)", () => {
+		const builtin = buildWriterSystemPrompt([], "none");
+		expect(buildWriterSystemPrompt([], "none", "chapter", "")).toBe(builtin);
+		expect(buildWriterSystemPrompt([], "none", "chapter", undefined)).toBe(builtin);
+		// 纯空白也是「没写」,不能给模型一段空白提示词
+		expect(buildWriterSystemPrompt([], "none", "chapter", "   \n  ")).toBe(builtin);
+	});
+
+	it("非空 → 整段替换:内置文本、shell 行、外部工具段一概不再出现", () => {
+		const custom = "你是我的私人写手。只写正文,不改别的东西。";
+		const p = buildWriterSystemPrompt([{ name: "fetch_url", description: "抓网页" }], "bash", "chapter", custom);
+		expect(p).toBe(custom);
+		// 内置的硬约束与落点纪律不在了(这是整段替换的既定代价,故此处正向断言)
+		expect(p).not.toContain("你绝不做的事");
+		expect(p).not.toContain("散文只有一个落点");
+		// shell 行与外部工具段也不追加 —— 那是用户逐字写的稿,不往里插字
+		expect(p).not.toContain("整台机器");
+		expect(p).not.toContain("# 外部工具");
+		expect(p).not.toContain("{SHELL_LINE}");
+	});
+
+	it("对话范围不影响自定义文本(用户自己写口径)", () => {
+		const custom = "自定义提示词";
+		expect(buildWriterSystemPrompt([], "bash", "book", custom)).toBe(custom);
+		expect(buildWriterSystemPrompt([], "bash", "chapter", custom)).toBe(custom);
+	});
+
+	it("编剧提示词同款:空串走内置,非空整段替换", () => {
+		const builtin = buildEditorSystemPrompt();
+		expect(buildEditorSystemPrompt("chapter", "")).toBe(builtin);
+		expect(buildEditorSystemPrompt("chapter", undefined)).toBe(builtin);
+		const custom = "你是编剧,只按用户指令改正文。";
+		expect(buildEditorSystemPrompt("chapter", custom)).toBe(custom);
+		expect(buildEditorSystemPrompt("book", custom)).toBe(custom);
+	});
+});
+
+/**
+ * 内置原文导出(2026-10-10):设置页「查看内置」弹层的数据来源。
+ *
+ * 要求:① 与真实装配同口径渲染(占位符不许漏给用户看 —— 用户会照着抄);
+ * ② 给的是**基础提示**(不含 # 外部工具 段,那由 MCP 决定),且不受自定义覆盖影响
+ *   (本函数的语义就是「内置长什么样」)。
+ */
+describe("buildBuiltinPromptText(内置原文导出)", () => {
+	const PLACEHOLDER = /\{[A-Za-z_]+\}/;
+
+	it("writer:基础提示与装配一致,但 shell 占位已按方言渲染", () => {
+		const none = buildBuiltinPromptText("writer", "chapter", "none");
+		const bash = buildBuiltinPromptText("writer", "chapter", "bash");
+		// 缺省 chapter 下,装配出来的 base(无外部工具段)应当与之一致
+		expect(bash).toBe(buildWriterSystemPrompt([], "bash", "chapter"));
+		// 方言不同 → shell 行不同
+		expect(bash).not.toBe(none);
+		expect(bash).toContain("整台机器");
+		expect(none).toContain("没有");
+	});
+
+	it("writer:对话范围占位按 scope 渲染(book 下的整节说明出现)", () => {
+		const chapter = buildBuiltinPromptText("writer", "chapter", "bash");
+		const book = buildBuiltinPromptText("writer", "book", "bash");
+		expect(book).not.toBe(chapter);
+		expect(book).toContain("对话与章节分离");
+		// 两种范围都不许把占位符漏出来
+		expect(chapter).not.toMatch(PLACEHOLDER);
+		expect(book).not.toMatch(PLACEHOLDER);
+	});
+
+	it("editor:按 scope 渲染,且不带 shell 占位(编剧提示词本就没有)", () => {
+		const chapter = buildBuiltinPromptText("editor", "chapter", "bash");
+		const book = buildBuiltinPromptText("editor", "book", "bash");
+		expect(chapter).toBe(buildEditorSystemPrompt("chapter"));
+		expect(book).toBe(buildEditorSystemPrompt("book"));
+		expect(chapter).not.toMatch(PLACEHOLDER);
+		expect(book).not.toMatch(PLACEHOLDER);
+	});
+
+	it("不含 # 外部工具 段(那是 MCP 挂载的事,与内置文案无关)", () => {
+		const p = buildBuiltinPromptText("writer", "chapter", "bash");
+		expect(p).not.toContain("# 外部工具");
 	});
 });
 

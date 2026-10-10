@@ -62,6 +62,7 @@ import {
 	type SetupState,
 } from "../setup.ts";
 import { readWriterSettings, updateWriterSettings, type WriterSettings } from "../writer-settings.ts";
+import { buildBuiltinPromptText } from "../prompt.ts";
 import { resolveWriterShell } from "../shell-kind.ts";
 import { listSkills } from "../skills-index.ts";
 import { BOOK_FILE_GROUPS, classifyBookFileKind, isWorkspaceFile, listBookFiles, readWorkspaceText, statWorkspaceFile } from "../book-files.ts";
@@ -832,6 +833,9 @@ export class WriterServer {
 			//  放服务端而非 localStorage:切换会改变 agent 装配,多窗口必须一致)
 			{ method: "GET", segments: ["settings"], handler: (ctx) => this.handleGetSettings(ctx) },
 			{ method: "PUT", segments: ["settings"], handler: (ctx) => this.handlePutSettings(ctx) },
+			// prompt-defaults(内置系统提示词原文;设置页「查看内置」弹层用。
+			//  提示词本体打包在 bundle 里,前端拿不到,只能由服务端渲染后下发)
+			{ method: "GET", segments: ["prompt-defaults"], handler: (ctx) => this.handleGetPromptDefaults(ctx) },
 			// 插件路由预留(构造参数;追加在内置路由之后)
 			...(this.options.extraRoutes ?? []),
 		];
@@ -2987,12 +2991,39 @@ export class WriterServer {
 	}
 
 	/**
-	 * PUT /api/settings {classicMode?, conversationScope?, enableShell?, shellKind?, shellPath?}:
+	 * GET /api/prompt-defaults:内置系统提示词的**渲染后原文**(2026-10-10)。
+	 *
+	 * 设置页的「查看内置」弹层要显示内置提示词全文,但 `prompts/*.md` 打包在
+	 * bundle 里、前端没有读取途径,所以由服务端渲染后下发(见 buildBuiltinPromptText)。
+	 *
+	 * 渲染口径与真实装配一致:按当前 settings 的 conversationScope + 解析出的 shell
+	 * 方言,把 `{SHELL_LINE}` / 对话范围占位替换掉 —— 用户看到的是「AI 实际拿到的那份」,
+	 * 照抄改造时不会把占位符一起抄走。
+	 *
+	 * 返回 `{ writer: {text, chars}, editor: {text, chars} }`(`chars` = 字符数,
+	 * 与设置页卡片上显示的「内置 · N 字」同源,避免前端再算一遍)。
+	 */
+	private async handleGetPromptDefaults(ctx: RouteContext): Promise<void> {
+		const settings = await readWriterSettings();
+		const shell = resolveWriterShell(settings).dialect;
+		const writerText = buildBuiltinPromptText("writer", settings.conversationScope, shell);
+		const editorText = buildBuiltinPromptText("editor", settings.conversationScope, shell);
+		this.send(ctx.res, 200, {
+			writer: { text: writerText, chars: writerText.length },
+			editor: { text: editorText, chars: editorText.length },
+		});
+	}
+
+	/**
+	 * PUT /api/settings {classicMode?, conversationScope?, enableShell?, shellKind?, shellPath?,
+	 *   enableImageGen?, image*, customWriterPrompt?, customEditorPrompt?,
+	 *   contextBudget?, memoryBudget?, activationDepth?, noticeInjectLimit?, completedMilestoneLimit?}:
 	 * 更新设置(只收白名单字段,未知字段忽略)。
 	 *
 	 * 这些开关都改变**服务端 agent 装配**(经典模式换提示词与工具集;对话与章节的关系换
-	 * 会话身份规则;外部命令放开 shell;shellKind/shellPath 换方言与可执行文件),
-	 * 所以落盘后立即应用:
+	 * 会话身份规则;外部命令放开 shell;shellKind/shellPath 换方言与可执行文件;
+	 * customWriterPrompt/customEditorPrompt 整段替换系统提示词;上下文预算五项决定
+	 * 背景包/记忆装配时的裁剪上限),所以落盘后立即应用:
 	 * - WriterHost(编辑页会话)按开关释放已建会话,下次对话按新装配重建;
 	 * - 主 SessionHost 走 reloadRuntime()(与 MCP 配置变更同一路径:复用当前会话文件重建
 	 *   运行时,新工具随之生效,leaf 指针保留)。重建失败不回滚设置——设置已落盘,
@@ -3018,6 +3049,17 @@ export class WriterServer {
 		const rawImageInReply = body?.imageInReply;
 		const rawImageWorldbook = body?.imageWorldbook;
 		const rawImageConfirm = body?.imageConfirmBeforeGen;
+		// 自定义系统提示词(2026-10-10)
+		const rawCustomWriter = body?.customWriterPrompt;
+		const rawCustomEditor = body?.customEditorPrompt;
+		// 上下文预算(2026-10-10):此前只有读路径,前端改不了 —— 见 writer-settings.ts 的说明。
+		// 显式标 unknown:body 的元素类型是 unknown,但可选链后 TS 会退化成 {} | null,
+		// 后面的 typeof 收窄与透传都需要它保持 unknown。
+		const rawContextBudget: unknown = body?.contextBudget;
+		const rawMemoryBudget: unknown = body?.memoryBudget;
+		const rawActivationDepth: unknown = body?.activationDepth;
+		const rawNoticeLimit: unknown = body?.noticeInjectLimit;
+		const rawMilestoneLimit: unknown = body?.completedMilestoneLimit;
 		if (rawClassic !== undefined && typeof rawClassic !== "boolean") {
 			throw new HttpError(400, "bad_request", "字段 classicMode 必须是布尔值");
 		}
@@ -3060,6 +3102,26 @@ export class WriterServer {
 		if (rawImageConfirm !== undefined && typeof rawImageConfirm !== "boolean") {
 			throw new HttpError(400, "bad_request", "字段 imageConfirmBeforeGen 必须是布尔值");
 		}
+		if (rawCustomWriter !== undefined && typeof rawCustomWriter !== "string") {
+			throw new HttpError(400, "bad_request", "字段 customWriterPrompt 必须是字符串");
+		}
+		if (rawCustomEditor !== undefined && typeof rawCustomEditor !== "string") {
+			throw new HttpError(400, "bad_request", "字段 customEditorPrompt 必须是字符串");
+		}
+		// 上下文预算:只收数字(JS 里 NaN/Infinity 的 typeof 也是 number,故单独挡掉)。
+		// 越界值不报错、交由 updateWriterSettings 钳制 —— 与 parseWriterSettings 同一口径,
+		// 避免「服务端 400 拒绝」与「手写文件被钳制」两套行为。
+		for (const [name, value] of [
+			["contextBudget", rawContextBudget],
+			["memoryBudget", rawMemoryBudget],
+			["activationDepth", rawActivationDepth],
+			["noticeInjectLimit", rawNoticeLimit],
+			["completedMilestoneLimit", rawMilestoneLimit],
+		] as const) {
+			if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value))) {
+				throw new HttpError(400, "bad_request", `字段 ${name} 必须是数字`);
+			}
+		}
 		const settings: WriterSettings = await updateWriterSettings({
 			...(rawClassic === undefined ? {} : { classicMode: rawClassic }),
 			...(rawScope === undefined ? {} : { conversationScope: rawScope }),
@@ -3075,7 +3137,18 @@ export class WriterServer {
 			...(rawImageInReply === undefined ? {} : { imageInReply: rawImageInReply }),
 			...(rawImageWorldbook === undefined ? {} : { imageWorldbook: rawImageWorldbook }),
 			...(rawImageConfirm === undefined ? {} : { imageConfirmBeforeGen: rawImageConfirm }),
-		});
+			// 自定义提示词:原样透传(不 trim —— 前导/尾随空白是用户排版的一部分;
+			// updateWriterSettings 内部的 clampPrompt 负责限长与「纯空白 = 内置」)
+			...(rawCustomWriter === undefined ? {} : { customWriterPrompt: rawCustomWriter }),
+			...(rawCustomEditor === undefined ? {} : { customEditorPrompt: rawCustomEditor }),
+		// 上下文预算(2026-10-10):钳制交给 updateWriterSettings(与 parseWriterSettings 同参)。
+		// 上面已保证「非 undefined 时必是有限数字」,故此处按 number 收窄。
+		...(typeof rawContextBudget === "number" ? { contextBudget: rawContextBudget } : {}),
+		...(typeof rawMemoryBudget === "number" ? { memoryBudget: rawMemoryBudget } : {}),
+		...(typeof rawActivationDepth === "number" ? { activationDepth: rawActivationDepth } : {}),
+		...(typeof rawNoticeLimit === "number" ? { noticeInjectLimit: rawNoticeLimit } : {}),
+		...(typeof rawMilestoneLimit === "number" ? { completedMilestoneLimit: rawMilestoneLimit } : {}),
+	});
 		// 解析实际方言:选 pwsh 而本机没有 → none(会话按无 shell 装配,提示词如实叙述)
 		const shell = resolveWriterShell(settings);
 		await this.options.writerHost?.setClassicMode(settings.classicMode);
@@ -3089,6 +3162,11 @@ export class WriterServer {
 		});
 		// 图片生成开关同理:它决定 image_generate 工具存不存在,变了就得释放会话
 		await this.options.writerHost?.setImageGen(settings.enableImageGen);
+		// 自定义系统提示词:改动直接顶替装配用的提示词文本,同样必须释放已建会话
+		await this.options.writerHost?.setCustomPrompt({
+			writer: settings.customWriterPrompt,
+			editor: settings.customEditorPrompt,
+		});
 		try {
 			await this.options.sessionHost.reloadRuntime();
 		} catch {
