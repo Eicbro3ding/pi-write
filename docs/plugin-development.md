@@ -64,7 +64,7 @@ export default function myPlugin(pi) {
 | `description` | 否 | 一句话描述(设置页列表展示) |
 | `backend` | 否 | 后端入口文件(相对插件目录;**缺省 `index.mjs`**) |
 | `enabled` | 否 | 作者级禁用开关:false 时用户侧无法启用(`manifestDisabled`) |
-| `frontend` | 否 | 声明式前端贡献:`slashCommands`(Web 斜杠命令)+ `ui.settingsItems`(设置菜单字段 schema,见第 7 节) |
+| `frontend` | 否 | 声明式前端贡献:`slashCommands`(Web 斜杠命令)+ `ui.settingsItems`(设置菜单字段 schema,见第 7 节)+ `ui.windows`(浮窗,7.5)+ `ui.slots`(槽位条目,7.6)+ `frontend`(trusted 插件 JS 入口,7.7) |
 
 **manifest 缺失/损坏**:插件仍以目录名兜底列出(version `0.0.0`),入口缺省 `index.mjs`;若也没有入口,列表显示「入口文件缺失」错误。
 
@@ -267,6 +267,107 @@ examples/plugins/dice/
 
 **完整示例**见 `examples/plugins/balance/`。
 
+## 7.6 槽位条目(声明式 slots)—— 浮窗的超集
+
+浮窗(7.5)本质上是「往某个固定位置放一块界面」。**槽位条目**把这件事一般化:pi-writer 的
+整个界面由一棵**槽位树**组成(顶栏、导航、全局浮层、各页面……),每个槽位有名字、有形态。
+插件可以显式声明「我这块界面放在哪个槽位」。
+
+> 一句话:**浮窗是槽位条目的一种**(默认落 `app.chrome.overlay`);`ui.slots` 让你指定别的槽位。
+
+**声明**(`frontend.ui.slots`):
+
+```json
+{
+  "frontend": {
+    "ui": {
+      "slots": [
+        {
+          "slot": "app.view.settings.plugin",
+          "key": "dice",
+          "order": 10,
+          "kind": "window",
+          "window": {
+            "id": "history",
+            "title": "掷骰历史",
+            "contentKind": "data",
+            "dataSource": "roll-history",
+            "fields": []
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+| 键 | 说明 |
+|---|---|
+| `slot` | 目标槽位名(点分小写命名,**必须是宿主已声明的槽位**);写错 → 该条不进列表(前端装载期还会再校验一次并抛错) |
+| `key` | 目标槽位是 `keyed` 形态时的分派键(如 `app.view.settings.plugin` 以 key = 插件 id 分派);非 keyed 槽位给了会被忽略 |
+| `order` | 槽位内排序权重(list 升序 / chain 降序);缺省 100 |
+| `kind` | 当前仅 `"window"` |
+| `window` | 浮窗声明,字段同 7.5 节 |
+
+**已开放的槽位**(宿主当前声明的,可作 `slot` 取值):
+
+| 槽位 | 形态 | 用途 |
+|---|---|---|
+| `app.chrome.overlay` | list | 全局浮层(`ui.windows` 默认落这里) |
+| `app.chrome.nav` | list | 顶栏导航条目 |
+| `app.chrome.status` | list | 顶栏右侧状态位 |
+| `app.view.settings.plugin` | keyed | 设置页每个插件卡内的扩展位(key = 插件 id) |
+
+> 完整槽位目录以宿主声明为准;调试模式下打开「UI 房」可见全部槽位与条目。
+
+**为什么只开放 `window` 一种形态**:往导航/状态位放按钮、往页面放面板,各自需要对应的受信任
+渲染器;当前只做了浮窗渲染器,所以就只开放浮窗这一种。协议本身是「槽位 + 形态」的组合,
+后续按需扩展。
+
+## 7.7 从插件 JS 注册槽位(trusted 专属)
+
+如果声明式不够用(想自己画任意界面、接自己的交互逻辑),被**完全信任**的插件可以用
+`frontend.mjs` 里的 `window.piWriter.slots` **在运行时注册**到任意已声明槽位 —— 这是
+`querySelector` 猜 DOM 的替代品。
+
+```js
+// frontend.mjs(仅 trusted 时被加载)
+const slots = window.piWriter?.slots;
+if (!slots) return; // 老宿主:静默退出
+
+const SLOT = "app.view.settings.plugin";
+if (slots.list().includes(SLOT)) {
+  slots.register(SLOT, {
+    id: "dice:roll-history",     // 建议带插件前缀(owner 由 ":" 前的前缀推断,用于整批回收)
+    key: "dice",                 // keyed 槽位必填
+    order: 10,
+    render: () => {              // 返回一个 DOM 节点;宿主挂进它自己的容器
+      const box = document.createElement("div");
+      box.textContent = "我自己的界面";
+      return box;
+    },
+  });
+}
+```
+
+| 方法 | 说明 |
+|---|---|
+| `slots.list()` | 返回已声明槽位名数组(据此判断能往哪儿放) |
+| `slots.register(slot, entry)` | 注册条目;`entry.render` 返回 DOM 节点(或直接给节点)。**未声明槽位 → 抛错** |
+| `slots.unregister(slot, id)` | 摘掉自己的条目 |
+| `slots.describe()` | 槽位树快照(`{name, kind, scope}[]`,调试用) |
+
+- 宿主把 `render()` 产出的节点挂进一个 `div.plugin-slot-host`,**该容器内的 DOM 完全归插件管**;
+  条目卸载时容器被清空。
+- `register` 抛错意味着槽位名拼错或 id 撞车 —— **这是有意的**(声明 = 授权),让错误当场暴露,
+  而不是静默消失。
+- 插件被取消信任 / 禁用时,其条目由宿主按条目 id 前缀整批回收。
+
+**完整示例**见 `examples/plugins/dice/frontend.mjs`(掷骰历史按钮)。
+
+> 注:`window.piWriter.slots` **只在插件 JS 已加载时存在**(trusted 才加载),所以「能调用它」
+> 本身就等于「用户已完全信任」;它不做额外授权,但仍守住「不许往未声明槽位乱塞」。
+
 ## 8. 装载与错误行为
 
 | 阶段 | 失败表现 |
@@ -344,7 +445,7 @@ export const webCommands = {
 - 插件 JS 调自己注册的后端路由(`/api/plugins/<id>/...`)取数据;
 - 插件前端失败静默(不影响主界面),错误可经插件自身 console 观察。
 
-> 注:声明式 `windows`(第 7.5 节)走的是宿主渲染器,**不需要** trusted;`frontend.mjs` 是你想自己接管 DOM 时才要的。
+> 注:声明式 `windows` / `slots`(第 7.5 / 7.6 节)走的是宿主渲染器,**不需要** trusted;`frontend.mjs` 是你想自己接管 DOM 时才要的(第 7.7 节起可用 `window.piWriter.slots` 注册,不必再 querySelector 猜 DOM)。
 
 **风险**:trusted 插件与 pi-writer **主进程/渲染进程同权**(可在渲染进程执行任意 JS,并凭同族 HTTP 端点访问本地数据)。开启=用户声明"我信任这个插件的作者"。**仅信任你自己安装的插件**。
 
@@ -364,7 +465,10 @@ A:工具在「注册成功但初始激活名单外」时可能不出现在系统
 A:间接可以——`registerTool` 的 execute 内读写书目录文件(插件与主进程同权),但**不要绕过 `world_update` 通道**直接改 world.json(会破坏结构校验与预览卡确认流)。写作建议:插件提供辅助工具(统计/生成/检索),世界文档变更交给 `world_update`。
 
 **Q:插件可以写 UI 吗?**
-A:**可以,但只走声明式**(见第 7 / 7.5 节):插件在 `plugin.json` 里声明设置字段(`settingsItems`)与浮窗(`windows`),由 pi-writer 的受信任渲染器按白名单画出来——**renderer 不执行插件 JS**,所以这套对非 trusted 插件同样开放。要脱离声明式、自己画任意界面,才需要「完全信任」+ `frontend.mjs`。
+A:**可以,但只走声明式**(见第 7 / 7.5 / 7.6 节):插件在 `plugin.json` 里声明设置字段(`settingsItems`)、浮窗(`windows`)与槽位条目(`slots`),由 pi-writer 的受信任渲染器按白名单画出来——**renderer 不执行插件 JS**,所以这套对非 trusted 插件同样开放。要脱离声明式、自己画任意界面,才需要「完全信任」+ `frontend.mjs`(用 `window.piWriter.slots` 注册到槽位)。
+
+**Q:插件前端想加个按钮/面板,该怎么放?**
+A:两条路。**声明式**(首选,不需要 trusted):`ui.slots` 声明一个 `window`,指定目标槽位(如 `app.view.settings.plugin` 放设置页插件卡里)与 `key`。**自己画**(要 trusted):`frontend.mjs` 里 `window.piWriter.slots.register(槽位, { id, key, render })`。两条路都**不要用 `querySelector` 猜宿主 DOM**——宿主换布局,注册代码一行不用改。
 
 **Q:插件与 MCP 是什么关系?**
 A:两条独立通道——MCP 解决「接外部服务器」,插件解决「本地注册工具/事件/命令」。插件 = 受信任本地代码(不做沙箱);MCP = 远端服务器工具(经 `mcp.json`)。插件可以封装 MCP 客户端,但不在本期开放面。

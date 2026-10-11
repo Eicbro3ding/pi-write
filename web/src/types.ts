@@ -868,10 +868,10 @@ export interface PluginInfoDto {
 	error: string | null;
 	/** 入口文件绝对路径(展示/调试用)。 */
 	path: string;
-	/** 声明式前端贡献(设置菜单 schema / 斜杠命令 / 浮窗 / 前端 JS 入口)。 */
+	/** 声明式前端贡献(设置菜单 schema / 斜杠命令 / 浮窗 / 槽位条目 / 前端 JS 入口)。 */
 	frontend?: {
 		slashCommands?: Array<{ trigger: string; hint: string }>;
-		ui?: { settingsItems?: PluginSettingsItemDto[]; windows?: PluginWindowDto[] };
+		ui?: { settingsItems?: PluginSettingsItemDto[]; windows?: PluginWindowDto[]; slots?: PluginSlotContributionDto[] };
 		/** 前端 JS 入口(相对插件目录;仅 trusted 加载)。 */
 		frontend?: string;
 	};
@@ -911,6 +911,18 @@ export interface PluginWindowDto {
 	/** 取数路径(相对 /api/plugins/<id>/;仅 trusted 插件路由可达)。 */
 	dataSource?: string;
 	closable?: boolean;
+}
+
+/** 声明式槽位条目(与 src/plugins.ts 的 PluginSlotContributionSpec 对齐)。 */
+export interface PluginSlotContributionDto {
+	/** 目标槽位名(须是宿主已声明的槽位)。 */
+	slot: string;
+	/** 目标槽位是 keyed 形态时的分派键(如设置页插件卡扩展位 key=插件 id)。 */
+	key?: string;
+	/** 排序权重(list 升序)。 */
+	order?: number;
+	kind: "window";
+	window: PluginWindowDto;
 }
 
 // —— 专注写作台 workspace 类型(前端本地模型,不与后端字段对齐)——

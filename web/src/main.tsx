@@ -5,6 +5,7 @@ import { App } from "./App.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { initTheme } from "./theme.ts";
 import { DEBUG_LOCK_COMMAND, DEBUG_UNLOCK_COMMAND, disableDebugMode, enableDebugMode } from "./settings.ts";
+import { createPluginSlotsApi } from "./plugin-slots.ts";
 import "./styles.css";
 // 分页样式:按此顺序在 styles.css 之后加载,同名选择器后者胜
 import "./styles/world.css";
@@ -31,13 +32,19 @@ initTheme(); // 首帧应用持久化主题,避免闪烁
  *   piWriterDebugOff()  // 关闭并重新藏回界面
  *
  * ⚠️ 这不是权限门:任何人打开控制台都能开,它防的是误触,不是恶意。
+ *
+ * `window.piWriter.slots` 是**插件前端 JS 的槽位注册入口**(2026-10-11 槽位树):
+ * trusted 插件的 frontend.mjs 通过它往具名槽位注册 UI 条目,不再 querySelector 猜 DOM。
+ * 详见 web/src/plugin-slots.ts。
  */
 declare global {
 	interface Window {
 		piWriterDebug: () => void;
 		piWriterDebugOff: () => void;
+		piWriter: { slots: ReturnType<typeof createPluginSlotsApi> } & Record<string, unknown>;
 	}
 }
+window.piWriter = { ...(window.piWriter ?? {}), slots: createPluginSlotsApi() };
 window.piWriterDebug = () => {
 	enableDebugMode();
 	console.info(`[pi-writer] 调试模式已开启(顶栏多出「UI 房」:全部 UI 组件的陈列室)。关闭并重新隐藏:${DEBUG_LOCK_COMMAND}`);

@@ -12,6 +12,8 @@ import { SHELL_CONFIRM_TEXT } from "../components/ShellCards.tsx";
 import { McpServerList } from "../components/McpServerList.tsx";
 import { PluginList } from "../components/PluginList.tsx";
 import { PluginSettings } from "../components/PluginSettings.tsx";
+import { Slot } from "../components/Slot.tsx";
+import { SLOT_SETTINGS_PLUGIN } from "../shell-slots.ts";
 import { PromptModal, type PromptModalMode } from "../components/PromptModal.tsx";
 import { ToggleSwitch } from "../components/ToggleSwitch.tsx";
 import { Select } from "../components/Select.tsx";
@@ -2310,6 +2312,10 @@ export function SettingsPage({
 									<div className="s-card-head">{plugin.name}</div>
 									{plugin.description && <div className="s-card-desc">{plugin.description}</div>}
 									<PluginSettings client={client} plugin={plugin} />
+									{/* 插件自有的设置页扩展位:trusted 插件的 frontend.mjs 往
+									    app.view.settings.plugin 注册 key=插件 id 的条目,落在这里。
+									    未注册时什么都不画(fallback null)。 */}
+									<Slot name={SLOT_SETTINGS_PLUGIN} key={plugin.id} />
 								</div>
 							);
 						})()}

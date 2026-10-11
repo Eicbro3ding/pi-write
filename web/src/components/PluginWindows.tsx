@@ -3,7 +3,7 @@ import type { ApiClient } from "../api/client.ts";
 import type { PluginInfoDto, PluginSettingsFieldDto, PluginWindowDto } from "../types.ts";
 import { ToggleSwitch } from "./ToggleSwitch.tsx";
 import { Select } from "./Select.tsx";
-import { listEntries, registerEntry, unregisterEntry, unregisterOwner, type SlotEntry } from "../slots.ts";
+import { listEntries, listSlots, registerEntry, unregisterEntry, unregisterOwner, type SlotEntry } from "../slots.ts";
 import { SLOT_OVERLAY } from "../shell-slots.ts";
 import { bumpSlots } from "./Slot.tsx";
 
@@ -14,11 +14,11 @@ import { bumpSlots } from "./Slot.tsx";
  * 与设置页卡片同一条哲学:插件只声明数据(标题/位置/尺寸/字段),由这里的受信任
  * 渲染器画 —— renderer 不执行任何用户 JS,所以**非 trusted 插件也能开浮窗**。
  *
- * **浮窗不是另一条渲染路径,而是 overlay 槽位的一种条目**(2026-10-11 槽位树合并):
- * `syncPluginWindows()` 把每个 window 声明编译成一个纯数据条目注册进
- * `SLOT_OVERLAY`,宿主用 `renderWindowEntry()` 当 `renderEntry` 把它画成浮窗。
- * 于是「插件界面」与「核心浮层」在同一张表里排队,由 `order` 定层级,删掉了
- * 原先 App.tsx 里那条 `<Slot fallback={<PluginWindows/>}>` 的双轨。
+ * **浮窗不是另一条渲染路径,而是槽位的一种条目**(2026-10-11 槽位树合并):
+ * `syncPluginWindows()` 把每个 window 声明编译成一个纯数据条目注册进目标槽位
+ * (`ui.windows` 落 overlay;`ui.slots` 可显式指定槽位),宿主用 `renderWindowEntry()`
+ * 当 `renderEntry` 把它画成浮窗。于是「插件界面」与「核心浮层」在同一张表里排队,
+ * 由 `order` 定层级,删掉了原先 App.tsx 里那条 `<Slot fallback={<PluginWindows/>}>` 的双轨。
  *
  * 两种内容形态:
  *  - fields:复用设置字段白名单(string/number/boolean/select/textarea)静态渲染;
@@ -54,25 +54,66 @@ export function collectWindows(plugins: PluginInfoDto[]): WindowEntryPayload[] {
 	return out;
 }
 
+/** 一条「已定位到槽位」的声明式浮窗:哪个槽位 + 浮窗 payload + 排序权重 + 可选分派键。 */
+export interface PlacedWindow {
+	slot: string;
+	order: number;
+	/** 目标槽位是 keyed 形态时的分派键。 */
+	key?: string;
+	payload: WindowEntryPayload;
+}
+
 /**
- * 按最新插件列表把浮窗声明同步进 overlay 槽位:先整批摘掉旧浮窗条目(按 owner 的
- * 前缀粒度),再按当前列表重新注册。
+ * 把所有插件的浮窗声明编译成「槽位 + 条目」的列表:
+ *  - `ui.windows` 是老出口(2026-10-11 前):一律落 overlay 槽位,order 100;
+ *  - `ui.slots` 是新出口(槽位树):插件显式写目标槽位,order 由声明给(缺省 100)。
+ * 两条出口对浮窗一视同仁 —— 都是纯数据条目,只是目标槽位不同。
+ *
+ * `ui.slots` 里未声明槽位的条目会被 `syncPluginSlots()` 抛错挡下(装载期严格)。
+ */
+export function collectPlacedWindows(plugins: PluginInfoDto[]): PlacedWindow[] {
+	const out: PlacedWindow[] = [];
+	for (const p of plugins) {
+		if (!p.enabled) continue;
+		const ui = p.frontend?.ui;
+		for (const w of ui?.windows ?? []) {
+			out.push({ slot: SLOT_OVERLAY, order: 100, payload: { kind: "window", pluginId: p.id, pluginName: p.name, spec: w } });
+		}
+		for (const c of ui?.slots ?? []) {
+			if (c.kind !== "window") continue;
+			out.push({
+				slot: c.slot,
+				order: c.order ?? 100,
+				...(c.key !== undefined ? { key: c.key } : {}),
+				payload: { kind: "window", pluginId: p.id, pluginName: p.name, spec: c.window },
+			});
+		}
+	}
+	return out;
+}
+
+/**
+ * 按最新插件列表把浮窗声明同步进各自槽位:先整批摘掉旧浮窗条目(按 owner 前缀粒度),
+ * 再按当前列表重新注册。
  *
  * 为什么整批换而不是差量:浮窗声明是**纯数据**且量极小,重建一两个条目比维护
  * 一份 diff 便宜得多;而整批换能天然处理「插件禁用了 / 删了 / 改了 id」所有情形,
  * 不会留孤儿条目。条目 id 带上 pluginId:windowId,重注册后 React key 稳定,
  * 不会白白重挂浮窗、丢拖拽位置。
+ *
+ * **未声明槽位直接抛错**(声明 = 授权):弹窗声明写错槽位名,装载期就现形,
+ * 而不是静默消失。
  */
 export function syncPluginWindows(plugins: PluginInfoDto[]): void {
 	// 摘掉全部浮窗条目(owner 用统一前缀标记,与核心/插件 JS 的条目区分开)
-	for (const e of entriesByWindowOwner()) unregisterEntry(SLOT_OVERLAY, e.id);
-	for (const w of collectWindows(plugins)) {
-		registerEntry(SLOT_OVERLAY, {
-			id: `${ENTRY_PREFIX}${w.pluginId}:${w.spec.id}`,
+	for (const e of entriesByWindowOwner()) unregisterEntry(e.slotName, e.id);
+	for (const placed of collectPlacedWindows(plugins)) {
+		registerEntry(placed.slot, {
+			id: `${ENTRY_PREFIX}${placed.payload.pluginId}:${placed.payload.spec.id}`,
 			owner: WINDOW_OWNER,
-			// 浮窗盖在普通浮层之上,order 给个偏大的值(插件自有界面用更小值即在其下)
-			order: 100,
-			render: w,
+			order: placed.order,
+			...(placed.key !== undefined ? { key: placed.key } : {}),
+			render: placed.payload,
 		});
 	}
 	bumpSlots();
@@ -81,9 +122,20 @@ export function syncPluginWindows(plugins: PluginInfoDto[]): void {
 /** 浮窗条目在注册表里的统一 owner —— 便于一次摘干净(与真实插件 id 区分,不冲突)。 */
 const WINDOW_OWNER = "__window__";
 
-/** 列出当前 overlay 槽位里所有浮窗条目(用于重注册前清场与测试)。 */
-function entriesByWindowOwner(): SlotEntry[] {
-	return listEntries(SLOT_OVERLAY).filter((e) => e.owner === WINDOW_OWNER);
+/**
+ * 列出当前所有槽位里的浮窗条目(用于重注册前清场)。
+ *
+ * 注意:浮窗可能落在任何槽位(见 `ui.slots`),所以不能只看 overlay ——
+ * 得扫全表。条目带 `slotName` 是为了摘的时候知道摘哪个槽位的。
+ */
+function entriesByWindowOwner(): Array<SlotEntry & { slotName: string }> {
+	const out: Array<SlotEntry & { slotName: string }> = [];
+	for (const s of listSlots()) {
+		for (const e of listEntries(s.name)) {
+			if (e.owner === WINDOW_OWNER) out.push({ ...e, slotName: s.name });
+		}
+	}
+	return out;
 }
 
 /**

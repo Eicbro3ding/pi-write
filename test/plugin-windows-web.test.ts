@@ -9,9 +9,9 @@
  * 渲染部分交给实机截图验证。
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { collectWindows, normalizeRows, syncPluginWindows } from "../web/src/components/PluginWindows.tsx";
+import { collectPlacedWindows, collectWindows, normalizeRows, syncPluginWindows } from "../web/src/components/PluginWindows.tsx";
 import { listEntries, registerEntry, registerSlot, resetSlots } from "../web/src/slots.ts";
-import { declareShellSlots, SLOT_OVERLAY } from "../web/src/shell-slots.ts";
+import { declareShellSlots, SLOT_OVERLAY, SLOT_SETTINGS_PLUGIN } from "../web/src/shell-slots.ts";
 import type { PluginInfoDto } from "../web/src/types.ts";
 
 /** 造一条插件 DTO(只填测试关心的字段)。 */
@@ -69,6 +69,82 @@ describe("collectWindows", () => {
 	it("空列表 / 无 windows 字段 → 空", () => {
 		expect(collectWindows([])).toEqual([]);
 		expect(collectWindows([plugin({ id: "x", frontend: {} })])).toEqual([]);
+	});
+});
+
+describe("collectPlacedWindows(两条出口 → 槽位)", () => {
+	it("ui.windows 落 overlay,order 100", () => {
+		const placed = collectPlacedWindows([
+			plugin({ id: "p", frontend: { ui: { windows: [{ id: "w", title: "窗", fields: [] }] } } }),
+		]);
+		expect(placed).toHaveLength(1);
+		expect(placed[0].slot).toBe(SLOT_OVERLAY);
+		expect(placed[0].order).toBe(100);
+		expect(placed[0].payload.spec.id).toBe("w");
+	});
+
+	it("ui.slots 用声明给的槽位与 order", () => {
+		const placed = collectPlacedWindows([
+			plugin({
+				id: "p",
+				frontend: {
+					ui: {
+						slots: [
+							{ slot: SLOT_SETTINGS_PLUGIN, key: "p", kind: "window", order: 7, window: { id: "s", title: "新窗", fields: [] } },
+						],
+					},
+				},
+			}),
+		]);
+		expect(placed).toHaveLength(1);
+		expect(placed[0].slot).toBe(SLOT_SETTINGS_PLUGIN);
+		expect(placed[0].order).toBe(7);
+		expect(placed[0].key).toBe("p");
+	});
+
+	it("ui.slots 缺 order 时默认 100", () => {
+		const placed = collectPlacedWindows([
+			plugin({ id: "p", frontend: { ui: { slots: [{ slot: SLOT_OVERLAY, kind: "window", window: { id: "s", title: "窗", fields: [] } }] } } }),
+		]);
+		expect(placed[0].order).toBe(100);
+	});
+
+	it("两条出口可共存(同一插件既发 windows 又发 slots)", () => {
+		const placed = collectPlacedWindows([
+			plugin({
+				id: "p",
+				frontend: {
+					ui: {
+						windows: [{ id: "old", title: "旧", fields: [] }],
+						slots: [{ slot: SLOT_OVERLAY, kind: "window", window: { id: "new", title: "新", fields: [] } }],
+					},
+				},
+			}),
+		]);
+		expect(placed.map((p) => p.payload.spec.id)).toEqual(["old", "new"]);
+	});
+
+	it("kind 非 window 的 slot 条目跳过", () => {
+		const placed = collectPlacedWindows([
+			plugin({ id: "p", frontend: { ui: { slots: [{ slot: SLOT_OVERLAY, kind: "button" as never, window: { id: "x", title: "X", fields: [] } }] } } }),
+		]);
+		expect(placed).toEqual([]);
+	});
+
+	it("disabled 插件两条出口都不收", () => {
+		const placed = collectPlacedWindows([
+			plugin({
+				id: "off",
+				enabled: false,
+				frontend: {
+					ui: {
+						windows: [{ id: "w", title: "窗", fields: [] }],
+						slots: [{ slot: SLOT_OVERLAY, kind: "window", window: { id: "s", title: "S", fields: [] } }],
+					},
+				},
+			}),
+		]);
+		expect(placed).toEqual([]);
 	});
 });
 
@@ -137,6 +213,41 @@ describe("syncPluginWindows(声明 → overlay 槽位条目)", () => {
 	it("无浮窗声明的插件列表 → 槽位保持空", () => {
 		syncPluginWindows([]);
 		expect(listEntries(SLOT_OVERLAY).filter((e) => e.owner === "__window__")).toEqual([]);
+	});
+
+	it("ui.slots 可把浮窗放进非 overlay 槽位,清场时不漏扫(跨槽位回收)", () => {
+		syncPluginWindows([
+			plugin({
+				id: "p",
+				frontend: {
+					ui: {
+						slots: [{ slot: SLOT_SETTINGS_PLUGIN, key: "p", kind: "window", window: { id: "s", title: "设置位窗", fields: [] } }],
+					},
+				},
+			}),
+		]);
+		const inSettings = listEntries(SLOT_SETTINGS_PLUGIN).filter((e) => e.owner === "__window__");
+		expect(inSettings).toHaveLength(1);
+		expect(inSettings[0].key).toBe("p"); // keyed 槽位:key 透传
+		// 再同步一次(声明消失)→ 该槽位里的浮窗条目必须被扫到并摘掉
+		syncPluginWindows([]);
+		expect(listEntries(SLOT_SETTINGS_PLUGIN).filter((e) => e.owner === "__window__")).toEqual([]);
+	});
+
+	it("往 keyed 槽位放东西却不给 key → 抛错(内核规则,不静默)", () => {
+		expect(() =>
+			syncPluginWindows([
+				plugin({ id: "p", frontend: { ui: { slots: [{ slot: SLOT_SETTINGS_PLUGIN, kind: "window", window: { id: "s", title: "无键", fields: [] } }] } } }),
+			]),
+		).toThrow(/必须给 key/);
+	});
+
+	it("往未声明槽位的 ui.slots 条目 → 抛错(声明 = 授权)", () => {
+		expect(() =>
+			syncPluginWindows([
+				plugin({ id: "p", frontend: { ui: { slots: [{ slot: "app.nope.typo", kind: "window", window: { id: "s", title: "坏", fields: [] } }] } } }),
+			]),
+		).toThrow(/未声明/);
 	});
 });
 

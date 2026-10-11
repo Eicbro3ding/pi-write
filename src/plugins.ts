@@ -81,18 +81,51 @@ export interface PluginWindowSpec {
 }
 
 /**
- * 插件 UI/菜单声明(2026-09 定稿声明式协议;2026-10 增 windows 浮窗)。
+ * 声明式槽位条目(2026-10-11 槽位树):插件把「往哪个槽位放什么」写成数据。
+ *
+ * 这是**非 trusted 插件**的 UI 出口 —— 它不写 JS,只是声明「我有一个浮窗,
+ * 想放进 app.chrome.overlay 这个槽位」。宿主据此把它编译成槽位条目。
+ *
+ * 当前只开放一种形态:`window`(复用 PluginWindowSpec)。其他槽位形态
+ * (往导航塞按钮、往页面塞面板)需要各自的受信任渲染器,后续按需开。
+ *
+ * 为什么是「声明槽位名」而不是「声明浮窗 + 前端猜默认放哪儿」:槽位名是宿主公开的
+ * 契约(见 web/src/shell-slots.ts 的常量与 UI 房的槽位目录),插件显式写出来,
+ * 宿主就能在装载期校验「这个名字存在吗」—— **声明 = 授权**这条铁律延伸到插件侧。
+ */
+export interface PluginSlotContributionSpec {
+	/** 目标槽位名(点分命名,须是宿主已声明的槽位;装载期校验)。 */
+	slot: string;
+	/**
+	 * 目标槽位是 keyed 形态时的分派键。
+	 * 例如设置页插件卡扩展位 `app.view.settings.plugin` 以 key=插件 id 分派,
+	 * 插件要往那里放东西就必须给出这个 key(通常就是自己的 id)。
+	 * 非 keyed 槽位给了 key 会被忽略。
+	 */
+	key?: string;
+	/** 条目在该槽位内的排序权重(list 升序 / chain 降序)。 */
+	order?: number;
+	/** 贡献形态。当前仅 `window`。 */
+	kind: "window";
+	/** kind=window 时的浮窗声明。 */
+	window: PluginWindowSpec;
+}
+
+/**
+ * 插件 UI/菜单声明(2026-09 定稿声明式协议;2026-10 增 windows 浮窗与 slots 槽位条目)。
  *
  * 原则:插件 UI 只能「声明数据」,由 pi-writer 服务端/前端用受信任的
  * 通用渲染器渲染(FieldRenderer + 现有 s-* 组件族);设置值存
  * plugins/<id>/settings.json(atomicWriteFile),未知键丢弃。
- * 插件自定义组件/任意 JS 注入仍不在开放面。
+ * 插件自定义组件/任意 JS 注入仍不在开放面(那要 trusted,走 window.piWriter.slots)。
  */
 export interface PluginUiSpec {
 	/** 设置页「集成」分类下的设置菜单项声明。 */
 	settingsItems?: PluginSettingsItemSpec[];
 	/** 全局浮窗声明(挂 `.plugin-layer`,非 trusted 插件亦可用)。 */
 	windows?: PluginWindowSpec[];
+	/** 槽位条目声明(比 windows 更一般:可指定目标槽位)。 */
+	slots?: PluginSlotContributionSpec[];
 }
 
 /** 插件清单(`~/.pi/writer/plugins/<id>/plugin.json`)。 */

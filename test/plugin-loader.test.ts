@@ -324,6 +324,95 @@ describe("windows 浮窗声明校验", () => {
 	});
 });
 
+describe("ui.slots 槽位条目声明校验", () => {
+	it("window 形态:slot 名合法 + window 合法 → 透传;slot 名非法 / kind 非 window / window 非法 → 丢弃", async () => {
+		writePlugin("slotcr", {
+			manifest: {
+				frontend: {
+					ui: {
+						slots: [
+							{
+								slot: "app.chrome.overlay",
+								order: 50,
+								kind: "window",
+								window: { id: "w1", title: "余额", contentKind: "data", dataSource: "balance", fields: [] },
+							},
+							// 槽位名非法(含斜杠 / 大写开头 / 空)
+							{ slot: "Overlay", kind: "window", window: { id: "w2", title: "坏名", fields: [{ key: "a", label: "A", type: "string" }] } },
+							{ slot: "", kind: "window", window: { id: "w3", title: "空名", fields: [{ key: "a", label: "A", type: "string" }] } },
+							// kind 不认识
+							{ slot: "app.chrome.nav", kind: "button", window: { id: "w4", title: "按钮", fields: [{ key: "a", label: "A", type: "string" }] } },
+							// window 本身非法(空 fields 的 fields 形态)
+							{ slot: "app.chrome.nav", kind: "window", window: { id: "w5", title: "空窗", fields: [] } },
+						],
+					},
+				},
+			},
+		});
+		const list = await listPlugins();
+		const slots = list[0].frontend?.ui?.slots ?? [];
+		expect(slots).toHaveLength(1);
+		expect(slots[0]).toMatchObject({ slot: "app.chrome.overlay", order: 50, kind: "window" });
+		expect(slots[0].window.id).toBe("w1");
+	});
+
+	it("key 透传(供 keyed 槽位分派);空 key 丢弃", async () => {
+		writePlugin("slotkey", {
+			manifest: {
+				frontend: {
+					ui: {
+						slots: [
+							{ slot: "app.view.settings.plugin", key: "myp", kind: "window", window: { id: "a", title: "A", fields: [{ key: "k", label: "K", type: "string" }] } },
+							{ slot: "app.view.settings.plugin", key: "  ", kind: "window", window: { id: "b", title: "B", fields: [{ key: "k", label: "K", type: "string" }] } },
+						],
+					},
+				},
+			},
+		});
+		const list = await listPlugins();
+		const slots = list[0].frontend?.ui?.slots ?? [];
+		expect(slots[0].key).toBe("myp");
+		expect(slots[1].key).toBeUndefined(); // 纯空白 key → 当没写
+	});
+
+	it("order 缺省时不带;非数 order 丢弃", async () => {		writePlugin("slotorder", {
+			manifest: {
+				frontend: {
+					ui: {
+						slots: [
+							{ slot: "app.chrome.nav", kind: "window", window: { id: "a", title: "A", fields: [{ key: "k", label: "K", type: "string" }] } },
+							{ slot: "app.chrome.nav", kind: "window", order: "abc", window: { id: "b", title: "B", fields: [{ key: "k", label: "K", type: "string" }] } },
+						],
+					},
+				},
+			},
+		});
+		const list = await listPlugins();
+		const slots = list[0].frontend?.ui?.slots ?? [];
+		expect(slots).toHaveLength(2);
+		expect(slots[0].order).toBeUndefined();
+		expect(slots[1].order).toBeUndefined(); // 非数 → 当没写
+	});
+
+	it("slots 与 windows 可共存(三条出口各自透传)", async () => {
+		writePlugin("allout", {
+			manifest: {
+				frontend: {
+					ui: {
+						settingsItems: [{ title: "设置", fields: [{ key: "p", label: "P", type: "string" }] }],
+						windows: [{ id: "w", title: "旧窗", fields: [{ key: "a", label: "A", type: "string" }] }],
+						slots: [{ slot: "app.chrome.overlay", kind: "window", window: { id: "s", title: "新窗", fields: [{ key: "b", label: "B", type: "string" }] } }],
+					},
+				},
+			},
+		});
+		const list = await listPlugins();
+		expect(list[0].frontend?.ui?.settingsItems).toHaveLength(1);
+		expect(list[0].frontend?.ui?.windows).toHaveLength(1);
+		expect(list[0].frontend?.ui?.slots).toHaveLength(1);
+	});
+});
+
 describe("Web 命令注册表(webCommands 具名导出)", () => {
 	it("入口导出 webCommands 且 trigger 在 manifest 声明内 → 注册;未声明忽略", async () => {
 		writePlugin("cmd", {

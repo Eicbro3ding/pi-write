@@ -23,7 +23,7 @@ import { pathToFileURL } from "node:url";
 import { getWriterDir } from "./config.ts";
 import { atomicWriteFile } from "./atomic-write.ts";
 import type { ExtensionFactory } from "./pi-adapter/index.ts";
-import type { PluginManifest, PluginSettingsFieldSpec, PluginSettingsFieldType, PluginSettingsItemSpec, PluginSlashCommandSpec, PluginUiSpec, PluginWindowSpec } from "./plugins.ts";
+import type { PluginManifest, PluginSettingsFieldSpec, PluginSettingsFieldType, PluginSettingsItemSpec, PluginSlotContributionSpec, PluginSlashCommandSpec, PluginUiSpec, PluginWindowSpec } from "./plugins.ts";
 
 /** plugins 根目录(~/.pi/writer/plugins)。 */
 export function getPluginsDir(): string {
@@ -206,6 +206,33 @@ function checkWindowSpec(raw: unknown): PluginWindowSpec | null {
 	};
 }
 
+/**
+ * 声明式槽位条目校验:slot 名须像点分命名且不能含空白/斜杠;kind 目前仅 window
+ * (其 window 用 checkWindowSpec 同一套校验)。非法逐条丢弃,不阻塞整个插件。
+ *
+ * 槽位**是否真的已声明**留给前端校验(那要读 web 端的声明表)—— 服务端只保证
+ * 形状合法。前端 `syncPluginSlots()` 编译时对未声明槽位抛错,与内核同一条铁律。
+ */
+function checkSlotContribution(raw: unknown): PluginSlotContributionSpec | null {
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+	const c = raw as Record<string, unknown>;
+	// 槽位名一律小写点分(与 shell-slots.ts 的常量一致);大写/空白/斜杠都判非法 ——
+	// 槽位名是跨模块的契约,大小写不敏感会让「大小写不同但看着一样」的错拼混进来
+	if (typeof c.slot !== "string" || !/^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)*$/.test(c.slot)) return null;
+	if (c.kind !== "window") return null;
+	const window = checkWindowSpec(c.window);
+	if (!window) return null;
+	const order = typeof c.order === "number" && Number.isFinite(c.order) ? Math.round(c.order) : undefined;
+	const key = typeof c.key === "string" && c.key.trim().length > 0 ? c.key.trim() : undefined;
+	return {
+		slot: c.slot,
+		kind: "window",
+		window,
+		...(key !== undefined ? { key } : {}),
+		...(order !== undefined ? { order } : {}),
+	};
+}
+
 /** frontend 声明校验:字段级白名单(非法项丢弃,不阻塞整个插件)。 */
 function checkFrontend(raw: unknown): PluginManifest["frontend"] | undefined {
 	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
@@ -225,6 +252,10 @@ function checkFrontend(raw: unknown): PluginManifest["frontend"] | undefined {
 		if (Array.isArray(ui.windows)) {
 			const windows = ui.windows.map(checkWindowSpec).filter((w): w is PluginWindowSpec => w !== null);
 			if (windows.length > 0) uiOut.windows = windows;
+		}
+		if (Array.isArray(ui.slots)) {
+			const slotsCr = ui.slots.map(checkSlotContribution).filter((c): c is PluginSlotContributionSpec => c !== null);
+			if (slotsCr.length > 0) uiOut.slots = slotsCr;
 		}
 		if (Object.keys(uiOut).length > 0) out.ui = uiOut;
 	}

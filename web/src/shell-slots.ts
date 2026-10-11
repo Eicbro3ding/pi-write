@@ -18,10 +18,11 @@
  *       └ app.view.stage                  single  舞台页
  *       └ app.view.world                  single  世界书页
  *       └ app.view.settings               single  设置页
+ *           └ app.view.settings.plugin    keyed   各插件设置卡内的扩展位(key = 插件 id)
  *   └ app.wizard                          single  首启向导(覆盖层)
  *
  * 为什么 view 槽位是 single:页面是「当前在哪」,同时只能有一个;插件想往页面上
- * 加东西应该往页面**内部**的槽位注册(下轮再开页内槽位),而不是替换整个页面。
+ * 加东西应该往页面**内部**的槽位注册(如 app.view.settings.plugin),而不是替换整个页面。
  */
 import { registerSlot } from "./slots.ts";
 
@@ -37,6 +38,8 @@ export const SLOT_VIEW_EDIT = "app.view.edit";
 export const SLOT_VIEW_STAGE = "app.view.stage";
 export const SLOT_VIEW_WORLD = "app.view.world";
 export const SLOT_VIEW_SETTINGS = "app.view.settings";
+/** 设置页插件卡内的扩展位(keyed:key = 插件 id)。插件往这里注册自己的界面。 */
+export const SLOT_SETTINGS_PLUGIN = "app.view.settings.plugin";
 /** 首启向导。 */
 export const SLOT_WIZARD = "app.wizard";
 
@@ -61,7 +64,14 @@ export function declareShellSlots(): void {
 			{ name: SLOT_VIEW_EDIT, kind: "single" },
 			{ name: SLOT_VIEW_STAGE, kind: "single" },
 			{ name: SLOT_VIEW_WORLD, kind: "single" },
-			{ name: SLOT_VIEW_SETTINGS, kind: "single" },
+			{
+				name: SLOT_VIEW_SETTINGS,
+				kind: "single",
+				// 设置页内部的插件扩展位:keyed,key = 插件 id,每个插件卡渲染自己的那一格
+				// (声明用 registerSlot 而不是再嵌套 children —— SlotDeclaration.children 是
+				//  一次性的字面量结构,这里按需在同一处把它声明齐)
+			},
+			{ name: SLOT_SETTINGS_PLUGIN, kind: "keyed" },
 		],
 	});
 	registerSlot({ name: SLOT_WIZARD, kind: "single", description: "首启向导" });
