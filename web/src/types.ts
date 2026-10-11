@@ -868,10 +868,10 @@ export interface PluginInfoDto {
 	error: string | null;
 	/** 入口文件绝对路径(展示/调试用)。 */
 	path: string;
-	/** 声明式前端贡献(设置菜单 schema / 斜杠命令 / 前端 JS 入口)。 */
+	/** 声明式前端贡献(设置菜单 schema / 斜杠命令 / 浮窗 / 前端 JS 入口)。 */
 	frontend?: {
 		slashCommands?: Array<{ trigger: string; hint: string }>;
-		ui?: { settingsItems?: PluginSettingsItemDto[] };
+		ui?: { settingsItems?: PluginSettingsItemDto[]; windows?: PluginWindowDto[] };
 		/** 前端 JS 入口(相对插件目录;仅 trusted 加载)。 */
 		frontend?: string;
 	};
@@ -895,6 +895,22 @@ export interface PluginSettingsItemDto {
 	title: string;
 	description?: string;
 	fields: PluginSettingsFieldDto[];
+}
+
+/** 浮窗声明(与 src/plugins.ts 的 PluginWindowSpec 对齐)。 */
+export interface PluginWindowDto {
+	id: string;
+	title: string;
+	/** 初始位置百分比(0-100,相对视口)。 */
+	position?: { x: number; y: number };
+	/** 初始尺寸(px)。 */
+	size?: { width?: number; height?: number };
+	fields: PluginSettingsFieldDto[];
+	/** fields = 声明式字段;data = 由 dataSource 路由取数渲染键值表。 */
+	contentKind?: "fields" | "data";
+	/** 取数路径(相对 /api/plugins/<id>/;仅 trusted 插件路由可达)。 */
+	dataSource?: string;
+	closable?: boolean;
 }
 
 // —— 专注写作台 workspace 类型(前端本地模型,不与后端字段对齐)——

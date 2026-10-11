@@ -92,13 +92,15 @@
 ## 9. 插件系统(2026-09,0.0.5)
 
 - **目录装载**:`~/.pi/writer/plugins/<id>/`,plugin.json(id/version/name/description/enabled/backend/frontend)+ 入口(index.mjs,default export = ExtensionFactory,与 vendor InlineExtension 同语义);清单零信任解析(字段级白名单,非法项逐条丢弃,坏插件 error 隔离不阻塞);入口 resolve 后必须在插件目录内(防逃逸);
+- **zip 安装**(2026-10):设置页「集成 → 插件」上传 `.zip` 即装(`POST /api/plugins/install`),不必手动放目录;解包与路径/体积校验复用书导入的安全原语(`web/zip-read.ts`);zip 根或单层子目录需含 plugin.json,id 取自清单;同 id 已存在则覆盖安装(`writePluginFiles` 先写暂存目录再换入,失败回滚保旧版本);
 - **启用双层**:manifest `enabled:false` 强制禁用 > 用户运行时开关(plugin-state.json,缺省 true);「完全信任」同条目(缺省 false),enabled/trusted 分开读写、merge 语义;
 - **能力面(定级)**:
   - 后端:工具注册(与 MCP 工具同通道注入 agent);「完全信任」后入口可导出 `routes`(后端自定义路由,segments 自动加 `plugins/<id>` 前缀,内置路由优先于插件路由);
-  - 前端:声明式设置菜单(settingsItems 字段白名单 string/number/boolean/select/textarea,值存 plugins/<id>/settings.json,写路径按清单 key+类型校验);声明式斜杠命令(触发词 + webCommands 具名导出,主进程执行、结果回插输入框,只收清单已声明 trigger);「完全信任」后 frontend.mjs(经 GET /api/plugins/:id/frontend.mjs 加载,仅 trusted 返回 text/javascript);
+  - 前端:声明式设置菜单(settingsItems 字段白名单 string/number/boolean/select/textarea,值存 plugins/<id>/settings.json,写路径按清单 key+类型校验);声明式浮窗(windows 同白名单:标题/位置/尺寸/字段,挂全局层 `.plugin-layer`,可拖拽可关闭、位置存 localStorage);两种内容形态——fields 复用字段白名单(不要求 trusted)、data 按 `dataSource` 调插件路由渲染键值表(仅 trusted 可达);声明式斜杠命令(触发词 + webCommands 具名导出,主进程执行、结果回插输入框,只收清单已声明 trigger);「完全信任」后 frontend.mjs(经 GET /api/plugins/:id/frontend.mjs 加载,仅 trusted 返回 text/javascript);
+- **挂载层**:`.plugin-layer`(`position:fixed; inset:0; pointer-events:none`,子元素各自 `auto`)是插件自有界面与浮窗的统一落脚点;对外契约是 `[data-plugin-layer]` 属性而非类名,插件不必 querySelector 猜 DOM。浮窗定位以该层 getBoundingClientRect 为基准换算百分比,层 ref 未接上时退回视口尺寸(拖动仍可用,不静默失效);
 - **安全模型**:插件与主进程同权(似 Obsidian 社区插件),显式启用、不自动安装/更新;trusted 是单一总闸——未信任插件的 routes/frontend.mjs 在装载期/端点双重拒绝,renderer 永不执行未信任用户 JS;开关带「与主进程/渲染进程同权,仅信任自己安装的插件」确认;
 - **热重载**:切换启用/信任时重新扫描 + 原生 import(URL 带随机 query 防 Node 模块缓存——jiti/进程内缓存实测改文件后仍返回旧代码);
-- **指南与示例**:docs/plugin-development.md;examples/plugins/dice(掷骰子)、examples/plugins/inspire(灵感笔,测试插件)。
+- **指南与示例**:docs/plugin-development.md;examples/plugins/dice(掷骰子)、examples/plugins/inspire(灵感笔,测试插件)、examples/plugins/balance(浮窗:data + fields 两种形态)。
 
 ## 10. 外部命令与 shell 方言(2026-09,0.0.6)
 

@@ -240,6 +240,9 @@
   justify-content: center;
   background: var(--bg);
 }
+/* 浮窗展项:层被上面的 transform 关进格子,但格子里内容居中会挤压 ——
+   让层自己铺满格子,窗按声明的百分比落位(与真实页面一致) */
+.uiroom-plugin-layer { display: block; }
 .uiroom-missing {
   padding: var(--sp-4);
   color: var(--red);

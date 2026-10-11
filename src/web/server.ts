@@ -29,7 +29,8 @@ import {
 	setCurrentChapter,
 	updateChapter,
 } from "../book-manager.ts";
-import { getPluginFrontendPath, listPlugins, loadPlugins, readPluginSettings, removePlugin, writePluginEnabled, writePluginSettings, writePluginTrusted, type PluginRouteDef, type PluginRuntimeInfo, type PluginWebCommandHandler } from "../plugin-loader.ts";
+import { getPluginFrontendPath, listPlugins, loadPlugins, pluginExists, readPluginSettings, removePlugin, writePluginEnabled, writePluginSettings, writePluginTrusted, type PluginRouteDef, type PluginRuntimeInfo, type PluginWebCommandHandler } from "../plugin-loader.ts";
+import { MAX_PLUGIN_ZIP_BYTES, readPluginZip, writePluginFiles, type PluginZipImport } from "./plugin-zip.ts";
 import { getAgentDir, getBookDir, getThemesDir, getWriterDir, VERSION } from "../config.ts";
 import { atomicWriteFile } from "../atomic-write.ts";
 import {
@@ -791,6 +792,7 @@ export class WriterServer {
 			// plugins(插件管理:列表/启用开关/删除;装载在启动时,切换后重建会话;
 			//   settings/command 为字面段,与 :id 参数段(2 段)段数不同无冲突)
 			{ method: "GET", segments: ["plugins"], handler: (ctx) => this.handleGetPlugins(ctx) },
+			{ method: "POST", segments: ["plugins", "install"], handler: (ctx) => this.handlePostPluginInstall(ctx) },
 			{ method: "GET", segments: ["plugins", ":id", "frontend.mjs"], handler: (ctx) => this.handleGetPluginFrontend(ctx) },
 			{ method: "GET", segments: ["plugins", ":id", "settings"], handler: (ctx) => this.handleGetPluginSettings(ctx) },
 			{ method: "PUT", segments: ["plugins", ":id", "settings"], handler: (ctx) => this.handlePutPluginSettings(ctx) },
@@ -2469,6 +2471,35 @@ export class WriterServer {
 		// 装载结果变化 → 重建会话使插件工具生效(与 handleMcpReload 同款)
 		await this.reloadPluginRuntime();
 		this.send(ctx.res, 200, { ok: true, plugins: await listPlugins() });
+	}
+
+	/**
+	 * POST /api/plugins/install:multipart 单文件字段 file(zip)→ 安装插件。
+	 * 解包与校验在 readPluginZip(中文错误),id 取自 plugin.json;
+	 * 同 id 已存在时覆盖安装(先写暂存目录再原子换入,见 writePluginFiles)。
+	 * 安装成功后重载插件运行时,使新插件即时可启用。
+	 */
+	private async handlePostPluginInstall(ctx: RouteContext): Promise<void> {
+		const { buffer } = await this.readMultipartFile(ctx.req, "file", {
+			limit: MAX_PLUGIN_ZIP_BYTES,
+			tooLargeMessage: `插件 zip 超过 ${MAX_PLUGIN_ZIP_BYTES / 1024 / 1024}MB`,
+		});
+		let parsed: PluginZipImport;
+		try {
+			parsed = await readPluginZip(buffer);
+		} catch (err) {
+			// readPluginZip 的校验错误(损坏/越界/缺 plugin.json/id 非法)统一 400
+			throw new HttpError(400, "bad_request", err instanceof Error ? err.message : String(err));
+		}
+		const overwritten = pluginExists(parsed.id);
+		try {
+			await writePluginFiles(parsed.id, parsed.files);
+		} catch (err) {
+			// 写盘失败(磁盘满/权限)照实报;旧版本已由 writePluginFiles 回滚保留
+			throw new HttpError(500, "io", err instanceof Error ? err.message : String(err));
+		}
+		await this.reloadPluginRuntime();
+		this.send(ctx.res, 200, { ok: true, id: parsed.id, overwritten, plugins: await listPlugins() });
 	}
 
 	/** DELETE /api/plugins/:id:删除插件目录(移除后重建会话;state 一并清理)。 */

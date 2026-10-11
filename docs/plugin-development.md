@@ -42,7 +42,17 @@ export default function myPlugin(pi) {
 }
 ```
 
-重启 pi-writer(Web/TUI)后,插件即被装载;`hello_world` 工具出现在对话工具列表。设置页「集成 → 插件」可查看/启停/删除。
+重启 pi-writer(Web/TUI)后,插件即被装载;`hello_world` 工具出现在对话工具列表。设置页「集成 → 插件」可查看/安装/启停/删除。
+
+### 安装插件(界面,无需手动放目录)
+
+设置页「集成 → 插件」卡片底部有「安装插件」按钮:选一个 `.zip` 即上传安装,不必手动把目录拷进 `~/.pi/writer/plugins/`。规则:
+
+- **压缩包根目录**(或单层子目录)下必须有 `plugin.json`;`plugin.json` 的 `id` 决定安装后的目录名。
+- 两种布局都接受:① `plugin.json` 直接在 zip 根;② 外面包一层目录(`my-plugin/plugin.json …`)—— 单层包裹会被剥掉。
+- **覆盖安装**:目标 id 已存在时直接替换(整份换掉,不保留旧版本独有的文件)。服务端先写暂存目录再换入,中途失败(磁盘满/权限)旧版本仍在,不会剩下半个目录。启用状态与「完全信任」不受影响。
+- 限额:zip ≤ 10MB、解压总量 ≤ 20MB、条目 ≤ 500;路径穿越(`../`、绝对路径、盘符)一律拒绝。
+- 安装后即可在列表里**启用**;**完全信任**仍需单独开启(见第 11 节)。
 
 ## 2. 清单字段(plugin.json)
 
@@ -193,6 +203,70 @@ examples/plugins/dice/
 
 **读取设置**:插件自己在主进程读 `settings.json`(示例见 dice 的 `readSettings()`);也可在 Web 命令 handler 里读。设置保存后 pi-writer 重建会话(工具即时用新值)。
 
+## 7.5 浮窗(声明式 windows)
+
+插件可以在界面上开浮窗,同为**声明式**:plugin.json 里写窗口长什么样,宿主按白名单渲染。
+
+- 浮窗挂在**全局层** `.plugin-layer` 上,盖在编辑页之上,不影响正文操作;可拖动、可关闭(关闭后左下角留一个胶囊可重开)。位置与开关状态记在浏览器本地,刷新后仍在。
+- **字段形态 (`contentKind: "fields"`,默认)** 复用设置页那套控件白名单 —— 插件只声明字段,渲染由宿主负责,**因此不要求插件被完全信任**。
+- **取数形态 (`contentKind: "data"`)** 由 `dataSource` 指定插件自己的路由路径(相对插件 id),宿主定时(30s)取数并渲染成键值表。路由由插件后端注册,**只有 trusted 插件才可达**。
+
+**声明**(`frontend.ui.windows`):
+
+```json
+{
+  "frontend": {
+    "ui": {
+      "settingsItems": [ /* 同上,可选 */ ],
+      "windows": [
+        {
+          "id": "balance",
+          "title": "账户余额",
+          "position": { "x": 78, "y": 72 },
+          "size": { "width": 260, "height": 220 },
+          "contentKind": "data",
+          "dataSource": "balance",
+          "closable": true,
+          "fields": []
+        },
+        {
+          "id": "watch",
+          "title": "余额提醒设置",
+          "position": { "x": 78, "y": 40 },
+          "contentKind": "fields",
+          "fields": [
+            { "key": "threshold", "label": "低于多少提醒", "type": "number", "default": 10 },
+            { "key": "pinned", "label": "常驻显示", "type": "boolean", "default": true }
+          ]
+        }
+      ]
+    }
+  }
+}
+```
+
+**字段语义**:
+
+| 键 | 说明 |
+|---|---|
+| `id` | 窗口标识,须合法(小写字母/数字/连字符/点/下划线),同插件内唯一;用于 localStorage 键与 React key |
+| `title` | 标题栏文字(必填,非空) |
+| `position` | 左上角位置,**百分比**(0-100),相对全局层;超出会被钳到该范围 |
+| `size` | `width` 像素、`height` 像素(作为 `max-height`);均被钳到 1-2000 |
+| `contentKind` | `"fields"`(默认)或 `"data"` |
+| `dataSource` | `contentKind: "data"` 时**必填**,插件路由路径(如 `balance` → `/api/plugins/<id>/balance`);不许含 `..`、不许绝对路径、不许带 `://` |
+| `fields` | 字段形态的字段列表,规则同 `settingsItems`(白名单类型);data 形态可省略 |
+| `closable` | 默认 `true`;设 `false` 则隐藏关闭按钮、不可关闭 |
+
+**校验失败即整条丢弃**(与设置项一致),不影响其他窗口或插件装载:`id`/`title` 非法、data 形态缺合法 `dataSource`、fields 形态无任何合法字段 → 该窗口不进列表。
+
+**取数返回体**归一化规则:
+- `{ "rows": [{ "label": "...", "value": "..." }] }` → 直接按序渲染;
+- 平铺对象 `{ "余额": "¥12.30", "状态": "正常" }` → 逐键成行;
+- 其他(数组 / 标量 / 嵌套)→ JSON 字符串化兜底,不猜结构。
+
+**完整示例**见 `examples/plugins/balance/`。
+
 ## 8. 装载与错误行为
 
 | 阶段 | 失败表现 |
@@ -254,7 +328,9 @@ export const webCommands = {
 
 ## 11. 完全信任(trusted)
 
-**默认安全模型**:插件只能声明式 UI(设置菜单 schema)+ 主进程逻辑(工具/webCommands/事件);renderer 绝不执行插件 JS。
+**默认安全模型**:插件只能声明式 UI(设置菜单 schema **+ 浮窗 schema**)+ 主进程逻辑(工具/webCommands/事件);renderer 绝不执行插件 JS。
+
+> 注意:声明式浮窗的 **fields 形态**不要求 trusted;但 **data 形态**要取数就得有后端路由,而路由仅 trusted 插件注册——所以真正要在浮窗里显示动态数据,仍需开启「完全信任」。非 trusted 插件开 data 形态浮窗时,窗口会正常显示、只是取数那步报错。
 
 **「完全信任」开启后**(设置页「集成 → 插件」每插件一个开关,需二次确认)解锁两种能力:
 
@@ -264,9 +340,11 @@ export const webCommands = {
 | 前端 JS | 入口 `frontend.mjs`(manifest `frontend.frontend` 可换路径),经 `GET /api/plugins/:id/frontend.mjs` 返回 `text/javascript`,**仅 trusted 插件可加载** |
 
 **前端 JS 约定**:
-- pi-writer 在设置页插件分类提供挂载点 `data-plugin-mount="<pluginId>"`;插件 JS 自我管理该节点下 DOM(示例:掷骰历史按钮);
+- 两个挂载点:**设置页插件分类**里每个插件有一张卡 `data-plugin-mount="<pluginId>"`(适合就近放设置相关的自定义界面);**全局层** `[data-plugin-layer]` 铺满视口、盖在编辑页之上(适合浮窗/常驻组件,自身 `pointer-events:none`,子元素自行开 `auto`)。插件 JS 自我管理挂载点下的 DOM(示例:掷骰历史按钮、灵感面板);
 - 插件 JS 调自己注册的后端路由(`/api/plugins/<id>/...`)取数据;
 - 插件前端失败静默(不影响主界面),错误可经插件自身 console 观察。
+
+> 注:声明式 `windows`(第 7.5 节)走的是宿主渲染器,**不需要** trusted;`frontend.mjs` 是你想自己接管 DOM 时才要的。
 
 **风险**:trusted 插件与 pi-writer **主进程/渲染进程同权**(可在渲染进程执行任意 JS,并凭同族 HTTP 端点访问本地数据)。开启=用户声明"我信任这个插件的作者"。**仅信任你自己安装的插件**。
 
@@ -286,7 +364,7 @@ A:工具在「注册成功但初始激活名单外」时可能不出现在系统
 A:间接可以——`registerTool` 的 execute 内读写书目录文件(插件与主进程同权),但**不要绕过 `world_update` 通道**直接改 world.json(会破坏结构校验与预览卡确认流)。写作建议:插件提供辅助工具(统计/生成/检索),世界文档变更交给 `world_update`。
 
 **Q:插件可以写 UI 吗?**
-A:本期(0.0.4)**不能**。renderer 不执行用户 JS 是安全红线,前端 UI 注入需声明式渲染协议(定义 → 注册 → 渲染),列入开发计划(见 `src/plugins.ts` 的 `PluginUiSpec` 预留类型);插件只能声明数据(`plugin.json`),由 pi-writer 受信任部分渲染。
+A:**可以,但只走声明式**(见第 7 / 7.5 节):插件在 `plugin.json` 里声明设置字段(`settingsItems`)与浮窗(`windows`),由 pi-writer 的受信任渲染器按白名单画出来——**renderer 不执行插件 JS**,所以这套对非 trusted 插件同样开放。要脱离声明式、自己画任意界面,才需要「完全信任」+ `frontend.mjs`。
 
 **Q:插件与 MCP 是什么关系?**
 A:两条独立通道——MCP 解决「接外部服务器」,插件解决「本地注册工具/事件/命令」。插件 = 受信任本地代码(不做沙箱);MCP = 远端服务器工具(经 `mcp.json`)。插件可以封装 MCP 客户端,但不在本期开放面。

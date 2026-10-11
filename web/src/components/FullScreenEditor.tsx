@@ -8,7 +8,8 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { CodeMirrorBox } from "../editor/CodeMirrorBox.tsx";
+import { CodeMirrorBox, type CodeMirrorBoxHandle } from "../editor/CodeMirrorBox.tsx";
+import { Lu } from "./Lu.tsx";
 import type { ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
 import { useMediaQuery } from "../useMediaQuery.ts";
@@ -50,6 +51,9 @@ export function FullScreenEditor({ client, slug, initialFile, title, onClose, cl
 	const [vim, setVim] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [words, setWords] = useState(0);
+	/** 撤销 / 重做可用的历史组数(工具条按钮置灰依据;0 = 置灰)。 */
+	const [history, setHistory] = useState<{ undo: number; redo: number }>({ undo: 0, redo: 0 });
+	const editorRef = useRef<CodeMirrorBoxHandle>(null);
 	/** 窄屏(≤900px):vim 键位不适合触屏,隐藏切换按钮(CodeMirrorBox 内部同样强制关闭)。 */
 	const narrow = useMediaQuery("(max-width: 900px)");
 	/** 脏缓冲退出确认条是否显示。 */
@@ -142,20 +146,20 @@ export function FullScreenEditor({ client, slug, initialFile, title, onClose, cl
 		onClose({ saved: true, file });
 	}
 
-	// Ctrl+S 保存;Esc 退出(仅非 vim 模式——vim 模式下 Esc 是编辑器键位,用退出按钮)
-	useEffect(() => {
-		const onKey = (e: KeyboardEvent) => {
-			if (e.ctrlKey && e.key === "s") {
-				e.preventDefault();
-				void save();
-			} else if (e.key === "Escape" && !vimRef.current) {
-				requestCloseRef.current();
-			}
-		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, []);
+// Ctrl+S 保存;Ctrl+Z / Ctrl+Shift+Z 撤销重做;Esc 退出(仅非 vim 模式——vim 模式下 Esc 是编辑器键位,用退出按钮)
+useEffect(() => {
+	const onKey = (e: KeyboardEvent) => {
+		if (e.ctrlKey && e.key === "s") {
+			e.preventDefault();
+			void save();
+		} else if (e.key === "Escape" && !vimRef.current) {
+			requestCloseRef.current();
+		}
+	};
+	window.addEventListener("keydown", onKey);
+	return () => window.removeEventListener("keydown", onKey);
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
 
 	return (
 		<div className={`fs-editor${closing ? " is-closing" : ""}`}>
@@ -191,6 +195,26 @@ export function FullScreenEditor({ client, slug, initialFile, title, onClose, cl
 					]}
 				/>
 				<span className="fs-stats">{words} 字{dirty ? " · 未保存" : " · 已保存"}</span>
+				{/* 撤销 / 重做:键盘用户走 Ctrl+Z / Ctrl+Shift+Z,这里给鼠标与触屏一条可见入口。
+				    窄屏没有修饰键(vim 开关也不渲染),这两个按钮是唯一的撤回方式。 */}
+				<button
+					className="fs-btn fs-undo"
+					disabled={history.undo === 0}
+					title="撤销 (Ctrl+Z)"
+					aria-label="撤销"
+					onClick={() => editorRef.current?.undo()}
+				>
+					<Lu icon="undo-2" size={14} />
+				</button>
+				<button
+					className="fs-btn fs-undo"
+					disabled={history.redo === 0}
+					title="重做 (Ctrl+Shift+Z)"
+					aria-label="重做"
+					onClick={() => editorRef.current?.redo()}
+				>
+					<Lu icon="redo-2" size={14} />
+				</button>
 				{!narrow && (
 					<button className={vim ? "fs-btn active" : "fs-btn"} onClick={() => setVim((v) => !v)} title="切换 vim 键位">
 							Vim
@@ -208,8 +232,10 @@ export function FullScreenEditor({ client, slug, initialFile, title, onClose, cl
 				{/* vim 切换经 key 重建编辑器(mount 时决定扩展);文档内容由受控 value 回填 */}
 				<CodeMirrorBox
 					key={vim ? "vim" : "plain"}
+					ref={editorRef}
 					value={text}
 					vimMode={vim}
+					onHistoryChange={setHistory}
 					onChange={(t) => {
 						setText(t);
 						// 与最近一次干净快照比较:初始化/vim 重建回填不误报脏

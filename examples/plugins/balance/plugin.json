@@ -1,0 +1,67 @@
+{
+  "id": "balance",
+  "name": "余额浮窗",
+  "version": "0.1.0",
+  "description": "示例插件:在全局浮窗里显示 DeepSeek / OpenRouter 账户余额。演示声明式 windows(非 trusted 也能开浮窗)+ trusted 后由插件路由取数两种形态。",
+  "backend": "index.mjs",
+  "frontend": {
+    "ui": {
+      "windows": [
+        {
+          "id": "balance",
+          "title": "账户余额",
+          "position": { "x": 78, "y": 72 },
+          "size": { "width": 260, "height": 220 },
+          "contentKind": "data",
+          "dataSource": "balance",
+          "fields": []
+        },
+        {
+          "id": "watch",
+          "title": "余额提醒设置",
+          "position": { "x": 78, "y": 40 },
+          "size": { "width": 260 },
+          "fields": [
+            {
+              "key": "threshold",
+              "label": "低于多少提醒",
+              "type": "number",
+              "default": 10,
+              "desc": "单位与账户币种一致。"
+            },
+            {
+              "key": "pinned",
+              "label": "常驻显示",
+              "type": "boolean",
+              "default": true
+            }
+          ]
+        }
+      ],
+      "settingsItems": [
+        {
+          "title": "余额浮窗",
+          "description": "选择要查询的供应商;API Key 在「模型」设置里配置,这里只选读哪一家。",
+          "fields": [
+            {
+              "key": "provider",
+              "label": "供应商",
+              "type": "select",
+              "default": "deepseek",
+              "options": [
+                { "value": "deepseek", "label": "DeepSeek" },
+                { "value": "openrouter", "label": "OpenRouter" }
+              ]
+            },
+            {
+              "key": "showCurrency",
+              "label": "显示币种单位",
+              "type": "boolean",
+              "default": true
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { CodeMirrorBox, type CodeMirrorBoxHandle, type CodeMirrorSelection } from "../editor/CodeMirrorBox.tsx";
+import { Lu } from "./Lu.tsx";
 import { resolveSaveOutcome } from "../workspace.ts";
 import type { ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
@@ -53,6 +54,8 @@ export function DraftWorkspace({
 	const [text, setText] = useState("");
 	const [status, setStatus] = useState<DraftStatus>("loading");
 	const [wordCount, setWordCount] = useState(0);
+	/** 撤销 / 重做可用的历史组数(工具栏按钮置灰依据;0 = 置灰)。 */
+	const [history, setHistory] = useState<{ undo: number; redo: number }>({ undo: 0, redo: 0 });
 	const [loadError, setLoadError] = useState<string | null>(null);
 	/** 其他窗口已保存本文件、本窗口有未保存修改时的冲突提示(不重载,避免覆盖本地编辑)。 */
 	const [externalConflict, setExternalConflict] = useState(false);
@@ -115,6 +118,9 @@ export function DraftWorkspace({
 				reportStatus("saved");
 				setExternalConflict(false);
 				lastMtimeRef.current = r.mtime; // 记录磁盘版本,保存时作 If-Match
+				// 换文件即换了一段历史:撤销栈由 CodeMirrorBox 自己在替换文档时清空,
+				// 这里同步把按钮态归零(否则会留着上一章的可撤销数)
+				setHistory({ undo: 0, redo: 0 });
 				const c = count(r.text);
 				setWordCount(c);
 				wordsCbRef.current?.(c);
@@ -170,7 +176,9 @@ export function DraftWorkspace({
 		onReload: () => setRetryKey((k) => k + 1),
 	});
 
-	// Ctrl+S 立即保存;Alt+E 聚焦编辑器(所有窗口 keydown,编辑器内外均可用)
+	// Ctrl+S 立即保存;Alt+E 聚焦编辑器(所有窗口 keydown,编辑器内外均可用)。
+	// Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y 由编辑器自己的键位表接管(编辑器有焦点时);
+	// 这里兜住焦点在纸面外的情况(如刚点完工具栏),避免「明明能撤却撤不动」。
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.ctrlKey && e.key === "s") {
@@ -179,6 +187,13 @@ export function DraftWorkspace({
 			} else if (e.altKey && e.key === "e") {
 				e.preventDefault();
 				editorRef.current?.focus();
+			} else if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "z") {
+				e.preventDefault();
+				if (e.shiftKey) editorRef.current?.redo();
+				else editorRef.current?.undo();
+			} else if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "y") {
+				e.preventDefault();
+				editorRef.current?.redo();
 			}
 		};
 		window.addEventListener("keydown", onKey);
@@ -312,6 +327,7 @@ export function DraftWorkspace({
 					value={text}
 					onChange={handleChange}
 					onSelectionChange={handleSelectionChange}
+					onHistoryChange={setHistory}
 				/>
 				{/* 切章/首次加载:正文还是上一章内容,盖一层骨架说明「正在取新的」
 				    (审计 2026-09-30:此前只是状态胶囊变「加载中」,正文无声硬切) */}
@@ -326,6 +342,31 @@ export function DraftWorkspace({
 						</div>
 					</div>
 				)}
+			</div>
+			{/* 编辑区工具条:撤销 / 重做。键盘用户用 Ctrl+Z / Ctrl+Shift+Z(编辑器内建),
+			    这里给鼠标与触屏一条可见的入口 —— 手机端没有修饰键,此前完全无法撤回。
+			    无历史可撤时按钮置灰而不是隐藏,位置稳定不跳。 */}
+			<div className="d-tools">
+				<button
+					type="button"
+					className="d-tool"
+					disabled={history.undo === 0}
+					title="撤销 (Ctrl+Z)"
+					aria-label="撤销"
+					onClick={() => editorRef.current?.undo()}
+				>
+					<Lu icon="undo-2" size={14} />
+				</button>
+				<button
+					type="button"
+					className="d-tool"
+					disabled={history.redo === 0}
+					title="重做 (Ctrl+Shift+Z)"
+					aria-label="重做"
+					onClick={() => editorRef.current?.redo()}
+				>
+					<Lu icon="redo-2" size={14} />
+				</button>
 			</div>
 		</aside>
 	);

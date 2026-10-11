@@ -342,6 +342,17 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .d-loading { position: absolute; inset: 0; z-index: 2; background: var(--bg); animation: fade-in var(--dur-fast) var(--ease-out); }
 /* 正文阅读宽度:纸张卡片本身已固定 728,编辑器铺满卡内(窄屏自动收窄) */
 .d-body .cm-editor { max-width: 100%; margin: 0 auto; }
+/* 编辑区工具条:撤销 / 重做。贴右下角,尺寸与纸张头部的图标按钮同族
+   (34×34 命中区、圆角、无历史可撤时降到 faint 并禁用) */
+.d-tools { flex: none; display: flex; justify-content: flex-end; gap: 6px; padding: 2px 10px 8px; }
+.d-tool {
+  width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.d-tool:hover:not(:disabled) { color: var(--amber); border-color: var(--line); background: var(--hover-tint); }
+.d-tool:disabled { color: var(--faint); cursor: default; opacity: 0.5; }
 /* 底部状态条:mono 细条 */
 /* 加载错误/冲突提示框(原硬编码内联样式收敛为 CSS 类) */
 .d-error {
@@ -1159,6 +1170,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .notice { font-size: 12px; padding: 8px 12px; border-radius: var(--r-md); line-height: 1.6; display: flex; align-items: center; gap: 10px; animation: fade-up var(--dur-base) var(--ease-out); }
 .notice.err { color: var(--red); border: 1px solid var(--red-tint-strong); background: var(--red-tint); }
 .notice.warn { color: var(--amber); border: 1px solid var(--amber-tint-strong); background: var(--amber-tint); }
+.notice.ok { color: var(--green); border: 1px solid var(--green-tint-strong); background: var(--green-tint); }
 /* 中性信息(缓存命中徽标):只用既有 token,不新增主题键(themes 测试强约束) */
 .notice.info { color: var(--faint); border: 1px solid transparent; }
 .notice-action { flex-shrink: 0; margin-left: auto; font-size: 12px; padding: 3px 10px; }
@@ -1260,6 +1272,9 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .fs-btn { font-size: 12px; color: var(--muted); padding: 5px 10px; border-radius: var(--r-sm); transition: color var(--dur-fast) var(--ease-out); }
 .fs-btn:hover { color: var(--ink); background: var(--hover-tint); }
 .fs-btn.active { color: var(--amber); }
+.fs-btn:disabled { color: var(--faint); opacity: 0.5; cursor: default; }
+/* 撤销 / 重做是图标按钮:收窄横向内边距,与旁边的文字按钮同高 */
+.fs-undo { display: inline-flex; align-items: center; justify-content: center; padding: 5px 7px; }
 .fs-notice { margin: 8px 20px 0; }
 .fs-body { flex: 1; min-height: 0; padding: 16px 28px; }
 .fs-confirm { flex: none; display: flex; align-items: center; justify-content: center; gap: 14px; padding: 14px; border-top: 1px solid var(--line); background: var(--bg-elev); }
@@ -2965,6 +2980,8 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .s-plugin-id { font-size: 11px; color: var(--faint); }
 .s-plugin-desc { font-size: 12px; color: var(--muted); margin-top: 4px; line-height: 1.6; }
 .s-plugin-err { font-size: 12px; color: var(--red); margin-top: 4px; word-break: break-all; }
+/* 安装插件行(按钮 + 说明;列表下方一条,不单独成卡) */
+.s-plugin-install { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
 
 /* ---- 插件设置菜单(ps-*,声明式 FieldRenderer)---- */
 .ps-body { padding: 12px 4px 4px; }
@@ -2988,6 +3005,57 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .s-plugin-trust-warn {
   font-size: 12px; color: var(--ink-2); line-height: 1.6; margin-bottom: 8px;
 }
+
+/* ---- 插件浮窗(pw-*,声明式 windows 渲染到全局层)---- */
+/* 全局层:铺满视口但不吃点击(子元素各自开 auto),浮窗/插件自由渲染都落在这里 */
+.plugin-layer { position: fixed; inset: 0; pointer-events: none; z-index: 60; }
+
+.pw {
+  position: absolute; pointer-events: auto;
+  width: 260px; min-width: 180px; max-width: min(420px, 92vw);
+  background: var(--bg-elev); border: 1px solid var(--line-strong);
+  border-radius: var(--r-md); box-shadow: var(--shadow-3);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.pw-bar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 8px 7px 11px; background: var(--bg-elev-2);
+  border-bottom: 1px solid var(--line); cursor: grab; user-select: none;
+  touch-action: none;
+}
+.pw-bar:active { cursor: grabbing; }
+.pw-title { font-size: 12px; font-weight: 500; color: var(--ink); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pw-from { font-size: 11px; color: var(--muted); flex: none; max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pw-close {
+  flex: none; width: 20px; height: 20px; line-height: 1; padding: 0;
+  background: none; border: none; color: var(--muted); cursor: pointer;
+  font-size: 15px; border-radius: var(--r-sm);
+}
+.pw-close:hover { color: var(--ink); background: var(--line); }
+.pw-body { padding: 10px 12px; overflow-y: auto; }
+
+.pw-fields { display: flex; flex-direction: column; gap: 8px; }
+.pw-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.pw-field-label { font-size: 12px; color: var(--ink-2); flex: 1; min-width: 0; }
+.pw-field .s-input-short { width: 74px; }
+.pw-field textarea.s-input { min-height: 44px; resize: vertical; }
+
+.pw-rows { display: flex; flex-direction: column; gap: 6px; }
+.pw-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 12px; }
+.pw-row-label { color: var(--muted); flex: none; }
+.pw-row-value { color: var(--ink); font-weight: 500; text-align: right; word-break: break-all; }
+.pw-loading, .pw-err { font-size: 12px; color: var(--muted); }
+.pw-err { color: var(--err-soft); }
+
+/* 关掉后的重新打开胶囊:贴左下,不挡正文 */
+.pw-chip {
+  position: absolute; left: 14px; bottom: 14px; pointer-events: auto;
+  padding: 5px 12px; font-size: 12px; cursor: pointer;
+  background: var(--bg-elev); color: var(--ink-2);
+  border: 1px solid var(--line-strong); border-radius: var(--r-full);
+  box-shadow: var(--shadow-2);
+}
+.pw-chip:hover { color: var(--ink); border-color: var(--amber); }
 
 /* —— 左栏内容切换(章节 / 工作区)与工作区面板 —— */
 /* 位置:原来章节栏的顶上。工作区与章节列表是同一层级的两块内容,不是第五个页面 */

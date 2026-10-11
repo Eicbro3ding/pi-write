@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
 import type { PluginInfoDto } from "../types.ts";
@@ -7,6 +7,10 @@ import { ToggleSwitch } from "./ToggleSwitch.tsx";
 /**
  * 插件列表(设置页「集成」分类):显示名称/版本/描述/状态徽章/装载错误,
  * 操作 = 启用/禁用 + 完全信任(确认态)+ 删除(确认态)。状态变更即重建会话。
+ *
+ * 安装(zip 上传):卡片底部一个按钮,选好压缩包即上传安装,不必手动把目录
+ * 拷进 ~/.pi/writer/plugins/。同 id 已存在时覆盖安装(服务端先写暂存目录再换入,
+ * 中途失败旧版本保留),失败给中文原因。
  *
  * 边界:插件与主进程同权(似 Obsidian/酒馆社区插件);「完全信任」额外解锁
  * 插件后端自定义路由 + 前端 JS(renderer 执行插件代码),开启需二次确认。
@@ -20,6 +24,12 @@ export function PluginList({ client, onChanged }: { client: ApiClient; onChanged
 	/** 正在确认信任的插件 id(null = 无;点击「完全信任」开关后弹确认)。 */
 	const [confirmTrust, setConfirmTrust] = useState<string | null>(null);
 	const [rowErr, setRowErr] = useState<string | null>(null);
+	/** 安装进行中(zip 上传与解包)。 */
+	const [installing, setInstalling] = useState(false);
+	/** 安装结果提示(成功/失败都走这里,中文)。 */
+	const [installMsg, setInstallMsg] = useState<{ ok: boolean; text: string } | null>(null);
+	/** 隐藏的文件选择器(底部「安装插件」按钮触发)。 */
+	const fileRef = useRef<HTMLInputElement>(null);
 
 	const load = () =>
 		client
@@ -33,6 +43,28 @@ export function PluginList({ client, onChanged }: { client: ApiClient; onChanged
 	useEffect(() => {
 		void load();
 	}, [client]);
+
+	async function install(file: File) {
+		if (installing) return;
+		setInstalling(true);
+		setRowErr(null);
+		setInstallMsg(null);
+		try {
+			const { id, overwritten, plugins: list } = await client.installPlugin(file);
+			setPlugins(list);
+			setInstallMsg({
+				ok: true,
+				text: overwritten
+					? `已覆盖安装「${id}」旧版本文件已替换。启用状态与「完全信任」保持不变。`
+					: `已安装「${id}」。在下方列表里启用它(如需后端路由/前端 JS 再单独开「完全信任」)。`,
+			});
+			onChanged?.();
+		} catch (e) {
+			setInstallMsg({ ok: false, text: `安装失败: ${friendlyError(e)}` });
+		} finally {
+			setInstalling(false);
+		}
+	}
 
 	async function toggleEnabled(p: PluginInfoDto) {
 		if (busyId) return;
@@ -88,7 +120,7 @@ export function PluginList({ client, onChanged }: { client: ApiClient; onChanged
 				</div>
 			) : plugins.length === 0 ? (
 				<div className="s-empty-row">
-					<span className="s-val muted">无插件。将插件目录放入 ~/.pi/writer/plugins/&lt;id&gt;/(含 plugin.json 与入口 index.mjs)。</span>
+					<span className="s-val muted">无插件。点下方「安装插件」选一个 .zip,或手动放入 ~/.pi/writer/plugins/&lt;id&gt;/(含 plugin.json 与入口 index.mjs)。</span>
 				</div>
 			) : (
 				<div className="s-plugin-list">
@@ -160,6 +192,25 @@ export function PluginList({ client, onChanged }: { client: ApiClient; onChanged
 					))}
 				</div>
 			)}
+			{/* 安装:隐藏文件框 + 底部按钮(上传插件 zip,系统原生选择器选 .zip) */}
+			<div className="s-plugin-install">
+				<input
+					ref={fileRef}
+					type="file"
+					accept=".zip,application/zip"
+					style={{ display: "none" }}
+					onChange={(e) => {
+						const f = e.target.files?.[0];
+						if (f) void install(f);
+						e.target.value = "";
+					}}
+				/>
+				<button type="button" className="btn-ghost" disabled={installing} onClick={() => fileRef.current?.click()}>
+					{installing ? "安装中…" : "安装插件"}
+				</button>
+				<span className="s-note-inline">选一个插件压缩包(.zip),不必手动放进插件目录</span>
+			</div>
+			{installMsg && <div className={`notice ${installMsg.ok ? "" : "err"}`}>{installMsg.text}</div>}
 			{rowErr && <div className="notice err">{rowErr}</div>}
 		</>
 	);

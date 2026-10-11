@@ -83,6 +83,10 @@
   .paper-zone { padding-bottom: calc(var(--m-composer-h, 66px) + env(safe-area-inset-bottom)); }
   .paper-surface .d-body { padding: 0 20px; }
   .paper-surface .d-body .cm-content { padding: 22px 0; }
+  /* 撤销/重做:触屏没有 Ctrl+Z,这是唯一的撤回入口 —— 命中区放大到 34×34,
+     并给底部留出输入条的空白(与 .paper-zone 的 padding-bottom 同源,不叠加) */
+  .paper-surface .d-tools { padding: 6px 20px 10px; }
+  .paper-surface .d-tool { width: 34px; height: 34px; }
   /* 顶部诊断条贴边(桌面是卡片内浮出的) */
   .paper-zone > .notice { margin: 8px 12px 0; }
 

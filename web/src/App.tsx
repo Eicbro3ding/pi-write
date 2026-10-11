@@ -3,6 +3,7 @@ import { ApiClient } from "./api/client.ts";
 import { useLibrary } from "./library.ts";
 import { useExitPresence } from "./use-exit-presence.ts";
 import { syncPluginScripts } from "./plugin-scripts.ts";
+import { PluginWindows, usePluginWindows } from "./components/PluginWindows.tsx";
 import { IconEdit, IconGear, IconGlobe, IconStage } from "./components/Icons.tsx";
 import { Lu } from "./components/Lu.tsx";
 import { SetupWizard } from "./components/SetupWizard.tsx";
@@ -453,6 +454,10 @@ export function App() {
 		};
 	}, [client, setupPhase]);
 
+	// 声明式浮窗:插件在 plugin.json 里声明的 windows 渲染到全局层。
+	// 与上面同一份插件列表(30s 对账 + 状态变化即时刷新)。
+	const { windows: pluginWindows, layerRef: pluginLayerRef } = usePluginWindows(client, setupPhase === "done");
+
 	// 首启:向导独占渲染,主界面四页尚未挂载——完成后才挂载,WritePage 的挂载
 	// 效应会拉书列表并自动打开第一本书(向导建的书记得一进去就打开)。
 	if (setupPhase === "checking") return <div className="wz-boot" />;
@@ -645,6 +650,13 @@ export function App() {
 							appVersion={appVersion}
 						/>
 					</section>
+			</div>
+			{/* 插件全局层:浮窗与 trusted 插件自由渲染的落脚点。position:fixed 覆盖全屏,
+			    自身 pointer-events:none(不挡下层的点击),子元素各自开 auto。
+			    data-plugin-layer 是给 frontend.mjs 的稳定挂载契约 —— 插件不必再
+			    querySelector 猜 DOM,直接往 [data-plugin-layer] 里塞即可。 */}
+			<div className="plugin-layer" data-plugin-layer ref={pluginLayerRef}>
+				<PluginWindows plugins={pluginWindows} layerRef={pluginLayerRef} />
 			</div>
 			{/* 重运行形态:覆盖层叠加在已挂载页面上,不打断流式状态;建书后刷新书库列表 */}
 			{wizardPresence.mounted && (

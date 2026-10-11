@@ -648,6 +648,19 @@ export class ApiClient {
 		return r.plugins;
 	}
 
+	/**
+	 * 安装插件 zip(multipart 字段 file)→ 插件 id、是否覆盖了旧版本、最新列表。
+	 * FormData 不能带手动 content-type 头(fetch 自动设 boundary),与 importBook 一样单独 fetch。
+	 * 同 id 已存在时服务端覆盖安装(overwritten=true),不再是错误。
+	 */
+	async installPlugin(file: File): Promise<{ id: string; overwritten: boolean; plugins: PluginInfoDto[] }> {
+		const form = new FormData();
+		form.append("file", file, file.name);
+		const res = await fetch(`${this.baseUrl}/api/plugins/install`, { method: "POST", body: form });
+		if (!res.ok) throw await apiErrorFrom(res);
+		return (await res.json()) as { id: string; overwritten: boolean; plugins: PluginInfoDto[] };
+	}
+
 	/** 插件设置菜单:schema(清单声明)+ 当前值(settings.json;不存在 = 空对象)。 */
 	async getPluginSettings(id: string): Promise<{ schema: PluginSettingsItemDto[]; values: Record<string, unknown> }> {
 		return this.request<{ schema: PluginSettingsItemDto[]; values: Record<string, unknown> }>(

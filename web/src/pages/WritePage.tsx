@@ -1477,10 +1477,17 @@ export function WritePage({
 	/** 编剧输入框句柄(选中文本自动填入)。 */
 	const writerInputRef = useRef<InputBarHandle>(null);
 
-	/** 选区同步(编剧「选中文本自动填入」):选中实际文本且编剧输入框为空时,
-	 *  预填选区上下文(文件 + 选中文本 + 请求前缀),用户接着补充请求即可发送;
-	 *  输入框非空不覆盖(不打断正在输入的请求)。 */
+	/**
+	 * 选区同步(编剧「选中文本自动填入」):选中实际文本且编剧输入框为空时,
+	 * 预填选区上下文(文件 + 选中文本 + 请求前缀),用户接着补充请求即可发送;
+	 * 输入框非空不覆盖(不打断正在输入的请求)。
+	 *
+	 * **手机端不做这件事**(2026-10-11 移除):触屏上「勾画一段文字」是长按/拖动手柄,
+	 * 本意往往是回看或复制,而预填会在手指一松开就把输入条换成半句话——用户还没想好
+	 * 要问什么,输入条已经被占了位置,还得先删干净。桌面上鼠标选中是明确意图,保留。
+	 */
 	function handleSelectionChange(sel: TextSelectionSnapshot | null) {
+		if (isPhone) return;
 		if (!sel || sel.from === sel.to || sel.text.trim().length === 0) return;
 		const fileLabel = sel.file.replace(/^draft\//, "");
 		writerInputRef.current?.prefillIfEmpty(`(选中 ${fileLabel} 的「${sel.text}」)请帮我处理这段——`);

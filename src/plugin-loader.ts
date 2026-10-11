@@ -23,7 +23,7 @@ import { pathToFileURL } from "node:url";
 import { getWriterDir } from "./config.ts";
 import { atomicWriteFile } from "./atomic-write.ts";
 import type { ExtensionFactory } from "./pi-adapter/index.ts";
-import type { PluginManifest, PluginSettingsFieldSpec, PluginSettingsFieldType, PluginSettingsItemSpec, PluginSlashCommandSpec, PluginUiSpec } from "./plugins.ts";
+import type { PluginManifest, PluginSettingsFieldSpec, PluginSettingsFieldType, PluginSettingsItemSpec, PluginSlashCommandSpec, PluginUiSpec, PluginWindowSpec } from "./plugins.ts";
 
 /** plugins 根目录(~/.pi/writer/plugins)。 */
 export function getPluginsDir(): string {
@@ -148,6 +148,64 @@ function checkSlashCommandSpec(raw: unknown): PluginSlashCommandSpec | null {
 	return { trigger: c.trigger.trim(), hint: c.hint.trim() };
 }
 
+/** 位置百分比钳制(0-100;非数/缺失返回 undefined)。 */
+function clampPct(v: unknown): number | undefined {
+	if (typeof v !== "number" || !Number.isFinite(v)) return undefined;
+	return Math.min(100, Math.max(0, v));
+}
+
+/** 正尺寸钳制(1-2000px;非数/越界返回 undefined)。 */
+function clampSize(v: unknown): number | undefined {
+	if (typeof v !== "number" || !Number.isFinite(v)) return undefined;
+	return Math.min(2000, Math.max(1, Math.round(v)));
+}
+
+/** dataSource 合法性:相对路径片段(不含 .. / 不以 / 开头 / 无协议)。 */
+function isValidDataSource(s: string): boolean {
+	if (s.length === 0 || s.length > 128) return false;
+	if (s.startsWith("/") || s.includes("..") || s.includes("://")) return false;
+	return /^[a-z0-9][a-z0-9-_.\/]*$/i.test(s);
+}
+
+/**
+ * 浮窗声明校验:fields 至少一条;contentKind=data 时必须有合法 dataSource
+ * (取数只能走插件自己的路由,不放开任意 URL)。非法逐条丢弃,不阻塞整个插件。
+ */
+function checkWindowSpec(raw: unknown): PluginWindowSpec | null {
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+	const w = raw as Record<string, unknown>;
+	if (typeof w.id !== "string" || !isValidSettingsKey(w.id)) return null;
+	if (typeof w.title !== "string" || w.title.trim().length === 0) return null;
+	const contentKind = w.contentKind === "data" ? "data" : "fields";
+	let fields: PluginSettingsFieldSpec[] = [];
+	if (Array.isArray(w.fields)) {
+		fields = w.fields.map(checkFieldSpec).filter((f): f is PluginSettingsFieldSpec => f !== null);
+	}
+	let dataSource: string | undefined;
+	if (contentKind === "data") {
+		if (typeof w.dataSource !== "string" || !isValidDataSource(w.dataSource)) return null;
+		dataSource = w.dataSource;
+	} else if (fields.length === 0) {
+		// fields 形态必须有字段;data 形态才允许空 fields
+		return null;
+	}
+	const px = typeof w.position === "object" && w.position !== null ? (w.position as Record<string, unknown>) : null;
+	const x = clampPct(px?.x);
+	const y = clampPct(px?.y);
+	const sz = typeof w.size === "object" && w.size !== null ? (w.size as Record<string, unknown>) : null;
+	const width = clampSize(sz?.width);
+	const height = clampSize(sz?.height);
+	return {
+		id: w.id,
+		title: w.title.trim(),
+		...(x !== undefined && y !== undefined ? { position: { x, y } } : {}),
+		...(width !== undefined || height !== undefined ? { size: { ...(width !== undefined ? { width } : {}), ...(height !== undefined ? { height } : {}) } } : {}),
+		fields,
+		...(contentKind === "data" ? { contentKind: "data" as const, dataSource } : {}),
+		...(w.closable === false ? { closable: false } : {}),
+	};
+}
+
 /** frontend 声明校验:字段级白名单(非法项丢弃,不阻塞整个插件)。 */
 function checkFrontend(raw: unknown): PluginManifest["frontend"] | undefined {
 	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
@@ -159,10 +217,16 @@ function checkFrontend(raw: unknown): PluginManifest["frontend"] | undefined {
 	}
 	if (typeof f.ui === "object" && f.ui !== null) {
 		const ui = f.ui as Record<string, unknown>;
+		const uiOut: PluginUiSpec = {};
 		if (Array.isArray(ui.settingsItems)) {
 			const items = ui.settingsItems.map(checkSettingsItem).filter((i): i is NonNullable<PluginUiSpec["settingsItems"]>[number] => i !== null);
-			if (items.length > 0) out.ui = { settingsItems: items };
+			if (items.length > 0) uiOut.settingsItems = items;
 		}
+		if (Array.isArray(ui.windows)) {
+			const windows = ui.windows.map(checkWindowSpec).filter((w): w is PluginWindowSpec => w !== null);
+			if (windows.length > 0) uiOut.windows = windows;
+		}
+		if (Object.keys(uiOut).length > 0) out.ui = uiOut;
 	}
 	// 前端 JS 入口:仅收 .mjs 后缀的相对文件名(防指向插件目录外;缺省 frontend.mjs)
 	if (typeof f.frontend === "string" && /^[a-z0-9][a-z0-9-_.]*\.mjs$/i.test(f.frontend) && !f.frontend.includes("/")) {
@@ -401,4 +465,9 @@ export async function removePlugin(id: string): Promise<void> {
 	if (!dir.startsWith(root + sep)) throw new Error("插件路径逃逸,拒绝删除");
 	if (!existsSync(dir)) throw new Error(`插件不存在: ${id}`);
 	await rm(dir, { recursive: true, force: true });
+}
+
+/** 插件是否已存在(安装前判断是全新安装还是覆盖;web/plugin-zip.ts 安装前调用)。 */
+export function pluginExists(id: string): boolean {
+	return isValidPluginId(id) && existsSync(join(getPluginsDir(), id));
 }

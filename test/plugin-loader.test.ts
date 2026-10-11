@@ -227,6 +227,103 @@ describe("frontend 声明校验(字段级白名单)", () => {
 	});
 });
 
+describe("windows 浮窗声明校验", () => {
+	it("fields 形态:合法窗口透传,字段类型非法则丢弃该字段;无字段的 fields 窗口丢弃", async () => {
+		writePlugin("win", {
+			manifest: {
+				frontend: {
+					ui: {
+						windows: [
+							{
+								id: "ok",
+								title: "余额",
+								position: { x: 78, y: 72 },
+								size: { width: 260 },
+								fields: [
+									{ key: "threshold", label: "阈值", type: "number", default: 10 },
+									{ key: "bad", label: "坏", type: "color_picker" },
+								],
+							},
+							{ id: "nofields", title: "空", fields: [] },
+							{ id: "notitle", fields: [{ key: "a", label: "A", type: "string" }] },
+						],
+					},
+				},
+			},
+		});
+		const list = await listPlugins();
+		const wins = list[0].frontend?.ui?.windows ?? [];
+		expect(wins).toHaveLength(1);
+		expect(wins[0]).toMatchObject({ id: "ok", title: "余额", position: { x: 78, y: 72 }, size: { width: 260 } });
+		expect(wins[0].fields).toEqual([{ key: "threshold", label: "阈值", type: "number", default: 10 }]);
+	});
+
+	it("data 形态:必须有合法 dataSource;含 .. / 绝对路径 / 协议的一律丢弃", async () => {
+		writePlugin("windata", {
+			manifest: {
+				frontend: {
+					ui: {
+						windows: [
+							{ id: "ok", title: "余额", contentKind: "data", dataSource: "balance", fields: [] },
+							{ id: "escape", title: "越界", contentKind: "data", dataSource: "../secret", fields: [] },
+							{ id: "abs", title: "绝对", contentKind: "data", dataSource: "/etc/passwd", fields: [] },
+							{ id: "proto", title: "协议", contentKind: "data", dataSource: "http://evil.test/x", fields: [] },
+							{ id: "nokind", title: "缺源", contentKind: "data", fields: [] },
+						],
+					},
+				},
+			},
+		});
+		const list = await listPlugins();
+		const wins = list[0].frontend?.ui?.windows ?? [];
+		expect(wins.map((w) => w.id)).toEqual(["ok"]);
+		expect(wins[0].dataSource).toBe("balance");
+		expect(wins[0].contentKind).toBe("data");
+	});
+
+	it("位置/尺寸钳制:越界百分比夹到 0-100,超大尺寸夹到 2000;closable:false 透传", async () => {
+		writePlugin("winit", {
+			manifest: {
+				frontend: {
+					ui: {
+						windows: [
+							{
+								id: "clamp",
+								title: "夹",
+								position: { x: 250, y: -40 },
+								size: { width: 99999, height: 12 },
+								closable: false,
+								fields: [{ key: "a", label: "A", type: "string" }],
+							},
+						],
+					},
+				},
+			},
+		});
+		const list = await listPlugins();
+		const w = list[0].frontend?.ui?.windows?.[0];
+		expect(w?.position).toEqual({ x: 100, y: 0 });
+		expect(w?.size).toEqual({ width: 2000, height: 12 });
+		expect(w?.closable).toBe(false);
+	});
+
+	it("windows 与 settingsItems 可共存,各自独立透传", async () => {
+		writePlugin("both", {
+			manifest: {
+				frontend: {
+					ui: {
+						settingsItems: [{ title: "设置", fields: [{ key: "p", label: "供应商", type: "string" }] }],
+						windows: [{ id: "w", title: "窗", fields: [{ key: "b", label: "常驻", type: "boolean" }] }],
+					},
+				},
+			},
+		});
+		const list = await listPlugins();
+		expect(list[0].frontend?.ui?.settingsItems).toHaveLength(1);
+		expect(list[0].frontend?.ui?.windows).toHaveLength(1);
+	});
+});
+
 describe("Web 命令注册表(webCommands 具名导出)", () => {
 	it("入口导出 webCommands 且 trigger 在 manifest 声明内 → 注册;未声明忽略", async () => {
 		writePlugin("cmd", {

@@ -24,6 +24,7 @@ import { FullScreenEditor } from "../components/FullScreenEditor.tsx";
 import { McpServerList } from "../components/McpServerList.tsx";
 import { PluginList } from "../components/PluginList.tsx";
 import { PluginSettings } from "../components/PluginSettings.tsx";
+import { PluginWindows, collectWindows } from "../components/PluginWindows.tsx";
 import { PromptModal } from "../components/PromptModal.tsx";
 import { ProviderList } from "../components/ProviderList.tsx";
 import { SHELL_CHOICES, ShellCards } from "../components/ShellCards.tsx";
@@ -88,6 +89,16 @@ export const SETTINGS_ENTRIES: readonly UIRoomEntry[] = [
 		symbols: ["PluginSettings"],
 		note: "按 plugin.json 声明的字段 schema 渲染的真表单(白名单:字符串 / 数字 / 开关 / 下拉 / 多行);这里用手写 PluginInfoDto 喂。假插件不在盘上(真读设置会 404),所以读方法挂住,只看 schema → 控件这一段。",
 		variants: ["标准", "多区块"],
+	},
+	{
+		id: "plugin-windows",
+		group: "settings",
+		title: "插件浮窗",
+		module: "components/PluginWindows.tsx",
+		symbols: ["PluginWindows", "usePluginWindows", "collectWindows", "normalizeRows"],
+		note: "声明式浮窗:插件在 plugin.json 的 ui.windows 里声明标题 / 位置 / 尺寸 / 字段,宿主渲染成全局层里的窗。fields 形态复用设置字段控件;data 形态按 dataSource 取数渲染键值表(仅 trusted 路由可达)。固定定位,已加框。",
+		variants: ["字段窗口", "取数窗口"],
+		frame: "viewport",
 	},
 	{
 		id: "export-panel",
@@ -421,6 +432,81 @@ function PluginSettingsMulti() {
 	return <PluginSettings client={stalled} plugin={PLUGIN_MULTI} />;
 }
 
+// —— 插件浮窗 ——
+
+/** 字段形态的窗口(提醒设置那种)。 */
+const PLUGIN_WIN_FIELDS: PluginInfoDto = {
+	id: "demo-balance",
+	name: "余额浮窗",
+	version: "0.1.0",
+	manifestDisabled: false,
+	enabled: true,
+	trusted: false,
+	error: null,
+	path: "/home/me/.pi/writer/plugins/demo-balance/index.mjs",
+	frontend: {
+		ui: {
+			windows: [
+				{
+					id: "watch",
+					title: "余额提醒设置",
+					position: { x: 30, y: 26 },
+					size: { width: 268 },
+					fields: [
+						{ key: "threshold", label: "低于多少提醒", type: "number", default: 10, desc: "单位与账户币种一致。" },
+						{ key: "pinned", label: "常驻显示", type: "boolean", default: true },
+					],
+				},
+			],
+		},
+	},
+};
+
+/** 取数形态的窗口(读插件路由渲染键值表);dataSource 指向不存在的插件,停在「读取中」。 */
+const PLUGIN_WIN_DATA: PluginInfoDto = {
+	id: "demo-balance",
+	name: "余额浮窗",
+	version: "0.1.0",
+	manifestDisabled: false,
+	enabled: true,
+	trusted: true,
+	error: null,
+	path: "/home/me/.pi/writer/plugins/demo-balance/index.mjs",
+	frontend: {
+		ui: {
+			windows: [
+				{
+					id: "balance",
+					title: "账户余额",
+					position: { x: 30, y: 26 },
+					size: { width: 268, height: 200 },
+					contentKind: "data",
+					dataSource: "balance",
+					fields: [],
+				},
+			],
+		},
+	},
+};
+
+function PluginWindowsFields() {
+	const ref = useRef<HTMLDivElement>(null);
+	return (
+		<div ref={ref} className="plugin-layer uiroom-plugin-layer">
+			<PluginWindows plugins={collectWindows([PLUGIN_WIN_FIELDS])} layerRef={ref} />
+		</div>
+	);
+}
+
+function PluginWindowsData() {
+	const ref = useRef<HTMLDivElement>(null);
+	return (
+		<div ref={ref} className="plugin-layer uiroom-plugin-layer">
+			<PluginWindows plugins={collectWindows([PLUGIN_WIN_DATA])} layerRef={ref} />
+		</div>
+	);
+}
+
 // —— 导出面板 ——
 
 /** 演示章节(与 BookDetail.chapters 同形);真实页面里由 WritePage 注入。 */
@@ -710,6 +796,10 @@ export const SETTINGS_SECTION: UIRoomSection = {
 	"plugin-settings": [
 		{ label: "标准", note: "五种控件各一", render: PluginSettingsStandard },
 		{ label: "多区块", note: "两个区块、长地址与令牌字段", render: PluginSettingsMulti },
+	],
+	"plugin-windows": [
+		{ label: "字段窗口", note: "fields 形态:数字 + 开关", render: PluginWindowsFields },
+		{ label: "取数窗口", note: "data 形态:等插件路由返回", render: PluginWindowsData },
 	],
 	"export-panel": [
 		{ label: "桌面", note: "440px 浮层,挂在按钮下方", render: ExportDesktop },

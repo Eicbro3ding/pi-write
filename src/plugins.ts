@@ -50,7 +50,38 @@ export interface PluginSettingsItemSpec {
 }
 
 /**
- * 插件 UI/菜单声明(2026-09 定稿:声明式渲染协议,renderer 零用户 JS)。
+ * 浮窗声明(2026-10-11 起:插件的第一个「非设置页」UI 类型)。
+ *
+ * 与 settingsItems 同一条哲学:插件只声明数据(标题/位置/尺寸/字段),由 pi-writer
+ * 的受信任渲染器画成浮窗;renderer 不执行任何用户 JS,所以非 trusted 插件也能开浮窗。
+ *
+ * 定位:浮窗一律挂在全局层(web 端 `.plugin-layer`),不挑当前在哪一页 ——
+ * 编辑页/舞台/世界书都能看到,这是它跟设置页卡片的根本区别。
+ */
+export interface PluginWindowSpec {
+	/** 窗口键(小写字母/数字/连字符;同插件内唯一,用于记住关闭/位置状态)。 */
+	id: string;
+	/** 标题栏文案。 */
+	title: string;
+	/** 初始位置百分比(0-100,相对视口左上;缺省右下角 82/78)。拖动后由前端本地记住。 */
+	position?: { x: number; y: number };
+	/** 初始尺寸(px;缺省 280×自动)。宽高各自可选,超视口由前端钳制。 */
+	size?: { width?: number; height?: number };
+	/** 窗口内展示的字段组(复用设置字段白名单 renderer)。 */
+	fields: PluginSettingsFieldSpec[];
+	/** 内容来源:声明式字段(缺省)/ 由插件路由取数渲染(见 windowData)。 */
+	contentKind?: "fields" | "data";
+	/**
+	 * contentKind=data 时的取数路径(相对 /api/plugins/<id>/);
+	 * 返回 { rows: [{label,value}] } 或纯对象 → 渲染成键值表。仅 trusted 插件的路由可达。
+	 */
+	dataSource?: string;
+	/** 是否可关闭(缺省 true);false = 常驻浮窗(仍有最小化入口)。 */
+	closable?: boolean;
+}
+
+/**
+ * 插件 UI/菜单声明(2026-09 定稿声明式协议;2026-10 增 windows 浮窗)。
  *
  * 原则:插件 UI 只能「声明数据」,由 pi-writer 服务端/前端用受信任的
  * 通用渲染器渲染(FieldRenderer + 现有 s-* 组件族);设置值存
@@ -60,6 +91,8 @@ export interface PluginSettingsItemSpec {
 export interface PluginUiSpec {
 	/** 设置页「集成」分类下的设置菜单项声明。 */
 	settingsItems?: PluginSettingsItemSpec[];
+	/** 全局浮窗声明(挂 `.plugin-layer`,非 trusted 插件亦可用)。 */
+	windows?: PluginWindowSpec[];
 }
 
 /** 插件清单(`~/.pi/writer/plugins/<id>/plugin.json`)。 */
