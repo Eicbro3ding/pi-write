@@ -597,27 +597,117 @@ function bookDirBase(): string | null {
 }
 
 /**
- * world_find —— 只读检索世界书条目(不改数据)。
+ * world_find —— 只读检索世界书条目(不改数据)。三种用法共用一个入口:
  *
- * 条目 id 是 world_update 各 id 类操作(delete_entry/set_status/advance_storyline/
- * 关系、约束等)的定位依据,但 LLM 无法直接列出 id——只能 read 整个 world.json
- * 自己找。本工具按标题/类型/触发词检索,返回 id 供后续 world_update 使用。
+ *  1. **定位**(默认,`detail: "brief"`):按标题/类型/触发词/子串过滤,回 id —— 供
+ *     `world_update` 的 id 类操作(delete_entry/set_status/关系、约束等)定位。LLM 列不出 id,
+ *     以前只能 read 整个 world.json 自己翻。
+ *  2. **阅读**(`detail: "full"`):同上过滤,但**附带条目正文**。此前没有任何工具能给到条目
+ *     正文(world_find 不给、read_style 只给采样),要正文就得把整本世界书读进上下文。
+ *  3. **核对**(`scan: "<一段正文>"`):把写好的正文递进来,工具扫出其中**被提及**的条目
+ *     (按各条自己的标题/触发词做子串命中),回正文 + 命中词,供模型核对「文里写的」与
+ *     「设定里的」有没有出入。
+ *
+ * 为什么核对要做成工具、而不是让模型自己抽词:模型会漏掉次要人物与地名。工具做的是
+ * **确定性穷举** —— 凡是登记过标题或触发词、又出现在这段文字里的条目,一条都跑不掉。
+ * 但工具只负责**捞候选 + 给命中依据**(命中了哪个词),相关性判断仍归模型。
+ *
+ * 扫描只认「标题 / 触发词」两种提法(不扫条目正文 —— 正文子串匹配噪声太大),且短于
+ * MIN_SCAN_TERM_LEN 的词不参与(单字会满篇乱撞)。
  */
+const MIN_SCAN_TERM_LEN = 2;
+/** scan / detail:full 单条正文的截断上限(够核对用,避免一次撑爆上下文)。 */
+const FIND_BODY_LIMIT = 2000;
+/** scan 模式最多回报的条目数(再多就不像「一段正文里的提及」了)。 */
+const SCAN_HIT_LIMIT = 20;
+
+/** 结果里单条目的摘要行(定位用)。 */
+function entryHeadline(e: WorldEntry): string {
+	return `- ${e.id} [${e.type}] ${e.title}${e.status !== "active" ? ` (${e.status})` : ""}`;
+}
+
+/** 正文截断:带明示,别让模型把读到的半截当成全文。 */
+function clipEntryBody(body: string): string {
+	const t = body.trim();
+	if (t.length <= FIND_BODY_LIMIT) return t;
+	return `${t.slice(0, FIND_BODY_LIMIT)}…(已截断,全文 ${t.length} 字)`;
+}
+
+/** 一条目的扫描词表:标题 + 触发词;去重,过短的不参与(见 MIN_SCAN_TERM_LEN)。 */
+function scanTermsOf(e: WorldEntry): string[] {
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const raw of [e.title, ...e.keys]) {
+		const t = raw.trim();
+		if (t.length < MIN_SCAN_TERM_LEN || seen.has(t)) continue;
+		seen.add(t);
+		out.push(t);
+	}
+	return out;
+}
+
+/**
+ * world_find 的 details 形状。两个返回分支**必须同形** —— 否则返回类型会被推断成互斥
+ * 联合,过不了 ToolDefinition 的 details 参数(与 read_style 两分支同形是同一个理由)。
+ */
+interface WorldFindDetails {
+	mode: string;
+	detail: string;
+	count: number;
+	found: Array<{ id: string; type: string; title: string; status: string; terms: string[] }>;
+}
+
 export const worldFindTool: ToolDefinition = defineTool({
 	name: "world_find",
 	label: "World Find",
-	description:
-		"只读检索世界书条目(不修改数据):按标题(精确)/类型/触发关键词过滤,返回条目的 id/type/title/status,供 world_update 的 id 类操作(delete_entry、set_status、关系、约束等)定位用。type 枚举: character/world/timeline/outline。",
+	description: [
+		"只读检索世界书条目(不改数据),三种用法:",
+		"①定位(默认)——按 title(精确)/type/keys(精确)/query(子串)过滤,回 id/type/title/status,供 world_update 的 id 类操作(delete_entry、set_status、关系、约束等)定位;type 枚举 character/world/timeline/outline。",
+		'②阅读——加 detail:"full",同上再回条目正文(此前没有任何工具能读到条目正文,要正文只能整本读 world.json)。',
+		'③核对——加 scan:"<一段正文>",工具扫出这段文字里被提及的条目(按各条的标题/触发词命中),回它们的正文与命中词。写完一章正文后用它核对设定有无出入,比凭记忆靠谱。给了 scan 时其余过滤参数忽略。',
+	].join(" "),
 	parameters: Type.Object({
 		title: Type.Optional(Type.String({ description: "按标题精确匹配(省略则不过滤)" })),
 		type: Type.Optional(Type.String({ description: "按类型过滤(character/world/timeline/outline)" })),
-		keys: Type.Optional(Type.Array(Type.String(), { description: "按触发关键词过滤(任一命中即匹配)" })),
+		keys: Type.Optional(Type.Array(Type.String(), { description: "按触发关键词精确匹配(任一命中即匹配)" })),
+		query: Type.Optional(Type.String({ description: "子串模糊匹配:标题或触发词里含该串即命中(英文不区分大小写);与 title/type/keys 是「与」关系" })),
+		detail: Type.Optional(Type.String({ enum: ["brief", "full"], description: "brief(默认)只回元信息;full 附带条目正文" })),
+		scan: Type.Optional(Type.String({ description: "一致性核对:传一段正文,扫出其中被提及的条目并回其正文与命中词;给了它则忽略其它过滤参数" })),
 		limit: Type.Optional(Type.Number({ description: "返回条数上限(1-100,默认 20)" })),
 	}),
 	async execute(_callId, params) {
 		const dir = bookDirBase();
 		if (!dir) throw new Error("world_find 未配置书目录");
 		const world = await ensureWorld(dir);
+		const limit = Math.max(1, Math.min(100, params.limit ?? 20));
+
+		// —— 核对模式:传进来一段文本,扫出其中被提及的条目 ——
+		const scanText = typeof params.scan === "string" ? params.scan : "";
+		if (scanText.trim().length > 0) {
+			const hits = world.entries
+				.map((e) => ({ entry: e, terms: scanTermsOf(e).filter((t) => scanText.includes(t)) }))
+				.filter((h) => h.terms.length > 0);
+			const shown = hits.slice(0, Math.min(limit, SCAN_HIT_LIMIT));
+			const blocks = shown.map((h) => {
+				const body = clipEntryBody(h.entry.body);
+				return `${entryHeadline(h.entry)}\n  命中:「${h.terms.join("」「")}」\n  正文: ${body || "(该条目没有正文)"}`;
+			});
+			// 零命中也要给出去路(护栏的一贯做法):光回一个「无」会让模型把「没扫到」
+			// 当成「一致」——那是两回事,不说清就会静默放过。
+			const header = hits.length > 0
+				? `这段文字里提及 ${hits.length} 条世界书条目${hits.length > shown.length ? `(只回前 ${shown.length} 条)` : ""} —— 请逐条核对:文中的描写与下面设定是否一致(身份、状态、关系、时间线、外貌);有出入就说明并按需用 world_update 更正。`
+				: "没有扫到任何已登记条目 —— 这不等于「一致」,只说明这段文字里没出现任何条目的标题或触发词(短于 2 字的标题不参与扫描)。若觉得该有,可再用 query 或标题片段复查一次。";
+			const details: WorldFindDetails = {
+				mode: "scan",
+				detail: "full",
+				count: hits.length,
+				found: shown.map((h) => ({ id: h.entry.id, type: h.entry.type, title: h.entry.title, status: h.entry.status, terms: h.terms })),
+			};
+			return { content: [{ type: "text", text: `${header}\n${blocks.join("\n")}` }], details };
+		}
+
+		// —— 过滤模式:定位(detail=brief)/ 阅读(detail=full) ——
+		const full = params.detail === "full";
 		let entries = world.entries;
 		if (params.title !== undefined && params.title.length > 0) {
 			entries = entries.filter((e) => e.title === params.title);
@@ -629,11 +719,22 @@ export const worldFindTool: ToolDefinition = defineTool({
 		if (keys.length > 0) {
 			entries = entries.filter((e) => keys.some((k) => e.keys.includes(k)));
 		}
-		const limit = Math.max(1, Math.min(100, params.limit ?? 20));
+		const query = (params.query ?? "").trim().toLowerCase();
+		if (query.length > 0) {
+			entries = entries.filter(
+				(e) => e.title.toLowerCase().includes(query) || e.keys.some((k) => k.toLowerCase().includes(query)),
+			);
+		}
 		const found = entries.slice(0, limit);
-		const lines = found.map(
-			(e) => `- ${e.id} [${e.type}] ${e.title}${e.status !== "active" ? ` (${e.status})` : ""}`,
+		const lines = found.map((e) =>
+			full ? `${entryHeadline(e)}\n  正文: ${clipEntryBody(e.body) || "(无)"}` : entryHeadline(e),
 		);
+		const details: WorldFindDetails = {
+			mode: "filter",
+			detail: full ? "full" : "brief",
+			count: entries.length,
+			found: found.map((e) => ({ id: e.id, type: e.type, title: e.title, status: e.status, terms: [] })),
+		};
 		return {
 			content: [
 				{
@@ -641,10 +742,7 @@ export const worldFindTool: ToolDefinition = defineTool({
 					text: `匹配 ${entries.length} 条${entries.length > found.length ? `,显示前 ${found.length}` : ""}:\n${lines.join("\n") || "(无)"}`,
 				},
 			],
-			details: {
-				count: entries.length,
-				found: found.map((e) => ({ id: e.id, type: e.type, title: e.title, status: e.status })),
-			},
+			details,
 		};
 	},
 });

@@ -499,6 +499,115 @@ describe("worldFindTool", () => {
 		setWorldUpdateBookDir(null);
 	});
 
+	/**
+	 * 种一本世界书:两个人物(各有触发词与正文)+ 一个够不着的地图条目。
+	 * 后面几组用例共用它 —— 造一份就够,免得每个用例各自铺一遍。
+	 */
+	async function seedWorld(): Promise<void> {
+		setWorldUpdateBookDir(tmp);
+		let world = createEmptyWorld();
+		world = applyWorldUpdate(world, { op: "upsert_entry", type: "character", title: "林婉", keys: ["婉姐"], body: "旧城书店的老板,左眼有一道疤。" });
+		world = applyWorldUpdate(world, { op: "upsert_entry", type: "character", title: "阿七", keys: ["小七"], body: "码头搬货的少年,话少。" });
+		world = applyWorldUpdate(world, { op: "upsert_entry", type: "world", title: "旧城地图", body: "三纵四横,河从城西过。" });
+		await saveWorld(tmp, world);
+	}
+
+	it("detail:full 附带条目正文(此前没有任何工具能读到条目 body)", async () => {
+		await seedWorld();
+		// 默认 brief 只给元信息 —— 正文一个字都不给
+		const brief = await runFind({ title: "林婉" });
+		expect(resultText(brief)).toContain("[character] 林婉");
+		expect(resultText(brief)).not.toContain("左眼");
+		// full 才把正文带出来
+		const full = await runFind({ title: "林婉", detail: "full" });
+		expect(resultText(full)).toContain("左眼有一道疤");
+		setWorldUpdateBookDir(null);
+	});
+
+	it("query 按子串匹配标题或触发词(记得住片段、记不住全名时也能找)", async () => {
+		await seedWorld();
+		// 标题片段
+		expect(resultText(await runFind({ query: "婉" }))).toContain("林婉");
+		// 触发词片段(「婉姐」里含「婉」,上面已覆盖);换一个只出现在触发词里的片段
+		expect(resultText(await runFind({ query: "小七" }))).toContain("阿七");
+		expect(resultText(await runFind({ query: "城地图" }))).toContain("旧城地图");
+		// 命中不了任何东西时不该无中生有
+		expect(resultText(await runFind({ query: "不存在片段" }))).toContain("匹配 0 条");
+		setWorldUpdateBookDir(null);
+	});
+
+	it("query 与 title/type 是「与」关系,不是「或」", async () => {
+		await seedWorld();
+		// 片段命中林婉,但类型限定人物之外 → 必须为空
+		expect(resultText(await runFind({ query: "婉", type: "world" }))).toContain("匹配 0 条");
+		expect(resultText(await runFind({ query: "婉", type: "character" }))).toContain("林婉");
+		setWorldUpdateBookDir(null);
+	});
+
+	it("scan:扫出正文里被提及的条目,回正文并点明命中了哪个词", async () => {
+		await seedWorld();
+		// 这段话提了「林婉」与「小七」(阿七的触发词),没提地图
+		const r = await runFind({ scan: "林婉推开门,小七跟在她身后,两人都没说话。" });
+		const t = resultText(r);
+		expect(t).toContain("林婉");
+		expect(t).toContain("命中:「林婉」");
+		expect(t).toContain("阿七");
+		expect(t).toContain("命中:「小七」");
+		// 正文被带出来 —— 这正是核对要用的东西
+		expect(t).toContain("左眼有一道疤");
+		expect(t).toContain("码头搬货的少年");
+		// 没提到的条目以及它的正文都不该出现
+		expect(t).not.toContain("旧城地图");
+		expect(t).not.toContain("三纵四横");
+		// 结果要以「核对指令」收尾,而不是把正文一倒了事
+		expect(t).toContain("逐条核对");
+		setWorldUpdateBookDir(null);
+	});
+
+	it("scan:零命中必须给出去路,不许让模型把「没扫到」当成「一致」", async () => {
+		await seedWorld();
+		const t = resultText(await runFind({ scan: "今天风很软,云压得很低。" }));
+		expect(t).toContain("没有扫到");
+		expect(t).toContain("不等于");
+		// 出路:换个方式再查一次
+		expect(t).toContain("query");
+		setWorldUpdateBookDir(null);
+	});
+
+	it("scan:短于 2 字的标题不参与扫描(单字会满篇乱撞)", async () => {
+		setWorldUpdateBookDir(tmp);
+		const world = applyWorldUpdate(createEmptyWorld(), { op: "upsert_entry", type: "world", title: "刀", body: "一柄旧刀。" });
+		await saveWorld(tmp, world);
+		// 「刀」是单字标题,不构成可靠提法 —— 命中它会带来大量误报
+		expect(resultText(await runFind({ scan: "他从袖里抽出刀,刀身雪亮。" }))).toContain("没有扫到");
+		// 但按标题精确找它仍然可以(短词只是不参与「扫描」)
+		expect(resultText(await runFind({ title: "刀" }))).toContain("[world] 刀");
+		setWorldUpdateBookDir(null);
+	});
+
+	it("scan / detail:full 对超长正文截断并明示(不让人以为读到的是全文)", async () => {
+		setWorldUpdateBookDir(tmp);
+		const long = "长".repeat(3000);
+		const world = applyWorldUpdate(createEmptyWorld(), { op: "upsert_entry", type: "character", title: "长文者", body: long });
+		await saveWorld(tmp, world);
+		const t = resultText(await runFind({ title: "长文者", detail: "full" }));
+		expect(t).toContain("已截断");
+		expect(t).toContain("全文 3000 字");
+		setWorldUpdateBookDir(null);
+	});
+
+	it("details 形状在 scan 与 filter 两种形态下同形(否则返回类型会塌成互斥联合)", async () => {
+		await seedWorld();
+		const scan = await runFind({ scan: "林婉站在门口。" });
+		const filter = await runFind({ type: "character" });
+		const keysOf = (d: unknown): string[] => Object.keys(d as Record<string, unknown>).sort();
+		expect(keysOf((scan as { details: unknown }).details)).toEqual(keysOf((filter as { details: unknown }).details));
+		expect(keysOf(((scan as { details: { found: unknown[] } }).details.found[0]))).toEqual(
+			keysOf(((filter as { details: { found: unknown[] } }).details.found[0])),
+		);
+		setWorldUpdateBookDir(null);
+	});
+
 	it("未配置书目录时报错", async () => {
 		setWorldUpdateBookDir(null);
 		await expect(runFind({ title: "x" })).rejects.toThrow("未配置书目录");
