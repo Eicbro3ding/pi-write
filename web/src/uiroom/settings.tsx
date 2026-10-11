@@ -24,7 +24,7 @@ import { FullScreenEditor } from "../components/FullScreenEditor.tsx";
 import { McpServerList } from "../components/McpServerList.tsx";
 import { PluginList } from "../components/PluginList.tsx";
 import { PluginSettings } from "../components/PluginSettings.tsx";
-import { PluginWindows, collectWindows } from "../components/PluginWindows.tsx";
+import { renderWindowEntry } from "../components/PluginWindows.tsx";
 import { Slot, bumpSlots } from "../components/Slot.tsx";
 import { registerEntry, registerSlot, unregisterOwner } from "../slots.ts";
 import { PromptModal } from "../components/PromptModal.tsx";
@@ -97,8 +97,8 @@ export const SETTINGS_ENTRIES: readonly UIRoomEntry[] = [
 		group: "settings",
 		title: "插件浮窗",
 		module: "components/PluginWindows.tsx",
-		symbols: ["PluginWindows", "usePluginWindows", "collectWindows", "normalizeRows"],
-		note: "声明式浮窗:插件在 plugin.json 的 ui.windows 里声明标题 / 位置 / 尺寸 / 字段,宿主渲染成全局层里的窗。fields 形态复用设置字段控件;data 形态按 dataSource 取数渲染键值表(仅 trusted 路由可达)。固定定位,已加框。",
+		symbols: ["usePluginWindows", "syncPluginWindows", "collectWindows", "renderWindowEntry", "normalizeRows"],
+		note: "声明式浮窗:插件在 plugin.json 的 ui.windows 里声明标题 / 位置 / 尺寸 / 字段,宿主渲染成全局层里的窗。浮窗是 overlay 槽位的一种条目 —— 声明被编译成纯数据条目注册,再由宿主渲染器 renderWindowEntry 画出来,与核心浮层共用一张表。fields 形态复用设置字段控件;data 形态按 dataSource 取数渲染键值表(仅 trusted 路由可达)。固定定位,已加框。",
 		variants: ["字段窗口", "取数窗口"],
 		frame: "viewport",
 	},
@@ -500,22 +500,51 @@ const PLUGIN_WIN_DATA: PluginInfoDto = {
 	},
 };
 
-function PluginWindowsFields() {
-	const ref = useRef<HTMLDivElement>(null);
+/**
+ * 声明式浮窗的展项(2026-10-11 槽位树合并后):浮窗不再是独立渲染路径,而是
+ * overlay 槽位的一种条目 —— 这里演示「声明 → 编译成条目 → 宿主渲染器画」这条链。
+ *
+ * 用**本地 demo 槽位**而不是真实 SLOT_OVERLAY:UI 房在跑着的应用里挂载,
+ * 往真 overlay 注册会盖掉宿主自己的浮窗。真实链路见 usePluginWindows()。
+ */
+function WindowDemo({ plugin, slotName }: { plugin: PluginInfoDto; slotName: string }) {
+	const [, force] = useState(0);
+	useEffect(() => {
+		try {
+			registerSlot({ name: slotName, kind: "list", description: "UI 房演示:声明式浮窗" });
+			const w = plugin.frontend?.ui?.windows?.[0];
+			if (w) {
+				registerEntry(slotName, {
+					id: `demo.window:${plugin.id}`,
+					owner: "uiroom",
+					order: 100,
+					render: { kind: "window", pluginId: plugin.id, pluginName: plugin.name, spec: w },
+				});
+			}
+			bumpSlots();
+			force((n) => n + 1);
+		} catch {
+			/* 重复挂载时已注册:忽略(展项不做健壮性示范) */
+		}
+		return () => {
+			unregisterOwner("uiroom");
+			bumpSlots();
+		};
+	}, [plugin.id, plugin.name, plugin.frontend?.ui?.windows, slotName]);
 	return (
-		<div ref={ref} className="plugin-layer uiroom-plugin-layer">
-			<PluginWindows plugins={collectWindows([PLUGIN_WIN_FIELDS])} layerRef={ref} />
+		<div className="plugin-layer uiroom-plugin-layer">
+			{/* 条目是纯数据,由宿主渲染器 renderWindowEntry 画成浮窗 */}
+			<Slot name={slotName} renderEntry={renderWindowEntry} fallback={<span className="ts">槽位空着</span>} />
 		</div>
 	);
 }
 
+function PluginWindowsFields() {
+	return <WindowDemo plugin={PLUGIN_WIN_FIELDS} slotName="uiroom.demo.window.fields" />;
+}
+
 function PluginWindowsData() {
-	const ref = useRef<HTMLDivElement>(null);
-	return (
-		<div ref={ref} className="plugin-layer uiroom-plugin-layer">
-			<PluginWindows plugins={collectWindows([PLUGIN_WIN_DATA])} layerRef={ref} />
-		</div>
-	);
+	return <WindowDemo plugin={PLUGIN_WIN_DATA} slotName="uiroom.demo.window.data" />;
 }
 
 // —— 槽位桥 ——

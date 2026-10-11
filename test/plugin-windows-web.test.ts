@@ -1,14 +1,17 @@
 /**
  * 插件浮窗(web/PluginWindows)的回归测试。
  *
- * 测两条纯逻辑,不碰 DOM:
+ * 测三条纯逻辑,不碰 DOM:
  *  - collectWindows:哪条插件/窗口该渲染(只收 enabled 且声明了 windows 的);
+ *  - syncPluginWindows:声明如何被编译成 overlay 槽位条目(槽位树合并的核心);
  *  - normalizeRows:插件路由返回体的归一化(rows 形式 / 平铺对象 / 标量兜底)。
  *
- * 这两处是浮窗里唯一有「判断」的地方,渲染部分交给实机截图验证。
+ * 渲染部分交给实机截图验证。
  */
-import { describe, expect, it } from "vitest";
-import { collectWindows, normalizeRows } from "../web/src/components/PluginWindows.tsx";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { collectWindows, normalizeRows, syncPluginWindows } from "../web/src/components/PluginWindows.tsx";
+import { listEntries, registerEntry, registerSlot, resetSlots } from "../web/src/slots.ts";
+import { declareShellSlots, SLOT_OVERLAY } from "../web/src/shell-slots.ts";
 import type { PluginInfoDto } from "../web/src/types.ts";
 
 /** 造一条插件 DTO(只填测试关心的字段)。 */
@@ -66,6 +69,74 @@ describe("collectWindows", () => {
 	it("空列表 / 无 windows 字段 → 空", () => {
 		expect(collectWindows([])).toEqual([]);
 		expect(collectWindows([plugin({ id: "x", frontend: {} })])).toEqual([]);
+	});
+});
+
+describe("syncPluginWindows(声明 → overlay 槽位条目)", () => {
+	beforeEach(() => {
+		resetSlots();
+		declareShellSlots();
+	});
+	afterEach(() => resetSlots());
+
+	it("把每个 window 声明注册成 overlay 槽位的纯数据条目", () => {
+		syncPluginWindows([
+			plugin({ id: "p1", frontend: { ui: { windows: [{ id: "w1", title: "窗一", fields: [] }] } } }),
+		]);
+		const entries = listEntries(SLOT_OVERLAY).filter((e) => e.owner === "__window__");
+		expect(entries).toHaveLength(1);
+		expect(entries[0].id).toBe("plugin.window:p1:w1");
+		const payload = entries[0].render as { kind: string; pluginId: string; spec: { title: string } };
+		expect(payload.kind).toBe("window");
+		expect(payload.pluginId).toBe("p1");
+		expect(payload.spec.title).toBe("窗一");
+	});
+
+	it("重复同步不累积:整批重注册,条目数保持等于声明数", () => {
+		const list = [plugin({ id: "p1", frontend: { ui: { windows: [{ id: "w1", title: "窗", fields: [] }] } } })];
+		syncPluginWindows(list);
+		syncPluginWindows(list);
+		syncPluginWindows(list);
+		expect(listEntries(SLOT_OVERLAY).filter((e) => e.owner === "__window__")).toHaveLength(1);
+	});
+
+	it("插件被禁用/删除后,其浮窗条目随之消失(不留孤儿)", () => {
+		syncPluginWindows([
+			plugin({ id: "goner", frontend: { ui: { windows: [{ id: "w", title: "旧窗", fields: [] }] } } }),
+			plugin({ id: "stayed", frontend: { ui: { windows: [{ id: "w", title: "留窗", fields: [] }] } } }),
+		]);
+		expect(listEntries(SLOT_OVERLAY).filter((e) => e.owner === "__window__")).toHaveLength(2);
+		// 第二次同步只剩 stayed(相当于 goner 被删)
+		syncPluginWindows([plugin({ id: "stayed", frontend: { ui: { windows: [{ id: "w", title: "留窗", fields: [] }] } } })]);
+		const ids = listEntries(SLOT_OVERLAY).filter((e) => e.owner === "__window__").map((e) => e.id);
+		expect(ids).toEqual(["plugin.window:stayed:w"]);
+	});
+
+	it("不干扰同槽位里别的条目(核心浮层 / 插件自有界面共存)", () => {
+		registerEntry(SLOT_OVERLAY, { id: "core.overlay.toast", owner: "core", order: 10, render: null });
+		syncPluginWindows([plugin({ id: "p1", frontend: { ui: { windows: [{ id: "w1", title: "窗", fields: [] }] } } })]);
+		syncPluginWindows([]);
+		const all = listEntries(SLOT_OVERLAY);
+		expect(all.map((e) => e.id)).toEqual(["core.overlay.toast"]);
+	});
+
+	it("浮窗条目排在核心浮层之后(order 100)", () => {
+		registerEntry(SLOT_OVERLAY, { id: "core.overlay.toast", owner: "core", order: 10, render: null });
+		syncPluginWindows([plugin({ id: "p1", frontend: { ui: { windows: [{ id: "w1", title: "窗", fields: [] }] } } })]);
+		const win = listEntries(SLOT_OVERLAY).find((e) => e.owner === "__window__");
+		expect(win?.order).toBe(100);
+	});
+
+	it("overlay 槽位未声明时抛错(声明 = 授权)", () => {
+		resetSlots(); // 只剩 root
+		expect(() => syncPluginWindows([plugin({ id: "p", frontend: { ui: { windows: [{ id: "w", title: "窗", fields: [] }] } } })])).toThrow(
+			/未声明/,
+		);
+	});
+
+	it("无浮窗声明的插件列表 → 槽位保持空", () => {
+		syncPluginWindows([]);
+		expect(listEntries(SLOT_OVERLAY).filter((e) => e.owner === "__window__")).toEqual([]);
 	});
 });
 

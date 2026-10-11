@@ -3,7 +3,7 @@ import { ApiClient } from "./api/client.ts";
 import { useLibrary } from "./library.ts";
 import { useExitPresence } from "./use-exit-presence.ts";
 import { syncPluginScripts } from "./plugin-scripts.ts";
-import { PluginWindows, usePluginWindows } from "./components/PluginWindows.tsx";
+import { renderWindowEntry, usePluginWindows } from "./components/PluginWindows.tsx";
 import { Slot, bumpSlots } from "./components/Slot.tsx";
 import { declareShellSlots, SLOT_NAV, SLOT_OVERLAY, SLOT_STATUS } from "./shell-slots.ts";
 import { registerEntry, unregisterOwner } from "./slots.ts";
@@ -457,9 +457,9 @@ export function App() {
 		};
 	}, [client, setupPhase]);
 
-	// 声明式浮窗:插件在 plugin.json 里声明的 windows 渲染到全局层。
-	// 与上面同一份插件列表(30s 对账 + 状态变化即时刷新)。
-	const { windows: pluginWindows, layerRef: pluginLayerRef } = usePluginWindows(client, setupPhase === "done");
+	// 声明式浮窗:插件在 plugin.json 里声明的 windows 被编译成 overlay 槽位条目
+	// (与核心浮层同一张表);与上面同一份插件列表(30s 对账 + 状态变化即时刷新)。
+	usePluginWindows(client, setupPhase === "done");
 
 	/**
 	 * 壳层槽位:声明一次(幂等),再把导航条目注册进去。
@@ -696,9 +696,10 @@ export function App() {
 			    自身 pointer-events:none(不挡下层的点击),子元素各自开 auto。
 			    data-plugin-layer 是给 frontend.mjs 的稳定挂载契约 —— 插件不必再
 			    querySelector 猜 DOM,直接往 [data-plugin-layer] 里塞即可。
-			    它是 overlay 槽位在宿主侧的渲染容器:槽位条目(浮窗、插件界面)落在这里。 */}
-			<div className="plugin-layer" data-plugin-layer ref={pluginLayerRef}>
-				<Slot name={SLOT_OVERLAY} fallback={<PluginWindows plugins={pluginWindows} layerRef={pluginLayerRef} />} />
+			    它是 overlay 槽位在宿主侧的渲染容器:槽位条目(浮窗、插件界面)落在这里。
+			    浮窗条目是纯数据,由 renderWindowEntry 这个宿主渲染器画。 */}
+			<div className="plugin-layer" data-plugin-layer>
+				<Slot name={SLOT_OVERLAY} renderEntry={renderWindowEntry} />
 			</div>
 			{/* 重运行形态:覆盖层叠加在已挂载页面上,不打断流式状态;建书后刷新书库列表 */}
 			{wizardPresence.mounted && (

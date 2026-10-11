@@ -3,6 +3,9 @@ import type { ApiClient } from "../api/client.ts";
 import type { PluginInfoDto, PluginSettingsFieldDto, PluginWindowDto } from "../types.ts";
 import { ToggleSwitch } from "./ToggleSwitch.tsx";
 import { Select } from "./Select.tsx";
+import { listEntries, registerEntry, unregisterEntry, unregisterOwner, type SlotEntry } from "../slots.ts";
+import { SLOT_OVERLAY } from "../shell-slots.ts";
+import { bumpSlots } from "./Slot.tsx";
 
 /**
  * 声明式浮窗渲染器(2026-10-11):把插件 `plugin.json` 的
@@ -10,6 +13,12 @@ import { Select } from "./Select.tsx";
  *
  * 与设置页卡片同一条哲学:插件只声明数据(标题/位置/尺寸/字段),由这里的受信任
  * 渲染器画 —— renderer 不执行任何用户 JS,所以**非 trusted 插件也能开浮窗**。
+ *
+ * **浮窗不是另一条渲染路径,而是 overlay 槽位的一种条目**(2026-10-11 槽位树合并):
+ * `syncPluginWindows()` 把每个 window 声明编译成一个纯数据条目注册进
+ * `SLOT_OVERLAY`,宿主用 `renderWindowEntry()` 当 `renderEntry` 把它画成浮窗。
+ * 于是「插件界面」与「核心浮层」在同一张表里排队,由 `order` 定层级,删掉了
+ * 原先 App.tsx 里那条 `<Slot fallback={<PluginWindows/>}>` 的双轨。
  *
  * 两种内容形态:
  *  - fields:复用设置字段白名单(string/number/boolean/select/textarea)静态渲染;
@@ -20,24 +29,77 @@ import { Select } from "./Select.tsx";
  * 这是纯前端展示偏好,不值得一次网络往返。
  */
 
-interface RenderableWindow {
+/** 浮窗条目的纯数据 payload(与 SlotEntry 的 `render` 字段同形)。 */
+export interface WindowEntryPayload {
+	kind: "window";
 	pluginId: string;
 	pluginName: string;
 	spec: PluginWindowDto;
 }
 
+/** 条目 id 前缀:浮窗在 overlay 槽位里的 id 是这个 + `pluginId:windowId`。 */
+const ENTRY_PREFIX = "plugin.window:";
+
 const DEFAULT_POS = { x: 82, y: 78 };
 
-/** 从插件列表抽出可渲染的浮窗(enabled 且声明了 windows;trusted 不是前提)。 */
-export function collectWindows(plugins: PluginInfoDto[]): RenderableWindow[] {
-	const out: RenderableWindow[] = [];
+/** 从插件列表抽出可渲染的浮窗声明(enabled 且声明了 windows;trusted 不是前提)。 */
+export function collectWindows(plugins: PluginInfoDto[]): WindowEntryPayload[] {
+	const out: WindowEntryPayload[] = [];
 	for (const p of plugins) {
 		if (!p.enabled) continue;
 		for (const w of p.frontend?.ui?.windows ?? []) {
-			out.push({ pluginId: p.id, pluginName: p.name, spec: w });
+			out.push({ kind: "window", pluginId: p.id, pluginName: p.name, spec: w });
 		}
 	}
 	return out;
+}
+
+/**
+ * 按最新插件列表把浮窗声明同步进 overlay 槽位:先整批摘掉旧浮窗条目(按 owner 的
+ * 前缀粒度),再按当前列表重新注册。
+ *
+ * 为什么整批换而不是差量:浮窗声明是**纯数据**且量极小,重建一两个条目比维护
+ * 一份 diff 便宜得多;而整批换能天然处理「插件禁用了 / 删了 / 改了 id」所有情形,
+ * 不会留孤儿条目。条目 id 带上 pluginId:windowId,重注册后 React key 稳定,
+ * 不会白白重挂浮窗、丢拖拽位置。
+ */
+export function syncPluginWindows(plugins: PluginInfoDto[]): void {
+	// 摘掉全部浮窗条目(owner 用统一前缀标记,与核心/插件 JS 的条目区分开)
+	for (const e of entriesByWindowOwner()) unregisterEntry(SLOT_OVERLAY, e.id);
+	for (const w of collectWindows(plugins)) {
+		registerEntry(SLOT_OVERLAY, {
+			id: `${ENTRY_PREFIX}${w.pluginId}:${w.spec.id}`,
+			owner: WINDOW_OWNER,
+			// 浮窗盖在普通浮层之上,order 给个偏大的值(插件自有界面用更小值即在其下)
+			order: 100,
+			render: w,
+		});
+	}
+	bumpSlots();
+}
+
+/** 浮窗条目在注册表里的统一 owner —— 便于一次摘干净(与真实插件 id 区分,不冲突)。 */
+const WINDOW_OWNER = "__window__";
+
+/** 列出当前 overlay 槽位里所有浮窗条目(用于重注册前清场与测试)。 */
+function entriesByWindowOwner(): SlotEntry[] {
+	return listEntries(SLOT_OVERLAY).filter((e) => e.owner === WINDOW_OWNER);
+}
+
+/**
+ * 宿主渲染器:把浮窗条目画成 `PluginWindow`。给 `<Slot renderEntry>` 用。
+ * 不认识的条目返回 `undefined`,由 Slot 退回默认窄化(不会吞掉别人)。
+ */
+export function renderWindowEntry(entry: SlotEntry): React.ReactNode | undefined {
+	const payload = entry.render as WindowEntryPayload | undefined;
+	if (!payload || payload.kind !== "window") return undefined;
+	return (
+		<PluginWindow
+			pluginId={payload.pluginId}
+			pluginName={payload.pluginName}
+			spec={payload.spec}
+		/>
+	);
 }
 
 /** 位置/关闭状态的 localStorage 键。 */
@@ -72,12 +134,13 @@ function writeLocalState(pluginId: string, windowId: string, patch: WindowLocalS
 }
 
 /**
- * 插件浮窗状态钩子:拉插件列表(30s 对账),返回可渲染窗与全局层 ref。
- * layerRef 给浮窗定位用(相对定位容器);宿主把 .plugin-layer 挂上这个 ref。
+ * 插件浮窗对账钩子:拉插件列表(30s 对账),把声明同步进 overlay 槽位。
+ *
+ * 返回的 `layerRef` 给浮窗定位用(相对定位容器)—— 但它的**归属已改**:容器
+ * 现在由 overlay 槽位所在的宿主节点(`.plugin-layer`)持有,浮窗通过 context 拿到,
+ * 不再是「App 建 ref 传给 PluginWindows」那条会脱钩的传参链。
  */
-export function usePluginWindows(client: ApiClient, active: boolean) {
-	const [plugins, setPlugins] = useState<PluginInfoDto[]>([]);
-	const layerRef = useRef<HTMLDivElement>(null);
+export function usePluginWindows(client: ApiClient, active: boolean): void {
 	useEffect(() => {
 		if (!active) return;
 		let cancelled = false;
@@ -85,7 +148,7 @@ export function usePluginWindows(client: ApiClient, active: boolean) {
 			client
 				.getPlugins()
 				.then((list) => {
-					if (!cancelled) setPlugins(list);
+					if (!cancelled) syncPluginWindows(list);
 				})
 				.catch(() => {
 					/* 拉取失败:保留上一次的窗口,下次再对账 */
@@ -96,34 +159,15 @@ export function usePluginWindows(client: ApiClient, active: boolean) {
 		return () => {
 			cancelled = true;
 			clearInterval(timer);
+			// 卸载时摘掉浮窗条目:slot 表是模块级单例,不清会留到下次挂载
+			unregisterOwner(WINDOW_OWNER);
+			bumpSlots();
 		};
 	}, [client, active]);
-	return { windows: collectWindows(plugins), layerRef };
-}
-
-/** 浮窗容器:遍历可渲染窗,逐个渲染 PluginWindow(各自持有位置/关闭状态)。 */
-export function PluginWindows({ plugins, layerRef }: { plugins: RenderableWindow[]; layerRef: React.RefObject<HTMLDivElement | null> }) {
-	return (
-		<>
-			{plugins.map((w) => (
-				<PluginWindow key={`${w.pluginId}:${w.spec.id}`} pluginId={w.pluginId} pluginName={w.pluginName} spec={w.spec} layerRef={layerRef} />
-			))}
-		</>
-	);
 }
 
 /** 单个浮窗:标题栏(可拖拽)+ 内容(fields 或 data)+ 关闭按钮。 */
-function PluginWindow({
-	pluginId,
-	pluginName,
-	spec,
-	layerRef,
-}: {
-	pluginId: string;
-	pluginName: string;
-	spec: PluginWindowDto;
-	layerRef: React.RefObject<HTMLDivElement | null>;
-}) {
+function PluginWindow({ pluginId, pluginName, spec }: { pluginId: string; pluginName: string; spec: PluginWindowDto }) {
 	const [local, setLocal] = useState<WindowLocalState>(() => readLocalState(pluginId, spec.id));
 	const [open, setOpen] = useState(() => !readLocalState(pluginId, spec.id).closed);
 	const ref = useRef<HTMLDivElement>(null);
@@ -149,9 +193,9 @@ function PluginWindow({
 		const onMove = (e: PointerEvent) => {
 			const box = ref.current;
 			if (!box) return;
-			// 定位基准取宿主挂的全局层;ref 万一没接上,退到窗口自身尺寸的 viewport
-			// (getBoundingClientRect 的相对原点仍是视口,行为一致)——不再静默不动。
-			const layer = layerRef.current;
+			// 定位基准取宿主挂的全局层;它挂在浮窗的父节点上,拿不到时退到窗口自身尺寸的
+			// viewport(getBoundingClientRect 的相对原点仍是视口,行为一致)——不再静默不动。
+			const layer = box.parentElement;
 			const rect = layer ? layer.getBoundingClientRect() : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
 			// 以窗口左上角为准,钳制在视口内(留 8px 边距)
 			const w = box.offsetWidth;
@@ -176,7 +220,7 @@ function PluginWindow({
 			window.removeEventListener("pointermove", onMove);
 			window.removeEventListener("pointerup", onUp);
 		};
-	}, [dragging, layerRef, pluginId, spec.id]);
+	}, [dragging, pluginId, spec.id]);
 
 	// 按下点相对窗口左上角的偏移(视口坐标),拖拽期间不变
 	const dragOffset = useRef({ px: 0, py: 0 });
