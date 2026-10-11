@@ -25,6 +25,8 @@ import { McpServerList } from "../components/McpServerList.tsx";
 import { PluginList } from "../components/PluginList.tsx";
 import { PluginSettings } from "../components/PluginSettings.tsx";
 import { PluginWindows, collectWindows } from "../components/PluginWindows.tsx";
+import { Slot, bumpSlots } from "../components/Slot.tsx";
+import { registerEntry, registerSlot, unregisterOwner } from "../slots.ts";
 import { PromptModal } from "../components/PromptModal.tsx";
 import { ProviderList } from "../components/ProviderList.tsx";
 import { SHELL_CHOICES, ShellCards } from "../components/ShellCards.tsx";
@@ -99,6 +101,15 @@ export const SETTINGS_ENTRIES: readonly UIRoomEntry[] = [
 		note: "声明式浮窗:插件在 plugin.json 的 ui.windows 里声明标题 / 位置 / 尺寸 / 字段,宿主渲染成全局层里的窗。fields 形态复用设置字段控件;data 形态按 dataSource 取数渲染键值表(仅 trusted 路由可达)。固定定位,已加框。",
 		variants: ["字段窗口", "取数窗口"],
 		frame: "viewport",
+	},
+	{
+		id: "slot-bridge",
+		group: "settings",
+		title: "槽位桥",
+		module: "components/Slot.tsx",
+		symbols: ["Slot", "bumpSlots", "slotsVersion"],
+		note: "槽位表的 React 桥:只读表、不写表。注册由 slots.ts 的 registerSlot / registerEntry 完成(宿主启动时、插件加载时),桥按槽位的 kind 把条目组合出来渲染。list 形态按 order 升序、when 为假的条目跳过;chain 形态按 priority 降序问一遍,第一个「举手」的中选。未声明槽位渲染 fallback 而不抛错 —— 注册期严格、渲染期宽容是一对。",
+		variants: ["list 顺序与条件", "chain 举手参选"],
 	},
 	{
 		id: "export-panel",
@@ -507,6 +518,96 @@ function PluginWindowsData() {
 	);
 }
 
+// —— 槽位桥 ——
+//
+// 展项演示「注册表 → 桥 → 渲染」这条链:先在本地声明一个 demo 槽位、注册几个条目,
+// 再由 <Slot> 渲染出来。演示完把这些条目摘干净,免得污染进程里那份全局注册表
+// (UI 房是开发者的排障页,它自己也不该变成别人的副作用来源)。
+//
+// 用 useEffect 注册:renderToStaticMarkup 不跑 effect,所以 SSR 那一遍只画出
+// 空槽位的 fallback —— 这也顺带证明「未声明/无条目时渲染期不炸」。
+
+const SLOT_DEMO = "uiroom.demo.list";
+
+function SlotDemoList() {
+	// useState 触发一次重渲染:注册完成后靠它把内容画出来
+	const [, force] = useState(0);
+	useEffect(() => {
+		try {
+			registerSlot({ name: SLOT_DEMO, kind: "list", description: "UI 房演示槽位" });
+			registerEntry(SLOT_DEMO, {
+				id: "demo.b",
+				owner: "uiroom",
+				order: 20,
+				render: () => <button type="button" className="top-entry">order 20</button>,
+			});
+			registerEntry(SLOT_DEMO, {
+				id: "demo.a",
+				owner: "uiroom",
+				order: 10,
+				render: () => <button type="button" className="top-entry active">order 10</button>,
+			});
+			registerEntry(SLOT_DEMO, {
+				id: "demo.c",
+				owner: "uiroom",
+				order: 30,
+				// when 返回 false:该条目对本轮不参与 —— 演示「条件条目」
+				when: () => false,
+				render: () => <button type="button" className="top-entry">不该出现</button>,
+			});
+			bumpSlots();
+			force((n) => n + 1);
+		} catch {
+			/* 重复挂载时条目已存在:忽略即可(展项不做健壮性示范) */
+		}
+		return () => {
+			unregisterOwner("uiroom");
+			bumpSlots();
+		};
+	}, []);
+	return (
+		<nav className="top-nav">
+			<Slot name={SLOT_DEMO} fallback={<span className="ts">槽位空着</span>} />
+		</nav>
+	);
+}
+
+/** chain 形态:高优先级的 when 为真者中选,只渲染它。 */
+const SLOT_DEMO_CHAIN = "uiroom.demo.chain";
+
+function SlotDemoChain() {
+	const [, force] = useState(0);
+	useEffect(() => {
+		try {
+			registerSlot({ name: SLOT_DEMO_CHAIN, kind: "chain", description: "UI 房演示链式槽位" });
+			registerEntry(SLOT_DEMO_CHAIN, {
+				id: "chain.normal",
+				owner: "uiroom",
+				priority: 1,
+				when: () => true,
+				render: () => <span className="ts">常规态(priority 1)</span>,
+			});
+			registerEntry(SLOT_DEMO_CHAIN, {
+				id: "chain.busy",
+				owner: "uiroom",
+				priority: 10,
+				// 高优先级但「不举手」:演示 chain 的顺位 —— 这里刻意设 false,让常规态中选
+				when: () => false,
+				render: () => <span className="ts">忙碌态(priority 10,不举手)</span>,
+			});
+			bumpSlots();
+			force((n) => n + 1);
+		} catch {
+			/* 同上层 */
+		}
+		return () => {
+			unregisterOwner("uiroom");
+			bumpSlots();
+		};
+	}, []);
+	return <Slot name={SLOT_DEMO_CHAIN} fallback={<span className="ts">无人举手</span>} />;
+}
+
 // —— 导出面板 ——
 
 /** 演示章节(与 BookDetail.chapters 同形);真实页面里由 WritePage 注入。 */
@@ -800,6 +901,10 @@ export const SETTINGS_SECTION: UIRoomSection = {
 	"plugin-windows": [
 		{ label: "字段窗口", note: "fields 形态:数字 + 开关", render: PluginWindowsFields },
 		{ label: "取数窗口", note: "data 形态:等插件路由返回", render: PluginWindowsData },
+	],
+	"slot-bridge": [
+		{ label: "list 顺序与条件", note: "order 10/20 升序;order 30 那条 when 为假被跳过", render: SlotDemoList },
+		{ label: "chain 举手参选", note: "priority 10 不举手 → 顺位给 priority 1", render: SlotDemoChain },
 	],
 	"export-panel": [
 		{ label: "桌面", note: "440px 浮层,挂在按钮下方", render: ExportDesktop },

@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiClient } from "./api/client.ts";
 import { useLibrary } from "./library.ts";
 import { useExitPresence } from "./use-exit-presence.ts";
 import { syncPluginScripts } from "./plugin-scripts.ts";
 import { PluginWindows, usePluginWindows } from "./components/PluginWindows.tsx";
+import { Slot, bumpSlots } from "./components/Slot.tsx";
+import { declareShellSlots, SLOT_NAV, SLOT_OVERLAY, SLOT_STATUS } from "./shell-slots.ts";
+import { registerEntry, unregisterOwner } from "./slots.ts";
 import { IconEdit, IconGear, IconGlobe, IconStage } from "./components/Icons.tsx";
 import { Lu } from "./components/Lu.tsx";
 import { SetupWizard } from "./components/SetupWizard.tsx";
@@ -458,6 +461,88 @@ export function App() {
 	// 与上面同一份插件列表(30s 对账 + 状态变化即时刷新)。
 	const { windows: pluginWindows, layerRef: pluginLayerRef } = usePluginWindows(client, setupPhase === "done");
 
+	/**
+	 * 壳层槽位:声明一次(幂等),再把导航条目注册进去。
+	 *
+	 * 导航条目的 `render` 是**函数**(延迟到渲染期求值),所以能读到此刻的 state;
+	 * 而条目本身只在挂载时注册一次 —— 不必每帧重注册,`<Slot>` 的订阅会负责刷新。
+	 * 用一个 ref 持有最新的 view/回调,函数读 ref 而不是闭包捕获,免得注册时那份
+	 * 闭包永远是首帧的值。
+	 */
+	const navRef = useRef({ view, setView, debugMode, classicMode });
+	navRef.current = { view, setView, debugMode, classicMode };
+	useEffect(() => {
+		declareShellSlots();
+		const onClick = (v: View) => () => navRef.current.setView(v);
+		const cur = () => navRef.current;
+		// order 定序:舞台 10 / 编辑 20 / 世界书 30 / 设置 40 / UI 房 90
+		registerEntry(SLOT_NAV, {
+			id: "core.nav.stage",
+			owner: "core",
+			order: 10,
+			// 经典模式(单 agent)去掉舞台:导演/演员/旁白那套多 agent 共演
+			when: () => !cur().classicMode,
+			render: () => (
+				<button type="button" className={cur().view === "stage" ? "top-entry active" : "top-entry"} onClick={onClick("stage")}>
+					<IconStage size={15} />
+					<span className="top-entry-label">舞台</span>
+				</button>
+			),
+		});
+		registerEntry(SLOT_NAV, {
+			id: "core.nav.edit",
+			owner: "core",
+			order: 20,
+			render: () => (
+				<button type="button" className={cur().view === "edit" ? "top-entry active" : "top-entry"} onClick={onClick("edit")}>
+					<IconEdit size={15} />
+					<span className="top-entry-label">编辑</span>
+				</button>
+			),
+		});
+		registerEntry(SLOT_NAV, {
+			id: "core.nav.world",
+			owner: "core",
+			order: 30,
+			render: () => (
+				<button type="button" className={cur().view === "world" ? "top-entry active" : "top-entry"} onClick={onClick("world")}>
+					<IconGlobe size={15} />
+					<span className="top-entry-label">世界书</span>
+				</button>
+			),
+		});
+		registerEntry(SLOT_NAV, {
+			id: "core.nav.settings",
+			owner: "core",
+			order: 40,
+			render: () => (
+				<button type="button" className={cur().view === "settings" ? "top-entry active" : "top-entry"} onClick={onClick("settings")}>
+					<IconGear size={15} />
+					<span className="top-entry-label">设置</span>
+				</button>
+			),
+		});
+		// UI 房:组件陈列室,只在调试模式里出现(开发者的排障页,不是给用户的第五页)
+		registerEntry(SLOT_NAV, {
+			id: "core.nav.uiroom",
+			owner: "core",
+			order: 90,
+			when: () => cur().debugMode,
+			render: () => (
+				<button type="button" className={cur().view === "uiroom" ? "top-entry active" : "top-entry"} onClick={onClick("uiroom" as View)}>
+					<Lu icon="layout-grid" size={15} />
+					<span className="top-entry-label">UI 房</span>
+				</button>
+			),
+		});
+		// 卸载时摘掉核心导航条目(严格模式下会挂→卸→挂;重挂时重新注册)
+		bumpSlots();
+		return () => {
+			unregisterOwner("core");
+			bumpSlots();
+		};
+	}, []);
+
 	// 首启:向导独占渲染,主界面四页尚未挂载——完成后才挂载,WritePage 的挂载
 	// 效应会拉书列表并自动打开第一本书(向导建的书记得一进去就打开)。
 	if (setupPhase === "checking") return <div className="wz-boot" />;
@@ -485,78 +570,34 @@ export function App() {
 				<div className="brand">
 					pi<i>·writer</i>
 				</div>
-				{/* 导航紧跟品牌靠左(旧版把它推到右侧),书名/字数交给各页自己的页头,
-				    顶栏只留「我现在在哪」与「存没存」两件事 */}
+				{/* 导航条目走槽位:宿主自带的那几个在下方 registerNavEntries 里注册,
+				    插件往同一槽位注册即可多一个入口(无需改这里)。渲染顺序由 order 定。 */}
 				<nav className="top-nav">
-					{/* 经典模式(单 agent)去掉的只有舞台:导演/演员/旁白那套多 agent 共演。
-					    世界书页没有 agent(面向人的设定编辑器),留着照常用 */}
-					{!classicMode && (
-						<button
-							type="button"
-							className={view === "stage" ? "top-entry active" : "top-entry"}
-							onClick={() => setView("stage")}
-						>
-							<IconStage size={15} />
-							<span className="top-entry-label">舞台</span>
-						</button>
-					)}
-					<button
-						type="button"
-						className={view === "edit" ? "top-entry active" : "top-entry"}
-						onClick={() => setView("edit")}
-					>
-						<IconEdit size={15} />
-						<span className="top-entry-label">编辑</span>
-					</button>
-					<button
-						type="button"
-						className={view === "world" ? "top-entry active" : "top-entry"}
-						onClick={() => setView("world")}
-					>
-						<IconGlobe size={15} />
-						<span className="top-entry-label">世界书</span>
-					</button>
-					<button
-						type="button"
-						className={view === "settings" ? "top-entry active" : "top-entry"}
-						onClick={() => setView("settings")}
-					>
-						<IconGear size={15} />
-						<span className="top-entry-label">设置</span>
-					</button>
-					{/* UI 房:组件陈列室,只在调试模式里出现(它是开发者的排障页,不是给用户的第五页) */}
-					{debugMode && (
-						<button
-							type="button"
-							className={view === "uiroom" ? "top-entry active" : "top-entry"}
-							onClick={() => setView("uiroom")}
-						>
-							<Lu icon="layout-grid" size={15} />
-							<span className="top-entry-label">UI 房</span>
-						</button>
-					)}
+					<Slot name={SLOT_NAV} />
 				</nav>
 				<div className="right">
-					{header ? (
-						<span className={!header.connected ? "stat err" : `stat ${SAVE_STYLE[header.save]?.cls ?? ""}`}>
-							{header.connected ? (
-								<>
-									{/* 保存状态变化时柔和淡入:key 换掉 → 重挂载 → 播 .stat-text 的 fade-in
-									    (原来是 keyed span + 内联 transition,重挂载的元素没有过渡起点 = 空转) */}
-									<span className={`stat-icon ${SAVE_STYLE[header.save]?.cls ?? ""}`}>
-										{SAVE_STYLE[header.save]?.icon ?? ""}
-									</span>
-									<span key={header.save} className="stat-text">
-										{header.save}
-									</span>
-								</>
-							) : (
-								"连接失败"
-							)}
-						</span>
-					) : (
-						<span className="stat">未连接</span>
-					)}
+					<Slot name={SLOT_STATUS} fallback={
+						header ? (
+							<span className={!header.connected ? "stat err" : `stat ${SAVE_STYLE[header.save]?.cls ?? ""}`}>
+								{header.connected ? (
+									<>
+										{/* 保存状态变化时柔和淡入:key 换掉 → 重挂载 → 播 .stat-text 的 fade-in
+										    (原来是 keyed span + 内联 transition,重挂载的元素没有过渡起点 = 空转) */}
+										<span className={`stat-icon ${SAVE_STYLE[header.save]?.cls ?? ""}`}>
+											{SAVE_STYLE[header.save]?.icon ?? ""}
+										</span>
+										<span key={header.save} className="stat-text">
+											{header.save}
+										</span>
+									</>
+								) : (
+									"连接失败"
+								)}
+							</span>
+						) : (
+							<span className="stat">未连接</span>
+						)
+					} />
 				</div>
 			</header>
 			<div className="main">
@@ -654,9 +695,10 @@ export function App() {
 			{/* 插件全局层:浮窗与 trusted 插件自由渲染的落脚点。position:fixed 覆盖全屏,
 			    自身 pointer-events:none(不挡下层的点击),子元素各自开 auto。
 			    data-plugin-layer 是给 frontend.mjs 的稳定挂载契约 —— 插件不必再
-			    querySelector 猜 DOM,直接往 [data-plugin-layer] 里塞即可。 */}
+			    querySelector 猜 DOM,直接往 [data-plugin-layer] 里塞即可。
+			    它是 overlay 槽位在宿主侧的渲染容器:槽位条目(浮窗、插件界面)落在这里。 */}
 			<div className="plugin-layer" data-plugin-layer ref={pluginLayerRef}>
-				<PluginWindows plugins={pluginWindows} layerRef={pluginLayerRef} />
+				<Slot name={SLOT_OVERLAY} fallback={<PluginWindows plugins={pluginWindows} layerRef={pluginLayerRef} />} />
 			</div>
 			{/* 重运行形态:覆盖层叠加在已挂载页面上,不打断流式状态;建书后刷新书库列表 */}
 			{wizardPresence.mounted && (
