@@ -172,7 +172,7 @@ describe("buildChapterContext", () => {
 		expect(r.text).toContain("林婉");
 		expect(r.text).toContain("对话不用引号");
 		expect(r.text).toContain("【Notice·备忘录】");
-		expect(r.text).toContain("- [ ] 保持悬疑。");
+		expect(r.text).toContain("- [ ] [n1] 保持悬疑。");
 		expect(r.text).toContain("真相浮出");
 		expect(r.text).toContain("写宴前对峙");
 		// 2026-10-05:采样从背景包挪出去了 —— 它在 world.json 里还在,要读者自己去取
@@ -205,30 +205,30 @@ describe("buildChapterContext", () => {
 		expect(r.included.constraints).toEqual(["全局", "主会话", "缺省", "编剧"]);
 		expect(r.text).not.toContain("C");
 	});
-	it("Notice 只注入未完成项(已完成不注入)", () => {
+	it("Notice 只注入未完成项(已完成不注入),且带短编号", () => {
 		const w = worldWith({ title: "林婉", type: "character" });
 		w.notice.items.push({ id: "n1", text: "未完成待办", done: false }, { id: "n2", text: "已完成事项", done: true });
 		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: DEFAULT_CONTEXT_BUDGET });
-		expect(r.text).toContain("- [ ] 未完成待办");
+		// 短编号(2026-10-11):notice_update 靠它指认条目
+		expect(r.text).toContain("- [ ] [n1] 未完成待办");
 		expect(r.text).not.toContain("已完成事项");
 	});
-	it("超预算先裁概述(约束保留);采样已经完全不在候选里", () => {
+	it("预算硬保:超预算也不裁概述与约束(只裁本章相关条目)", () => {
 		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
 		w.constraints.push({ id: "c1", name: "对话风格", text: "对话不用引号。", enabled: true });
 		w.worldSummary = "字".repeat(3000);
 		// 采样还在 world.json 里 —— 但它连「被裁」都不会发生,因为压根不参与背景包
 		w.styleSample = { text: "雨落青瓦。", source: "", updatedAt: 0 };
 		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: 100 });
-		expect(r.included.hasSummary).toBe(false);
+		// 2026-10-11:世界观概述与写作约束都是硬保,预算再小也不裁。
+		expect(r.included.hasSummary).toBe(true);
 		expect(r.included.constraints).toEqual(["对话风格"]);
 		expect(r.text).toContain("对话不用引号");
-		// 2026-10-04(T4):原文用 `not.toContain(...)` 靠段标题字符串判定「未注入」,
-		// 但裁切提示行现在会点名它们(可见性正是 T4 的目标),字符串断言失去区分力。
-		// 改为直接验证**内容**未注入 —— 这才是原意。
-		expect(r.text).not.toContain("字".repeat(3000));
-		expect(r.text).not.toContain("雨落青瓦");
-		expect(r.trimmed.some((t) => t.kind === "summary")).toBe(true);
+		expect(r.text).toContain("字".repeat(3000));
+		// 概述不再进裁切明细(它已不可裁)
+		expect(r.trimmed.some((t) => t.kind === "summary")).toBe(false);
 		expect(r.trimmed.some((t) => t.kind === "sample")).toBe(false);
+		expect(r.text).not.toContain("雨落青瓦");
 	});
 	it("超预算按序裁剪激活组并计数", () => {
 		const w = createEmptyWorld();
@@ -242,6 +242,27 @@ describe("buildChapterContext", () => {
 		// 用户/模型看到的是具体标题,不是光秃秃的数字。
 		expect(r.text).toContain("因预算未包含");
 		expect(r.text).toMatch(/《角色\d》/);
+	});
+	it("预算极小时硬保段全在:概述 / 约束 / Notice / 发展线当前位置都不裁", () => {
+		// 用户 2026-10-11 明确要求:预算满时不许丢简要世界观、不许丢约束
+		// (并要求 Notice 与发展线当前位置也一并硬保)。
+		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
+		w.worldSummary = "雾港旧事。";
+		w.constraints.push({ id: "c1", name: "人称", text: "第三人称限知。", enabled: true });
+		w.notice.items.push({ id: "n1", text: "埋伏笔:钥匙", done: false });
+		w.storyline.nodes = [
+			{ id: "s1", title: "初入旧城", status: "in-progress", goal: "交代背景", next: "引出林婉" },
+			{ id: "s0", title: "序", status: "done", goal: "", next: null },
+		];
+		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: 1 });
+		expect(r.text).toContain("【世界观概述】");
+		expect(r.text).toContain("雾港旧事。");
+		expect(r.text).toContain("第三人称限知。");
+		expect(r.text).toContain("埋伏笔:钥匙");
+		expect(r.text).toContain("当前位置: [s1] 初入旧城");
+		// 可裁的只剩「发展线·已完成」与「世界书·本章相关」这两处
+		expect(r.included.hasCompletedMilestones).toBe(false);
+		expect(r.text).not.toContain("【发展线·已完成】");
 	});
 	it("全关时背景包为空", () => {
 		const w = createEmptyWorld();
@@ -276,14 +297,13 @@ describe("T4 裁切可见（trimmed 明细 + summarizeTrim）", () => {
 		expect(r.trimmedCount).toBe(entries.length);
 	});
 
-	it("世界观概述被裁时进明细 —— 2026-10-05 起这是常驻组唯一可裁的段", () => {
+	it("世界观概述**不再**被裁 —— 2026-10-11 起它与约束同属预算硬保", () => {
 		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
 		w.worldSummary = "概".repeat(4000);
 		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: 50 });
-		const summary = r.trimmed.find((t) => t.kind === "summary");
-		expect(summary).toBeDefined();
-		expect(summary?.label).toBe("世界观概述");
-		expect(summary?.tokens).toBeGreaterThan(1000);
+		expect(r.trimmed.some((t) => t.kind === "summary")).toBe(false);
+		expect(r.included.hasSummary).toBe(true);
+		expect(r.text).toContain("概".repeat(4000));
 	});
 
 	it("文风采样既不注入也不进 trimmed —— 它没有参与背景包,不是「被裁掉了」", () => {
@@ -376,13 +396,15 @@ describe("T5 分段占用（sections 快照）", () => {
 		expect(r.sections.find((s) => s.id === "entries")?.count).toBe(1);
 	});
 
-	it("被裁的段不进 sections（裁掉的量只体现在 trimmed）", () => {
+	it("硬保的段即使超预算也仍在 sections 里(裁掉的量只体现在 trimmed)", () => {
 		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
 		w.worldSummary = "字".repeat(3000);
 		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: 100 });
-		expect(r.trimmed.some((t) => t.kind === "summary")).toBe(true);
-		// 概述被裁 → 不进 sections(否则预算面板会虚报占用)
-		expect(r.sections.some((s) => s.id === "summary")).toBe(false);
+		// 概述不可裁 → 不进 trimmed,也**照常**进 sections(面板要如实显示它吃了多少)
+		expect(r.trimmed.some((t) => t.kind === "summary")).toBe(false);
+		const sum = r.sections.find((s) => s.id === "summary");
+		expect(sum).toBeDefined();
+		expect(sum!.tokens).toBeGreaterThan(1000);
 	});
 
 	it("sections 的 token 之和不超过预算（越界说明哪段没算对）", () => {
@@ -454,20 +476,17 @@ describe("buildChapterContext(世界观概述)", () => {
 		expect(r.text).not.toContain("【世界观概述】");
 		expect(r.included.hasSummary).toBe(false);
 	});
-	it("超预算裁概述(约束保留)", () => {
+	it("超预算也不裁概述(与约束同属硬保,2026-10-11)", () => {
 		const w = worldWith({ title: "林婉", type: "character", keys: ["林婉"] });
 		w.constraints.push({ id: "c1", name: "对话风格", text: "对话不用引号。", enabled: true });
 		w.styleSample = { text: "字".repeat(3000), source: "", updatedAt: 0 };
 		w.worldSummary = "字".repeat(3000);
 		const r = buildChapterContext(w, { chapterId: "ch01", draftText: "林婉在。", recentUserMessages: [], budget: 100 });
-		expect(r.included.hasSummary).toBe(false);
+		expect(r.included.hasSummary).toBe(true);
 		expect(r.included.constraints).toEqual(["对话风格"]);
 		expect(r.text).toContain("对话不用引号");
-		// 2026-10-04(T4):原断言靠段标题字符串判定「未注入」,但裁切提示行现在会
-		// 点名它们(可见性正是 T4 的目标)。改为验证内容未注入 + 概述进了明细;
-		// 采样则两者都不沾(它不参与背景包,见上面的专门用例)。
-		expect(r.text).not.toContain("字".repeat(3000));
-		expect(r.trimmed.some((t) => t.kind === "summary")).toBe(true);
+		expect(r.text).toContain("字".repeat(3000));
+		expect(r.trimmed.some((t) => t.kind === "summary")).toBe(false);
 		expect(r.trimmed.some((t) => t.kind === "sample")).toBe(false);
 	});
 	it("预算中等时概述保留", () => {
@@ -510,7 +529,12 @@ describe("buildStorylineView(已完成里程碑视图)", () => {
 			{ id: "s2", title: "第二章·寻剑", status: "in-progress", goal: "找到婉姐的剑", next: "第三章" },
 			{ id: "s3", title: "第三章·剑冢", status: "done", goal: "", next: null },
 		];
-		expect(buildStorylineView(w)).toEqual({ currentTitle: "第二章·寻剑", completed: ["第一章·结怨", "第三章·剑冢"] });
+		expect(buildStorylineView(w)).toEqual({
+			currentTitle: "第二章·寻剑",
+			currentId: "s2",
+			completed: ["第一章·结怨", "第三章·剑冢"],
+			completedIds: ["s1", "s3"],
+		});
 	});
 	it("未启用或无节点返回 null", () => {
 		const w = worldWith({ title: "林婉", type: "character" });
@@ -545,10 +569,12 @@ describe("buildChapterContext(发展线·已完成注入)", () => {
 		expect(r.text).toContain("【发展线·已完成】");
 		expect(r.text).toContain("第一章·结怨");
 		expect(r.text).toContain("禁止重复追求/推进");
-		expect(r.text).toContain("【发展线】\n当前位置: 第二章·寻剑");
+		// 短编号(2026-10-11):storyline_update 靠它指认节点
+		expect(r.text).toContain("【发展线】\n当前位置: [s2] 第二章·寻剑");
 		expect(r.text).toContain("目标: 找到剑");
+		expect(r.text).toContain("- [s1] 第一章·结怨");
 	});
-	it("预算不足时已完成列表被裁(约束与进行中目标保留)", () => {
+	it("预算不足时已完成列表被裁(约束与进行中目标硬保)", () => {
 		const w = worldWith({ title: "林婉", type: "character" });
 		w.storyline.nodes = [
 			{ id: "s1", title: "第一章·结怨", status: "done", goal: "", next: null },
@@ -559,7 +585,7 @@ describe("buildChapterContext(发展线·已完成注入)", () => {
 		expect(r.included.hasCompletedMilestones).toBe(false);
 		expect(r.text).not.toContain("【发展线·已完成】");
 		expect(r.text).toContain("对话不用引号");
-		expect(r.text).toContain("当前位置: 第二章·寻剑");
+		expect(r.text).toContain("当前位置: [s2] 第二章·寻剑");
 	});
 	it("无已完成节点时不注入已完成块", () => {
 		const w = worldWith({ title: "林婉", type: "character" });

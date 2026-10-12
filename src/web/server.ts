@@ -571,9 +571,10 @@ function matchRoute(method: string, parts: string[], routes: Route[]): { route: 
  * 沿 leaf 链扫描 customType 为 world-context 的条目:压缩(compaction 把旧历史移出
  * leaf 链)之后背景包就不在上下文里了 → 返回 false → ensureChapterContext 补注入。
  *
- * 与 writer-host.ts 稳定块的指纹扫描同源思路,差别在于这里只判**存在性**而不是
- * 内容指纹:整包含草稿、发展线位置、最近用户消息等易变内容,指纹每轮都变,
- * 拿它当稳定键会导致每轮都重注入(白付全价未缓存输入)。
+ * 与 writer-host.ts 早年那套稳定块指纹扫描曾是同源思路(那套已随 2026-10-11
+ * 注入合流撤掉),差别在于这里从来只判**存在性**而不是内容指纹:整包含草稿、
+ * 发展线位置、最近用户消息等易变内容,指纹每轮都变,拿它当稳定键会导致每轮都
+ * 重注入(白付全价未缓存输入)。
  *
  * 文件不存在/解析失败返回 false —— 宁可多注一次,也不要让世界书静默缺席。
  */
@@ -990,8 +991,8 @@ export class WriterServer {
 	 *
 	 * 每轮 chat 前扫一次 leaf 链:还在就零额外成本跳过,丢了就按当前世界状态
 	 * 重新装配一份注进去。用「存在性」而非「内容指纹」判据的理由见
-	 * sessionLeafHasWorldContext —— 世界书中途被改而背景包还在的情况属 P1
-	 * (稳定块/易变块拆分),不在本方法的职责内。
+	 * sessionLeafHasWorldContext —— 世界书中途被改而背景包还是旧快照的情况,
+	 * 由「切章重注」覆盖,不在本方法的职责内。
 	 */
 	private async ensureChapterContext(): Promise<void> {
 		const state = this.options.sessionHost.getState();

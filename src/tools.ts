@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { defineTool, type ToolDefinition } from "./pi-adapter/index.ts";
 import { Type, type TSchema } from "typebox";
 import { cjkCount } from "./cjk.ts";
-import { ensureWorld, newId, saveWorld, validateWorld, writeWorldEditRecord, WorldValidationError, type ConstraintTarget, type EntryStatus, type EntryType, type RelationArrow, type StoryNodeStatus, type WorldData, type WorldEntry } from "./world-data.ts";
+import { ensureWorld, newId, saveWorld, shortId, validateWorld, writeWorldEditRecord, WorldValidationError, type ConstraintTarget, type EntryStatus, type EntryType, type NoticeItem, type RelationArrow, type StoryNode, type StoryNodeStatus, type WorldData, type WorldEntry } from "./world-data.ts";
 import { toolGuardContext } from "./tool-guard.ts";
 import { withWorldLock } from "./world-lock.ts";
 import { classifyBookFileKind, MAX_READ_BYTES, readWorkspaceText } from "./book-files.ts";
@@ -183,6 +183,7 @@ export type WorldUpdateOp =
 	| { op: "notice_delete"; id: string }
 	| { op: "advance_storyline"; id: string; status: StoryNodeStatus; next?: string | null }
 	| { op: "upsert_storyline_node"; id?: string; title: string; status?: StoryNodeStatus; goal?: string; next?: string | null }
+	| { op: "delete_storyline_node"; id: string }
 	| { op: "upsert_constraint"; id?: string; name: string; text: string; enabled?: boolean; target?: ConstraintTarget }
 	| { op: "delete_constraint"; id: string }
 	| { op: "update_style_sample"; text: string; source?: string }
@@ -205,6 +206,7 @@ const WORLD_UPDATE_UNION = Type.Union([
 	Type.Object({ op: Type.Literal("notice_delete"), id: Type.String() }),
 	Type.Object({ op: Type.Literal("advance_storyline"), id: Type.String(), status: Type.String(), next: Type.Optional(Type.Union([Type.String(), Type.Null()])) }),
 	Type.Object({ op: Type.Literal("upsert_storyline_node"), id: Type.Optional(Type.String()), title: Type.String(), status: Type.Optional(Type.String()), goal: Type.Optional(Type.String()), next: Type.Optional(Type.Union([Type.String(), Type.Null()])) }),
+	Type.Object({ op: Type.Literal("delete_storyline_node"), id: Type.String() }),
 	Type.Object({ op: Type.Literal("upsert_constraint"), id: Type.Optional(Type.String()), name: Type.String(), text: Type.String(), enabled: Type.Optional(Type.Boolean()), target: Type.Optional(Type.Union([Type.Literal("main"), Type.Literal("director"), Type.Literal("writer"), Type.Literal("all")])) }),
 	Type.Object({ op: Type.Literal("delete_constraint"), id: Type.String() }),
 	Type.Object({ op: Type.Literal("update_style_sample"), text: Type.String(), source: Type.Optional(Type.String()) }),
@@ -234,13 +236,17 @@ export function normalizeWorldUpdate(raw: unknown): WorldUpdateOp {
  * `world_update` 全量权限:风格是编剧的本职,人物/关系/时间线仍然只有导演能改。
  *
  * 两处与 world_update 不同的语义:
- * 1. **约束一律写 target="writer"**——编剧只约束自己(成文与编辑页对话),不替导演立规;
- *    要约束导演得用户直接对导演讲(它有全量 world_update)。
+ * 1. **新建的约束写 target="writer"**——编剧只约束自己(成文与编辑页对话),不替导演立规;
+ *    要约束导演得用户直接对导演讲(它有全量 world_update)。**但既有约束保留原 target**:
+ *    2026-10-11 修的 bug —— 此前一律写 writer,于是编剧重述一条 `target: all` 的规矩,
+ *    会把它**静默缩窄**成只管编剧,导演与主会话从此看不到(用户看到的症状是
+ *    「这规矩怎么时灵时不灵」)。
  * 2. **按名字 upsert / 删除**——注入给编剧的【写作约束】块只有 `名字: 正文`,没有 id,
  *    所以不能要求模型先查 id;同名即更新,避免重复立规矩。
  */
 export type StyleUpdateOp =
 	| { op: "upsert_constraint"; name: string; text: string; enabled?: boolean }
+	| { op: "set_constraint_enabled"; name: string; enabled: boolean }
 	| { op: "delete_constraint"; name: string }
 	| { op: "update_style_sample"; text: string; source?: string }
 	| { op: "set_world_summary"; text: string };
@@ -248,6 +254,7 @@ export type StyleUpdateOp =
 /** style_update 的操作联合(schema 唯一真相源;对外暴露的是压平版 STYLE_UPDATE_FLAT)。 */
 const STYLE_UPDATE_UNION = Type.Union([
 	Type.Object({ op: Type.Literal("upsert_constraint"), name: Type.String(), text: Type.String(), enabled: Type.Optional(Type.Boolean()) }),
+	Type.Object({ op: Type.Literal("set_constraint_enabled"), name: Type.String(), enabled: Type.Boolean() }),
 	Type.Object({ op: Type.Literal("delete_constraint"), name: Type.String() }),
 	Type.Object({ op: Type.Literal("update_style_sample"), text: Type.String(), source: Type.Optional(Type.String()) }),
 	Type.Object({ op: Type.Literal("set_world_summary"), text: Type.String() }),
@@ -278,7 +285,28 @@ export function applyStyleUpdate(data: WorldData, update: StyleUpdateOp): WorldD
 				text: update.text,
 				// 用户重述一条已有规矩 = 它现在生效;缺省置 true(界面上手动停用的会被重新启用)
 				enabled: update.enabled ?? true,
-				target: "writer",
+				// 作用域:既有约束**保留原 target**(见 StyleUpdateOp 的注释 —— 一律写
+				// writer 会把用户的 all/director 规矩静默缩窄);只有新建才默认 writer。
+				// 注意 target 传 undefined 时 applyWorldUpdate 不动该字段,正是这里要的语义。
+				...(existing ? {} : { target: "writer" as const }),
+			});
+		}
+		case "set_constraint_enabled": {
+			// 单独切开关(2026-10-11 补):此前唯一入口是 upsert_constraint,而它**必填 text**
+			// —— 模型想「先停用这条规矩」就得把正文再抄一遍,抄错就把规矩改了。
+			// 这里只动 enabled,正文与作用域原样带回去。
+			const existing = data.constraints.find((c) => c.name === update.name);
+			if (!existing) {
+				throw new WorldValidationError(
+					`没有名为「${update.name}」的写作约束。现有约束见上下文【写作约束】块,按那里的名字改。`,
+				);
+			}
+			return applyWorldUpdate(data, {
+				op: "upsert_constraint",
+				id: existing.id,
+				name: existing.name,
+				text: existing.text,
+				enabled: update.enabled,
 			});
 		}
 		case "delete_constraint": {
@@ -512,6 +540,17 @@ export function applyWorldUpdate(data: WorldData, update: WorldUpdateOp): WorldD
 			} else {
 				next.storyline.nodes.push({ id: newId("story"), title: update.title, status: update.status ?? "pending", goal: update.goal ?? "", next: update.next === undefined ? null : resolveNextTitle(next, update.next) });
 			}
+			break;
+		}
+		case "delete_storyline_node": {
+			// 与 notice_delete / delete_constraint 同口径:传错 id 不许静默无操作
+			// (模型会据此以为「已删除」继续推理)。2026-10-11 补:此前发展线只能增改不能删,
+			// 一个建错的节点只能让用户去界面上删。
+			const n = next.storyline.nodes.find((x) => x.id === update.id);
+			if (!n) throw new WorldValidationError(`发展线节点不存在: ${update.id}(未删除任何内容)`);
+			next.storyline.nodes = next.storyline.nodes.filter((x) => x.id !== update.id);
+			// 有其他节点的 next 指向它时留原文(那只是描述文本,悬空无害)——与删除条目的
+			// 悬空关系校验不同,这里的 next 不参与结构校验,故不做级联。
 			break;
 		}
 		case "upsert_constraint": {
@@ -832,7 +871,7 @@ export const worldUpdateTool: ToolDefinition = defineTool({
 	name: "world_update",
 	label: "World Update",
 	description:
-		"更新世界书(world.json):增删改条目、关系、约束、Notice、发展线、采样、简要世界观与时间线。这是修改世界设定的唯一通道;结构性约束(重复 id、悬空引用、多个 in-progress 等)由程序校验。upsert_entry 是真 upsert:带 id 时查不到就按该 id 新建;不带 id 时按 (type, title) 匹配已有条目(存在则更新、保留原 id),都不命中才新建——更新已有条目通常不需要先查 id。关系的 from/to 接受条目 id 或标题(标题自动解析为条目 id;标题匹配到多个条目时返回报错并列出候选 id,请用 world_find 查 id 消歧;成功时返回会回显解析结果 from id(标题) → to id(标题))。枚举只接受英文:type=character/world/timeline/outline;status=alive/dead/unknown/active/archived/draft;关系 arrow=none/single/double;发展线 status=pending/in-progress/done/shelved。注意 status 是条目状态,与条目是否参与上下文注入(active 字段,界面「注入上下文」开关)无关,world_update 不改 active。发展线:节点按数组顺序推进,upsert_storyline_node 创建/更新节点,advance_storyline 推进状态;节点的 next 字段 = 该节点完成后的下一步内容(填标题或描述;也接受已有节点 id,会自动转为该节点标题)。查找条目 id 用 world_find 工具。set_world_summary 覆盖简要世界观概述(常驻注入,每次会话都会读到;建议 1-2 段,≤600 字)。新建条目后若与现有条目存在剧情关联,建议一并创建关系(upsert_relation)。",
+		"更新世界书(world.json):增删改条目、关系、约束、Notice、发展线、采样、简要世界观与时间线。这是修改世界设定的唯一通道;结构性约束(重复 id、悬空引用、多个 in-progress 等)由程序校验。upsert_entry 是真 upsert:带 id 时查不到就按该 id 新建;不带 id 时按 (type, title) 匹配已有条目(存在则更新、保留原 id),都不命中才新建——更新已有条目通常不需要先查 id。关系的 from/to 接受条目 id 或标题(标题自动解析为条目 id;标题匹配到多个条目时返回报错并列出候选 id,请用 world_find 查 id 消歧;成功时返回会回显解析结果 from id(标题) → to id(标题))。枚举只接受英文:type=character/world/timeline/outline;status=alive/dead/unknown/active/archived/draft;关系 arrow=none/single/double;发展线 status=pending/in-progress/done/shelved。注意 status 是条目状态,与条目是否参与上下文注入(active 字段,界面「注入上下文」开关)无关,world_update 不改 active。发展线:节点按数组顺序推进,upsert_storyline_node 创建/更新节点,advance_storyline 推进状态,delete_storyline_node 删除节点;节点的 next 字段 = 该节点完成后的下一步内容(填标题或描述;也接受已有节点 id,会自动转为该节点标题)。查找条目 id 用 world_find 工具。set_world_summary 覆盖简要世界观概述(常驻注入,每次会话都会读到;建议 1-2 段,≤600 字)。新建条目后若与现有条目存在剧情关联,建议一并创建关系(upsert_relation)。",
 	parameters: Type.Object({
 		update: WORLD_UPDATE_FLAT,
 	}),
@@ -970,7 +1009,7 @@ export const styleUpdateTool: ToolDefinition = defineTool({
 	name: "style_update",
 	label: "Style Update",
 	description:
-		"更新**写作风格**设定:写作约束(你与成文要遵守的硬规矩)、文风采样(作者文风基准)、简要世界观概述。这是你唯一能改世界书的通道——人物/关系/时间线/大纲/发展线/Notice 你改不了,那些归导演,你的相关建议写 advice.md。语义:① 约束按**名字** upsert——同名即更新(不会重复立规矩),所以重述一条已有规矩不需要先查 id;约束只作用于**你自己**(编辑页对话与收幕成文),要约束导演得用户直接对导演讲。② 删除按名字,名字见上下文【写作约束】块(那里没有 id,别去找 id)。③ 约束要**可判定**(「禁用破折号」「每章 2500 字上下」),不要写「文笔要优美」;条数控制在 8 条以内。④ update_style_sample 的 text 是 300–500 字的代表性样本(用户自己写的,或他想靠近的片段),**绝不编造**;set_world_summary 是 1-2 句题材与基调定位(常驻注入,≤600 字)。op 名与 world_update 的同名操作一致,便于对照。",
+		"更新**写作风格**设定:写作约束(你与成文要遵守的硬规矩)、文风采样(作者文风基准)、简要世界观概述。人物/关系/时间线/大纲你改不了(那些归导演);发展线与 Notice 走 `storyline_update` / `notice_update`。语义:① 约束按**名字** upsert——同名即更新(不会重复立规矩),所以重述一条已有规矩不需要先查 id;**改已有约束会保留它原来的作用域**(只在新建时默认 writer = 只管你自己),要约束导演得用户直接对导演讲。② `set_constraint_enabled` 单独切开关:停用/启用一条规矩而**不动它的正文**,别为了停用而把正文重抄一遍(抄错就把规矩改了)。③ 删除按名字,名字见上下文【写作约束】块(那里没有 id,别去找 id)。④ 约束要**可判定**(「禁用破折号」「每章 2500 字上下」),不要写「文笔要优美」;条数控制在 8 条以内。⑤ update_style_sample 的 text 是 300–500 字的代表性样本(用户自己写的,或他想靠近的片段),**绝不编造**;set_world_summary 是 1-2 句题材与基调定位(常驻注入,≤600 字)。op 名与 world_update 的同名操作一致,便于对照。",
 	parameters: Type.Object({
 		update: STYLE_UPDATE_FLAT,
 	}),
@@ -988,5 +1027,268 @@ export const styleUpdateTool: ToolDefinition = defineTool({
 				details: { op: update.op },
 			};
 		});
+	},
+});
+
+// ——————————————————————————————————————————————————————————————
+// 编剧的「发展与备忘」窄通道(2026-10-11)
+// ——————————————————————————————————————————————————————————————
+
+/**
+ * 解析「编号 / 名称」指认 —— 编辑发展线 / Notice 时的**唯一**定位口径。
+ *
+ * 顺序即优先级(2026-10-11 拍板「编号优先、名字兜底」):
+ * ① 完整 id → ② 短编号({@link shortId}) → ③ 唯一前缀 → ④ 精确名称 → ⑤ 唯一子串。
+ *
+ * 为什么「编号优先」:注入块给的是 `[9f2k1x] 初入旧城`,编号是 id 的一部分 ——
+ * **改标题不会让它失效**,而按名字指认有两个陷阱:重名(报错比猜安全)与
+ * 「模型只记得大意」(子串恰好命中一条时帮它一把)。
+ *
+ * 任何一步命中多条都**不静默取首个**,而是报错并列出候选(带短编号)让模型重发 ——
+ * 与 resolveRelationTarget 同一条纪律:静默取首个 = 改错对象还不吭声。
+ */
+function resolveByIdOrName<T>(
+	items: readonly T[],
+	target: string,
+	opts: { idOf: (t: T) => string; nameOf: (t: T) => string; what: string; hint: string },
+): T {
+	const t = target.trim();
+	if (t.length === 0) throw new WorldValidationError(`${opts.what}的编号或名称不能为空。${opts.hint}`);
+	const label = (x: T): string => `[${shortId(opts.idOf(x))}] ${opts.nameOf(x)}`;
+
+	const byId = items.filter((x) => opts.idOf(x) === t);
+	if (byId.length === 1) return byId[0]!;
+	const byShort = items.filter((x) => shortId(opts.idOf(x)) === t);
+	if (byShort.length === 1) return byShort[0]!;
+	// 前缀:模型只抄了编号前几位、或补进完整 id 的前段。只在唯一命中时采纳,
+	// 否则继续往下走名称通路(名称那边可能正好是它想找的那条)。
+	// **至少 3 位**才认前缀 —— 一个字符的前缀在 6 位短编号上几乎必然命中,
+	// 那不是「指认」而是抽签(静默改错对象最贵)。
+	const byPrefix = t.length >= 3
+		? items.filter((x) => {
+				const id = opts.idOf(x);
+				return id.startsWith(t) || shortId(id).startsWith(t);
+			})
+		: [];
+	if (byPrefix.length === 1) return byPrefix[0]!;
+
+	const exact = items.filter((x) => opts.nameOf(x) === t);
+	if (exact.length === 1) return exact[0]!;
+	const pool = exact.length > 1 ? exact : items.filter((x) => opts.nameOf(x).includes(t));
+	if (pool.length === 1) return pool[0]!;
+	const candidates = (pool.length > 1 ? pool : items).slice(0, 20).map(label);
+	throw new WorldValidationError(
+		`没有唯一匹配「${t}」的${opts.what}${pool.length > 1 ? `(匹配到 ${pool.length} 条)` : ""}。${opts.hint}` +
+			(candidates.length > 0 ? `当前${opts.what}列表: ${candidates.join("、")}` : `当前还没有任何${opts.what}。`),
+	);
+}
+
+/**
+ * `storyline_update` 的操作集:增删改**发展线**节点(写正文前定目标、写完一幕推进它)。
+ *
+ * 为什么单开一个窄工具而不是放开 `world_update`(2026-10-11):常驻编剧手上只有
+ * `style_update`,发展线是**它在写作过程中最常需要动的东西**(写完一幕就该推进目标),
+ * 而它此前只能把"下一章该推进到哪"写进 advice.md 等导演开会话 —— 与 2026-10-01
+ * 约束那条断链完全同型。放开的仍是**窄**通道:人物/关系/时间线/大纲照旧归导演。
+ *
+ * `target` 可以是短编号 / 完整 id / 节点标题(见 {@link resolveByIdOrName}),
+ * 因为注入的【发展线】块里两者都带着(`[9f2k1x] 初入旧城`)。
+ */
+export type StorylineUpdateOp =
+	| { op: "upsert_node"; target?: string; title?: string; status?: StoryNodeStatus; goal?: string; next?: string | null }
+	| { op: "advance"; target: string; status: StoryNodeStatus; next?: string | null }
+	| { op: "delete_node"; target: string };
+
+const STORYLINE_UPDATE_UNION = Type.Union([
+	Type.Object({ op: Type.Literal("upsert_node"), target: Type.Optional(Type.String()), title: Type.Optional(Type.String()), status: Type.Optional(Type.String()), goal: Type.Optional(Type.String()), next: Type.Optional(Type.Union([Type.String(), Type.Null()])) }),
+	Type.Object({ op: Type.Literal("advance"), target: Type.String(), status: Type.String(), next: Type.Optional(Type.Union([Type.String(), Type.Null()])) }),
+	Type.Object({ op: Type.Literal("delete_node"), target: Type.String() }),
+]);
+
+const STORYLINE_UPDATE_FLAT = flattenOpUnion(STORYLINE_UPDATE_UNION);
+const STORYLINE_UPDATE_REQUIRED = requiredFieldsByOp(STORYLINE_UPDATE_UNION);
+
+/** 校验并收窄 storyline_update 入参;缺字段/未知 op 抛 WorldValidationError。 */
+export function normalizeStorylineUpdate(raw: unknown): StorylineUpdateOp {
+	return narrowOp<StorylineUpdateOp>(raw, STORYLINE_UPDATE_REQUIRED, "storyline_update");
+}
+
+/** 发展线节点的指认口径(两个 op 共用,免得两处各写一遍措辞)。 */
+const STORY_NODE_REF = {
+	idOf: (n: StoryNode) => n.id,
+	nameOf: (n: StoryNode) => n.title,
+	what: "发展线节点",
+	hint: "编号见上下文【发展线】块里的 [xxxxxx];也可以填节点标题(唯一匹配才生效)。",
+};
+
+/** 应用一次发展线更新(纯函数,复用 applyWorldUpdate 的引擎与校验)。 */
+export function applyStorylineUpdate(data: WorldData, update: StorylineUpdateOp): WorldData {
+	switch (update.op) {
+		case "upsert_node": {
+			const target = (update.target ?? "").trim();
+			if (target.length === 0) {
+				// 不给指认 = 新建;此时 title 必填(否则新节点没有名字)
+				if (!update.title || update.title.trim().length === 0) {
+					throw new WorldValidationError(
+						"新增发展线节点必须给 title;要改已有节点就把它的编号填进 target(见上下文【发展线】块)。",
+					);
+				}
+				return applyWorldUpdate(data, {
+					op: "upsert_storyline_node",
+					title: update.title,
+					status: update.status,
+					goal: update.goal,
+					next: update.next,
+				});
+			}
+			const node = resolveByIdOrName(data.storyline.nodes, target, STORY_NODE_REF);
+			// 只指认不修改 = 空操作;报错而不是静默成功(模型会据此以为改写成功了)
+			if (update.title === undefined && update.status === undefined && update.goal === undefined && update.next === undefined) {
+				throw new WorldValidationError(
+					`发展线节点 [${shortId(node.id)}] ${node.title} 至少要给出 title / status / goal / next 之一(只指认节点,没有可改的内容)。`,
+				);
+			}
+			return applyWorldUpdate(data, {
+				op: "upsert_storyline_node",
+				id: node.id,
+				title: update.title ?? node.title,
+				status: update.status,
+				goal: update.goal,
+				next: update.next,
+			});
+		}
+		case "advance": {
+			// 推进状态:不需要重抄标题(那正是 upsert_node 的负担所在)
+			const node = resolveByIdOrName(data.storyline.nodes, update.target, STORY_NODE_REF);
+			return applyWorldUpdate(data, {
+				op: "upsert_storyline_node",
+				id: node.id,
+				title: node.title,
+				status: update.status,
+				next: update.next,
+			});
+		}
+		case "delete_node": {
+			const node = resolveByIdOrName(data.storyline.nodes, update.target, STORY_NODE_REF);
+			return applyWorldUpdate(data, { op: "delete_storyline_node", id: node.id });
+		}
+	}
+}
+
+/**
+ * `notice_update` 的操作集:增删改**Notice 备忘录**(待办清单:伏笔、待补的细节、
+ * 提醒自己别忘的事)。
+ *
+ * 定位口径与 development 线同款,只是「名称」对 Notice 而言就是它的**文本**
+ * (Notice 条目没有标题)。文本匹配同样只在**唯一**命中时生效:待办条目常是
+ * 「补写第三章的雨夜」这类长句,模型只记得片段,允许子串命中;但命中两条以上
+ * 一律报错列候选,不猜。
+ */
+export type NoticeUpdateOp =
+	| { op: "append"; text: string }
+	| { op: "edit"; target: string; text: string }
+	| { op: "set_done"; target: string; done: boolean }
+	| { op: "delete"; target: string }
+	| { op: "set_enabled"; enabled: boolean };
+
+const NOTICE_UPDATE_UNION = Type.Union([
+	Type.Object({ op: Type.Literal("append"), text: Type.String() }),
+	Type.Object({ op: Type.Literal("edit"), target: Type.String(), text: Type.String() }),
+	Type.Object({ op: Type.Literal("set_done"), target: Type.String(), done: Type.Boolean() }),
+	Type.Object({ op: Type.Literal("delete"), target: Type.String() }),
+	Type.Object({ op: Type.Literal("set_enabled"), enabled: Type.Boolean() }),
+]);
+
+const NOTICE_UPDATE_FLAT = flattenOpUnion(NOTICE_UPDATE_UNION);
+const NOTICE_UPDATE_REQUIRED = requiredFieldsByOp(NOTICE_UPDATE_UNION);
+
+/** 校验并收窄 notice_update 入参;缺字段/未知 op 抛 WorldValidationError。 */
+export function normalizeNoticeUpdate(raw: unknown): NoticeUpdateOp {
+	return narrowOp<NoticeUpdateOp>(raw, NOTICE_UPDATE_REQUIRED, "notice_update");
+}
+
+/** Notice 条目的指认口径(「名称」= 待办文本)。 */
+const NOTICE_ITEM_REF = {
+	idOf: (i: NoticeItem) => i.id,
+	nameOf: (i: NoticeItem) => i.text,
+	what: "Notice 待办",
+	hint: "编号见上下文【Notice·备忘录】块里的 [xxxxxx];也可以填待办原文(唯一匹配才生效)。",
+};
+
+/** 文本类入参的非空校验:空串一律拒绝,别让「改没了」变成静默损失。 */
+function requireNoticeText(text: string, what: string): string {
+	if (text.trim().length === 0) {
+		throw new WorldValidationError(`${what}的 text 是空的 —— 空文本会把待办内容清掉。若确实要清掉这条,用 delete。`);
+	}
+	return text;
+}
+
+/** 应用一次 Notice 更新(纯函数,复用 applyWorldUpdate 的引擎与校验)。 */
+export function applyNoticeUpdate(data: WorldData, update: NoticeUpdateOp): WorldData {
+	switch (update.op) {
+		case "append":
+			return applyWorldUpdate(data, { op: "notice_append", text: requireNoticeText(update.text, "notice_update append") });
+		case "edit": {
+			const it = resolveByIdOrName(data.notice.items, update.target, NOTICE_ITEM_REF);
+			return applyWorldUpdate(data, { op: "notice_update", id: it.id, text: requireNoticeText(update.text, "notice_update edit") });
+		}
+		case "set_done": {
+			const it = resolveByIdOrName(data.notice.items, update.target, NOTICE_ITEM_REF);
+			return applyWorldUpdate(data, { op: "notice_set_done", id: it.id, done: update.done });
+		}
+		case "delete": {
+			const it = resolveByIdOrName(data.notice.items, update.target, NOTICE_ITEM_REF);
+			return applyWorldUpdate(data, { op: "notice_delete", id: it.id });
+		}
+		case "set_enabled":
+			// 整体开关:关掉后【Notice·备忘录】块不再注入(UI 上那条板子仍在)
+			return applyWorldUpdate(data, { op: "update_notice", enabled: update.enabled });
+	}
+}
+
+/**
+ * 两个窄工具共用的执行体:读-改-写持同一把世界锁(与 world_update / style_update 同源,
+ * agent 一轮多工具并行调用时不会丢更新)。
+ *
+ * **不写世界书编辑记录**(`stage/last-world-edit.json`):与 style_update 同一条理由
+ * —— 那份记录只有舞台页消费,编辑页不读它,写它只会在窄窗口里串出一张舞台预览卡。
+ * 改完的可见反馈走工具结果 + 编剧的一句话确认。
+ */
+async function runWorldEditTool<TOp extends { op: string }>(
+	toolName: string,
+	raw: unknown,
+	normalize: (raw: unknown) => TOp,
+	apply: (world: WorldData, update: TOp) => WorldData,
+): Promise<{ content: Array<{ type: "text"; text: string }>; details: { op: string } }> {
+	const dir = bookDirBase();
+	if (!dir) throw new Error(`${toolName} 未配置书目录`);
+	return withWorldLock(dir, async () => {
+		const update = normalize(raw);
+		const world = await ensureWorld(dir);
+		const next = apply(world, update);
+		await saveWorld(dir, next);
+		return { content: [{ type: "text", text: `已更新世界书(${update.op})。` }], details: { op: update.op } };
+	});
+}
+
+export const storylineUpdateTool: ToolDefinition = defineTool({
+	name: "storyline_update",
+	label: "Storyline Update",
+	description:
+		"增删改**发展线**节点(全书的目标推进表)。这是你在写作过程中推进剧情目标的通道,和写正文是一回事的两面:写完一幕就把对应节点 advance 到 done、把 in-progress 挪到下一个目标。读法:上下文【发展线】块里每条都带短编号,形如 `[9f2k1x] 初入旧城`。操作:① upsert_node —— 给 target(编号/标题)改已有节点的 title/status/goal/next;不给 target 就是新建(此时 title 必填)。② advance —— 只改状态,靶子用编号指定,不必重抄标题。③ delete_node —— 删掉建错的节点。op 名与 world_update 的同名操作一致。status 枚举只接受英文:pending / in-progress / done / shelved;一本书同时**只应有一个 in-progress**。人物/关系/时间线/大纲仍归导演,你改不了。",
+	parameters: Type.Object({ update: STORYLINE_UPDATE_FLAT }),
+	async execute(_callId, params) {
+		return runWorldEditTool("storyline_update", params.update, normalizeStorylineUpdate, applyStorylineUpdate);
+	},
+});
+
+export const noticeUpdateTool: ToolDefinition = defineTool({
+	name: "notice_update",
+	label: "Notice Update",
+	description:
+		"增删改**Notice 备忘录**(待办清单:埋伏笔、待补的细节、记着别忘的事)。上下文里的【Notice·备忘录】块每条都带短编号,形如 `[k3p9wq] 补写第三章的雨夜`。操作:① append —— 追加一条新待办(只给 text)。② edit —— 按 target 改某条的正文。③ set_done —— 勾掉(做完的条目不再注入上下文,但留在板子上);记得在确实写完之后再勾。④ delete —— 删掉一条(建错了才用,日常是 set_done)。⑤ set_enabled —— 整个备忘录的注入开关。target 可以是短编号 / 完整 id / 待办原文(唯一匹配才生效;命中多条会报错列候选)。注意:Notice 是「作者给自己的提醒」,不是剧情目标 —— 剧情往哪走用 storyline_update。",
+	parameters: Type.Object({ update: NOTICE_UPDATE_FLAT }),
+	async execute(_callId, params) {
+		return runWorldEditTool("notice_update", params.update, normalizeNoticeUpdate, applyNoticeUpdate);
 	},
 });

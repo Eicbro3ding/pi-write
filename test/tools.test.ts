@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyStyleUpdate, applyWorldUpdate, emptiedEntryBodies, normalizeStyleUpdate, normalizeWorldUpdate, readChapterTool, readStyleTool, setWorldUpdateBookDir, styleUpdateTool, worldFindTool, worldUpdateTool } from "../src/tools.ts";
+import { applyNoticeUpdate, applyStorylineUpdate, applyStyleUpdate, applyWorldUpdate, emptiedEntryBodies, normalizeNoticeUpdate, normalizeStorylineUpdate, normalizeStyleUpdate, normalizeWorldUpdate, noticeUpdateTool, readChapterTool, readStyleTool, setWorldUpdateBookDir, storylineUpdateTool, styleUpdateTool, worldFindTool, worldUpdateTool } from "../src/tools.ts";
 import { createEmptyWorld, ensureWorld, saveWorld, WorldValidationError } from "../src/world-data.ts";
 
 type ToolContext = Parameters<typeof readChapterTool.execute>[4];
@@ -623,12 +623,12 @@ describe("worldFindTool", () => {
  * ③ 约束按**名字** upsert(同名更新而不是重复立规矩)、按名字删;④ 越权/未命中要报错。
  */
 describe("applyStyleUpdate（编剧窄通道）", () => {
-	it("upsert_constraint 新建,且约束强制写成编剧范围", () => {
+	it("upsert_constraint 新建,且**新建**的约束默认写成编剧范围", () => {
 		const next = applyStyleUpdate(createEmptyWorld(), { op: "upsert_constraint", name: "文风", text: "禁用破折号" });
 		expect(next.constraints).toHaveLength(1);
 		expect(next.constraints[0]!.name).toBe("文风");
 		expect(next.constraints[0]!.text).toBe("禁用破折号");
-		// 编剧只约束自己——要约束导演得用户直接对导演讲
+		// 新建时编剧只约束自己——要约束导演得用户直接对导演讲
 		expect(next.constraints[0]!.target).toBe("writer");
 		expect(next.constraints[0]!.enabled).toBe(true);
 	});
@@ -645,6 +645,37 @@ describe("applyStyleUpdate（编剧窄通道）", () => {
 	it("upsert_constraint 可显式停用", () => {
 		const next = applyStyleUpdate(createEmptyWorld(), { op: "upsert_constraint", name: "文风", text: "x", enabled: false });
 		expect(next.constraints[0]!.enabled).toBe(false);
+	});
+
+	it("重述已有约束**不吞掉它的作用域**(2026-10-11 修的 bug)", () => {
+		// 用户建了一条 target:"all" 的规矩(导演/编剧/主会话都要遵守),随后编剧
+		// 在编辑页重述一遍 —— 修复前这里一律写 writer,于是规矩被静默缩窄成只管编剧,
+		// 导演与主会话从此看不到(症状是「这规矩怎么时灵时不灵」)。
+		const base = applyWorldUpdate(createEmptyWorld(), {
+			op: "upsert_constraint", name: "人称", text: "第三人称限知", target: "all",
+		});
+		const after = applyStyleUpdate(base, { op: "upsert_constraint", name: "人称", text: "第三人称限知,不写内心独白" });
+		expect(after.constraints).toHaveLength(1);
+		expect(after.constraints[0]!.target).toBe("all");
+		expect(after.constraints[0]!.text).toBe("第三人称限知,不写内心独白");
+	});
+
+	it("set_constraint_enabled 只切开关,正文与作用域原样不动", () => {
+		const base = applyWorldUpdate(createEmptyWorld(), {
+			op: "upsert_constraint", name: "人称", text: "第三人称限知", target: "all",
+		});
+		const off = applyStyleUpdate(base, { op: "set_constraint_enabled", name: "人称", enabled: false });
+		expect(off.constraints[0]!.enabled).toBe(false);
+		expect(off.constraints[0]!.text).toBe("第三人称限知");
+		expect(off.constraints[0]!.target).toBe("all");
+		const on = applyStyleUpdate(off, { op: "set_constraint_enabled", name: "人称", enabled: true });
+		expect(on.constraints[0]!.enabled).toBe(true);
+		expect(on.constraints[0]!.text).toBe("第三人称限知");
+	});
+
+	it("set_constraint_enabled 名字不存在时抛错并指路约束块(不静默无操作)", () => {
+		expect(() => applyStyleUpdate(createEmptyWorld(), { op: "set_constraint_enabled", name: "没这条", enabled: false }))
+			.toThrow(/【写作约束】/);
 	});
 
 	it("delete_constraint 按名字删;名字不存在时抛错并指路约束块", () => {
@@ -674,11 +705,17 @@ describe("applyStyleUpdate（编剧窄通道）", () => {
 		expect(w.styleSample?.text).toBe("暮色如旧。");
 	});
 
-	it("碰不到条目/关系/时间线/发展线(窄通道的参数 schema 只有四个 op)", () => {
+	it("碰不到条目/关系/时间线/发展线/Notice(窄通道的参数 schema 只有这几个 op)", () => {
 		const flat = (styleUpdateTool.parameters as { properties: { update: { anyOf?: unknown; required?: string[]; properties: { op: { enum?: string[] } } } } })
 			.properties.update;
 		expect(flat.anyOf).toBeUndefined();
-		expect((flat.properties.op.enum ?? []).slice().sort()).toEqual(["delete_constraint", "set_world_summary", "update_style_sample", "upsert_constraint"]);
+		expect((flat.properties.op.enum ?? []).slice().sort()).toEqual([
+			"delete_constraint",
+			"set_constraint_enabled",
+			"set_world_summary",
+			"update_style_sample",
+			"upsert_constraint",
+		]);
 		expect(styleUpdateTool.name).toBe("style_update");
 	});
 });
@@ -853,6 +890,141 @@ describe("read_style（文风采样按需读取）", () => {
 	it("描述里写明动笔前要取一次(补决提示词没说的那半句)", () => {
 		// 工具 schema 随请求发给模型,这是「它会不会想起用」的第一现场
 		expect(readStyleTool.description).toContain("动笔写正文前");
+	});
+});
+
+/**
+ * 2026-10-11:编剧的「发展与备忘」窄通道。此前编剧改不了发展线/Notice,
+ * 只能把结论写进 advice.md 等导演开会话 —— 与 2026-10-01 约束那条断链同型。
+ */
+function worldWithStoryAndNotice() {
+	const w = createEmptyWorld();
+	w.storyline = {
+		enabled: true,
+		nodes: [
+			{ id: "story-aa11bb", title: "初入旧城", status: "in-progress", goal: "交代背景", next: "引出林婉" },
+			{ id: "story-cc22dd", title: "离开村庄", status: "done", goal: "", next: null },
+		],
+	};
+	w.notice = {
+		enabled: true,
+		items: [
+			{ id: "ntc-k3p9wq", text: "补写第三章的雨夜", done: false },
+			{ id: "ntc-zz88yy", text: "确认林婉的年龄", done: true },
+		],
+	};
+	return w;
+}
+
+describe("applyStorylineUpdate（发展线窄通道）", () => {
+	it("按短编号指认并改状态(编号是 id 的一部分,改名不丢靶)", () => {
+		const w = worldWithStoryAndNotice();
+		const next = applyStorylineUpdate(w, { op: "advance", target: "aa11bb", status: "done" });
+		expect(next.storyline.nodes.find((n) => n.id === "story-aa11bb")!.status).toBe("done");
+	});
+
+	it("完整 id / 标题也能指认(编号优先、名字兜底)", () => {
+		const w = worldWithStoryAndNotice();
+		const byFullId = applyStorylineUpdate(w, { op: "upsert_node", target: "story-cc22dd", goal: "离开村庄的动机要交代" });
+		expect(byFullId.storyline.nodes.find((n) => n.id === "story-cc22dd")!.goal).toBe("离开村庄的动机要交代");
+		const byTitle = applyStorylineUpdate(w, { op: "upsert_node", target: "离开村庄", status: "shelved" });
+		expect(byTitle.storyline.nodes.find((n) => n.id === "story-cc22dd")!.status).toBe("shelved");
+	});
+
+	it("不给 target 就是新建(title 必填)", () => {
+		const next = applyStorylineUpdate(worldWithStoryAndNotice(), {
+			op: "upsert_node", title: "北上", status: "pending", goal: "找线索",
+		});
+		expect(next.storyline.nodes).toHaveLength(3);
+		expect(next.storyline.nodes[2]!.title).toBe("北上");
+		expect(() => applyStorylineUpdate(worldWithStoryAndNotice(), { op: "upsert_node" })).toThrow(/title/);
+	});
+
+	it("给了 target 却没有任何可改字段 → 报错,不静默成功", () => {
+		expect(() => applyStorylineUpdate(worldWithStoryAndNotice(), { op: "upsert_node", target: "aa11bb" }))
+			.toThrow(/至少要给出/);
+	});
+
+	it("指认不唯一 / 指认不到 → 抛错并列出候选(不静默取首个)", () => {
+		const w = worldWithStoryAndNotice();
+		w.storyline.nodes.push({ id: "story-aa11cc", title: "初入旧城", status: "pending", goal: "", next: null });
+		expect(() => applyStorylineUpdate(w, { op: "advance", target: "初入旧城", status: "done" }))
+			.toThrow(/匹配到 2 条/);
+		expect(() => applyStorylineUpdate(w, { op: "advance", target: "不存在的节点", status: "done" }))
+			.toThrow(/没有唯一匹配/);
+	});
+
+	it("delete_node 删掉建错的节点;编号不存在时抛错(不静默无操作)", () => {
+		const next = applyStorylineUpdate(worldWithStoryAndNotice(), { op: "delete_node", target: "cc22dd" });
+		expect(next.storyline.nodes.map((n) => n.id)).toEqual(["story-aa11bb"]);
+		expect(() => applyStorylineUpdate(worldWithStoryAndNotice(), { op: "delete_node", target: "nope" }))
+			.toThrow(WorldValidationError);
+	});
+});
+
+describe("applyNoticeUpdate（Notice 窄通道）", () => {
+	it("append 追加一条未完成待办", () => {
+		const next = applyNoticeUpdate(worldWithStoryAndNotice(), { op: "append", text: "查证旧城的地图" });
+		expect(next.notice.items).toHaveLength(3);
+		expect(next.notice.items[2]!.done).toBe(false);
+	});
+
+	it("set_done 按短编号勾选;delete 按原文删除", () => {
+		const done = applyNoticeUpdate(worldWithStoryAndNotice(), { op: "set_done", target: "k3p9wq", done: true });
+		expect(done.notice.items.find((i) => i.id === "ntc-k3p9wq")!.done).toBe(true);
+		const del = applyNoticeUpdate(worldWithStoryAndNotice(), { op: "delete", target: "补写第三章的雨夜" });
+		expect(del.notice.items.map((i) => i.id)).toEqual(["ntc-zz88yy"]);
+	});
+
+	it("edit 改正文;空文本一律拒绝(要清掉就用 delete)", () => {
+		const next = applyNoticeUpdate(worldWithStoryAndNotice(), { op: "edit", target: "k3p9wq", text: "补写第三章的雨夜(要写足 800 字)" });
+		expect(next.notice.items[0]!.text).toContain("800 字");
+		expect(() => applyNoticeUpdate(worldWithStoryAndNotice(), { op: "edit", target: "k3p9wq", text: "  " }))
+			.toThrow(/空的/);
+		expect(() => applyNoticeUpdate(worldWithStoryAndNotice(), { op: "append", text: "" })).toThrow(/空的/);
+	});
+
+	it("set_enabled 切整体注入开关", () => {
+		const next = applyNoticeUpdate(worldWithStoryAndNotice(), { op: "set_enabled", enabled: false });
+		expect(next.notice.enabled).toBe(false);
+	});
+
+	it("指认不唯一时抛错列候选", () => {
+		const w = worldWithStoryAndNotice();
+		w.notice.items.push({ id: "ntc-qq77ww", text: "补写第三章的雨夜", done: false });
+		expect(() => applyNoticeUpdate(w, { op: "set_done", target: "补写第三章的雨夜", done: true }))
+			.toThrow(/匹配到 2 条/);
+	});
+});
+
+describe("storyline_update / notice_update 的工具外壳", () => {
+	it("两个工具都暴露压平后的单一对象 schema(无 anyOf)", () => {
+		for (const tool of [storylineUpdateTool, noticeUpdateTool]) {
+			const flat = (tool.parameters as { properties: { update: { anyOf?: unknown } } }).properties.update;
+			expect(flat.anyOf).toBeUndefined();
+		}
+	});
+
+	it("normalize 按 op 校验必填", () => {
+		expect(normalizeStorylineUpdate({ op: "advance", target: "aa11bb", status: "done" }).op).toBe("advance");
+		expect(() => normalizeStorylineUpdate({ op: "advance", target: "aa11bb" })).toThrow(/status/);
+		expect(normalizeNoticeUpdate({ op: "append", text: "x" }).op).toBe("append");
+		expect(() => normalizeNoticeUpdate({ op: "append" })).toThrow(/text/);
+		expect(() => normalizeNoticeUpdate({ op: "upsert_entry", title: "x" })).toThrow(/不支持的 op/);
+	});
+
+	it("端到端:确实写得进 world.json", async () => {
+		setWorldUpdateBookDir(tmp);
+		try {
+			await saveWorld(tmp, worldWithStoryAndNotice());
+			await storylineUpdateTool.execute("call", { update: { op: "advance", target: "aa11bb", status: "done" } } as never, undefined, undefined, {} as ToolContext);
+			await noticeUpdateTool.execute("call", { update: { op: "append", text: "新待办" } } as never, undefined, undefined, {} as ToolContext);
+			const world = await ensureWorld(tmp);
+			expect(world.storyline.nodes.find((n) => n.id === "story-aa11bb")!.status).toBe("done");
+			expect(world.notice.items.some((i) => i.text === "新待办")).toBe(true);
+		} finally {
+			setWorldUpdateBookDir(null);
+		}
 	});
 });
 

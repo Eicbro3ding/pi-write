@@ -1,4 +1,5 @@
 import type { WorldData, WorldEntry, ConstraintTarget } from "./world-data.ts";
+import { shortId } from "./world-data.ts";
 import { isCjkChar } from "./cjk.ts";
 
 /**
@@ -48,17 +49,27 @@ export interface ContextLimits {
 export interface StorylineView {
 	/** 当前进行中目标标题(至多一个,world-data 校验保证)。 */
 	currentTitle: string | null;
+	/** 当前进行中节点 id(null = 没有进行中节点)。2026-10-11 加:注入块要带短编号。 */
+	currentId: string | null;
 	/** 已完成节点标题(取节点数组尾部——较新的追加在后,上限 COMPLETED_MILESTONE_LIMIT)。 */
 	completed: string[];
+	/** 已完成节点 id,与 {@link completed} 一一对应(同序)。 */
+	completedIds: string[];
 }
 
 /** 组装发展线视图:in-progress 节点 = 当前目标;done 节点 = 已完成列表(尾部优先)。 */
 export function buildStorylineView(data: WorldData, limit: number = COMPLETED_MILESTONE_LIMIT): StorylineView | null {
 	if (!data.storyline.enabled || data.storyline.nodes.length === 0) return null;
 	const current = data.storyline.nodes.find((n) => n.status === "in-progress");
-	const completed = data.storyline.nodes.filter((n) => n.status === "done").map((n) => n.title);
-	if (!current && completed.length === 0) return null;
-	return { currentTitle: current?.title ?? null, completed: limit > 0 ? completed.slice(-limit) : [] };
+	const done = data.storyline.nodes.filter((n) => n.status === "done");
+	if (!current && done.length === 0) return null;
+	const shown = limit > 0 ? done.slice(-limit) : [];
+	return {
+		currentTitle: current?.title ?? null,
+		currentId: current?.id ?? null,
+		completed: shown.map((n) => n.title),
+		completedIds: shown.map((n) => n.id),
+	};
 }
 
 export interface ChapterContextInput {
@@ -80,7 +91,13 @@ export interface ChapterContextInput {
 
 /** 一处因预算被省略的内容(2026-10-04,T4 裁切可见)。 */
 export interface TrimRecord {
-	/** 类别:激活条目 / 世界观概述 / 已完成里程碑(文风采样已移出背景包,不再有 segment)。 */
+	/**
+	 * 类别:激活条目 / 已完成里程碑。
+	 *
+	 * `"summary"`(世界观概述)**自 2026-10-11 起不再产生** —— 概述与写作约束
+	 * 一起进了「预算硬保」名单(用户要求:预算满也不许丢)。该取值保留是为了兼容
+	 * 旧缓存的裁切摘要与读它的 UI,别据此以为概述还会被裁。
+	 */
 	kind: "entry" | "summary" | "milestones";
 	/** 人类可读的名称(条目标题 / 段名)。 */
 	label: string;
@@ -312,16 +329,17 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 		result.included.hasSummary = true;
 	}
 	let used = estimateTokens(resident) + estimateTokens(overview);
-	// 超预算:概述可裁、约束保留(采样已不在 resident 里,见上方注释)
-	if (used > input.budget && overview.length > 0) {
-		result.trimmed.push({ kind: "summary", label: "世界观概述", tokens: estimateTokens(overview) });
-		overview = "";
-		result.included.hasSummary = false;
-		used = estimateTokens(resident);
-	}
-	// 分段快照(2026-10-04,T5):常驻组里只剩约束与概述两块(约束始终保有原样、
-	// 概述可能被整段裁掉),故各自单独量长度。必须在剪裁之后量,否则面板会把
-	// 已经丢掉的内容算进预算。
+	// 预算硬保(2026-10-11):常驻组里**概述与约束都不裁**。
+	//
+	// 此前这里是「超预算先把概述整段丢掉、约束保留」(2026-10-04)。那套顺序的代价
+	// 是模型丢掉全局基调后仍按自己的印象写——而基调恰恰是"丢了就会写错"的那类事实。
+	// 用户 2026-10-11 明确要求:预算满时不许丢简要世界观、不许丢约束。
+	//
+	// 于是可裁的只剩「世界书·本章相关」与「发展线·已完成」——真正按需的那部分。
+	// 常驻组因此**可能整体超出预算**:这是有意的让步(超一点预算 < 丢掉基调),
+	// 面板上仍按实际占用显示,用户看得到谁在吃预算(见 inspect/report.ts)。
+	// 分段快照(2026-10-04,T5):常驻组里概述与约束都保留原样,各自单独量长度。
+	// 必须在剪裁之后量,否则面板会把已经丢掉的内容算进预算。
 	addSection({ id: "constraints", label: "写作约束", tokens: estimateTokens(residentConstraints), count: result.included.constraints.length });
 	addSection({ id: "summary", label: "世界观概述", tokens: estimateTokens(overview), count: overview.length > 0 ? 1 : 0 });
 
@@ -361,7 +379,8 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 	const milestoneLimit = input.limits?.completedMilestoneLimit ?? COMPLETED_MILESTONE_LIMIT;
 	const noticeItems = data.notice.items.filter((i) => !i.done).slice(0, noticeLimit);
 	if (data.notice.enabled && noticeItems.length > 0) {
-		noticeBlock = `【Notice·备忘录】\n${noticeItems.map((i) => `- [ ] ${i.text}`).join("\n")}\n`;
+		// 短编号(2026-10-11):条目自带 [k3p9wq] 供 notice_update 指认,见 world-data.shortId
+		noticeBlock = `【Notice·备忘录】\n${noticeItems.map((i) => `- [ ] [${shortId(i.id)}] ${i.text}`).join("\n")}\n`;
 		tail += noticeBlock;
 		result.included.hasNotice = true;
 	}
@@ -370,13 +389,15 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 	if (view) {
 		if (view.currentTitle) {
 			const current = data.storyline.nodes.find((n) => n.status === "in-progress");
-			storylineBlock += `【发展线】\n当前位置: ${view.currentTitle}\n`;
+			const curNo = view.currentId ? `[${shortId(view.currentId)}] ` : "";
+			storylineBlock += `【发展线】\n当前位置: ${curNo}${view.currentTitle}\n`;
 			if (current?.goal) storylineBlock += `目标: ${current.goal}\n`;
 			if (current?.next) storylineBlock += `下一步: ${current.next}\n`;
 			if (current) result.included.storylineNode = current.id;
 		}
 		if (view.completed.length > 0) {
-			const completedBlock = `【发展线·已完成】以下目标已完成,禁止重复追求/推进:\n${view.completed.map((t) => `- ${t}`).join("\n")}`;
+			// 短编号(2026-10-11):已完成那串也带,便于回溯修正(storyline_update 的 target)
+			const completedBlock = `【发展线·已完成】以下目标已完成,禁止重复追求/推进:\n${view.completed.map((t, i) => `- [${shortId(view.completedIds[i] ?? "")}] ${t}`).join("\n")}`;
 			if (used + estimateTokens(completedBlock) <= input.budget) {
 				storylineBlock += `\n${completedBlock}\n`;
 				result.included.hasCompletedMilestones = true;

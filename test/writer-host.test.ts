@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appendStageEntry, makeStageEntry } from "../src/stage/stage-store.ts";
 import { getBookDir } from "../src/config.ts";
 import { ensureWorld, saveWorld } from "../src/world-data.ts";
-import { hostPromptScope, latestStageTranscript, stableFingerprint, WriterHost, writerToolset } from "../src/web/writer-host.ts";
+import { hostPromptScope, insertBeforeLastUserMessage, latestStageTranscript, WriterHost, writerToolset } from "../src/web/writer-host.ts";
 
 interface FakeHostLike {
 	subscribe(l: (e: unknown) => void): () => void;
@@ -51,8 +51,8 @@ function makeFakeHost(): FakeHostLike & { listeners: Set<(e: unknown) => void> }
 	};
 }
 
-// 稳定块同步(syncStableContext)会经 getBookDir 读世界书:整体隔离到临时
-// PI_WRITER_DIR,避免测试读/写真实 ~/.pi/writer 数据
+// 每轮上下文注入会经 getBookDir 读世界书:整体隔离到临时 PI_WRITER_DIR,
+// 避免测试读/写真实 ~/.pi/writer 数据
 let tmpRoot: string;
 beforeEach(() => {
 	tmpRoot = mkdtempSync(join(tmpdir(), "piw-writer-host-"));
@@ -355,109 +355,99 @@ describe("latestStageTranscript（最近一幕舞台转录注入，§16 编剧�
 	});
 });
 
-describe("stableFingerprint(稳定块指纹)", () => {
-	it("同内容同指纹,异内容异指纹", () => {
-		expect(stableFingerprint("雾港")).toBe(stableFingerprint("雾港"));
-		expect(stableFingerprint("雾港")).not.toBe(stableFingerprint("雾港2"));
+describe("insertBeforeLastUserMessage(统一注入位置,2026-10-11)", () => {
+	const msg = (role: "user" | "assistant", content: string) => ({ role, content, timestamp: 1 }) as never;
+
+	it("插在最后一条用户输入之前(不是追加到尾部)", () => {
+		const out = insertBeforeLastUserMessage([msg("user", "第一问"), msg("assistant", "答"), msg("user", "第二问")], "【上下文】");
+		expect(out.map((m) => m.content)).toEqual(["第一问", "答", "【上下文】", "第二问"]);
+	});
+
+	it("只有一条用户消息时插在它前面", () => {
+		const out = insertBeforeLastUserMessage([msg("user", "问题")], "【上下文】");
+		expect(out.map((m) => m.content)).toEqual(["【上下文】", "问题"]);
+	});
+
+	it("找不到用户消息时退化为追加(位置不理想但绝不丢内容)", () => {
+		const out = insertBeforeLastUserMessage([msg("assistant", "自说自话")], "【上下文】");
+		expect(out.map((m) => m.content)).toEqual(["自说自话", "【上下文】"]);
 	});
 });
 
-describe("syncStableContext(稳定块指纹注入,2026-08-22 缓存优化)", () => {
-	it("稳定块非空:chat 前经 injectContext 持久化;内容不变不重注入;变更后重注入", async () => {
-		const slug = "fog-harbor";
-		const bookDir = getBookDir(slug);
-		await mkdir(bookDir, { recursive: true });
-		const world = await ensureWorld(bookDir);
-		await saveWorld(bookDir, { ...world, worldSummary: "雾港小城,北方海岸。" });
-		const fake = makeFakeHost();
-		const host = new WriterHost({ createHost: async () => fake as never });
-		await host.chat(slug, "hi", "ch01.jsonl");
-		expect(fake.injectContext).toHaveBeenCalledTimes(1);
-		expect(String(fake.injectContext.mock.calls[0][0])).toContain("【世界观概述】");
-		expect(fake.sendMessage).toHaveBeenCalledWith("hi");
-		// 指纹未变:第二次对话不重注入
-		await host.chat(slug, "hi again", "ch01.jsonl");
-		expect(fake.injectContext).toHaveBeenCalledTimes(1);
-		// 世界书内容变更:重注入新指纹
-		await saveWorld(bookDir, { ...world, worldSummary: "雾港小城,南方海岸。" });
-		await host.chat(slug, "third", "ch01.jsonl");
-		expect(fake.injectContext).toHaveBeenCalledTimes(2);
-	});
-	it("稳定块为空(无世界书内容):不注入", async () => {
-		const fake = makeFakeHost();
-		const host = new WriterHost({ createHost: async () => fake as never });
-		await host.chat("empty-book", "hi", "ch01.jsonl");
-		expect(fake.injectContext).not.toHaveBeenCalled();
-		expect(fake.sendMessage).toHaveBeenCalledWith("hi");
-	});
-});
-
-/**
- * 注入去重(2026-10-06 分诊收口)—— **本轮重构的收益,必须有测试钉住**。
- *
- * 收口前:`world.notice` 在本会话里被注两次 —— `editorContext`(每轮易变块)
- * 与 `stableContext`(指纹稳定块)各一份;发展线同理。分诊表把它们分别归到
- * 格 B / 格 C 后,同一会话内每类内容只应出现一次。
- */
-describe("注入去重(分诊收口,2026-10-06)", () => {
-	/** 造一个有 Notice + 发展线 + memory 的书,供去重断言使用。 */
+describe("统一注入(2026-10-11:编辑会话只剩一条注入通道)", () => {
+	/** 造一个有 Notice + 发展线 + memory 的书。 */
 	async function seedRichBook(slug: string): Promise<void> {
 		const bookDir = getBookDir(slug);
-		await mkdir(bookDir, { recursive: true });
+		await mkdir(join(bookDir, "draft"), { recursive: true });
 		const world = await ensureWorld(bookDir);
 		await saveWorld(bookDir, {
 			...world,
 			worldSummary: "雾港小城,北方海岸。",
-			notice: { enabled: true, items: [{ id: "n1", text: "第三卷回收信物伏笔", done: false }] },
+			notice: { enabled: true, items: [{ id: "ntc-n1", text: "第三卷回收信物伏笔", done: false }] },
 			storyline: {
 				...world.storyline,
 				enabled: true,
-				nodes: [{ id: "s1", title: "查明白塔来历", status: "in-progress", goal: "找档案", next: "夜探" }],
+				nodes: [{ id: "story-s1", title: "查明白塔来历", status: "in-progress", goal: "找档案", next: "夜探" }],
 			},
 		});
 		await writeFile(join(bookDir, "memory.md"), "- 主角的剑叫「婉姐的剑」", "utf8");
+		await writeFile(join(bookDir, "draft", "ch01.md"), "第一章正文。", "utf8");
 	}
 
-	it("Notice 只进稳定块(格 B),不再进每轮易变块 —— 同一会话内只出现一次", async () => {
+	type EditorCtx = (slug: string, chapterFile: string | null, messages: never[]) => Promise<never[] | undefined>;
+	const runEditorContext = async (host: WriterHost, slug: string, chapterFile: string | null, prompt: string) => {
+		const messages = [{ role: "user", content: prompt, timestamp: 1 }] as never[];
+		const out = await (host as unknown as { editorContext: EditorCtx }).editorContext(slug, chapterFile, messages);
+		return (out ?? []).map((m) => (m as unknown as { content: string }).content);
+	};
+
+	it("世界观/约束/Notice/正文/发展线同在一份,且插在用户输入之前", async () => {
 		const slug = "fog-harbor";
 		await seedRichBook(slug);
-		const fake = makeFakeHost();
-		const host = new WriterHost({ createHost: async () => fake as never });
-		// 每轮易变块经 context 钩子产出的消息:捕获它,才能数 Notice 出现在哪
-		const seen: string[] = [];
-		host.setEventSink(() => {});
-		await host.chat(slug, "hi", "ch01.jsonl");
-
-		// 稳定块(格 B)必须带 Notice
-		const stable = String(fake.injectContext.mock.calls[0][0]);
-		expect(stable).toContain("【Notice·备忘录】");
-		expect(stable).toContain("第三卷回收信物伏笔");
-		// 稳定块**不带**发展线(那是格 C 的)
-		expect(stable).not.toContain("【发展线】");
-		seen.push(stable);
-
-		// 断言总量:整条会话装配里 Notice 标题只出现一次
-		expect(seen.join("\n").match(/【Notice·备忘录】/g)?.length).toBe(1);
+		const host = new WriterHost({ createHost: async () => makeFakeHost() as never });
+		const contents = await runEditorContext(host, slug, "ch01.jsonl", "帮我看看这段");
+		expect(contents).toHaveLength(2);
+		const [injected, prompt] = contents as [string, string];
+		expect(prompt).toBe("帮我看看这段");
+		for (const t of ["【世界观概述】", "【Notice·备忘录】", "【当前正文 · draft/ch01.md】", "【发展线】"]) {
+			expect(injected, `注入块应含 ${t}`).toContain(t);
+		}
 	});
 
-	it("发展线只进每轮易变块(格 C),不进稳定块 —— 否则每轮击穿指纹", async () => {
-		const slug = "fog-harbor2";
+	it("每类内容只出现一次(合流后不再有两格各注一遍)", async () => {
+		const slug = "fog-harbor-dup";
+		await seedRichBook(slug);
+		const host = new WriterHost({ createHost: async () => makeFakeHost() as never });
+		const all = (await runEditorContext(host, slug, "ch01.jsonl", "问题")).join("\n");
+		for (const t of ["【世界观概述】", "【Notice·备忘录】", "【发展线】", "【当前正文 · draft/ch01.md】"]) {
+			expect(all.match(new RegExp(t, "g"))?.length, `${t} 出现了多次`).toBe(1);
+		}
+	});
+
+	it("Notice / 发展线带短编号(窄工具靠它指认)", async () => {
+		const slug = "fog-harbor-ids";
+		await seedRichBook(slug);
+		const host = new WriterHost({ createHost: async () => makeFakeHost() as never });
+		const injected = (await runEditorContext(host, slug, "ch01.jsonl", "问题"))[0]!;
+		expect(injected).toContain("[n1] 第三卷回收信物伏笔");
+		expect(injected).toContain("[s1] 查明白塔来历");
+	});
+
+	it("无世界内容且无正文时不注入(返回 undefined,调用方据此跳过)", async () => {
+		const host = new WriterHost({ createHost: async () => makeFakeHost() as never });
+		const out = await (host as unknown as { editorContext: EditorCtx })
+			.editorContext("empty-book", null, [{ role: "user", content: "hi", timestamp: 1 }] as never[]);
+		expect(out).toBeUndefined();
+	});
+
+	it("chat 不再往会话里持久化稳定块(指纹机制已撤),也不影响发消息", async () => {
+		const slug = "fog-harbor-chat";
 		await seedRichBook(slug);
 		const fake = makeFakeHost();
 		const host = new WriterHost({ createHost: async () => fake as never });
 		await host.chat(slug, "hi", "ch01.jsonl");
-		const stable = String(fake.injectContext.mock.calls[0][0]);
-		expect(stable).not.toContain("【发展线】");
-	});
-
-	it("世界观概述只进稳定块(格 B)", async () => {
-		const slug = "fog-harbor3";
-		await seedRichBook(slug);
-		const fake = makeFakeHost();
-		const host = new WriterHost({ createHost: async () => fake as never });
-		await host.chat(slug, "hi", "ch01.jsonl");
-		const stable = String(fake.injectContext.mock.calls[0][0]);
-		expect(stable).toContain("【世界观概述】");
+		expect(fake.injectContext).not.toHaveBeenCalled();
+		expect(fake.sendMessage).toHaveBeenCalledWith("hi");
 	});
 });
 
@@ -563,10 +553,13 @@ describe("setCustomPrompt(自定义系统提示词,2026-10-10)", () => {
 describe("writerToolset（编剧 / 写作 agent 的权限边界）", () => {
 	const names = (t: ReturnType<typeof writerToolset>): string[] => t.map((x) => x.name).sort();
 
-	it("舞台形态的编剧:有只读 world_find 与窄通道 style_update,没有 world_update", () => {
+	it("舞台形态的编剧:有只读 world_find,以及 style_update / storyline_update / notice_update 三条窄通道,没有 world_update", () => {
 		const n = names(writerToolset({ classicMode: false, mcpTools: [] }));
 		expect(n).toContain("world_find");
 		expect(n).toContain("style_update");
+		// 2026-10-11:发展线与 Notice 也归编剧 —— 否则它写完一幕只能写 advice.md 干等
+		expect(n).toContain("storyline_update");
+		expect(n).toContain("notice_update");
 		expect(n).not.toContain("world_update");
 	});
 
@@ -574,6 +567,8 @@ describe("writerToolset（编剧 / 写作 agent 的权限边界）", () => {
 		const n = names(writerToolset({ classicMode: true, mcpTools: [] }));
 		expect(n).toContain("world_update");
 		expect(n).not.toContain("style_update");
+		expect(n).not.toContain("storyline_update");
+		expect(n).not.toContain("notice_update");
 	});
 
 	it("MCP 工具两种形态都带上", () => {

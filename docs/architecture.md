@@ -79,9 +79,11 @@ agent 会话事件(pi 的 AgentSessionEvent)
 - **世界书**:`world_update` 是唯一变更通道(提示词禁止 edit/write 直改);`applyWorldUpdate` 纯函数(判别联合 → clone → mutate → validateWorld),`withWorldLock` 串行化读-改-写(进程内;跨进程并发仍需外部文件锁)。
 - **守卫**:`installToolPathGuard(bookDir, readOnlyDirs)` 把文件工具限制在书目录内,`skills/` 目录只读放行;Web 多会话下通过 `AsyncLocalStorage` 按当前会话读取书目录 / 只读目录 / 正文白名单,避免并发会话互相覆盖。
 
-## 5. 上下文注入(背景包)
+## 5. 上下文注入
 
-`buildChapterContext`(src/world-context.ts)按序组装:
+两条通道,由 `src/inject-plan.ts`(分诊层,「哪类内容放哪一格」的唯一真相)统一裁决。
+
+**背景包**(主会话 / TUI 的唯一来源,`buildChapterContext` in src/world-context.ts)按序组装:
 
 ```
 【记忆】→【世界观概述】→【世界书·本章相关】→【写作约束】→【Notice】+【发展线】
@@ -89,8 +91,20 @@ agent 会话事件(pi 的 AgentSessionEvent)
 
 - 预算:`DEFAULT_CONTEXT_BUDGET = 2000`(常驻 + 激活共享);记忆单独 `DEFAULT_MEMORY_BUDGET = 1500` 先裁剪。
 - 激活引擎:种子 = 关键词命中(keys 子串匹配草稿 + 最近 2 条用户消息);`expandActivation` 深度内多源 BFS 沿关系展开(visited 去重,无视 arrow);排序键 = 直接命中 > 强关联 > 普通关联 > 跳距 > 类型优先级。详见 [design.md](design.md)。
-- 裁剪顺序:先裁概述,约束 / Notice / 发展线不可裁。
+- 裁剪顺序(2026-10-11 改):**世界观概述、写作约束、Notice、发展线当前位置为预算硬保**;可裁的只剩「世界书·本章相关」与「发展线·已完成」。硬保段因此可能整体超预算 —— 有意的让步,面板按实际占用如实显示。
 - **文风采样不注入**(2026-10-05):改由 `read_style` 按需读取,见 [design.md](design.md) §2 的说明。
+
+**编剧每轮上下文**(编辑会话,`planContextBlocks`)—— 2026-10-11 起编辑会话只剩这一格:
+
+```
+【世界观概述】→【世界书】→【写作约束】→【Notice·备忘录】→【当前正文】→【发展线】→【最近一幕舞台转录】
+```
+
+- 全部内容每轮一起注入,作为一条 user 消息**插在本轮用户输入之前**;走 vendor 的 context 钩子(`transformContext`),产物只参与本次请求、**不落会话历史** —— 因此不存在旧版本堆叠。
+- 此前分「稳定块(指纹去重,持久化进会话)」与「易变块(每轮追加在消息尾部)」两格,2026-10-11 合并:那套省法没换来预期的缓存命中,却让稳定块每改一次就再注一份(真实会话堆到 16 份互相打架)。取舍详见 `src/inject-plan.ts` 文件头。
+- Notice / 发展线条目在注入块里**带短编号**(`[k3p9wq] 补写第三章的雨夜`,见 `world-data.shortId`),供 `notice_update` / `storyline_update` 指认。
+
+**每轮锚**(`renderAnchor`,走 `systemPrompt` 尾部):模式行 + 当前章节 + `memory.md`;跨轮恒定且必须抗压缩,其余内容一律不进锚。
 
 ## 6. 舞台区(实验)
 

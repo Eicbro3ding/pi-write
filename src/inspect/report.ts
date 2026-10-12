@@ -80,12 +80,17 @@ export interface InspectReport {
 
 const TRIM_IMPACT: Record<TrimRecord["kind"], string> = {
 	entry: "模型看不到这条设定,可能把「没写进世界书」当作事实",
-	summary: "世界观基调丢失,细节设定仍在(世界书条目未受影响)",
+	summary: "(历史记录)世界观概述曾可被裁掉;2026-10-11 起概述与约束为预算硬保,不会再出现这一条",
 	milestones: "已完成的目标可能被重复推进 —— 这一段装的是「勿再追求」清单",
 };
 
-/** 可被预算挤掉的段 —— 与 buildChapterContext 里的裁剪顺序一致。 */
-const TRIMMABLE: ReadonlySet<ContextSection["id"]> = new Set(["summary", "entries", "storyline"]);
+/**
+ * 可被预算挤掉的段 —— 与 buildChapterContext 里的裁剪顺序一致。
+ *
+ * `summary` **不在其中**(2026-10-11):世界观概述与写作约束进了预算硬保名单,
+ * 面板上不该再把它标成「可裁」,否则用户会以为调小预算能省掉它。
+ */
+const TRIMMABLE: ReadonlySet<ContextSection["id"]> = new Set(["entries", "storyline"]);
 
 /** 展开为面板行(按占用降序;占用为 0 的段仍然保留,让用户看到「这段是空的」)。 */
 export function buildInspectReport(args: {
@@ -134,7 +139,7 @@ export function buildInspectReport(args: {
 /** 与上下文装配相关的可调项 —— 只列真的有影响的,不堆设置全表。 */
 export function budgetItems(s: WriterSettings): InspectBudgetRow[] {
 	return [
-		{ key: "contextBudget", label: "上下文预算", value: s.contextBudget, range: "200 - 20000", effect: "背景包总量上限,超出即按下面的顺序裁" },
+		{ key: "contextBudget", label: "上下文预算", value: s.contextBudget, range: "200 - 20000", effect: "背景包总量上限;超预算先裁「世界书·本章相关」与「发展线·已完成」,世界观概述与写作约束为硬保不裁" },
 		{ key: "memoryBudget", label: "记忆预算", value: s.memoryBudget, range: "100 - 20000", effect: "跨章节记忆 memory.md 注入前的裁剪上限" },
 		{ key: "activationDepth", label: "激活深度", value: s.activationDepth, range: "0 - 5", effect: "0 = 只注入关键词命中的条目;越大越会带出关联条目" },
 		{ key: "noticeInjectLimit", label: "Notice 条数", value: s.noticeInjectLimit, range: "0 - 50", effect: "注入的未完成备忘条数上限" },

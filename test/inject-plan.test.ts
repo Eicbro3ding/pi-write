@@ -2,8 +2,12 @@
  * 分诊层单测 —— 钉住「同一会话内每类内容只出现在一格」这条不变量。
  *
  * 反证法思路(本文件的核心价值):如果哪天有人把同一类内容同时塞进两格
- * (比如「Notice 放稳定块的同时又放回每轮注入」),下面的断言必须变红。
+ * (比如「Notice 进了每轮上下文、又放回锚」),下面的断言必须变红。
  * 这才是「统一」的护栏 —— 光靠注释约束不住,得让重复**无法通过测试**。
+ *
+ * 2026-10-11 起编辑会话的格 B/格 C 已合并为一格(`context`):全部内容每轮一起
+ * 注入在用户输入之前。所以这里除「互斥」外还多钉一条**顺序**(常驻组在前、
+ * 本章组在后)与一条**编号**(Notice/发展线带短编号,供窄工具指认)。
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -12,9 +16,11 @@ import {
 	EDITOR_ROUTING,
 	packContents,
 	planAnchorBlocks,
-	planPerTurnBlocks,
-	planStableBlocks,
+	planChapterBlocks,
+	planContextBlocks,
+	planResidentBlocks,
 	renderAnchor,
+	renderEditorContext,
 	slotOf,
 	truncate,
 	type ContentRouting,
@@ -62,12 +68,12 @@ function richWorld(): WorldData {
 		constraints: [{ id: "c1", name: "人称", text: "第三人称限知", enabled: true, target: "all" }],
 		styleSample: null,
 		worldSummary: "一座靠海的小城",
-		notice: { enabled: true, items: [{ id: "n1", text: "埋伏笔:钥匙", done: false }] },
+		notice: { enabled: true, items: [{ id: "ntc-n1", text: "埋伏笔:钥匙", done: false }] },
 		storyline: {
 			enabled: true,
 			nodes: [
-				{ id: "s1", title: "开场", status: "in-progress", goal: "交代背景", next: "引出林婉" },
-				{ id: "s0", title: "序", status: "done", goal: "", next: null },
+				{ id: "story-s1", title: "开场", status: "in-progress", goal: "交代背景", next: "引出林婉" },
+				{ id: "story-s0", title: "序", status: "done", goal: "", next: null },
 			],
 		},
 		timeline: [],
@@ -85,19 +91,21 @@ describe("分诊表(EDITOR_ROUTING)", () => {
 		expect(new Set(ids).size).toBe(ids.length);
 	});
 
-	it("三个格位都被用到(没有空格 —— 空格说明表写错了)", () => {
-		const slots: InjectSlot[] = ["stable", "perTurn", "anchor"];
+	it("两个格位都被用到(没有空格 —— 空格说明表写错了)", () => {
+		const slots: InjectSlot[] = ["context", "anchor"];
 		for (const s of slots) {
 			expect(contentsInSlot(s).length, `格 ${s} 没有内容`).toBeGreaterThan(0);
 		}
 	});
 
-	it("Notice 归稳定块、发展线归每轮 —— 2026-10-06 拍板的归属,不许漂移", () => {
-		expect(slotOf("notice")).toBe("stable");
-		expect(slotOf("storyline")).toBe("perTurn");
+	it("Notice 与发展线同归格 C(2026-10-11 合流:编辑会话不再分稳定块/浮动块)", () => {
+		expect(slotOf("notice")).toBe("context");
+		expect(slotOf("storyline")).toBe("context");
+		expect(slotOf("worldSummary")).toBe("context");
+		expect(slotOf("constraints")).toBe("context");
 	});
 
-	it("memory.md 归锚(不是稳定块,也不是每轮易变块)", () => {
+	it("memory.md 归锚(不是每轮上下文)", () => {
 		expect(slotOf("memory")).toBe("anchor");
 	});
 
@@ -116,38 +124,38 @@ describe("分诊表(EDITOR_ROUTING)", () => {
 	});
 });
 
-describe("格 B:稳定块(planStableBlocks)", () => {
+describe("格 C 常驻组(planResidentBlocks)", () => {
 	it("产出概述/世界书/约束/Notice 四块,且顺序固定", () => {
-		const blocks = planStableBlocks({ world: richWorld(), classicMode: false });
+		const blocks = planResidentBlocks({ world: richWorld(), classicMode: false });
 		expect(titlesOf(blocks)).toEqual(["【世界观概述】", "【世界书】", "【写作约束】", "【Notice·备忘录】"]);
 	});
 
-	it("**不产出发展线** —— 它已归格 C(这是本轮去重的关键)", () => {
-		const blocks = planStableBlocks({ world: richWorld(), classicMode: false });
+	it("**不产出发展线** —— 它归本章组", () => {
+		const blocks = planResidentBlocks({ world: richWorld(), classicMode: false });
 		expect(blocks.join("\n")).not.toContain("【发展线】");
 	});
 
-	it("**不产出正文** —— 正文归格 C", () => {
-		const blocks = planStableBlocks({ world: richWorld(), classicMode: false });
+	it("**不产出正文** —— 它归本章组", () => {
+		const blocks = planResidentBlocks({ world: richWorld(), classicMode: false });
 		expect(blocks.join("\n")).not.toContain("【当前正文");
 	});
 
-	it("约束按 target 过滤:编剧只取 writer/main-c 并集外的 excluded", () => {
+	it("约束按 target 过滤:编剧只取 writer,经典模式还收 main", () => {
 		const world = richWorld();
 		const w = { ...world, constraints: [
 			{ id: "c1", name: "给编剧", text: "x", enabled: true, target: "writer" as const },
 			{ id: "c2", name: "给导演", text: "y", enabled: true, target: "director" as const },
 		] };
-		const editor = planStableBlocks({ world: w, classicMode: false });
+		const editor = planResidentBlocks({ world: w, classicMode: false });
 		expect(editor.join("\n")).toContain("给编剧");
 		expect(editor.join("\n")).not.toContain("给导演");
 		// 经典模式是单一写作 agent:writer 与 main 都该生效,但 director 仍不该
-		const classic = planStableBlocks({ world: w, classicMode: true });
+		const classic = planResidentBlocks({ world: w, classicMode: true });
 		expect(classic.join("\n")).toContain("给编剧");
 		expect(classic.join("\n")).not.toContain("给导演");
 	});
 
-	it("空世界不产出任何块(不产生空块污染指纹)", () => {
+	it("空世界不产出任何块(不产生空块)", () => {
 		const empty: WorldData = {
 			version: 1,
 			entries: [],
@@ -159,46 +167,86 @@ describe("格 B:稳定块(planStableBlocks)", () => {
 			storyline: { enabled: false, nodes: [] },
 			timeline: [],
 		};
-		expect(planStableBlocks({ world: empty, classicMode: false })).toEqual([]);
+		expect(planResidentBlocks({ world: empty, classicMode: false })).toEqual([]);
 	});
 
 	it("Notice 关掉时不产出 Notice 块", () => {
 		const world = richWorld();
 		world.notice.enabled = false;
-		expect(planStableBlocks({ world, classicMode: false }).join("\n")).not.toContain("Notice");
+		expect(planResidentBlocks({ world, classicMode: false }).join("\n")).not.toContain("Notice");
+	});
+
+	it("**Notice 条目带短编号** —— notice_update 靠它指认(2026-10-11)", () => {
+		const text = planResidentBlocks({ world: richWorld(), classicMode: false }).join("\n");
+		// id = ntc-n1 → 短编号 n1
+		expect(text).toContain("[n1] 埋伏笔:钥匙");
+		expect(text).not.toContain("ntc-n1");
 	});
 });
 
-describe("格 C:每轮易变块(planPerTurnBlocks)", () => {
+describe("格 C 本章组(planChapterBlocks)", () => {
 	it("产出发展线与正文", () => {
-		const blocks = planPerTurnBlocks({ world: richWorld(), draft: "正文内容", draftFile: "draft/ch01.md" });
+		const blocks = planChapterBlocks({ world: richWorld(), draft: "正文内容", draftFile: "draft/ch01.md" });
 		const all = blocks.join("\n");
 		expect(all).toContain("【当前正文 · draft/ch01.md】");
 		expect(all).toContain("【发展线】");
 	});
 
-	it("**不产出 Notice** —— 它已归格 B(本轮去重的关键)", () => {
-		const blocks = planPerTurnBlocks({ world: richWorld(), draft: "x", draftFile: "draft/ch01.md" });
-		expect(blocks.join("\n")).not.toContain("Notice");
-	});
-
-	it("**不产出世界观概述 / 世界书 / 约束** —— 它们归格 B", () => {
-		const blocks = planPerTurnBlocks({ world: richWorld(), draft: "x", draftFile: "draft/ch01.md" });
+	it("**不产出 Notice / 概述 / 世界书 / 约束** —— 它们归常驻组", () => {
+		const blocks = planChapterBlocks({ world: richWorld(), draft: "x", draftFile: "draft/ch01.md" });
 		const all = blocks.join("\n");
+		expect(all).not.toContain("Notice");
 		expect(all).not.toContain("【世界观概述】");
 		expect(all).not.toContain("【世界书】");
 		expect(all).not.toContain("【写作约束】");
 	});
 
+	it("**发展线带短编号** —— storyline_update 靠它指认(2026-10-11)", () => {
+		const text = planChapterBlocks({ world: richWorld(), draft: "x", draftFile: "draft/c.md" }).join("\n");
+		// id = story-s1 → 短编号 s1;已完成 story-s0 → s0
+		expect(text).toContain("当前位置: [s1] 开场");
+		expect(text).toContain("[s0] 序");
+		expect(text).not.toContain("story-s1");
+	});
+
 	it("正文文件不存在时给落点提示(而非静默省略)", () => {
-		const blocks = planPerTurnBlocks({ world: richWorld(), draft: null, draftFile: "draft/ch01.md" });
+		const blocks = planChapterBlocks({ world: richWorld(), draft: null, draftFile: "draft/ch01.md" });
 		expect(blocks[0]).toContain("尚未创建");
 		expect(blocks[0]).toContain("draft/ch01.md");
 	});
 
 	it("无正文目标时完全不产正文块(不产生空块)", () => {
-		const blocks = planPerTurnBlocks({ world: richWorld() });
+		const blocks = planChapterBlocks({ world: richWorld() });
 		expect(blocks.join("\n")).not.toContain("【当前正文");
+	});
+});
+
+describe("格 C 合并后的整体(planContextBlocks / renderEditorContext)", () => {
+	it("常驻组在前、本章组在后(越靠近用户输入越「当下」)", () => {
+		const blocks = planContextBlocks({
+			world: richWorld(),
+			classicMode: false,
+			draft: "x",
+			draftFile: "draft/c.md",
+			transcript: "一幕",
+		});
+		expect(titlesOf(blocks)).toEqual([
+			"【世界观概述】",
+			"【世界书】",
+			"【写作约束】",
+			"【Notice·备忘录】",
+			"【当前正文 · draft/c.md】",
+			"【发展线】",
+			"【最近一幕舞台转录】",
+		]);
+	});
+
+	it("渲染出总说明,并声明「每轮刷新、当前唯一有效」(合流后历史里不留副本)", () => {
+		const text = renderEditorContext(true, planContextBlocks({ world: richWorld(), classicMode: true }));
+		expect(text).toContain("写作上下文");
+		expect(text).toContain("每轮刷新");
+		expect(text).toContain("【世界观概述】");
+		expect(renderEditorContext(false, ["x"])).toContain("编剧上下文");
 	});
 });
 
@@ -210,10 +258,12 @@ describe("格 D:每轮锚(planAnchorBlocks / renderAnchor)", () => {
 		expect(titlesOf(r.blocks)).toEqual(["【跨章节记忆 memory.md】"]);
 	});
 
-	it("**不装 Notice,也不装发展线** —— 它们分别在格 B / 格 C(本轮去重的关键)", () => {
+	it("**不装 Notice,也不装发展线 / 概述 / 约束** —— 它们全归格 C", () => {
 		const text = renderAnchor({ mode: "writing", chapterFile: "ch01.jsonl", memory: "x" });
 		expect(text).not.toContain("Notice");
 		expect(text).not.toContain("【发展线】");
+		expect(text).not.toContain("【世界观概述】");
+		expect(text).not.toContain("【写作约束】");
 	});
 
 	it("模式行排在记忆之前(顺序钉死 —— 最优先的约束在最前)", () => {
@@ -242,25 +292,25 @@ describe("格 D:每轮锚(planAnchorBlocks / renderAnchor)", () => {
 });
 
 describe("跨格互斥(反证:同一块不得出现在两格)", () => {
-	it("稳定块与每轮块的块标题集合**不相交**", () => {
-		const stable = titlesOf(planStableBlocks({ world: richWorld(), classicMode: false }));
-		const perTurn = titlesOf(
-			planPerTurnBlocks({ world: richWorld(), draft: "x", draftFile: "draft/ch01.md", transcript: "一幕" }),
+	it("常驻组与本章组的块标题集合**不相交**", () => {
+		const resident = titlesOf(planResidentBlocks({ world: richWorld(), classicMode: false }));
+		const chapter = titlesOf(
+			planChapterBlocks({ world: richWorld(), draft: "x", draftFile: "draft/c.md", transcript: "一幕" }),
 		);
-		const overlap = stable.filter((t) => perTurn.includes(t));
-		expect(overlap, `这些块同时出现在格 B 与格 C:${overlap.join(", ")}`).toEqual([]);
+		const overlap = resident.filter((t) => chapter.includes(t));
+		expect(overlap, `这些块同时出现在常驻组与本章组:${overlap.join(", ")}`).toEqual([]);
 	});
 
-	it("稳定块与锚的块标题集合不相交", () => {
-		const stable = titlesOf(planStableBlocks({ world: richWorld(), classicMode: false }));
+	it("格 C 与锚的块标题集合不相交", () => {
+		const context = titlesOf(planContextBlocks({
+			world: richWorld(),
+			classicMode: false,
+			draft: "x",
+			draftFile: "draft/c.md",
+			transcript: "一幕",
+		}));
 		const anchor = titlesOf(planAnchorBlocks({ mode: "writing", chapterFile: "c", memory: "x" }).blocks);
-		expect(stable.filter((t) => anchor.includes(t))).toEqual([]);
-	});
-
-	it("每轮块与锚的块标题集合不相交", () => {
-		const perTurn = titlesOf(planPerTurnBlocks({ world: richWorld(), draft: "x", draftFile: "draft/c.md" }));
-		const anchor = titlesOf(planAnchorBlocks({ mode: "writing", chapterFile: "c", memory: "x" }).blocks);
-		expect(perTurn.filter((t) => anchor.includes(t))).toEqual([]);
+		expect(context.filter((t) => anchor.includes(t))).toEqual([]);
 	});
 
 	it("全表覆盖:EDITOR_ROUTING 里的每个 id 恰好能被某一格产出一次", () => {
@@ -277,8 +327,7 @@ describe("跨格互斥(反证:同一块不得出现在两格)", () => {
 			"【跨章节记忆 memory.md】": "memory",
 		};
 		const produced = new Set<string>([
-			...titlesOf(planStableBlocks({ world: richWorld(), classicMode: false })),
-			...titlesOf(planPerTurnBlocks({ world: richWorld(), draft: "x", draftFile: "draft/c.md", transcript: "t" })),
+			...titlesOf(planContextBlocks({ world: richWorld(), classicMode: false, draft: "x", draftFile: "draft/c.md", transcript: "t" })),
 			...titlesOf(planAnchorBlocks({ mode: "writing", chapterFile: "c", memory: "x" }).blocks),
 		]);
 		const mapped = new Set(Object.keys(blockIdOf).filter((t) => produced.has(t)).map((t) => blockIdOf[t]!));
@@ -304,7 +353,7 @@ describe("truncate(截断)", () => {
 });
 
 describe("格 E:背景包按会话类型(反证:编剧会话不得复用背景包)", () => {
-	it("主会话承载全部(它没有稳定块/易变块 —— 背景包是唯一来源)", () => {
+	it("主会话承载全部(它没有格 C —— 背景包是唯一来源)", () => {
 		expect(packContents("main")).toEqual(["memory", "worldSummary", "constraints", "notice", "storyline"]);
 	});
 
@@ -312,7 +361,7 @@ describe("格 E:背景包按会话类型(反证:编剧会话不得复用背景�
 		expect(packContents("tui").length).toBe(packContents("main").length);
 	});
 
-	it("编剧会话**不承载**背景包内容(它有格 B/C/D,再走背景包就是重复)", () => {
+	it("编剧会话**不承载**背景包内容(它有格 C/D,再走背景包就是重复)", () => {
 		expect(packContents("editor")).toEqual([]);
 	});
 
@@ -323,8 +372,8 @@ describe("格 E:背景包按会话类型(反证:编剧会话不得复用背景�
 
 describe("路由表类型可用", () => {
 	it("ContentRouting 可作只读表传入(contentsInSlot 支持自定义表)", () => {
-		const custom: readonly ContentRouting[] = [{ id: "a", label: "甲", slot: "stable" }];
-		expect(contentsInSlot("stable", custom)).toEqual(["a"]);
-		expect(contentsInSlot("perTurn", custom)).toEqual([]);
+		const custom: readonly ContentRouting[] = [{ id: "a", label: "甲", slot: "context" }];
+		expect(contentsInSlot("context", custom)).toEqual(["a"]);
+		expect(contentsInSlot("anchor", custom)).toEqual([]);
 	});
 });

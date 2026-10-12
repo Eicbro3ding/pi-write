@@ -17,10 +17,12 @@
  * **例外**:`chatAndWait` 永远按**章节键**取宿主,不受 conversationScope 影响 ——
  * 收幕成文天然要落某一章的正文,它不能跑进一段与章节无关的自由对话。
  *
- * 上下文注入分两类:**稳定块**(世界观概述/世界书条目/写作约束)按
- * 指纹持久化进会话(nextTurn custom 消息,内容变化才重注入,可缓存前缀的一部分);
- * **易变块**(当前章节草稿 + 发展线 + Notice 备忘录 + 最近一幕舞台转录)经
- * context 钩子每次调用前追加在消息尾部——编剧据此讨论行文/取舍/评戏/维护 advice.md。
+ * 上下文注入**只有一条通道**(2026-10-11 统一):世界观概述 / 世界书条目 / 写作约束 /
+ * Notice / 当前章草稿 / 发展线 / 最近一幕舞台转录,全部由 `editorContext` 经 context 钩子
+ * 每轮产出,作为一条 user 消息插在**本轮用户输入之前**。此前分「稳定块(指纹去重,
+ * 持久化进会话)」与「易变块(每轮追加在消息尾部)」两类,分格的动机是省 token,
+ * 但稳定块一变就再注一份、旧的一份留在历史里删不掉(真实会话堆到 16 份互相打架),
+ * 用户据此拍板合流 —— 理由与取舍见 `src/inject-plan.ts` 的文件头。
  * 章节由 chat() 的 chapterFile 声明(每书记最近一次,无则只注入世界书);
  * book 模式下 chapterFile 不再决定会话身份,只登记「用户正在看的章节」(setViewChapter,
  * 每次调用现读),会话身份由 conversationId 决定。
@@ -65,7 +67,6 @@ import {
 	type AgentSessionEvent,
 	type ExtensionAPI,
 	type RuntimeFactoryHandle,
-	type SessionEntry,
 	type ThinkingLevel,
 	type ToolDefinition,
 } from "../pi-adapter/index.ts";
@@ -73,12 +74,12 @@ import { createEmptyWorld, ensureWorld, newId, type WorldData } from "../world-d
 // 记忆锚:格 D 的 IO shell(读 memory.md)。拼装口径在 inject-plan 的分诊层里
 // —— web 编剧会话与 TUI 共用同一实现(before_agent_start 各注册一次)。
 import { buildMemoryAnchor } from "../extension.ts";
-import { planPerTurnBlocks, planStableBlocks } from "../inject-plan.ts";
+import { planContextBlocks, renderEditorContext } from "../inject-plan.ts";
 import { detectSessionMode } from "../session-mode.ts";
 import { buildEditorSystemPrompt, buildWriterSystemPrompt, writerShellLine } from "../prompt.ts";
 import type { ShellDialect } from "../shell-kind.ts";
 import type { ConversationScope } from "../writer-settings.ts";
-import { readChapterTool, readStyleTool, styleUpdateTool, worldFindTool, worldUpdateTool } from "../tools.ts";
+import { noticeUpdateTool, readChapterTool, readStyleTool, storylineUpdateTool, styleUpdateTool, worldFindTool, worldUpdateTool } from "../tools.ts";
 import { createAskUserTool, settleDanglingAskParts } from "../ask-user.ts";
 
 /**
@@ -90,14 +91,17 @@ const askUserTool = createAskUserTool();
 /**
  * 常驻编剧 / 经典模式写作 agent 的自定义工具清单 —— **权限边界唯一真相源**。
  *
- * 非经典(舞台形态)下编剧只有:`world_find`(只读检索世界书)+ `style_update`
- * (只写写作约束 / 文风采样 / 世界观概述的窄通道)。人物 / 关系 / 时间线 / 大纲 /
- * 发展线 / Notice 一律改不了——那是导演的活,这条边界是刻意的。
+ * 非经典(舞台形态)下编剧有:`world_find`(只读检索世界书)+ `style_update`
+ * (写作约束 / 文风采样 / 世界观概述的窄通道)+ `storyline_update` / `notice_update`
+ * (发展线与 Notice 的窄通道,2026-10-11 补)。人物 / 关系 / 时间线 / 大纲一律改不了
+ * ——那是导演的活,这条边界是刻意的。
  * 经典模式换成单一写作 agent,才补上 `world_update`(完整写作工具集)。
  *
  * 抽成纯函数是为了让单测直接钉住这条边界:`style_update` 是 2026-10-01 才补的——
  * 此前编剧连「以后别用破折号」都只能写 advice.md 等导演下次开会话落盘,
- * 用户看到的是"说了没生效"。
+ * 用户看到的是"说了没生效"。2026-10-11 的 `storyline_update` / `notice_update`
+ * 是同一个断链的另一半:写完一幕该推进发展线、该勾掉 Notice,编剧此前同样只能
+ * 写 advice.md 干等。
  */
 export function writerToolset(opts: { classicMode: boolean; mcpTools: ToolDefinition[] }): ToolDefinition[] {
 	// read_chapter(2026-10-04)两种形态都给:它是**只读**的,不触碰世界书/人物/关系,
@@ -108,7 +112,7 @@ export function writerToolset(opts: { classicMode: boolean; mcpTools: ToolDefini
 	// 成了版本堆叠的第二大来源。改成按需取,顺手把那条触发也拆了。
 	return opts.classicMode
 		? [worldUpdateTool, worldFindTool, readChapterTool, readStyleTool, askUserTool, ...opts.mcpTools]
-		: [worldFindTool, styleUpdateTool, readChapterTool, readStyleTool, askUserTool, ...opts.mcpTools];
+		: [worldFindTool, styleUpdateTool, storylineUpdateTool, noticeUpdateTool, readChapterTool, readStyleTool, askUserTool, ...opts.mcpTools];
 }
 import { SessionHost } from "./session-host.ts";
 import { formatStageLines } from "../stage/assembler.ts";
@@ -149,23 +153,41 @@ export function chapterSemantic(id: string | null | undefined): string | null {
 	return typeof id === "string" && id.endsWith(".jsonl") ? id : null;
 }
 
+/**
+ * 把每轮上下文块作为一条 user 消息,插到**最后一条用户输入之前**(2026-10-11)。
+ *
+ * 为什么必须「之前」:块里装的是世界观/约束/进度这类**背景**,它要读起来像"先看资料
+ * 再听要求";追加在用户输入之后(合流前的做法)会让模型先看到问题再看到资料。
+ * 找不到 user 消息时(理论上不该发生)退化为追加在末尾 —— 位置不理想,但绝不丢内容:
+ * 静默丢弃会让模型在完全没有设定的情况下动笔,而它不会报告"我没拿到资料"。
+ *
+ * 导出即为了单测(与 hostPromptScope / chapterSemantic 同款)。
+ */
+export function insertBeforeLastUserMessage(messages: readonly AgentMessage[], text: string): AgentMessage[] {
+	const injected: AgentMessage = { role: "user", content: text, timestamp: Date.now() };
+	const out = [...messages];
+	let at = out.length;
+	for (let i = out.length - 1; i >= 0; i--) {
+		if (out[i]?.role === "user") {
+			at = i;
+			break;
+		}
+	}
+	out.splice(at, 0, injected);
+	return out;
+}
+
 /** 经典模式(单 agent)的内置工具:web 无 bash,其余全量(与 webActiveTools 同集)。 */
 const CLASSIC_ACTIVE_TOOLS = ["read", "write", "edit", "grep", "find", "ls"];
 
 // 注入块的长度上限(DRAFT_LIMIT / WORLD_LIMIT / SUMMARY_LIMIT)已随 2026-10-06 分诊收口
 // 迁到 `src/inject-plan.ts` —— 与产出那些块的函数放在一起,免得改上限要跨文件找。
 
-/**
- * 稳定上下文条目的识别标记(见 `countStableContextInLeaf`)。
- *
- * 用标题里的固定字样而不是 customType:`world-context` 是所有注入共用的类型,
- * 切成章背景包 / 压缩补偿都会用到它;稳定上下文有自己的文案前缀,按它数才准。
- */
-const STABLE_CONTEXT_MARKER = "稳定上下文";
-const STAGE_LIMIT = 8000;
-
 /** 无章节/无对话时的兜底对话 id:会话文件 writer-default.jsonl(与改动前一致)。 */
 const DEFAULT_CONVERSATION_ID = "default";
+
+/** 舞台转录注入上限(与 `inject-plan.ts` 的 STAGE_LIMIT 同值;供 latestStageTranscript 截断)。 */
+const STAGE_LIMIT = 8000;
 
 /**
  * 手动压缩的缺省摘要指令(2026-10-05 失忆修复)。
@@ -360,9 +382,6 @@ export class WriterHost {
 	 * (而不是创建会话时闭包捕获),setViewChapter 与带 chapterFile 的 writer 调用都会更新它。
 	 */
 	private readonly viewChapter = new Map<string, string | null>();
-	/** 已注入会话的稳定块指纹(键 = 会话键):内容不变不重注入;服务重启后为空,
-	 *  由 sessionLeafHasFingerprint 扫当前分支补记账。 */
-	private readonly stableInjected = new Map<string, string>();
 	/** 事件转发(server 构造时注入 → broadcast 为 writer_event);注入前静默丢弃。
 	 *  chapterFile 随事件透传(编剧会话按章节隔离,前端据此过滤,2026-08-13);
 	 *  conversation 只在 book 模式的会话上给(章节模式保持负载逐字节不变)。 */
@@ -782,9 +801,9 @@ export class WriterHost {
 						// 而 web 编剧会话不装配那个扩展 —— 与刚修的工具护栏是**同一个坑**:
 						// 真正写正文的会话反而没有护栏/锚。搬后 web 与 TUI 行为一致。
 						//
-						// 内容口径由分诊层决定(见 src/inject-plan.ts):Notice 与**发展线不再进锚**
-						// —— 它们分别归格 B(稳定块)与格 C(每轮易变块),放在锚里等于每轮重付一次。
-						// 锚只承载「丢了就会写错、且变化极少」的那几项,以保住缓存友好性。
+						// 内容口径由分诊层决定(见 src/inject-plan.ts):Notice / 发展线 / 世界观 / 约束
+						// 一律归格 C(每轮上下文,见上面的 context 钩子),**不进锚**(放锚里等于每轮重付一次)。
+						// 锚只承载「丢了就会写错、且变化极少」的那几项 —— 模式行 / 章节 / memory.md。
 						pi.on("before_agent_start", async (event) => {
 							try {
 								// book 模式的章节是易变上下文,必须现读 viewChapter(不能闭包捕获)——
@@ -825,19 +844,17 @@ export class WriterHost {
 		});
 	}
 
-	/** 上下文注入(易变块 = 分诊表的**格 C**,每次调用追加在消息尾部):
-	 *  当前章节草稿 + 发展线 + 最近一幕舞台转录。
+	/** 上下文注入 —— **编辑会话唯一的注入通道**(分诊表的格 C,2026-10-11 合流后):
+	 *  世界观概述 / 世界书条目 / 写作约束 / Notice / 当前章节草稿 / 发展线 / 最接近一幕舞台转录。
 	 *
-	 *  **Notice 已移出本方法**(2026-10-06 收口):它原先在这里与本会话的稳定块
-	 *  (`stableContext`)各注一遍 —— 同一份 `world.notice` 每轮出现两次。按分诊表
-	 *  归**格 B(指纹去重)**,`stableContext` 是它现在唯一的出处。见 `src/inject-plan.ts`。
+	 *  注入形态:一条 user 消息,**插在本轮用户输入之前**(见 insertBeforeLastUserMessage)。
+	 *  走 context 钩子(vendor 的 transformContext)—— 它的产物只参与**本次请求**、
+	 *  不落会话历史,所以既不会堆版本,也不必再挂「第几版」的牌子。
 	 *
-	 *  **格 B**(世界观概述/世界书条目/写作约束/Notice)不在这里逐轮注入——
-	 *  它们变化很少,逐轮注入等于每轮都付一笔全价未缓存输入;改为
-	 *  syncStableContext 按「指纹」持久化进会话(chat/chatAndWait 前调用),
-	 *  内容变化才重注入。chapter 模式下章节随会话固定(切章后新会话注入新章,
-	 *  旧会话不再被使用);book 模式下 chapterFile 由调用方在每次调用前现读 viewChapter
-	 *  (见 roleFactory 的 inject)。 */
+	 *  合流前这里只装易变块,稳定块走 `syncStableContext` 持久化注入;两格的分工与
+	 *  合并理由见 `src/inject-plan.ts` 的文件头。chapter 模式下章节随会话固定
+	 *  (切章后新会话注入新章,旧会话不再被使用);book 模式下 chapterFile 由调用方
+	 *  在每次调用前现读 viewChapter(见 roleFactory 的 inject)。 */
 	private async editorContext(slug: string, chapterFile: string | null, messages: AgentMessage[]): Promise<AgentMessage[] | undefined> {
 		let world: WorldData | null = null;
 		try {
@@ -845,7 +862,7 @@ export class WriterHost {
 		} catch {
 			/* 世界书缺失:跳过需要它的块,不阻断对话 */
 		}
-		// 格 C 的块由分诊层产出(见 src/inject-plan.ts 的 EDITOR_ROUTING)。
+		// 块由分诊层产出(见 src/inject-plan.ts 的 EDITOR_ROUTING / planContextBlocks)。
 		// 正文用 readTextSafe 现读:null 表示文件不存在,由分诊层转成「尚未创建」落点提示。
 		const draftFile = chapterFile ? `draft/${chapterFile.replace(/\.jsonl$/, ".md")}` : null;
 		const draft = draftFile ? await readTextSafe(join(getBookDir(slug), draftFile)) : null;
@@ -854,63 +871,16 @@ export class WriterHost {
 		// 经典模式无舞台(页面隐藏、不会有新一幕),不注入:省 token,也避免单 agent
 		// 上下文里出现它无从操作的概念。
 		const transcript = this.classicMode ? null : await latestStageTranscript(getBookDir(slug));
-		const blocks = planPerTurnBlocks({
+		const blocks = planContextBlocks({
 			// 世界书读失败时不产出需要它的块(发展线),正文与转录仍照常
 			world: world ?? createEmptyWorld(),
+			classicMode: this.classicMode,
 			draft,
 			draftFile,
 			transcript,
 		});
 		if (blocks.length === 0) return undefined;
-		return [...messages, { role: "user", content: blocks.join("\n\n"), timestamp: Date.now() }];
-	}
-
-	/** 稳定块上下文 = 分诊表的**格 B**:世界观概述 / 世界书角色条目 / 写作约束 / **Notice**。
-	 *
-	 *  **Notice 自 2026-10-06 起归此格**(原先它在 `editorContext` 与本方法各注一遍)。
-	 *  归属理由见 `src/inject-plan.ts` 的 EDITOR_ROUTING:Notice 变化频率低、内容稳定,
-	 *  正是指纹去重的适用场景;放在每轮注入只是每轮重付一次 token。
-	 *
-	 *  **文风采样已不在其中**(2026-10-05):改由 `read_style` 按需读取,见下方注释。
-	 *  与易变块分离:syncStableContext 按指纹持久化进会话,内容不变不重注入,
-	 *  省掉每轮数 k token 的全价未缓存输入(2026-08-22 缓存命中优化)。 */
-	private async stableContext(slug: string): Promise<string> {
-		try {
-			const world = await ensureWorld(getBookDir(slug));
-			// 文风采样**刻意不在这里**(2026-10-05):它是 `read_style` 的按需读取对象,
-			// 不再常驻。两个原因 —— ① 按提示词纪律「明显变化则换新,从当前章草稿选
-			// 300–500 字」,采样每写一章就可能换一次,而它一变稳定块指纹就变、就要重注
-			// 一份(见 countStableContextInLeaf),它是版本堆叠的第二大来源;
-			// ② 讨论轮根本不动笔,用不上采样,却照样为它付了 token。
-			return planStableBlocks({ world, classicMode: this.classicMode }).join("\n\n");
-		} catch {
-			/* 世界书缺失:跳过注入 */
-			return "";
-		}
-	}
-
-	/**
-	 * 同步稳定块上下文:指纹与会话内已注入的一致则跳过;不一致(首次/世界书或
-	 * 文风等变更后)经 injectContext 以 nextTurn custom 消息持久化——随下个用户
-	 * prompt 进入上下文并落盘,之后成为可缓存前缀的一部分,不再每轮重付。
-	 * 指纹扫描沿当前 leaf 分支:压缩(compaction 把旧历史移出 leaf 链)或切分支后
-	 * 稳定块不在上下文里时会被重新发现并补注入。
-	 */
-	private async syncStableContext(slug: string, conversationId: string, host: SessionHost): Promise<void> {
-		const stable = await this.stableContext(slug);
-		if (stable.length === 0) return;
-		const fp = stableFingerprint(stable);
-		const key = WriterHost.key(slug, conversationId);
-		if (this.stableInjected.get(key) === fp) return;
-		if (!this.stableInjected.has(key) && sessionLeafHasFingerprint(slug, conversationId, fp)) {
-			// 服务重启后内存为空,但当前分支已含同指纹注入:只补记账,不重注入
-			this.stableInjected.set(key, fp);
-			return;
-		}
-		// 版本号 = 已有份数 + 1:已经注入过的那些不会消失,新版本必须能盖过它们。
-		const version = countStableContextInLeaf(slug, conversationId) + 1;
-		await host.injectContext(renderStableContext(this.classicMode, stable, version));
-		this.stableInjected.set(key, fp);
+		return insertBeforeLastUserMessage(messages, renderEditorContext(this.classicMode, blocks));
 	}
 
 	/** 编剧会话状态快照(纯读;未对话过的对话返回空态,不创建会话)。
@@ -1002,7 +972,6 @@ export class WriterHost {
 	async chat(slug: string, text: string, chapterFile?: string | null, conversation?: string): Promise<void> {
 		const { key, chapter } = this.resolveRef(slug, chapterFile, conversation, true);
 		const host = await this.getOrCreate(slug, key, chapter);
-		await this.syncStableContext(slug, key, host);
 		await host.sendMessage(text);
 	}
 
@@ -1023,7 +992,6 @@ export class WriterHost {
 		if (chapter) this.currentChapter.set(slug, chapter);
 		const key = chapter ?? this.currentChapter.get(slug) ?? DEFAULT_CONVERSATION_ID;
 		const host = await this.getOrCreate(slug, key, key === DEFAULT_CONVERSATION_ID ? null : key);
-		await this.syncStableContext(slug, key, host);
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const timeout = new Promise<"timeout">((resolve) => {
 			timer = setTimeout(() => resolve("timeout"), timeoutMs);
@@ -1182,7 +1150,6 @@ export class WriterHost {
 			this.hosts.delete(key);
 			await host.dispose();
 		}
-		this.stableInjected.delete(key);
 		if (this.currentConversation.get(slug) === safeId) this.currentConversation.delete(slug);
 		if (this.currentChapter.get(slug) === safeId) this.currentChapter.delete(slug);
 		if (this.viewChapter.get(slug) === safeId) this.viewChapter.set(slug, null);
@@ -1262,7 +1229,7 @@ function readSessionFromDisk(slug: string, conversationId: string | null): {
 
 /** 会话文件 basename:`writer-<对话 id>.jsonl`(chapter 模式下 id 就是章节文件名,
  *  `ch01.jsonl` → `writer-ch01.jsonl`,与改动前逐字节一致;无 id → default)。
- *  模块级(state/readSessionFromDisk/sessionLeafHasFingerprint/对话管理共用)。 */
+ *  模块级(state/readSessionFromDisk/对话管理共用)。 */
 function writerSessionFile(conversationId: string | null | undefined): string {
 	const id = (conversationId ?? DEFAULT_CONVERSATION_ID).replace(/\.jsonl$/, "") || DEFAULT_CONVERSATION_ID;
 	return `writer-${id}.jsonl`;
@@ -1303,99 +1270,6 @@ export function conversationTitleText(text: string): string {
 	const source = skill ? [skill.name, skill.userMessage ?? ""].filter((s) => s.length > 0).join(" · ") : text;
 	const flat = source.replace(/\s+/g, " ").trim();
 	return flat.length > TITLE_LIMIT ? flat.slice(0, TITLE_LIMIT) : flat;
-}
-
-/**
- * 渲染稳定上下文的注入文本(纯函数,单测直接钉)。
- *
- * 三个必须同在这条标题里的东西,少一个都会出事:
- * - **指纹**:`sessionLeafHasFingerprint` 靠 `指纹 ${fp}` 认出「已经注入过这一版」,
- *   服务重启后能只补记账不重注入。去掉它,每次重启都白付一次全价未缓存输入。
- * - **版本号**:见 {@link countStableContextInLeaf},旧版本不会消失,必须有可比的序号。
- * - **取代声明**:只给版本号不给作废语义的话,模型看到多份「长期有效」仍会自己挑。
- *
- * @param classicMode true = 写作 agent,false = 编剧(两者的稳定块内容口径不同)
- */
-export function renderStableContext(classicMode: boolean, stable: string, version: number): string {
-	const role = classicMode ? "写作" : "编剧";
-	return [
-		`【${role}稳定上下文 · 第 ${version} 版 · 取代此前所有同名条目】`,
-		"以下是世界观与写作基准,长期有效。",
-		"",
-		"**这份是当前唯一有效的版本。** 本书设定每次改动我都会重新整理一份注入到这里,而更早的那些条目**不会消失**,它们是被改动之前的旧快照 —— 名字一样、内容可能已经不同。多条内容冲突时,只以**版本号最大**的这一条为准,其余一律作废。",
-		"",
-		stable,
-	].join("\n");
-}
-
-/**
- * 当前 leaf 分支上已有的稳定上下文版本数(0 = 还没注入过)。
- *
- * 为什么需要它:只要世界书改一次,`stableContext` 的内容就变、指纹就变,于是
- * **又注入一份**。旧的那份留在该 leaf 链上没人删 —— 真实会话
- * `writer-c-v05ij1` 里堆到 **16 份**(760 → 3885 字),每一份都自称「长期有效」,
- * 可第 1 份和第 16 份对同一个人的写法已经不同了。用户抱怨「我不是曾经介绍过
- * 本我侵蚀吗」「笔记里不都有吗」,就是因为模型对着十几份互相打架的设定不知道
- * 该信哪一份 —— **这是「背景包堆叠」真正的代价,不是占了多少 token。**
- *
- * 为什么不去删旧条目:custom 消息已经落进会话树并被 ack,parentId 链不能断。
- * 于是退一步 —— 在新版本上标清楚自己是第几版、旧的是废的。移不掉就挂牌子。
- */
-export function countStableContextInLeaf(slug: string, conversationId: string | null): number {
-	try {
-		const sessionsDir = getBookSessionsDir(slug);
-		const abs = join(sessionsDir, writerSessionFile(conversationId));
-		if (!existsSync(abs)) return 0;
-		// 只读读取器(与 sessionLeafHasFingerprint 同一套,见那里的注释)
-		const sm = readSessionFile(abs, sessionsDir, getBookDir(slug));
-		if (!sm) return 0;
-		const leafId = sm.getLeafId();
-		if (!leafId) return 0;
-		let n = 0;
-		for (const e of sm.getBranch(leafId) as SessionEntry[]) {
-			if (e.type !== "custom_message") continue;
-			if (JSON.stringify(e).includes(STABLE_CONTEXT_MARKER)) n++;
-		}
-		return n;
-	} catch {
-		return 0;
-	}
-}
-
-/** FNV-1a 8 位十六进制指纹(稳定块内容);不引 crypto,防碰撞能力对「内容变没变」判断足够。 */
-export function stableFingerprint(text: string): string {
-	let h = 0x811c9dc5;
-	for (let i = 0; i < text.length; i++) {
-		h ^= text.charCodeAt(i);
-		h = Math.imul(h, 0x01000193);
-	}
-	return (h >>> 0).toString(16).padStart(8, "0");
-}
-
-/**
- * 当前 leaf 分支是否已含该指纹的稳定块注入(只读打开会话文件)。
- * 沿 leaf 链扫描:压缩/切分支后旧注入移出当前上下文 → 返回 false → syncStableContext 允许补注入。
- * 文件不存在/解析失败返回 false(视为未注入)。
- */
-function sessionLeafHasFingerprint(slug: string, conversationId: string | null, fp: string): boolean {
-	try {
-		const sessionsDir = getBookSessionsDir(slug);
-		const abs = join(sessionsDir, writerSessionFile(conversationId));
-		if (!existsSync(abs)) return false;
-		// 2026-10-04(T7 批 2):只读读取器(见 readSessionFromDisk 同处注释)
-		const sm = readSessionFile(abs, sessionsDir, getBookDir(slug));
-		if (!sm) return false;
-		const leafId = sm.getLeafId();
-		if (!leafId) return false;
-		const marker = `指纹 ${fp}`;
-		for (const e of sm.getBranch(leafId) as SessionEntry[]) {
-			if (e.type !== "custom_message") continue;
-			if (JSON.stringify(e).includes(marker)) return true;
-		}
-		return false;
-	} catch {
-		return false;
-	}
 }
 
 /**

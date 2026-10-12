@@ -95,6 +95,24 @@ export function newId(prefix: string): string {
 }
 
 /**
+ * 条目 id 的**短编号** —— 注入块里给模型指认用的那个键(2026-10-11)。
+ *
+ * id 形如 `story-9f2k1x`(前缀 + 6 位随机段),短编号只取最后一段 `9f2k1x`:
+ * 前缀的作用是区分「这是哪类对象」,而注入块已经用【发展线】/【Notice·备忘录】
+ * 这样的块标题分了类,再带一遍前缀纯属重复;6 位随机段既够唯一又够短,
+ * 模型抄进 target 时不容易抄错。**它是 id 的一部分,所以改名不丢靶**
+ * (改标题不换 id)——这正是「按编号指认」相对「按名字指认」的价值。
+ *
+ * 手工编辑过的 world.json 可能有不带 `-` 的 id:原样返回(此时短编号 = 完整 id)。
+ */
+export function shortId(id: string): string {
+	const i = id.lastIndexOf("-");
+	if (i === -1) return id;
+	const tail = id.slice(i + 1);
+	return tail.length > 0 ? tail : id;
+}
+
+/**
  * 书目录解析：绝对路径直接使用（测试与调用方传 getBookDir(slug) 的结果）；
  * 相对值按 slug 经 getBookDir 解析。
  */

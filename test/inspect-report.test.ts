@@ -57,7 +57,8 @@ describe("buildInspectReport（T5 上下文检视）", () => {
 		const byId = Object.fromEntries(r.sections.map((s) => [s.id, s.trimmable]));
 		expect(byId.memory).toBe(false); // 记忆不参与裁剪
 		expect(byId.entries).toBe(true);
-		expect(byId.summary).toBe(true);
+		// 2026-10-11:世界观概述与写作约束同为预算硬保,面板不该再把它标成可裁
+		expect(byId.summary).toBe(false);
 	});
 
 	it("被省略的每条都带「丢了会怎样」—— 只给数字等于没说", () => {
