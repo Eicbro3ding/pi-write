@@ -577,8 +577,7 @@ function matchRoute(method: string, parts: string[], routes: Route[]): { route: 
  * 重注入(白付全价未缓存输入)。
  *
  * 文件不存在/解析失败返回 false —— 宁可多注一次,也不要让世界书静默缺席。
- */
-export function sessionLeafHasWorldContext(slug: string, chapterFile: string): boolean {
+ */export function sessionLeafHasWorldContext(slug: string, chapterFile: string): boolean {
 	try {
 		const absPath = getChapterSessionsPath(slug, chapterFile);
 		if (!existsSync(absPath)) return false;
@@ -595,6 +594,42 @@ export function sessionLeafHasWorldContext(slug: string, chapterFile: string): b
 	} catch {
 		return false;
 	}
+}
+
+/**
+ * world.json 的 mtimeMs;文件不存在/读不到返回 0(调用方按「没有信息」处理)。
+ *
+ * 只被 world_update 与 UI 的写路径触碰 —— 没改 = mtime 不变,这是「包是否陈旧」
+ * 的零成本判据的前提。
+ */
+function worldJsonMtime(slug: string): number {
+	try {
+		return statSync(join(getBookDir(slug), "world.json")).mtimeMs;
+	} catch {
+		return 0;
+	}
+}
+
+/**
+ * 背景包陈旧判据(2026-10-12):世界书在背景包装配之后被改过吗?
+ *
+ * 存在性判据({@link sessionLeafHasWorldContext})只治「压缩后忘」—— 包被移出
+ * leaf 链就补注。它治不了「陈旧」:切章时注入的那份快照停在注入那一刻,之后
+ * **同章内** AI 的 world_update、用户在 UI 改的设定/约束/Notice,全都不在上下文
+ * 里,要等下次切章、或压缩偶然把旧包吃掉才刷新。症状就是用户体感的「规矩时灵
+ * 时不灵」:立规矩那轮 toolResult 还在,十轮之后快照里没有。
+ *
+ * 判据用 mtime 而非内容指纹:整包含易变内容(草稿/发展线位置/最近消息),指纹
+ * 每轮都变,拿它当键会每轮重注;而 world.json 只在真正改设定时才动。没改 →
+ * 跳过(零成本),改了 → 下一轮刷新。快路径的便宜保留,判据从「在不在」升级成
+ * 「新不新」。
+ *
+ * `stampedMtime === undefined`(进程重启后第一次)一律判陈旧 —— 宁可多注一次,
+ * 也不要让重启期间发生的世界书变更静默缺席。
+ */
+export function worldPackStale(stampedMtime: number | undefined, currentMtime: number): boolean {
+	if (stampedMtime === undefined) return true;
+	return currentMtime > stampedMtime;
 }
 
 export class WriterServer {
@@ -641,6 +676,15 @@ export class WriterServer {
 	 * 两者都由同一次 injectChapterContext 写入,键一致。
 	 */
 	private readonly lastTrimmed = new Map<string, TrimRecord[]>();
+	/**
+	 * 最近一次背景包装配时 world.json 的 mtimeMs(键 = slug,2026-10-12)。
+	 *
+	 * 与 lastTrim 同一次装配写入 —— 它是「这份包是哪一版世界书」的邮戳。
+	 * ensureChapterContext 据此判断 leaf 链里那个包是否已陈旧(存在性判据
+	 * 治丢失,这个邮戳治过期)。按 slug 而非 slug/chapter 记:世界书是书级的,
+	 * 切章不改变它的版本。
+	 */
+	private readonly lastPackWorldMtime = new Map<string, number>();
 	/**
 	 * models.json 读-改-写串行队列(2026-10 审计 BUG-011):并发新增/编辑/删除
 	 * 自定义 provider/model 时,各自「读旧快照 → 改 → 原子写」会互相覆盖。
@@ -934,7 +978,14 @@ export class WriterServer {
 	 * 注入世界书背景包:switchSession/reloadRuntime 之后,以当前会话的
 	 * 章节上下文(custom 消息随下个 prompt 进入)重建 nextTurn 背景包。
 	 */
-	private async injectChapterContext(slug: string, chapterFile: string): Promise<void> {
+	/**
+	 * 装配并注入本章背景包。
+	 *
+	 * @param reason "switch" = 切章后的首包(正常路径);"refresh" = 同章内世界书
+	 *   变过的重注 —— 旧包还在历史里,包首必须声明取代关系,否则模型会把两份
+	 *   自称「背景包」的消息都当有效(2026-10-11 编辑会话 16 份堆叠的教训)。
+	 */
+	private async injectChapterContext(slug: string, chapterFile: string, reason: "switch" | "refresh" = "switch"): Promise<void> {
 		const chapterId = chapterFile.replace(/\.jsonl$/, "");
 		let draftText = "";
 		try {
@@ -952,6 +1003,10 @@ export class WriterServer {
 			memory = "";
 		}
 		const world = await ensureWorld(slug);
+		// 邮戳与本次装配取同一时刻的 world.json —— 记「装配时看到的版本」,
+		// 之后它变了才算陈旧;记早了会把刚写进的世界书误判成已过期,记晚了
+		// 则漏掉装配期间那一瞬的变更。
+		const worldMtime = worldJsonMtime(slug);
 		const recent = this.options.sessionHost
 			.getState()
 			.messages.filter((m) => m.role === "user")
@@ -977,7 +1032,14 @@ export class WriterServer {
 		this.lastSections.set(`${slug}/${chapterFile}`, context.sections);
 		this.lastTrimmed.set(`${slug}/${chapterFile}`, context.trimmed);
 		if (context.text.length > 0) {
-			await this.options.sessionHost.injectContext(context.text);
+			// 重注时旧包还躺在历史里、且自称「背景包」—— 不声明取代关系,模型
+			// 会把两份都当有效。首包(switch)不需要这行。
+			const text =
+				reason === "refresh"
+					? `【背景包 · 重注】世界书在本章会话期间被修改过,本包取代此前所有背景包,以本包与 world_find 查询为准。\n\n${context.text}`
+					: context.text;
+			await this.options.sessionHost.injectContext(text);
+			this.lastPackWorldMtime.set(slug, worldMtime);
 		}
 	}
 
@@ -989,16 +1051,30 @@ export class WriterServer {
 	 * 全部抹掉 —— 而提示词还告诉 agent「记忆已在上下文里」,于是它也不会去读
 	 * memory.md 自救,表现为纯粹的失忆。
 	 *
-	 * 每轮 chat 前扫一次 leaf 链:还在就零额外成本跳过,丢了就按当前世界状态
-	 * 重新装配一份注进去。用「存在性」而非「内容指纹」判据的理由见
-	 * sessionLeafHasWorldContext —— 世界书中途被改而背景包还是旧快照的情况,
-	 * 由「切章重注」覆盖,不在本方法的职责内。
+	 * 2026-10-12 起判据分两层(原来只有第一层):
+	 * ① **存在性**:每轮扫 leaf 链,包还在就跳过;被压缩吃了就按当前世界状态
+	 *    重新装配一份注进去(用「存在性」而非「内容指纹」的理由见
+	 *    sessionLeafHasWorldContext —— 易变内容指纹每轮都变)。
+	 * ② **陈旧性**:包还在,但世界书在装配后被改过(同章内 AI 的 world_update
+	 *    或 UI 写路径)—— 快照停在注入那一刻,那些变更永远不进上下文,直到
+	 *    下次切章或压缩。以 world.json 的 mtime 为邮戳,变新就重注一份,
+	 *    并在包首声明「取代此前所有背景包」(旧包还躺在历史里且自称背景包,
+	 *    不声明取代关系,模型会把两份都当有效 —— 2026-10-11 编辑会话
+	 *    16 份堆叠的教训)。
 	 */
 	private async ensureChapterContext(): Promise<void> {
 		const state = this.options.sessionHost.getState();
 		if (!state.bookSlug || !state.chapterFile) return;
-		if (sessionLeafHasWorldContext(state.bookSlug, state.chapterFile)) return;
-		await this.injectChapterContext(state.bookSlug, state.chapterFile);
+		const { bookSlug, chapterFile } = state;
+		if (!sessionLeafHasWorldContext(bookSlug, chapterFile)) {
+			// 包被压缩移出了 leaf 链 → 补注(P0 的原路径)
+			await this.injectChapterContext(bookSlug, chapterFile, "switch");
+			return;
+		}
+		if (worldPackStale(this.lastPackWorldMtime.get(bookSlug), worldJsonMtime(bookSlug))) {
+			// 包还在,但世界书已经改过 —— 重注一份新的取代它
+			await this.injectChapterContext(bookSlug, chapterFile, "refresh");
+		}
 	}
 
 	/**

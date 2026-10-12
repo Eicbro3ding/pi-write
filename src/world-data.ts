@@ -34,6 +34,32 @@ export class WorldValidationError extends Error {
 
 const ENTRY_TYPES = ["character", "world", "timeline", "outline"] as const;
 const ENTRY_STATUSES = ["alive", "dead", "unknown", "active", "archived", "draft"] as const;
+
+/**
+ * 条目状态的注入标记(2026-10-12):拼进 `【标题】` 或 `- 标题:` 的后缀。
+ *
+ * **为什么需要它**:`status:"dead"` 这个字段在世界书数据里一直存在且有校验,
+ * 但两条注入链路(编辑会话的 `planResidentBlocks`、主会话的 `buildChapterContext`)
+ * 都只拼 title+body —— 死亡信息存了,却从没进过上下文。症状是「死而复生」:
+ * 模型看到的人物 body 全是活人状态的正面描写,没有任何「这人已经死了」的信号,
+ * 采样时活人必胜。现在把状态显式拼进标题行,让「死亡」成为每轮都看得见的事实。
+ *
+ * 只标记**偏离默认**的状态:alive/active 不加后缀(绝大多数条目是活的,加了反而
+ * 稀释注意力),unknown 不标(未标注 = 无信息,标了反而是噪声)。
+ */
+export function entryStatusSuffix(status: EntryStatus): string {
+	switch (status) {
+		case "dead":
+			return " · 已死亡";
+		case "archived":
+			return " · 已归档";
+		default:
+			return "";
+	}
+}
+
+/** 死亡角色单独成行的红线条抬头(2026-10-12):正文引用规则直接写在标题里。 */
+export const DEAD_CHARACTER_HEADER = "【已死亡角色 · 只可回忆/遗物/他人提及形式出现,不可作为活人出场】";
 const STORY_STATUSES = ["pending", "in-progress", "done", "shelved"] as const;
 const RELATION_ARROWS = ["none", "single", "double"] as const;
 const CONSTRAINT_TARGETS = ["main", "director", "writer", "all"] as const;

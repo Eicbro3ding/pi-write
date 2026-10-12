@@ -192,3 +192,47 @@ describe("起笔纪律(世界书/大纲/约束都没有时先问再写)", () => 
 		expect(editor).toContain("直接写就写");
 	});
 });
+
+/**
+ * memory.md 纪律必须**两条链路对称**(2026-10-12 用户要求:新功能同时覆盖
+ * 「主对话」与「平常的编辑」)。
+ *
+ * 背景:memory.md 此前只在 writer-main.md 有纪律(3 处),编剧与导演提示词
+ * **零提及** —— 而读侧(记忆锚)每轮把 memory.md 注入所有会话,编剧看到这个块
+ * 却没有任何规则解释它、更没被要求维护它,用户体感就是「形同虚设」。
+ * 这条测试钉住:凡是有 write/edit 的写作角色,都必须知道 memory.md 是什么、
+ * 何时读、何时写、写在哪。
+ */
+describe("memory.md 纪律(主对话 ⇄ 编辑 对称)", () => {
+	const roles = ["writer-main.md", "writer-editor.md", "director.md"];
+
+	it("三个写作角色都提到 memory.md(读侧注入了,写侧就要有规则)", () => {
+		for (const f of roles) {
+			const text = loadPromptText(f);
+			expect(text, `${f} 没提 memory.md`).toContain("memory.md");
+		}
+	});
+
+	it("都讲清了「跨章记忆 + 容量约 1500 token + 装在书目录根」", () => {
+		for (const f of roles) {
+			const text = loadPromptText(f);
+			expect(text, `${f} 没说跨章`).toContain("跨章");
+			expect(text, `${f} 没说容量`).toContain("1500");
+			expect(text, `${f} 没提醒不在 world.json 禁区`).toContain("禁区");
+		}
+	});
+
+	it("主对话与编剧都把「状态变化必落盘」写死(死亡 → 不可复活)", () => {
+		for (const f of ["writer-main.md", "writer-editor.md"]) {
+			const text = loadPromptText(f);
+			expect(text, `${f} 缺状态落盘纪律`).toContain("死而复生");
+			expect(text, `${f} 缺死亡落盘示例`).toContain("身亡");
+		}
+	});
+
+	it("导演的纪律按它的角色改写(收幕后盘点,不是动笔时)", () => {
+		const d = loadPromptText("director.md");
+		expect(d).toContain("跨章记忆纪律");
+		expect(d).toContain("收幕后");
+	});
+});

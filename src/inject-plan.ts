@@ -71,7 +71,7 @@
  */
 
 import { type SessionMode, modeAnchorLine } from "./session-mode.ts";
-import { shortId, type WorldData } from "./world-data.ts";
+import { DEAD_CHARACTER_HEADER, entryStatusSuffix, shortId, type WorldData } from "./world-data.ts";
 import { buildStorylineView, constraintTargetMatches } from "./world-context.ts";
 
 /** 会话类型 —— 决定能用哪些格位(见文件头表格)。 */
@@ -218,12 +218,23 @@ export function planContextBlocks(input: ContextPlanInput): string[] {
  * 顺序固定 —— 概述在最前是「先给全局再给细节」的阅读顺序,且与既有测试一致。
  * 内容为空时对应块**跳过**(不产生空块)。
  *
+ * **已死亡角色块置顶**(2026-10-12):它是一条红线警报,不是资料 —— 放在概述之前,
+ * 让「谁死了」成为模型每轮最先读到的连续性事实之一。正文引用规则写在标题里,
+ * 不需要再靠约束簿里的一条「不要复活死人」与 body 的活人描写对抗。
+ *
  * **Notice 带短编号**(2026-10-11):`[k3p9wq] 补写第三章的雨夜` ——
  * `notice_update` 靠它指认条目;改名不丢靶(编号是 id 的一部分)。
  */
 export function planResidentBlocks(input: ResidentPlanInput): string[] {
 	const { world } = input;
 	const blocks: string[] = [];
+
+	// 已死亡角色:从世界书里摘出来单独成行。body 是人物设定(写活人状态正常),
+	// 留着供参考,但「死亡」这个事实必须有一条不被 body 稀释的通路。
+	const deadChars = world.entries.filter((e) => e.type === "character" && e.status === "dead");
+	if (deadChars.length > 0) {
+		blocks.push(`${DEAD_CHARACTER_HEADER}${deadChars.map((e) => e.title).join("、")}`);
+	}
 
 	const summary = world.worldSummary?.trim();
 	if (summary && summary.length > 0) {
@@ -232,7 +243,7 @@ export function planResidentBlocks(input: ResidentPlanInput): string[] {
 
 	const chars = world.entries
 		.filter((e) => e.type === "character" || e.type === "world")
-		.map((e) => `【${e.title}】${e.body}`)
+		.map((e) => `【${e.title}${entryStatusSuffix(e.status)}】${e.body}`)
 		.join("\n");
 	if (chars.trim().length > 0) {
 		blocks.push(`【世界书】\n${truncate(chars, WORLD_LIMIT)}`);
@@ -320,11 +331,26 @@ export interface AnchorPlanInput {
 	readonly chapterFile?: string;
 	/** 已按预算裁剪的 memory.md 正文(空 = 不注入)。 */
 	readonly memory?: string;
+	/**
+	 * 硬约束速查(2026-10-12;空 = 不注入)。
+	 *
+	 * **只给没有格 C 的会话用**(主会话/TUI —— 它们的约束只在背景包里,而背景包
+	 * 会被对话推远、被压缩吃掉,约束因此是「时灵时不灵」重灾区)。编辑会话的
+	 * 约束每轮贴在生成点旁(格 C),位置已经最优,不要再进锚重复一遍。
+	 *
+	 * 与背景包里那份的关系:速查是**精简名单**(名称 + 截断文本),不是第二份全文;
+	 * 锚每轮重渲染、不落历史,不存在「两份旧版打架」的堆叠问题。
+	 */
+	readonly constraints?: readonly { readonly name: string; readonly text: string }[];
 }
 
 /** 锚的块标题(测试与调用方共用,避免字符串各写各的)。 */
 export const ANCHOR_HEADER = "【常驻记忆锚 · 每轮刷新】";
 export const ANCHOR_MEMORY_TITLE = "【跨章节记忆 memory.md】";
+/** 锚里的硬约束速查块标题(与格 C 的【写作约束】刻意不同名,避免被误判成重复注入)。 */
+export const ANCHOR_CONSTRAINTS_TITLE = "【写作约束 · 速查】";
+/** 速查块总字符上限:超了按序截断并注明还有几条在背景包/世界书里。 */
+export const ANCHOR_CONSTRAINTS_LIMIT = 400;
 
 /**
  * 格 D 的锚正文(不含 {@link ANCHOR_HEADER} 那行总说明 —— 由 {@link renderAnchor} 加)。
@@ -343,6 +369,18 @@ export function planAnchorBlocks(input: AnchorPlanInput): { modeLine: string; he
 	const blocks: string[] = [];
 	const memory = input.memory?.trim();
 	if (memory && memory.length > 0) blocks.push(`${ANCHOR_MEMORY_TITLE}\n${memory}`);
+	const constraints = (input.constraints ?? []).filter((c) => c.text.trim().length > 0);
+	if (constraints.length > 0) {
+		const lines = constraints.map((c) => `- ${c.name}: ${c.text}`);
+		let body = lines.join("\n");
+		let overflow = 0;
+		while (body.length > ANCHOR_CONSTRAINTS_LIMIT && lines.length > 1) {
+			overflow++;
+			body = lines.slice(0, lines.length - overflow).join("\n");
+		}
+		if (overflow > 0) body += `\n(另有 ${overflow} 条约束见背景包 / world.json)`;
+		blocks.push(`${ANCHOR_CONSTRAINTS_TITLE}\n${body}`);
+	}
 	return {
 		modeLine: input.mode ? `${modeAnchorLine(input.mode)}\n` : "",
 		head: input.chapterFile ? `当前章节: ${input.chapterFile}\n` : "",

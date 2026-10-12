@@ -1,5 +1,5 @@
 import type { WorldData, WorldEntry, ConstraintTarget } from "./world-data.ts";
-import { shortId } from "./world-data.ts";
+import { entryStatusSuffix, shortId } from "./world-data.ts";
 import { isCjkChar } from "./cjk.ts";
 
 /**
@@ -353,7 +353,9 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 	for (const id of ids) {
 		const entry = data.entries.find((e) => e.id === id);
 		if (!entry) continue;
-		const line = `- ${entry.title}: ${entry.body}`;
+		// 状态后缀(2026-10-12):dead/archived 条目带「 · 已死亡/已归档」标记 ——
+		// status 字段此前只存不注,激活条目又是主会话唯一的设定来源,不标等于失明。
+		const line = `- ${entry.title}${entryStatusSuffix(entry.status)}: ${entry.body}`;
 		const tokens = estimateTokens(line);
 		if (used + tokens > input.budget && activeParts.length > 0) {
 			result.trimmedCount++;

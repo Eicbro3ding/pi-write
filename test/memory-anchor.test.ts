@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMemoryAnchor, echoUserMessages } from "../src/extension.ts";
-import { sessionLeafHasWorldContext } from "../src/web/server.ts";
+import { sessionLeafHasWorldContext, worldPackStale } from "../src/web/server.ts";
 import { getBookDir } from "../src/config.ts";
 import { getBookSessionsDir } from "../src/book-manager.ts";
 import { ensureWorld, saveWorld } from "../src/world-data.ts";
@@ -118,6 +118,32 @@ describe("buildMemoryAnchor(每轮记忆锚)", () => {
 			},
 		});
 		expect(await buildMemoryAnchor(slug, "ch01.jsonl")).toBe("");
+	});
+
+	it("传 { constraints: true } 才带硬约束速查(2026-10-12;主会话/TUI 专用,writer ∪ main 口径)", async () => {
+		const slug = "fog-harbor";
+		const bookDir = getBookDir(slug);
+		await mkdir(bookDir, { recursive: true });
+		await writeFile(join(bookDir, "memory.md"), "- 一条记忆", "utf8");
+		const world = await ensureWorld(bookDir);
+		await saveWorld(bookDir, {
+			...world,
+			constraints: [
+				{ id: "c1", name: "视角", text: "第三人称限知", enabled: true, target: "writer" },
+				{ id: "c2", name: "给主会话的", text: "每章不超过三千字", enabled: true, target: "main" },
+				{ id: "c3", name: "给导演的", text: "节奏从宽", enabled: true, target: "director" },
+				{ id: "c4", name: "已停用", text: "别用破折号", enabled: false, target: "all" },
+			],
+		});
+		const anchor = await buildMemoryAnchor(slug, "ch01.jsonl", "writing", { constraints: true });
+		expect(anchor).toContain("【写作约束 · 速查】");
+		expect(anchor).toContain("第三人称限知");
+		expect(anchor).toContain("每章不超过三千字");
+		expect(anchor).not.toContain("给导演的");
+		expect(anchor).not.toContain("已停用");
+		// 默认路径(编辑会话)不带速查 —— 它的约束每轮贴生成点,不需要第二份
+		const plain = await buildMemoryAnchor(slug, "ch01.jsonl", "writing");
+		expect(plain).not.toContain("【写作约束 · 速查】");
 	});
 
 	it("无当前章节(book 模式未声明)也可注入,只是省略章节行", async () => {
@@ -229,5 +255,24 @@ describe("sessionLeafHasWorldContext(压缩补偿判据)", () => {
 			},
 		]);
 		expect(sessionLeafHasWorldContext("fog-harbor", "ch04.jsonl")).toBe(false);
+	});
+});
+
+describe("worldPackStale(陈旧判据,2026-10-12)", () => {
+	it("没有邮戳(进程重启后第一次)→ 判陈旧,宁可多注一次", () => {
+		expect(worldPackStale(undefined, 0)).toBe(true);
+		expect(worldPackStale(undefined, 1700000000000)).toBe(true);
+	});
+
+	it("world.json 比邮戳新 → 陈旧(同章内改过世界书,快照过期)", () => {
+		expect(worldPackStale(1000, 1001)).toBe(true);
+	});
+
+	it("与邮戳相同 → 不陈旧(快路径:没改就跳过,零成本)", () => {
+		expect(worldPackStale(1000, 1000)).toBe(false);
+	});
+
+	it("比邮戳旧 → 不陈旧(时钟回拨/文件被换回,维持现状不重注)", () => {
+		expect(worldPackStale(1000, 999)).toBe(false);
 	});
 });

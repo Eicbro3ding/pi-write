@@ -11,6 +11,8 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+	ANCHOR_CONSTRAINTS_LIMIT,
+	ANCHOR_CONSTRAINTS_TITLE,
 	ANCHOR_HEADER,
 	contentsInSlot,
 	EDITOR_ROUTING,
@@ -51,18 +53,33 @@ function richWorld(): WorldData {
 			{
 				id: "e2",
 				type: "world",
-				title: "旧城",
-				keys: ["旧城"],
-				chapters: [],
-				status: "active",
-				active: true,
-				parent: null,
-				tags: [],
-				body: "舞台",
-				avatar: null,
-				images: [],
-				updatedAt: 0,
-			},
+			title: "旧城",
+			keys: ["旧城"],
+			chapters: [],
+			status: "active",
+			active: true,
+			parent: null,
+			tags: [],
+			body: "舞台",
+			avatar: null,
+			images: [],
+			updatedAt: 0,
+		},
+		{
+			id: "e3",
+			type: "character",
+			title: "陈锋",
+			keys: ["陈锋"],
+			chapters: [],
+			status: "dead",
+			active: true,
+			parent: null,
+			tags: [],
+			body: "已在第三章中坠楼",
+			avatar: null,
+			images: [],
+			updatedAt: 0,
+		},
 		],
 		relations: [],
 		constraints: [{ id: "c1", name: "人称", text: "第三人称限知", enabled: true, target: "all" }],
@@ -125,8 +142,35 @@ describe("分诊表(EDITOR_ROUTING)", () => {
 });
 
 describe("格 C 常驻组(planResidentBlocks)", () => {
-	it("产出概述/世界书/约束/Notice 四块,且顺序固定", () => {
+	it("产出死角色/概述/世界书/约束/Notice 五块,且顺序固定", () => {
 		const blocks = planResidentBlocks({ world: richWorld(), classicMode: false });
+		expect(titlesOf(blocks)).toEqual(["【已死亡角色 · 只可回忆/遗物/他人提及形式出现,不可作为活人出场】陈锋", "【世界观概述】", "【世界书】", "【写作约束】", "【Notice·备忘录】"]);
+	});
+
+	it("已死亡角色块置顶:列名字,不列 body(body 是活人设定,留在世界书块里)", () => {
+		const blocks = planResidentBlocks({ world: richWorld(), classicMode: false });
+		const head = blocks[0]!;
+		expect(head).toContain("陈锋");
+		expect(head).not.toContain("坠楼"); // body 不在红线条里
+		expect(blocks.join("\n")).toContain("【陈锋 · 已死亡】"); // 世界书块里带状态标记
+	});
+
+	it("世界书条目行带状态后缀(dead/archived 标记,alive 不加)", () => {
+		const world = richWorld();
+		const w: WorldData = {
+			...world,
+			entries: world.entries.map((e) => (e.id === "e1" ? { ...e, status: "dead" as const } : e)),
+		};
+		const text = planResidentBlocks({ world: w, classicMode: false }).join("\n");
+		expect(text).toContain("【林婉 · 已死亡】");
+		expect(text).toContain("【旧城】"); // active 无后缀
+	});
+
+	it("没有死亡角色时不产出红线条(不产生空块)", () => {
+		const world = richWorld();
+		const w: WorldData = { ...world, entries: world.entries.filter((e) => e.status !== "dead") };
+		const blocks = planResidentBlocks({ world: w, classicMode: false });
+		expect(blocks.join("\n")).not.toContain("已死亡角色");
 		expect(titlesOf(blocks)).toEqual(["【世界观概述】", "【世界书】", "【写作约束】", "【Notice·备忘录】"]);
 	});
 
@@ -231,6 +275,7 @@ describe("格 C 合并后的整体(planContextBlocks / renderEditorContext)", ()
 			transcript: "一幕",
 		});
 		expect(titlesOf(blocks)).toEqual([
+			"【已死亡角色 · 只可回忆/遗物/他人提及形式出现,不可作为活人出场】陈锋",
 			"【世界观概述】",
 			"【世界书】",
 			"【写作约束】",
@@ -258,12 +303,37 @@ describe("格 D:每轮锚(planAnchorBlocks / renderAnchor)", () => {
 		expect(titlesOf(r.blocks)).toEqual(["【跨章节记忆 memory.md】"]);
 	});
 
-	it("**不装 Notice,也不装发展线 / 概述 / 约束** —— 它们全归格 C", () => {
+	it("**不装 Notice,也不装发展线 / 概述**(它们全归格 C);不传 constraints 时也不装约束", () => {
 		const text = renderAnchor({ mode: "writing", chapterFile: "ch01.jsonl", memory: "x" });
 		expect(text).not.toContain("Notice");
 		expect(text).not.toContain("【发展线】");
 		expect(text).not.toContain("【世界观概述】");
 		expect(text).not.toContain("【写作约束】");
+	});
+
+	it("传了 constraints 才产速查块(2026-10-12:opt-in,只有主会话/TUI 传)", () => {
+		const r = planAnchorBlocks({
+			mode: "writing",
+			chapterFile: "ch01.jsonl",
+			memory: "记得林婉怕水",
+			constraints: [{ name: "人称", text: "第三人称限知" }],
+		});
+		expect(titlesOf(r.blocks)).toEqual(["【跨章节记忆 memory.md】", "【写作约束 · 速查】"]);
+		expect(r.blocks[1]).toContain("第三人称限知");
+	});
+
+	it("速查块与格 C 的【写作约束】刻意不同名 —— 同名会被误判成「同类内容两处注入」", () => {
+		expect(ANCHOR_CONSTRAINTS_TITLE).not.toBe("【写作约束】");
+	});
+
+	it("速查超长时按序截断,并注明还有几条在背景包/世界书里", () => {
+		const many = Array.from({ length: 12 }, (_, i) => ({ name: `规则${i}`, text: "内容".repeat(60) }));
+		const r = planAnchorBlocks({ constraints: many });
+		const block = r.blocks[0]!;
+		expect(block.length).toBeLessThanOrEqual(ANCHOR_CONSTRAINTS_LIMIT + 40);
+		expect(block).toContain("另有");
+		expect(block).toContain("规则0");
+		expect(block).not.toContain("规则11");
 	});
 
 	it("模式行排在记忆之前(顺序钉死 —— 最优先的约束在最前)", () => {
@@ -317,6 +387,7 @@ describe("跨格互斥(反证:同一块不得出现在两格)", () => {
 		// 内容的「可观测块标题」→ 登记 id 的映射。若新增内容忘了在此登记,
 		// 这条会失败,提醒补表。
 		const blockIdOf: Record<string, string> = {
+			"【已死亡角色 · 只可回忆/遗物/他人提及形式出现,不可作为活人出场】陈锋": "worldEntries",
 			"【世界观概述】": "worldSummary",
 			"【世界书】": "worldEntries",
 			"【写作约束】": "constraints",

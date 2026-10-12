@@ -31,7 +31,7 @@ import { applyWorldUpdate, readChapterTool, readStyleTool, worldFindTool, worldU
 import { flattenWorldTree, renderWorldTree, renderWorldTreeFromData } from "./world-tree.ts";
 import { ensureWorld, type WorldData } from "./world-data.ts";
 import { chatTextOfMessage } from "./session-text.ts";
-import { buildChapterContext, type ChapterContextResult, summarizeTrim, trimMemory, WORLD_CONTEXT_TYPE } from "./world-context.ts";
+import { buildChapterContext, constraintTargetMatches, type ChapterContextResult, summarizeTrim, trimMemory, WORLD_CONTEXT_TYPE } from "./world-context.ts";
 import { renderAnchor } from "./inject-plan.ts";
 import { detectSessionMode, type SessionMode } from "./session-mode.ts";
 import { readWriterSettings, type WriterSettings } from "./writer-settings.ts";
@@ -165,18 +165,41 @@ export async function readAnchorMemory(bookDir: string): Promise<string> {
 }
 
 /**
+ * 锚用的硬约束速查名单(2026-10-12):enabled 约束,口径 = writer ∪ main
+ * (与主会话背景包一致 —— 经典写作 agent 同时是「主会话」与「编剧」,all 与
+ * undefined 默认值已含在这两个匹配里)。失败(无世界书/读不出)返回空数组,
+ * 由 renderAnchor 跳过该块。
+ */
+async function anchorConstraints(bookDir: string): Promise<{ name: string; text: string }[]> {
+	try {
+		const world = await ensureWorld(bookDir);
+		return world.constraints
+			.filter((c) => c.enabled && (constraintTargetMatches(c.target, "main") || constraintTargetMatches(c.target, "writer")))
+			.map((c) => ({ name: c.name, text: c.text }));
+	} catch {
+		return [];
+	}
+}
+
+/**
  * 每轮记忆锚(格 D)—— **shell 层**:取 IO,拼装交给分诊层。
  *
  * web 编剧会话直接调本函数(见 `src/web/writer-host.ts` 的 before_agent_start),
  * TUI 经 `writerExtension` 调 —— 两处同一实现,不再各写一份。
+ *
+ * @param opts.constraints true = 附带硬约束速查(2026-10-12)。**只有主会话/TUI 传**:
+ *   它们的约束只在背景包里(会被推远、被压缩吃);编辑会话的约束每轮贴生成点,
+ *   位置已最优,再进锚就是同一会话两处注入。
  */
 export async function buildMemoryAnchor(
 	slug: string,
 	chapterFile: string | undefined,
 	mode?: SessionMode,
+	opts?: { constraints?: boolean },
 ): Promise<string> {
 	const memory = await readAnchorMemory(getBookDir(slug));
-	return renderAnchor({ mode, chapterFile, memory });
+	const constraints = opts?.constraints ? await anchorConstraints(getBookDir(slug)) : undefined;
+	return renderAnchor({ mode, chapterFile, memory, constraints });
 }
 
 /** Derive the chapter file basename from an absolute session file path. */
@@ -404,7 +427,7 @@ function writerFactory(pi: ExtensionAPI): void {
 			const slug = bookSlugFromSessionFile(sessionFile);
 			if (!slug) return;
 			const mode = detectSessionMode(event.prompt);
-			const anchor = await buildMemoryAnchor(slug, chapterFileFromSessionFile(sessionFile), mode);
+			const anchor = await buildMemoryAnchor(slug, chapterFileFromSessionFile(sessionFile), mode, { constraints: true });
 			if (!anchor) return;
 			return { systemPrompt: `${event.systemPrompt}\n\n${anchor}` };
 		} catch {
@@ -428,7 +451,9 @@ function writerFactory(pi: ExtensionAPI): void {
 			const sessionFile = ctx.sessionManager.getSessionFile() ?? undefined;
 			const slug = bookSlugFromSessionFile(sessionFile);
 			if (!slug) return; // 非书会话:交回 vendor 默认摘要
-			const anchor = await buildMemoryAnchor(slug, chapterFileFromSessionFile(sessionFile));
+			// 压缩摘要也带约束速查:背景包被吃的这一刻,约束不能只剩「摘要转述」这一条
+			// 命(摘要对禁令类内容存活率低,见 ensureChapterContext 注释)。
+			const anchor = await buildMemoryAnchor(slug, chapterFileFromSessionFile(sessionFile), undefined, { constraints: true });
 			const echoes = echoUserMessages(event.preparation.messagesToSummarize);
 			if (!anchor && !echoes) return; // 无内容可保:交回默认
 			return {
