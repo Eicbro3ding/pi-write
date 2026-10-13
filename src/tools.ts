@@ -639,7 +639,7 @@ let worldUpdateBookDir: string | null = null;
 export function setWorldUpdateBookDir(dir: string | null): void { worldUpdateBookDir = dir; }
 
 /** 当前会话的书目录:SessionHost ALS 上下文优先,其次工厂注入值(见 session-factory)。 */
-function bookDirBase(): string | null {
+export function bookDirBase(): string | null {
 	return toolGuardContext.getStore()?.bookDir ?? worldUpdateBookDir;
 }
 

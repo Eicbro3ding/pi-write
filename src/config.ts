@@ -73,6 +73,18 @@ export function getBookDir(slug: string): string {
 	return join(getBooksDir(), slug);
 }
 
+/**
+ * 全局作者画像文件(2026-10-13,Phase 2)。**跨书共用** —— 它是「这位作者本人
+ * 长期稳定的偏好」(语气/文体/禁忌),不随书变(书的语气微调归该书 world.json 的
+ * 约束)。与每本书的 memory.md 分工:memory.md 记「这本书发生了什么」,user.md 记
+ * 「作者是谁、怎么跟他讲话」。缺省 ~/.pi/writer/user.md;不存在时锚里不注入该块。
+ */
+export function getUserProfilePath(): string {
+	const override = process.env.PI_WRITER_USER_PROFILE;
+	if (override && override.trim().length > 0) return override;
+	return join(getWriterDir(), "user.md");
+}
+
 /** Path to a book's index file: <bookDir>/book.json. */
 export function getBookIndexPath(slug: string): string {
 	return join(getBookDir(slug), "book.json");

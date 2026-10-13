@@ -80,6 +80,7 @@ import { buildEditorSystemPrompt, buildWriterSystemPrompt, writerShellLine } fro
 import type { ShellDialect } from "../shell-kind.ts";
 import type { ConversationScope } from "../writer-settings.ts";
 import { noticeUpdateTool, readChapterTool, readStyleTool, storylineUpdateTool, styleUpdateTool, worldFindTool, worldUpdateTool } from "../tools.ts";
+import { memoryTool } from "../memory-tool.ts";
 import { createAskUserTool, settleDanglingAskParts } from "../ask-user.ts";
 
 /**
@@ -111,8 +112,8 @@ export function writerToolset(opts: { classicMode: boolean; mcpTools: ToolDefini
 	// 提示词纪律「每写一章就可能换一次采样」—— 采样一变稳定块的指纹就变、就重注一份,
 	// 成了版本堆叠的第二大来源。改成按需取,顺手把那条触发也拆了。
 	return opts.classicMode
-		? [worldUpdateTool, worldFindTool, readChapterTool, readStyleTool, askUserTool, ...opts.mcpTools]
-		: [worldFindTool, styleUpdateTool, storylineUpdateTool, noticeUpdateTool, readChapterTool, readStyleTool, askUserTool, ...opts.mcpTools];
+		? [worldUpdateTool, worldFindTool, readChapterTool, readStyleTool, askUserTool, memoryTool, ...opts.mcpTools]
+		: [worldFindTool, styleUpdateTool, storylineUpdateTool, noticeUpdateTool, readChapterTool, readStyleTool, askUserTool, memoryTool, ...opts.mcpTools];
 }
 import { SessionHost } from "./session-host.ts";
 import { formatStageLines } from "../stage/assembler.ts";

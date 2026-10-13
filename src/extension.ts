@@ -23,18 +23,21 @@ import {
 	updateChapter,
 } from "./book-manager.ts";
 import { bookSlugFromSessionFile } from "./book-files.ts";
-import { APP_TITLE, getBookDir } from "./config.ts";
+import { APP_TITLE, getBookDir, getUserProfilePath } from "./config.ts";
 import { autoSaveConflicts, DraftEditorPanel } from "./draft-panel.ts";
 import { type ChatApi, type ChatMessage, openFileEditor, parseEditArgs } from "./editor/index.ts";
 import { createWriterStartupHeader, type WriterHeaderContext } from "./startup-header.ts";
 import { applyWorldUpdate, readChapterTool, readStyleTool, worldFindTool, worldUpdateTool } from "./tools.ts";
+import { memoryTool } from "./memory-tool.ts";
 import { flattenWorldTree, renderWorldTree, renderWorldTreeFromData } from "./world-tree.ts";
 import { ensureWorld, type WorldData } from "./world-data.ts";
 import { chatTextOfMessage } from "./session-text.ts";
-import { buildChapterContext, constraintTargetMatches, type ChapterContextResult, summarizeTrim, trimMemory, WORLD_CONTEXT_TYPE } from "./world-context.ts";
+import { buildChapterContext, constraintTargetMatches, DEFAULT_USER_PROFILE_BUDGET, type ChapterContextResult, summarizeTrim, trimMemory, WORLD_CONTEXT_TYPE } from "./world-context.ts";
 import { renderAnchor } from "./inject-plan.ts";
+import { cachedAnchorInputs } from "./anchor-cache.ts";
+import { sanitizeAnchorText } from "./anchor-sanitize.ts";
 import { detectSessionMode, type SessionMode } from "./session-mode.ts";
-import { readWriterSettings, type WriterSettings } from "./writer-settings.ts";
+import { getWriterSettingsPath, readWriterSettings, type WriterSettings } from "./writer-settings.ts";
 import { buildInspectReport, inspectHeadline, openInspectPanel, type InspectReport } from "./inspect/index.ts";
 import { buildWriterTheme } from "./writer-theme.ts";
 import { countWriting, WriterFooter, WriterInfoBar, type WriterUiState } from "./writer-ui.ts";
@@ -165,6 +168,21 @@ export async function readAnchorMemory(bookDir: string): Promise<string> {
 }
 
 /**
+ * 取全局作者画像(user.md)并按预算裁剪(锚的输入之一,2026-10-13 Phase 2)。
+ *
+ * 与 memory.md 的分工:memory.md 是**书级**「这本书发生了什么」,user.md 是**全局**
+ * 「这位作者是谁、怎么跟他讲话」(跨书共用,见 {@link getUserProfilePath})。
+ * 不存在/读失败一律返回空串(没写画像不是错误),锚里就不出【作者画像】块。
+ */
+export async function readAnchorUserProfile(): Promise<string> {
+	try {
+		return trimMemory(await readFile(getUserProfilePath(), "utf-8"), DEFAULT_USER_PROFILE_BUDGET);
+	} catch {
+		return "";
+	}
+}
+
+/**
  * 锚用的写作约束(2026-10-13):enabled,按 {@link AnchorConstraintRole} 过滤。
  *
  * 口径与各会话一致(见 `writerToolset` / `buildChapterContext`):
@@ -187,10 +205,15 @@ async function anchorConstraints(bookDir: string, roles: readonly AnchorConstrai
 }
 
 /**
- * 每轮记忆锚(格 D)—— **shell 层**:取 IO,拼装交给分诊层。
+ * 每轮记忆锚(格 D)—— **shell 层**:取 IO(带冻结缓存),拼装交给分诊层。
  *
  * web 编剧会话直接调本函数(见 `src/web/writer-host.ts` 的 before_agent_start),
  * TUI 经 `writerExtension` 调 —— 两处同一实现,不再各写一份。
+ *
+ * **冻结快照(2026-10-13)**:稳定输入(memory.md / world.json 约束 / 设置)经
+ * {@link cachedAnchorInputs} 缓存,用文件 mtime 失效 —— 输入不变时下一轮直接复用,
+ * `systemPrompt` 因此在一章内逐字稳定、前缀缓存可命中;设定/记忆一被改写,mtime
+ * 变,自动重建。`mode` 行不进缓存(由当前 prompt 判定,本就每轮现算)。
  *
  * @param opts.constraints true = 附带写作约束(2026-10-13 起**全文**,不再只是速查)。
  *   所有会话都该传:约束是指令,systemPrompt 是它唯一能拿到「系统身份 + 抗压缩」的位置。
@@ -205,11 +228,30 @@ export async function buildMemoryAnchor(
 	mode?: SessionMode,
 	opts?: { constraints?: boolean; constraintRoles?: readonly AnchorConstraintRole[] },
 ): Promise<string> {
-	const memory = await readAnchorMemory(getBookDir(slug));
-	const constraints = opts?.constraints
-		? await anchorConstraints(getBookDir(slug), opts.constraintRoles ?? ["main", "writer"])
-		: undefined;
-	return renderAnchor({ mode, chapterFile, memory, constraints });
+	const bookDir = getBookDir(slug);
+	const wantConstraints = opts?.constraints === true;
+	const roles = opts?.constraintRoles ?? (["main", "writer"] as const);
+	// 缓存口径键:是否带约束 + 角色集合 —— 主对话与编剧的约束集不同,不能共用一份
+	const scopeKey = `${wantConstraints ? "c" : "n"}:${roles.join(",")}`;
+	const inputs = await cachedAnchorInputs(
+		`${bookDir}\u0000${scopeKey}`,
+		[join(bookDir, "memory.md"), join(bookDir, "world.json"), getUserProfilePath(), getWriterSettingsPath()],
+		async () => ({
+			memory: await readAnchorMemory(bookDir),
+			user: await readAnchorUserProfile(),
+			constraints: wantConstraints ? await anchorConstraints(bookDir, roles) : [],
+		}),
+	);
+	return renderAnchor({
+		mode,
+		chapterFile,
+		// 注入清洗(Phase 4):memory/user 进系统提示词前逐行扫注入模式,命中换占位符;
+		// 磁盘原文不动(用户仍可见、可用 memory 工具删)。constraints 来自受守卫的
+		// world.json(经 world_update 结构化校验),不在本扫描范围内。
+		memory: sanitizeAnchorText(inputs.memory),
+		user: sanitizeAnchorText(inputs.user),
+		constraints: wantConstraints ? inputs.constraints : undefined,
+	});
 }
 
 /** Derive the chapter file basename from an absolute session file path. */
@@ -333,6 +375,9 @@ function writerFactory(pi: ExtensionAPI): void {
 	// read_style(2026-10-05):style_update 的读对偶。此前文风采样只在稳定块里常驻,
 	// 而没有任何工具能读它 —— 改成按需取,稳定块也随之变瘦、少一个重注入触发。
 	pi.registerTool(readStyleTool);
+	// memory(2026-10-13,Phase 3):让 AI 自主维护跨章记忆 + 全局作者画像。
+	// 挂主会话(TUI)与 web 两条链路(见 writerToolset 两分支) —— 双链路铁律。
+	pi.registerTool(memoryTool);
 
 	// Keep the footer slot in sync after lifecycle events.
 	pi.on("session_start", async (_event, ctx) => {

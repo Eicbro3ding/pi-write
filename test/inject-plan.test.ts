@@ -426,10 +426,11 @@ describe("跨格互斥(反证:同一块不得出现在两格)", () => {
 			"【当前正文 · draft/c.md】": "draft",
 			"【最近一幕舞台转录】": "transcript",
 			"【跨章节记忆 memory.md】": "memory",
+			"【作者画像】": "userProfile",
 		};
 		const produced = new Set<string>([
 			...titlesOf(planContextBlocks({ world: richWorld(), classicMode: false, draft: "x", draftFile: "draft/c.md", transcript: "t" })),
-			...titlesOf(planAnchorBlocks({ mode: "writing", chapterFile: "c", memory: "x", constraints: [{ name: "规则", text: "正文" }] }).blocks),
+			...titlesOf(planAnchorBlocks({ mode: "writing", chapterFile: "c", memory: "x", user: "作者偏好", constraints: [{ name: "规则", text: "正文" }] }).blocks),
 		]);
 		const mapped = new Set(Object.keys(blockIdOf).filter((t) => produced.has(t)).map((t) => blockIdOf[t]!));
 		// modeLine / chapter 不是【】块(在 head/modeLine 里),从表里单列

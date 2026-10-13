@@ -123,6 +123,7 @@ export const EDITOR_ROUTING: readonly ContentRouting[] = [
 	{ id: "modeLine", label: "模式行", slot: "anchor" },
 	{ id: "chapter", label: "当前章节", slot: "anchor" },
 	{ id: "memory", label: "跨章节记忆 memory.md", slot: "anchor" },
+	{ id: "userProfile", label: "作者画像 user.md", slot: "anchor" },
 	/**
 	 * 写作约束的**系统级副本**(2026-10-13)—— 本表里**唯一**有意占两格的内容。
 	 *
@@ -350,6 +351,13 @@ export interface AnchorPlanInput {
 	/** 已按预算裁剪的 memory.md 正文(空 = 不注入)。 */
 	readonly memory?: string;
 	/**
+	 * 全局作者画像(user.md)正文(空 = 不注入该块,2026-10-13 Phase 2)。
+	 *
+	 * 与 memory.md **同档**:都是进锚的稳定事实。区别是它**跨书**(作者本人长期稳定的
+	 * 偏好:语气/文体/禁忌),而 memory.md 是**书级**「这本书发生了什么」。
+	 */
+	readonly user?: string;
+	/**
 	 * 写作约束(2026-10-12 加、2026-10-13 升为全文;空 = 不注入)。
 	 *
 	 * **所有会话都该传**(2026-10-13):约束是指令,systemPrompt 是唯一同时满足
@@ -364,9 +372,18 @@ export interface AnchorPlanInput {
 	readonly constraints?: readonly { readonly name: string; readonly text: string }[];
 }
 
-/** 锚的块标题(测试与调用方共用,避免字符串各写各的)。 */
-export const ANCHOR_HEADER = "【常驻记忆锚 · 每轮刷新】";
+/**
+ * 锚的块标题(测试与调用方共用,避免字符串各写各的)。
+ *
+ * 2026-10-13(Phase 1 冻结快照)去掉了旧措辞「每轮刷新」:锚的稳定输入
+ * (memory.md / 约束 / 设置)现在按文件 mtime 冻结复用(见 `src/anchor-cache.ts`),
+ * 再说「每轮刷新」就与事实相反了 —— 正是项目那条反向纪律(改机制要同步改提示词/
+ * 常量里的机制描述词)要防的静默漂移。锚仍**每轮注入**,只是内容在一章内稳定。
+ */
+export const ANCHOR_HEADER = "【常驻记忆锚】";
 export const ANCHOR_MEMORY_TITLE = "【跨章节记忆 memory.md】";
+/** 锚里的作者画像块标题(2026-10-13 Phase 2;全局 user.md,跨书共用)。 */
+export const ANCHOR_USER_TITLE = "【作者画像】";
 /** 锚里的写作约束块标题(与格 C 的【写作约束】刻意不同名:两个面是同一内容的两处,
  *  同名会让模型以为是重复块,也会撞「格 C 与锚标题不相交」的不变量测试)。 */
 export const ANCHOR_CONSTRAINTS_TITLE = "【写作约束 · 常驻,本章必须遵守】";
@@ -394,6 +411,8 @@ export function planAnchorBlocks(input: AnchorPlanInput): { modeLine: string; he
 	const blocks: string[] = [];
 	const memory = input.memory?.trim();
 	if (memory && memory.length > 0) blocks.push(`${ANCHOR_MEMORY_TITLE}\n${memory}`);
+	const user = input.user?.trim();
+	if (user && user.length > 0) blocks.push(`${ANCHOR_USER_TITLE}\n${user}`);
 	const constraints = (input.constraints ?? []).filter((c) => c.text.trim().length > 0);
 	if (constraints.length > 0) {
 		const lines = constraints.map((c) => `- ${c.name}: ${c.text}`);
@@ -416,7 +435,7 @@ export function planAnchorBlocks(input: AnchorPlanInput): { modeLine: string; he
 /**
  * 渲染完整的记忆锚文本;无内容时返回空串(调用方据此跳过注入)。
  *
- * 结构:`【常驻记忆锚 · 每轮刷新】` 总说明 → 模式行 → 当前章节 → memory.md。
+ * 结构:`【常驻记忆锚】` 总说明 → 模式行 → 当前章节 → memory.md(→ 作者画像 user.md)。
  *
  * **空串判据(与收口前逐字一致,2026-10-06 复刻)**:只有「模式行」与「块」
  * 参与判定 —— **章节行单独不构成锚**。

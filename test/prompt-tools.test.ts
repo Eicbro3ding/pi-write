@@ -27,6 +27,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadPromptText } from "../src/prompts.ts";
 import { writerToolset } from "../src/web/writer-host.ts";
+import * as memoryToolObjects from "../src/memory-tool.ts";
 import * as toolObjects from "../src/tools.ts";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -34,9 +35,14 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 /** vendor 内置的文件工具六件套 —— 主提示词必须让模型看见它们。 */
 const BUILTIN_FILE_TOOLS = ["read", "write", "edit", "ls", "grep", "find"] as const;
 
-/** 变量名(`worldUpdateTool`)→ 真实工具名(`world_update`),从导出对象上读,不猜。 */
+/**
+ * 变量名(`worldUpdateTool`)→ 真实工具名(`world_update`),从导出对象上读,不猜。
+ *
+ * 2026-10-13:并入 `src/memory-tool.ts` —— memory 工具是独立的工具模块,但同样是
+ * 「注册了就该在提示词清单里」的形态之一,护栏必须一起扫,否则它成了盲区。
+ */
 const NAMED = new Map<string, string>(
-	Object.entries(toolObjects)
+	Object.entries({ ...toolObjects, ...memoryToolObjects })
 		.filter((e): e is [string, { name: string }] => !!e[1] && typeof e[1] === "object" && typeof (e[1] as { name?: unknown }).name === "string")
 		.map(([k, v]) => [k, v.name]),
 );
@@ -170,10 +176,12 @@ describe("形态工具集 ⊆ 提示词工具清单(防 read_chapter 式死代�
 		}
 	});
 
-	it("src/tools.ts 里定义的工具没有漏网之鱼(都被某个形态装配或至少导出)", () => {
-		// 兜底:有人在 tools.ts 加了 defineTool 却忘了 export / 忘了注册 ——
-		const src = readFileSync(resolve(REPO_ROOT, "src/tools.ts"), "utf8");
-		const defined = [...src.matchAll(/^export const \w+Tool: ToolDefinition = defineTool\(\{\s*\n\tname: "([a-z_]+)"/gm)].map((m) => m[1]);
+	it("工具模块里定义的工具没有漏网之鱼(都被某个形态装配或至少导出)", () => {
+		// 兜底:有人在工具模块里加了 defineTool 却忘了 export / 忘了注册 ——
+		const defined = ["src/tools.ts", "src/memory-tool.ts"].flatMap((rel) => {
+			const src = readFileSync(resolve(REPO_ROOT, rel), "utf8");
+			return [...src.matchAll(/^export const \w+Tool: ToolDefinition = defineTool\(\{\s*\n\tname: "([a-z_]+)"/gm)].map((m) => m[1]);
+		});
 		expect(defined.length).toBeGreaterThan(0);
 		for (const name of defined) {
 			expect([...NAMED.values()], `${name} 定义了但没导出`).toContain(name);

@@ -15,6 +15,15 @@ export const DEFAULT_CONTEXT_BUDGET = 2000;
 export const DEFAULT_MEMORY_BUDGET = 1500;
 
 /**
+ * 作者画像(user.md)注入锚的 token 预算(缺省值,2026-10-13 Phase 2)。
+ *
+ * 刻意比 memory.md 小:画像是「长期稳定的偏好」,本就该精炼(几行足矣);
+ * 它进的是 systemPrompt(每轮都在),肥了等于每轮白付。v1 是固定值 ——
+ * 需要可配时再照 memoryBudget 的路子加设置字段。
+ */
+export const DEFAULT_USER_PROFILE_BUDGET = 800;
+
+/**
  * 背景包注入用的 custom 消息类型。
  *
  * 三个写入方必须同值:`SessionHost.injectContext`(web)、`worldContextMessage`
