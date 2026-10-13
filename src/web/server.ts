@@ -577,7 +577,8 @@ function matchRoute(method: string, parts: string[], routes: Route[]): { route: 
  * 重注入(白付全价未缓存输入)。
  *
  * 文件不存在/解析失败返回 false —— 宁可多注一次,也不要让世界书静默缺席。
- */export function sessionLeafHasWorldContext(slug: string, chapterFile: string): boolean {
+ */
+export function sessionLeafHasWorldContext(slug: string, chapterFile: string): boolean {
 	try {
 		const absPath = getChapterSessionsPath(slug, chapterFile);
 		if (!existsSync(absPath)) return false;

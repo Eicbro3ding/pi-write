@@ -123,6 +123,24 @@ export const EDITOR_ROUTING: readonly ContentRouting[] = [
 	{ id: "modeLine", label: "模式行", slot: "anchor" },
 	{ id: "chapter", label: "当前章节", slot: "anchor" },
 	{ id: "memory", label: "跨章节记忆 memory.md", slot: "anchor" },
+	/**
+	 * 写作约束的**系统级副本**(2026-10-13)—— 本表里**唯一**有意占两格的内容。
+	 *
+	 * 为什么破这条不变量:约束是指令,而「指令」有两个不能互相替代的位置需求 ——
+	 * ① **系统身份**:system 里的内容被模型当系统级规则读,权重最高、抗压缩、
+	 *    不随对话推远(background 包会被推远、被 compaction 吃掉);且约束不变时
+	 *    system 前缀稳定、prompt cache 全命中,比放在每轮的 user turn 里更省。
+	 * ② **生成点距离**:格 C 那份紧贴用户输入,离采样最近。
+	 * 两者都要,所以是**有意双面**,不是漏改。
+	 *
+	 * 不会重演「16 份堆叠」(2026-10-11 的教训):两个面都不落会话历史 ——
+	 * 格 C 走 context 钩子(只参与单次请求)、锚走 systemPrompt 尾部(每轮覆盖)。
+	 * 冗余的代价是每轮多几百字;换来的是约束同时站在两个最强位置。
+	 *
+	 * 与格 C 的 `constraints` 分开登记,是为了让本表诚实回答「谁放哪」——
+	 * 复制内容不合并 id,否则 `slotOf("constraints")` 无法同时表达两个答案。
+	 */
+	{ id: "constraintsAnchor", label: "写作约束(系统级副本)", slot: "anchor" },
 ];
 
 /** 取某类内容在编辑会话下的格位(null = 未登记,属于编程错误)。 */
@@ -332,14 +350,16 @@ export interface AnchorPlanInput {
 	/** 已按预算裁剪的 memory.md 正文(空 = 不注入)。 */
 	readonly memory?: string;
 	/**
-	 * 硬约束速查(2026-10-12;空 = 不注入)。
+	 * 写作约束(2026-10-12 加、2026-10-13 升为全文;空 = 不注入)。
 	 *
-	 * **只给没有格 C 的会话用**(主会话/TUI —— 它们的约束只在背景包里,而背景包
-	 * 会被对话推远、被压缩吃掉,约束因此是「时灵时不灵」重灾区)。编辑会话的
-	 * 约束每轮贴在生成点旁(格 C),位置已经最优,不要再进锚重复一遍。
+	 * **所有会话都该传**(2026-10-13):约束是指令,systemPrompt 是唯一同时满足
+	 * 「系统身份 + 抗压缩 + 不随对话推远」的位置。编辑会话的格 C 里也有一份,
+	 * 那是**有意的双面**(理由见 {@link EDITOR_ROUTING} 里 constraintsAnchor 的注释)。
 	 *
-	 * 与背景包里那份的关系:速查是**精简名单**(名称 + 截断文本),不是第二份全文;
-	 * 锚每轮重渲染、不落历史,不存在「两份旧版打架」的堆叠问题。
+	 * 过滤口径由调用方按角色给({@link buildMemoryAnchor} 的 constraintRoles):
+	 * 主会话/TUI = main ∪ writer(单一写作 agent 同时是两者);编剧 = 只要 writer,
+	 * 避免把「给主会话的约束」越权给编剧。导演会话的约束走它自己的注入块
+	 * (stage/orchestrator),不经锚。
 	 */
 	readonly constraints?: readonly { readonly name: string; readonly text: string }[];
 }
@@ -347,10 +367,15 @@ export interface AnchorPlanInput {
 /** 锚的块标题(测试与调用方共用,避免字符串各写各的)。 */
 export const ANCHOR_HEADER = "【常驻记忆锚 · 每轮刷新】";
 export const ANCHOR_MEMORY_TITLE = "【跨章节记忆 memory.md】";
-/** 锚里的硬约束速查块标题(与格 C 的【写作约束】刻意不同名,避免被误判成重复注入)。 */
-export const ANCHOR_CONSTRAINTS_TITLE = "【写作约束 · 速查】";
-/** 速查块总字符上限:超了按序截断并注明还有几条在背景包/世界书里。 */
-export const ANCHOR_CONSTRAINTS_LIMIT = 400;
+/** 锚里的写作约束块标题(与格 C 的【写作约束】刻意不同名:两个面是同一内容的两处,
+ *  同名会让模型以为是重复块,也会撞「格 C 与锚标题不相交」的不变量测试)。 */
+export const ANCHOR_CONSTRAINTS_TITLE = "【写作约束 · 常驻,本章必须遵守】";
+/**
+ * 约束块总字符上限:这是**极端兜底**,不是常规裁剪 —— 常规情况约束本就该是稀而硬的
+ * (工具说明里写着「8 条以内」),全文进 system。真超了(用户攒了几十条)才丢尾部并注明,
+ * 免得把 systemPrompt 撑爆。
+ */
+export const ANCHOR_CONSTRAINTS_LIMIT = 2000;
 
 /**
  * 格 D 的锚正文(不含 {@link ANCHOR_HEADER} 那行总说明 —— 由 {@link renderAnchor} 加)。
@@ -378,7 +403,7 @@ export function planAnchorBlocks(input: AnchorPlanInput): { modeLine: string; he
 			overflow++;
 			body = lines.slice(0, lines.length - overflow).join("\n");
 		}
-		if (overflow > 0) body += `\n(另有 ${overflow} 条约束见背景包 / world.json)`;
+		if (overflow > 0) body += `\n(另有 ${overflow} 条未展开,见世界书 / world.json——建议让用户精简到 8 条以内)`;
 		blocks.push(`${ANCHOR_CONSTRAINTS_TITLE}\n${body}`);
 	}
 	return {

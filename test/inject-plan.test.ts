@@ -139,6 +139,20 @@ describe("分诊表(EDITOR_ROUTING)", () => {
 			seen.set(r.id, r.slot);
 		}
 	});
+
+	it("约束是**唯一**有意双面的内容(2026-10-13);其余各类仍严格单格", () => {
+		// 双面白名单:只有约束允许 context + anchor 各一份(理由见 EDITOR_ROUTING 注释)
+		const dualAllowed = new Set(["constraints", "constraintsAnchor"]);
+		const idsIn = (slot: InjectSlot) =>
+			EDITOR_ROUTING.filter((r) => r.slot === slot).map((r) => r.id).filter((id) => !dualAllowed.has(id));
+		const overlap = idsIn("context").filter((id) => idsIn("anchor").includes(id));
+		expect(overlap, `这些内容同时占两格(除约束外不允许):${overlap.join(", ")}`).toEqual([]);
+	});
+
+	it("约束的两个面各自登记(constraints 归 context,constraintsAnchor 归 anchor)", () => {
+		expect(slotOf("constraints")).toBe("context");
+		expect(slotOf("constraintsAnchor")).toBe("anchor");
+	});
 });
 
 describe("格 C 常驻组(planResidentBlocks)", () => {
@@ -311,29 +325,36 @@ describe("格 D:每轮锚(planAnchorBlocks / renderAnchor)", () => {
 		expect(text).not.toContain("【写作约束】");
 	});
 
-	it("传了 constraints 才产速查块(2026-10-12:opt-in,只有主会话/TUI 传)", () => {
+	it("传了 constraints 才产约束块(2026-10-13 起全文,不再是速查)", () => {
 		const r = planAnchorBlocks({
 			mode: "writing",
 			chapterFile: "ch01.jsonl",
 			memory: "记得林婉怕水",
 			constraints: [{ name: "人称", text: "第三人称限知" }],
 		});
-		expect(titlesOf(r.blocks)).toEqual(["【跨章节记忆 memory.md】", "【写作约束 · 速查】"]);
+		expect(titlesOf(r.blocks)).toEqual(["【跨章节记忆 memory.md】", "【写作约束 · 常驻,本章必须遵守】"]);
 		expect(r.blocks[1]).toContain("第三人称限知");
 	});
 
-	it("速查块与格 C 的【写作约束】刻意不同名 —— 同名会被误判成「同类内容两处注入」", () => {
+	it("约束块与格 C 的【写作约束】刻意不同名 —— 双面是设计,但同名会被当成重复块", () => {
 		expect(ANCHOR_CONSTRAINTS_TITLE).not.toBe("【写作约束】");
 	});
 
-	it("速查超长时按序截断,并注明还有几条在背景包/世界书里", () => {
-		const many = Array.from({ length: 12 }, (_, i) => ({ name: `规则${i}`, text: "内容".repeat(60) }));
+	it("约束超长时(用户攒了几十条)才丢尾部,并注明还有几条", () => {
+		const many = Array.from({ length: 40 }, (_, i) => ({ name: `规则${i}`, text: "内容".repeat(60) }));
 		const r = planAnchorBlocks({ constraints: many });
 		const block = r.blocks[0]!;
-		expect(block.length).toBeLessThanOrEqual(ANCHOR_CONSTRAINTS_LIMIT + 40);
+		expect(block.length).toBeLessThanOrEqual(ANCHOR_CONSTRAINTS_LIMIT + 60);
 		expect(block).toContain("另有");
 		expect(block).toContain("规则0");
-		expect(block).not.toContain("规则11");
+		expect(block).not.toContain("规则39");
+	});
+
+	it("常规条数(8 条以内)全文进锚,不截断", () => {
+		const eight = Array.from({ length: 8 }, (_, i) => ({ name: `规则${i}`, text: "可判定的硬规矩" }));
+		const block = planAnchorBlocks({ constraints: eight }).blocks[0]!;
+		expect(block).not.toContain("另有");
+		expect(block).toContain("规则7");
 	});
 
 	it("模式行排在记忆之前(顺序钉死 —— 最优先的约束在最前)", () => {
@@ -383,6 +404,14 @@ describe("跨格互斥(反证:同一块不得出现在两格)", () => {
 		expect(context.filter((t) => anchor.includes(t))).toEqual([]);
 	});
 
+	it("约束双面时仍然不相交:两边都有约束,但块标题不同名(不会被当成同一块)", () => {
+		const context = titlesOf(planContextBlocks({ world: richWorld(), classicMode: false }));
+		const anchor = titlesOf(planAnchorBlocks({ constraints: [{ name: "规则", text: "正文" }] }).blocks);
+		expect(context, "格 C 该有约束").toContain("【写作约束】");
+		expect(anchor, "锚该有约束").toContain(ANCHOR_CONSTRAINTS_TITLE);
+		expect(context.filter((t) => anchor.includes(t))).toEqual([]);
+	});
+
 	it("全表覆盖:EDITOR_ROUTING 里的每个 id 恰好能被某一格产出一次", () => {
 		// 内容的「可观测块标题」→ 登记 id 的映射。若新增内容忘了在此登记,
 		// 这条会失败,提醒补表。
@@ -391,6 +420,7 @@ describe("跨格互斥(反证:同一块不得出现在两格)", () => {
 			"【世界观概述】": "worldSummary",
 			"【世界书】": "worldEntries",
 			"【写作约束】": "constraints",
+			"【写作约束 · 常驻,本章必须遵守】": "constraintsAnchor",
 			"【Notice·备忘录】": "notice",
 			"【发展线】": "storyline",
 			"【当前正文 · draft/c.md】": "draft",
@@ -399,7 +429,7 @@ describe("跨格互斥(反证:同一块不得出现在两格)", () => {
 		};
 		const produced = new Set<string>([
 			...titlesOf(planContextBlocks({ world: richWorld(), classicMode: false, draft: "x", draftFile: "draft/c.md", transcript: "t" })),
-			...titlesOf(planAnchorBlocks({ mode: "writing", chapterFile: "c", memory: "x" }).blocks),
+			...titlesOf(planAnchorBlocks({ mode: "writing", chapterFile: "c", memory: "x", constraints: [{ name: "规则", text: "正文" }] }).blocks),
 		]);
 		const mapped = new Set(Object.keys(blockIdOf).filter((t) => produced.has(t)).map((t) => blockIdOf[t]!));
 		// modeLine / chapter 不是【】块(在 head/modeLine 里),从表里单列

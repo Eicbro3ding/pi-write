@@ -515,14 +515,22 @@ export function applyWorldUpdate(data: WorldData, update: WorldUpdateOp): WorldD
 			break;
 		}
 		case "advance_storyline": {
-			const n = next.storyline.nodes.find((x) => x.id === update.id);
-			if (!n) {
-				// 节点不存在则创建(以 id 为标题兜底)
-				next.storyline.nodes.push({ id: update.id, title: update.id, status: update.status, goal: "", next: update.next === undefined ? null : resolveNextTitle(next, update.next) });
-			} else {
-				n.status = update.status;
-				if (update.next !== undefined) n.next = resolveNextTitle(next, update.next);
-			}
+			// 指认口径与 storyline_update.advance 统一(2026-10-13):完整 id / 短编号 /
+			// 唯一前缀 / 节点标题都认(见下方 resolveByIdOrName),解析不到**一律报错**。
+			//
+			// **不再「查不到就按该 id 新建节点」** —— 那是 2026-08-10 起的老语义(注释原文
+			// 「以 id 为标题兜底」),当时没有 upsert_storyline_node,advance 兼着建节点的活。
+			// 如今建节点有专门通道,而这套兜底与 2026-10-11 起的注入块相撞:注入块把节点写成
+			// 短编号(`[9f2k1x] 初入旧城`),模型抄下来调 advance 就成了「幽灵节点(id = "9f2k1x")
+			// 诞生 + 真节点纹丝不动」的静默污染 —— 正是同文件 delete_storyline_node /
+			// notice_delete 特意防的那件事(传错 id 不许静默无操作)。要新建节点请用
+			// upsert_storyline_node。
+			//
+			// 注:STORY_NODE_REF / resolveByIdOrName 定义在文件后半(编剧窄通道一处),
+			// 运行时模块已求值完,无 TDZ 问题;共享定义是为了口径不分叉。
+			const n = resolveByIdOrName(next.storyline.nodes, update.id, STORY_NODE_REF);
+			n.status = update.status;
+			if (update.next !== undefined) n.next = resolveNextTitle(next, update.next);
 			break;
 		}
 		case "upsert_storyline_node": {
@@ -703,7 +711,7 @@ export const worldFindTool: ToolDefinition = defineTool({
 		"只读检索世界书条目(不改数据),三种用法:",
 		"①定位(默认)——按 title(精确)/type/keys(精确)/query(子串)过滤,回 id/type/title/status,供 world_update 的 id 类操作(delete_entry、set_status、关系、约束等)定位;type 枚举 character/world/timeline/outline。",
 		'②阅读——加 detail:"full",同上再回条目正文(此前没有任何工具能读到条目正文,要正文只能整本读 world.json)。',
-		'③核对——加 scan:"<一段正文>",工具扫出这段文字里被提及的条目(按各条的标题/触发词命中),回它们的正文与命中词。写完一章正文后用它核对设定有无出入,比凭记忆靠谱。给了 scan 时其余过滤参数忽略。',
+		'③核对——加 scan:"<一段正文>",工具扫出这段文字里被提及的条目(按各条的标题/触发词命中,英文不区分大小写),回它们的正文与命中词。写完一章正文后用它核对设定有无出入,比凭记忆靠谱。给了 scan 时其余过滤参数忽略。',
 	].join(" "),
 	parameters: Type.Object({
 		title: Type.Optional(Type.String({ description: "按标题精确匹配(省略则不过滤)" })),
@@ -723,8 +731,12 @@ export const worldFindTool: ToolDefinition = defineTool({
 		// —— 核对模式:传进来一段文本,扫出其中被提及的条目 ——
 		const scanText = typeof params.scan === "string" ? params.scan : "";
 		if (scanText.trim().length > 0) {
+			// 大小写不敏感(2026-10-13 修):与 query 分支同口径 —— 英文条目名在正文里
+			// 大小写一变(Alice / alice)就扫不到,而那本是同一件事。中文无大小写,
+			// toLowerCase 对它是恒等变换。
+			const haystack = scanText.toLowerCase();
 			const hits = world.entries
-				.map((e) => ({ entry: e, terms: scanTermsOf(e).filter((t) => scanText.includes(t)) }))
+				.map((e) => ({ entry: e, terms: scanTermsOf(e).filter((t) => haystack.includes(t.toLowerCase())) }))
 				.filter((h) => h.terms.length > 0);
 			const shown = hits.slice(0, Math.min(limit, SCAN_HIT_LIMIT));
 			const blocks = shown.map((h) => {
@@ -871,7 +883,7 @@ export const worldUpdateTool: ToolDefinition = defineTool({
 	name: "world_update",
 	label: "World Update",
 	description:
-		"更新世界书(world.json):增删改条目、关系、约束、Notice、发展线、采样、简要世界观与时间线。这是修改世界设定的唯一通道;结构性约束(重复 id、悬空引用、多个 in-progress 等)由程序校验。upsert_entry 是真 upsert:带 id 时查不到就按该 id 新建;不带 id 时按 (type, title) 匹配已有条目(存在则更新、保留原 id),都不命中才新建——更新已有条目通常不需要先查 id。关系的 from/to 接受条目 id 或标题(标题自动解析为条目 id;标题匹配到多个条目时返回报错并列出候选 id,请用 world_find 查 id 消歧;成功时返回会回显解析结果 from id(标题) → to id(标题))。枚举只接受英文:type=character/world/timeline/outline;status=alive/dead/unknown/active/archived/draft;关系 arrow=none/single/double;发展线 status=pending/in-progress/done/shelved。注意 status 是条目状态,与条目是否参与上下文注入(active 字段,界面「注入上下文」开关)无关,world_update 不改 active。发展线:节点按数组顺序推进,upsert_storyline_node 创建/更新节点,advance_storyline 推进状态,delete_storyline_node 删除节点;节点的 next 字段 = 该节点完成后的下一步内容(填标题或描述;也接受已有节点 id,会自动转为该节点标题)。查找条目 id 用 world_find 工具。set_world_summary 覆盖简要世界观概述(常驻注入,每次会话都会读到;建议 1-2 段,≤600 字)。新建条目后若与现有条目存在剧情关联,建议一并创建关系(upsert_relation)。",
+		"更新世界书(world.json):增删改条目、关系、约束、Notice、发展线、采样、简要世界观与时间线。这是修改世界设定的唯一通道;结构性约束(重复 id、悬空引用、多个 in-progress 等)由程序校验。upsert_entry 是真 upsert:带 id 时查不到就按该 id 新建;不带 id 时按 (type, title) 匹配已有条目(存在则更新、保留原 id),都不命中才新建——更新已有条目通常不需要先查 id。关系的 from/to 接受条目 id 或标题(标题自动解析为条目 id;标题匹配到多个条目时返回报错并列出候选 id,请用 world_find 查 id 消歧;成功时返回会回显解析结果 from id(标题) → to id(标题))。枚举只接受英文:type=character/world/timeline/outline;status=alive/dead/unknown/active/archived/draft;关系 arrow=none/single/double;发展线 status=pending/in-progress/done/shelved。注意 status 是条目状态,与条目是否参与上下文注入(active 字段,界面「注入上下文」开关)无关,world_update 不改 active。发展线:节点按数组顺序推进。upsert_storyline_node 创建/更新节点(带 id 时按该 id 更新、查不到则按该 id 新建——id 要写完整,别拿注入块里的短编号当新 id,那会多出一个节点);advance_storyline 推进已有节点的状态,其 id 可填完整 id / 上下文【发展线】块里的短编号 / 节点标题,**查不到一律报错、不再兜底新建**(要建节点用 upsert_storyline_node);delete_storyline_node 删除节点。节点的 next 字段 = 该节点完成后的下一步内容(填标题或描述;也接受已有节点 id,会自动转为该节点标题)。查找条目 id 用 world_find 工具。set_world_summary 覆盖简要世界观概述(常驻注入,每次会话都会读到;建议 1-2 段,≤600 字)。新建条目后若与现有条目存在剧情关联,建议一并创建关系(upsert_relation)。约束的删除(delete_constraint)不可逆:拿不准就 upsert_constraint 带 enabled:false 停用;删用户的规矩只在用户明确要求时做。",
 	parameters: Type.Object({
 		update: WORLD_UPDATE_FLAT,
 	}),
@@ -1009,7 +1021,7 @@ export const styleUpdateTool: ToolDefinition = defineTool({
 	name: "style_update",
 	label: "Style Update",
 	description:
-		"更新**写作风格**设定:写作约束(你与成文要遵守的硬规矩)、文风采样(作者文风基准)、简要世界观概述。人物/关系/时间线/大纲你改不了(那些归导演);发展线与 Notice 走 `storyline_update` / `notice_update`。语义:① 约束按**名字** upsert——同名即更新(不会重复立规矩),所以重述一条已有规矩不需要先查 id;**改已有约束会保留它原来的作用域**(只在新建时默认 writer = 只管你自己),要约束导演得用户直接对导演讲。② `set_constraint_enabled` 单独切开关:停用/启用一条规矩而**不动它的正文**,别为了停用而把正文重抄一遍(抄错就把规矩改了)。③ 删除按名字,名字见上下文【写作约束】块(那里没有 id,别去找 id)。④ 约束要**可判定**(「禁用破折号」「每章 2500 字上下」),不要写「文笔要优美」;条数控制在 8 条以内。⑤ update_style_sample 的 text 是 300–500 字的代表性样本(用户自己写的,或他想靠近的片段),**绝不编造**;set_world_summary 是 1-2 句题材与基调定位(常驻注入,≤600 字)。op 名与 world_update 的同名操作一致,便于对照。",
+		"更新**写作风格**设定:写作约束(你与成文要遵守的硬规矩)、文风采样(作者文风基准)、简要世界观概述。人物/关系/时间线/大纲你改不了(那些归导演);发展线与 Notice 走 `storyline_update` / `notice_update`。语义:① 约束按**名字** upsert——同名即更新(不会重复立规矩),所以重述一条已有规矩不需要先查 id;**改已有约束会保留它原来的作用域**(只在新建时默认 writer = 只管你自己),要约束导演得用户直接对导演讲。② `set_constraint_enabled` 单独切开关:停用/启用一条规矩而**不动它的正文**,别为了停用而把正文重抄一遍(抄错就把规矩改了)。③ 删除按名字,名字见上下文【写作约束】块(那里没有 id,别去找 id);**删除不可逆,而停用可逆** —— 一条规矩看起来不适用(这一章不需要、与当下写法冲突)时,默认改用「停用」把它留下,只有用户明确说「这条不要了」才删。约束是用户立的规矩,不是你的草稿。④ 约束要**可判定**(「禁用破折号」「每章 2500 字上下」),不要写「文笔要优美」;条数控制在 8 条以内。⑤ update_style_sample 的 text 是 300–500 字的代表性样本(用户自己写的,或他想靠近的片段),**绝不编造**;set_world_summary 是 1-2 句题材与基调定位(常驻注入,≤600 字)。op 名与 world_update 的同名操作一致,便于对照。",
 	parameters: Type.Object({
 		update: STYLE_UPDATE_FLAT,
 	}),
@@ -1035,7 +1047,11 @@ export const styleUpdateTool: ToolDefinition = defineTool({
 // ——————————————————————————————————————————————————————————————
 
 /**
- * 解析「编号 / 名称」指认 —— 编辑发展线 / Notice 时的**唯一**定位口径。
+ * 解析「编号 / 名称」指认 —— 发展线 / Notice 的**唯一**定位口径。
+ *
+ * 服务三处:`storyline_update` / `notice_update` 两个窄工具,以及 `world_update`
+ * 的 `advance_storyline`(2026-10-13 接入——此前它对查不到的 id 兜底创建节点,
+ * 而注入块给的是短编号,模型抄下来推进就长出幽灵节点)。
  *
  * 顺序即优先级(2026-10-11 拍板「编号优先、名字兜底」):
  * ① 完整 id → ② 短编号({@link shortId}) → ③ 唯一前缀 → ④ 精确名称 → ⑤ 唯一子串。
@@ -1043,6 +1059,9 @@ export const styleUpdateTool: ToolDefinition = defineTool({
  * 为什么「编号优先」:注入块给的是 `[9f2k1x] 初入旧城`,编号是 id 的一部分 ——
  * **改标题不会让它失效**,而按名字指认有两个陷阱:重名(报错比猜安全)与
  * 「模型只记得大意」(子串恰好命中一条时帮它一把)。
+ *
+ * **剥方括号**(2026-10-13):注入块把编号写成 `[9f2k1x] 初入旧城`,模型常连方括号
+ * 一起抄回来(`[9f2k1x]`)。剥掉再解析,省一轮「报错 → 看候选 → 重发」。
  *
  * 任何一步命中多条都**不静默取首个**,而是报错并列出候选(带短编号)让模型重发 ——
  * 与 resolveRelationTarget 同一条纪律:静默取首个 = 改错对象还不吭声。
@@ -1052,7 +1071,9 @@ function resolveByIdOrName<T>(
 	target: string,
 	opts: { idOf: (t: T) => string; nameOf: (t: T) => string; what: string; hint: string },
 ): T {
-	const t = target.trim();
+	const raw = target.trim();
+	// 统一剥掉一层方括号:注入块给的是 `[9f2k1x] 标题`,模型照抄时会带上 `[]`
+	const t = raw.length > 2 && raw.startsWith("[") && raw.endsWith("]") ? raw.slice(1, -1).trim() : raw;
 	if (t.length === 0) throw new WorldValidationError(`${opts.what}的编号或名称不能为空。${opts.hint}`);
 	const label = (x: T): string => `[${shortId(opts.idOf(x))}] ${opts.nameOf(x)}`;
 

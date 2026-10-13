@@ -165,16 +165,21 @@ export async function readAnchorMemory(bookDir: string): Promise<string> {
 }
 
 /**
- * 锚用的硬约束速查名单(2026-10-12):enabled 约束,口径 = writer ∪ main
- * (与主会话背景包一致 —— 经典写作 agent 同时是「主会话」与「编剧」,all 与
- * undefined 默认值已含在这两个匹配里)。失败(无世界书/读不出)返回空数组,
- * 由 renderAnchor 跳过该块。
+ * 锚用的写作约束(2026-10-13):enabled,按 {@link AnchorConstraintRole} 过滤。
+ *
+ * 口径与各会话一致(见 `writerToolset` / `buildChapterContext`):
+ * - 主对话/TUI:「单一写作 agent 同时是主会话与编剧」→ main ∪ writer
+ * - 编剧会话(编辑页的常驻编剧):只要 writer —— 拿「给主会话的约束」是越权
+ * 失败(无世界书/读不出)返回空数组,由 renderAnchor 跳过该块。
  */
-async function anchorConstraints(bookDir: string): Promise<{ name: string; text: string }[]> {
+export type AnchorConstraintRole = "main" | "director" | "writer";
+
+async function anchorConstraints(bookDir: string, roles: readonly AnchorConstraintRole[]): Promise<{ name: string; text: string }[]> {
+	if (roles.length === 0) return [];
 	try {
 		const world = await ensureWorld(bookDir);
 		return world.constraints
-			.filter((c) => c.enabled && (constraintTargetMatches(c.target, "main") || constraintTargetMatches(c.target, "writer")))
+			.filter((c) => c.enabled && roles.some((r) => constraintTargetMatches(c.target, r)))
 			.map((c) => ({ name: c.name, text: c.text }));
 	} catch {
 		return [];
@@ -187,18 +192,23 @@ async function anchorConstraints(bookDir: string): Promise<{ name: string; text:
  * web 编剧会话直接调本函数(见 `src/web/writer-host.ts` 的 before_agent_start),
  * TUI 经 `writerExtension` 调 —— 两处同一实现,不再各写一份。
  *
- * @param opts.constraints true = 附带硬约束速查(2026-10-12)。**只有主会话/TUI 传**:
- *   它们的约束只在背景包里(会被推远、被压缩吃);编辑会话的约束每轮贴生成点,
- *   位置已最优,再进锚就是同一会话两处注入。
+ * @param opts.constraints true = 附带写作约束(2026-10-13 起**全文**,不再只是速查)。
+ *   所有会话都该传:约束是指令,systemPrompt 是它唯一能拿到「系统身份 + 抗压缩」的位置。
+ *   编辑会话的格 C 里另有一份,那是有意的双面(见 `src/inject-plan.ts` 的
+ *   `EDITOR_ROUTING` 注释),不是重复注入的疏漏。
+ * @param opts.constraintRoles target 过滤口径(缺省 main ∪ writer = 单 agent 写作会话口径);
+ *   编剧会话传 `["writer"]`,免得看到「给主会话的约束」。
  */
 export async function buildMemoryAnchor(
 	slug: string,
 	chapterFile: string | undefined,
 	mode?: SessionMode,
-	opts?: { constraints?: boolean },
+	opts?: { constraints?: boolean; constraintRoles?: readonly AnchorConstraintRole[] },
 ): Promise<string> {
 	const memory = await readAnchorMemory(getBookDir(slug));
-	const constraints = opts?.constraints ? await anchorConstraints(getBookDir(slug)) : undefined;
+	const constraints = opts?.constraints
+		? await anchorConstraints(getBookDir(slug), opts.constraintRoles ?? ["main", "writer"])
+		: undefined;
 	return renderAnchor({ mode, chapterFile, memory, constraints });
 }
 

@@ -243,7 +243,10 @@ describe("applyWorldUpdate", () => {
 		).toThrow(WorldValidationError);
 	});
 	it("advance_storyline 校验至多一个 in-progress", () => {
-		const w = createEmptyWorld();
+		// 节点须先存在:2026-10-13 起 advance 不再兜底新建(见下方「查不到一律报错」用例)
+		let w = createEmptyWorld();
+		w = applyWorldUpdate(w, { op: "upsert_storyline_node", id: "n1", title: "进城" });
+		w = applyWorldUpdate(w, { op: "upsert_storyline_node", id: "n2", title: "抵达码头" });
 		const a = applyWorldUpdate(w, { op: "advance_storyline", id: "n1", status: "in-progress" });
 		expect(() => applyWorldUpdate(a, { op: "advance_storyline", id: "n2", status: "in-progress" })).toThrow(WorldValidationError);
 		const b = applyWorldUpdate(a, { op: "advance_storyline", id: "n1", status: "done", next: null });
@@ -593,6 +596,18 @@ describe("worldFindTool", () => {
 		const t = resultText(await runFind({ title: "长文者", detail: "full" }));
 		expect(t).toContain("已截断");
 		expect(t).toContain("全文 3000 字");
+		setWorldUpdateBookDir(null);
+	});
+
+	it("scan 命中大小写不敏感(英文条目名,与 query 分支同口径,2026-10-13)", async () => {
+		setWorldUpdateBookDir(tmp);
+		let world = createEmptyWorld();
+		world = applyWorldUpdate(world, { op: "upsert_entry", type: "character", title: "Alice", body: "钟表匠的女儿。" });
+		await saveWorld(tmp, world);
+		// 条目名是 Alice,正文里写的是 ALICE —— 小写化后仍应命中(中文不受影响,是恒等变换)
+		const t = resultText(await runFind({ scan: "he saw ALICE at the fair" }));
+		expect(t).toContain("Alice");
+		expect(t).toContain("命中:「Alice」");
 		setWorldUpdateBookDir(null);
 	});
 
@@ -959,6 +974,28 @@ describe("applyStorylineUpdate（发展线窄通道）", () => {
 		expect(next.storyline.nodes.map((n) => n.id)).toEqual(["story-aa11bb"]);
 		expect(() => applyStorylineUpdate(worldWithStoryAndNotice(), { op: "delete_node", target: "nope" }))
 			.toThrow(WorldValidationError);
+	});
+
+	it("world_update 的 advance_storyline 与窄工具同口径:认短编号/标题,查不到报错且不新建(2026-10-13)", () => {
+		const w = worldWithStoryAndNotice();
+		// 短编号(注入块给的那个,经典模式下模型抄的就是它)—— 此前会被当成新节点 id
+		const byShort = applyWorldUpdate(w, { op: "advance_storyline", id: "aa11bb", status: "done" });
+		expect(byShort.storyline.nodes.find((n) => n.id === "story-aa11bb")!.status).toBe("done");
+		// 标题也能命中(唯一时)
+		const byTitle = applyWorldUpdate(w, { op: "advance_storyline", id: "离开村庄", status: "pending" });
+		expect(byTitle.storyline.nodes.find((n) => n.id === "story-cc22dd")!.status).toBe("pending");
+		// 查不到 → 报错,且**不新建**幽灵节点(此前会 push 一个 id = 传入串的节点)
+		expect(() => applyWorldUpdate(w, { op: "advance_storyline", id: "9f2k1x", status: "done" }))
+			.toThrow(/没有唯一匹配/);
+		expect(w.storyline.nodes).toHaveLength(2);
+	});
+
+	it("指认剥方括号:注入块给的是 [aa11bb],模型连方括号抄回来也命中(2026-10-13)", () => {
+		const w = worldWithStoryAndNotice();
+		const viaNarrow = applyStorylineUpdate(w, { op: "advance", target: "[aa11bb]", status: "done" });
+		expect(viaNarrow.storyline.nodes.find((n) => n.id === "story-aa11bb")!.status).toBe("done");
+		const viaWorldUpdate = applyWorldUpdate(w, { op: "advance_storyline", id: "[story-aa11bb]", status: "done" });
+		expect(viaWorldUpdate.storyline.nodes.find((n) => n.id === "story-aa11bb")!.status).toBe("done");
 	});
 });
 

@@ -120,7 +120,7 @@ describe("buildMemoryAnchor(每轮记忆锚)", () => {
 		expect(await buildMemoryAnchor(slug, "ch01.jsonl")).toBe("");
 	});
 
-	it("传 { constraints: true } 才带硬约束速查(2026-10-12;主会话/TUI 专用,writer ∪ main 口径)", async () => {
+	it("传 { constraints: true } 才带写作约束(2026-10-13 全文进 system;口径 main ∪ writer)", async () => {
 		const slug = "fog-harbor";
 		const bookDir = getBookDir(slug);
 		await mkdir(bookDir, { recursive: true });
@@ -136,14 +136,35 @@ describe("buildMemoryAnchor(每轮记忆锚)", () => {
 			],
 		});
 		const anchor = await buildMemoryAnchor(slug, "ch01.jsonl", "writing", { constraints: true });
-		expect(anchor).toContain("【写作约束 · 速查】");
+		expect(anchor).toContain("【写作约束 · 常驻");
 		expect(anchor).toContain("第三人称限知");
 		expect(anchor).toContain("每章不超过三千字");
 		expect(anchor).not.toContain("给导演的");
 		expect(anchor).not.toContain("已停用");
-		// 默认路径(编辑会话)不带速查 —— 它的约束每轮贴生成点,不需要第二份
+		// 默认路径(不传 opts)不带约束
 		const plain = await buildMemoryAnchor(slug, "ch01.jsonl", "writing");
-		expect(plain).not.toContain("【写作约束 · 速查】");
+		expect(plain).not.toContain("【写作约束");
+	});
+
+	it("constraintRoles 收窄口径:编剧只取 writer,拿不到「给主会话的约束」", async () => {
+		const slug = "fog-harbor";
+		const bookDir = getBookDir(slug);
+		await mkdir(bookDir, { recursive: true });
+		const world = await ensureWorld(bookDir);
+		await saveWorld(bookDir, {
+			...world,
+			constraints: [
+				{ id: "c1", name: "编剧的规矩", text: "少用形容词", enabled: true, target: "writer" },
+				{ id: "c2", name: "主会话的规矩", text: "每章三千字", enabled: true, target: "main" },
+			],
+		});
+		const editor = await buildMemoryAnchor(slug, "ch01.jsonl", "writing", { constraints: true, constraintRoles: ["writer"] });
+		expect(editor).toContain("少用形容词");
+		expect(editor).not.toContain("每章三千字");
+		// 经典模式编剧是单 agent(main ∪ writer),两条都要
+		const classic = await buildMemoryAnchor(slug, "ch01.jsonl", "writing", { constraints: true, constraintRoles: ["main", "writer"] });
+		expect(classic).toContain("少用形容词");
+		expect(classic).toContain("每章三千字");
 	});
 
 	it("无当前章节(book 模式未声明)也可注入,只是省略章节行", async () => {

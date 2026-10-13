@@ -809,7 +809,14 @@ export class WriterHost {
 								// book 模式的章节是易变上下文,必须现读 viewChapter(不能闭包捕获)——
 								// 与上方 inject 同一个理由(见其注释)。
 								const anchorChapter = bookScope ? this.viewChapter.get(slug) ?? null : chapter;
-								const anchor = await buildMemoryAnchor(slug, anchorChapter ?? undefined, detectSessionMode(event.prompt));
+								// 约束(2026-10-13):所有会话都进锚 —— systemPrompt 是指令唯一能拿到
+								// 「系统身份 + 抗压缩」的位置。target 口径与会话身份同源:经典模式是
+								// 单一写作 agent(main ∪ writer),普通编剧只要 writer(拿「给主会话的
+								// 约束」是越权)。格 C 里那份保留 —— 有意的双面,见 inject-plan 注释。
+								const anchor = await buildMemoryAnchor(slug, anchorChapter ?? undefined, detectSessionMode(event.prompt), {
+									constraints: true,
+									constraintRoles: this.classicMode ? (["main", "writer"] as const) : (["writer"] as const),
+								});
 								if (!anchor) return;
 								return { systemPrompt: `${event.systemPrompt}\n\n${anchor}` };
 							} catch {
