@@ -1,6 +1,6 @@
 {
   "name": "pi-writer",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Standalone creative writing agent built on pi: book/chapter sessions, world-book tree, writer tools",
   "type": "module",
   "bin": {
@@ -94,11 +94,14 @@
     "llm",
     "cli"
   ],
-  "author": "Pi Contributors",
+  "author": {
+    "name": "Eicbro3ding",
+    "email": "209677417@qq.com"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Eicbro3ding/pi-writer.git"
+    "url": "git+https://github.com/Eicbro3ding/pi-write.git"
   },
   "engines": {
     "node": ">=22.19.0"
