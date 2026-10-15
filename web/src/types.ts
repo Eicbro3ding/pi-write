@@ -1107,3 +1107,39 @@ export interface BookFileTextDto {
 	/** 是否因超过上限被截断。 */
 	truncated: boolean;
 }
+
+/** GET /api/about 响应:应用信息(纯读,不联网)。 */
+export interface AboutDto {
+	name: string;
+	version: string;
+	author: string;
+	/** SPDX 标识符(如 MIT);读不到就是空串。 */
+	license: string;
+	/** 规范化后的仓库地址;没配就是空串(界面据此不显示这一行)。 */
+	repository: string;
+	homepage: string;
+	/** 数据根目录与书稿目录,家目录部分缩写成 `~`。 */
+	dataDir: string;
+	booksDir: string;
+	/** 由仓库地址推导的外链;非 GitHub 形态时三项都是 null。 */
+	links: { changelog: string | null; thirdParty: string | null; issues: string | null };
+	edition: "electron" | "web" | "cli";
+}
+
+/**
+ * POST /api/update/check 响应。
+ *
+ * **失败也是结果**:`ok=false` 时看 `error`(已是可读文案,含代理提示)。
+ * `latest === null && ok` = 上游没有发布过任何 Release —— 与「已是最新」不是一回事。
+ */
+export interface UpdateCheckDto {
+	ok: boolean;
+	current: string;
+	latest: string | null;
+	hasUpdate: boolean;
+	/** 有更新时是 Release 页,否则仓库页。 */
+	url: string;
+	notes: string | null;
+	publishedAt: string | null;
+	error: string | null;
+}

@@ -5,7 +5,7 @@
  * 注意:本文件不得在 import 时触碰 DOM 专属 API(EventSource 只在 subscribeEvents 内使用),
  * 以兼容 node 环境的 vitest 单测。
  */
-import type { AgentEventDto, BookDetail, BookFileTextDto, BookFilesDto, BookMeta, BuiltinPromptsDto, ChapterRef, ContextUsageDto, ConversationDto, ConversationScopeDto, ImageProviderDto, ImageSizeDto, InspectReportDto, McpServerInfo, McpServerStatus, PluginInfoDto, PluginSettingsItemDto, ProviderDetailDto, ProviderInfo, ProviderRefreshError, ResolvedShellDto, SessionState, SessionUsageStatsDto, SessionTreeDto, SetupStateDto, SkillInfoDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, ThinkingHostResult, TrimSummaryDto, WorldDataDto, ShellKindDto, WriterSettingsDto, WriterStateDto } from "../types.ts";
+import type { AboutDto, AgentEventDto, BookDetail, BookFileTextDto, BookFilesDto, BookMeta, BuiltinPromptsDto, ChapterRef, ContextUsageDto, ConversationDto, ConversationScopeDto, ImageProviderDto, ImageSizeDto, InspectReportDto, McpServerInfo, McpServerStatus, PluginInfoDto, PluginSettingsItemDto, ProviderDetailDto, ProviderInfo, ProviderRefreshError, ResolvedShellDto, SessionState, SessionUsageStatsDto, SessionTreeDto, SetupStateDto, SkillInfoDto, StageSnapshotDto, StageWorldEditRecordDto, ThemeManifest, ThinkingHostResult, TrimSummaryDto, UpdateCheckDto, WorldDataDto, ShellKindDto, WriterSettingsDto, WriterStateDto } from "../types.ts";
 import type { ConfirmCardItem } from "../components/ConfirmCard.tsx";
 
 /** 图片访问 URL(同源相对路径;生产/Electron 同源,vite dev 经代理)。 */
@@ -401,6 +401,23 @@ export class ApiClient {
 	 */
 	async getSettings(): Promise<{ settings: WriterSettingsDto; shell: ResolvedShellDto; appVersion: string }> {
 		return this.request<{ settings: WriterSettingsDto; shell: ResolvedShellDto; appVersion: string }>("/api/settings");
+	}
+
+	/** 应用信息(「关于」页;服务端纯读、不联网,拿不到就该报错而不是留空)。 */
+	async getAbout(): Promise<AboutDto> {
+		const r = await this.request<{ about: AboutDto }>("/api/about");
+		return r.about;
+	}
+
+	/**
+	 * 检查更新(会联网,可能耗时数秒)。
+	 *
+	 * 服务端把「没网 / 被限流 / 上游没有 Release」都当业务结果回 200,
+	 * 所以这里**不会**因为检查失败而抛错 —— 失败信息在返回值的 `error` 里。
+	 */
+	async checkUpdate(): Promise<UpdateCheckDto> {
+		const r = await this.request<{ update: UpdateCheckDto }>("/api/update/check", { method: "POST" });
+		return r.update;
 	}
 
 	/**

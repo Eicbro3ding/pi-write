@@ -53,6 +53,12 @@ export interface WebCliOptions {
 	 * 落空,Electron 壳必须显式传 asar 内路径。
 	 */
 	webDistDir?: string;
+	/**
+	 * 应用版本(Electron 壳传 `app.getVersion()`)。打包后 bundle 的 import.meta.url
+	 * 是构建机路径,从它探测 package.json 在用户机器上会落空,「关于」页就会显示
+	 * 0.0.0 —— 与 webDistDir 同一类问题、同一条显式注入的路子。
+	 */
+	appVersion?: string;
 }
 
 /**
@@ -310,6 +316,9 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 		writerHost,
 		// Electron 壳显式传 asar 内前端目录;缺省探测(烘焙路径)在 CI 产物上会落空
 		...(opts.webDistDir ? { webDistDir: opts.webDistDir } : {}),
+		// 运行形态与版本(「关于」页);--electron 即桌面壳,其余都算网页版
+		edition: opts.electron ? "electron" : "web",
+		...(opts.appVersion ? { appVersion: opts.appVersion } : {}),
 	});
 	// 插件装载态(错误/声明/命令注册表/trusted 路由)交给 server,GET /api/plugins 合并展示
 	server.setPluginInfos(pluginLoad.infos, pluginLoad.webCommands, pluginLoad.routes);

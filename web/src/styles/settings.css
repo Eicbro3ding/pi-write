@@ -27,6 +27,108 @@
 @media (max-width: 1080px) {
   .st-cols { grid-template-columns: minmax(0, 1fr); }
 }
+/* ════════════════════════════════════════════════════════════════
+   「关于」页(2026-10-15 按设计稿重排)
+   这一页当**书末版权页**排,不当表单排:身份块挂顶、版权页吸底,
+   中间那块空白是留白而不是没写完。所以:
+     · 内容列要撑满可视高度,否则 margin-top:auto 无处可吸 —— 见 .ab-inner
+     · 右栏竖线拉通到底,与版权页横线接成 L 形框(窄屏降级时撤掉)
+     · 卡片只留两处:会变状态的「版本与更新」、承载 markdown 的「更新说明」
+   类名一律 ab- 前缀,与其它页面互不干扰。
+   ════════════════════════════════════════════════════════════════ */
+.ab-inner { min-height: 100%; display: flex; flex-direction: column; }
+.ab-inner > .st-cols-about { flex: 1; align-items: stretch; }
+.st-cols-about .st-col-side { display: flex; }
+
+/* 身份区:logo + 词标 + 一句 tagline。**不入卡** —— 它是这一页的身份,不是一条设置 */
+.ab-masthead {
+  display: flex; align-items: center; gap: var(--sp-4);
+  padding: 0 0 var(--sp-5); border-bottom: 1px solid var(--line);
+}
+/* logo 源为 512×512 自带圆角的浅色方底(web/public/logo.png);64px 显示时
+   CSS 的 r-md 与素材自身圆角(约 14%)同量级,不额外加描边 —— 浅底已经能立住 */
+.ab-logo {
+  width: 64px; height: 64px; flex: none; display: block;
+  border-radius: var(--r-md); box-shadow: var(--shadow-1);
+}
+.ab-masthead-text { min-width: 0; }
+.ab-wordmark { font-size: var(--fs-22); font-weight: 600; letter-spacing: 0.01em; color: var(--ink); }
+.ab-wordmark i { font-style: normal; color: var(--amber); }
+.ab-tagline { font-size: var(--fs-13); line-height: 1.7; color: var(--muted); margin: 3px 0 0; }
+
+/* 版本行:18px mono 的版本号 —— 这一页唯一一个"大数字" */
+.ab-ver-row { display: flex; align-items: baseline; gap: var(--sp-3); margin: var(--sp-3) 0 0; }
+.ab-ver-label { flex: none; font-size: var(--fs-12); color: var(--muted); }
+.ab-ver-value { font-family: var(--mono); font-size: var(--fs-18); color: var(--ink); }
+/* 状态徽标:中性描边 + mono,不吃琥珀 —— 琥珀留给品牌 ·writer 与主按钮 */
+.ab-chip {
+  flex: none; font-size: var(--fs-11); line-height: 1;
+  padding: 3px 10px; border-radius: var(--r-full);
+  color: var(--amber); background: var(--amber-tint); border: 1px solid var(--amber-tint-strong);
+}
+.ab-status {
+  display: flex; align-items: center; gap: 7px;
+  font-size: var(--fs-12); color: var(--muted); margin: var(--sp-2) 0 0;
+}
+.ab-status.is-ok { color: var(--green); }
+/* 失败时那句人话可能有两行(服务端会把「已尝试通过代理 …」一起带上),
+   图标顶对齐而不是垂直居中,否则图标会飘到两行中间 */
+.ab-inner .notice { align-items: flex-start; }
+.ab-inner .notice svg { flex: none; margin-top: 3px; }
+
+/* 更新说明:搬进正文宽度(卡片在主列,正文再限 660px),
+   字体与列表排版交给全局的 .record-md(聊天/词条同源),这里只管尺寸与间距 */
+.ab-notes-meta {
+  display: flex; align-items: center; gap: var(--sp-2);
+  font-size: var(--fs-11); color: var(--faint); margin: var(--sp-3) 0 0;
+}
+.ab-notes-body { max-width: 660px; margin: var(--sp-3) 0 0; }
+.ab-notes-foot { display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-4) 0 0; }
+
+/* 版权页:定义列表,不入卡。吸到内容列底部 —— 它本来就在最后一页 */
+.ab-colophon { margin-top: auto; padding-top: var(--sp-4); }
+.ab-colophon-title {
+  font-size: var(--fs-11); letter-spacing: 0.12em; color: var(--faint); font-weight: 500;
+  margin-bottom: var(--sp-3);
+}
+.ab-colophon dl { margin: 0; }
+.ab-crow {
+  display: flex; align-items: baseline; gap: var(--sp-4);
+  padding: 9px 0; border-top: 1px solid var(--line);
+}
+.ab-colophon dt { flex: none; width: 72px; font-size: var(--fs-12); color: var(--faint); }
+.ab-colophon dd { margin: 0; min-width: 0; font-size: var(--fs-13); color: var(--ink-2); overflow-wrap: anywhere; }
+
+/* 右栏:本机(数据落在哪) + 相关。本地优先的工具,「我的数据在哪」是这一页第二该答的 */
+.ab-side { flex: 1; border-left: 1px solid var(--line); padding-left: var(--sp-5); }
+.ab-side-group + .ab-side-group {
+  margin-top: var(--sp-5); padding-top: var(--sp-4); border-top: 1px solid var(--line);
+}
+.ab-side-label {
+  font-size: var(--fs-11); letter-spacing: 0.12em; color: var(--faint); font-weight: 500;
+  margin-bottom: var(--sp-3);
+}
+.ab-side dl { margin: 0; display: flex; flex-direction: column; gap: var(--sp-3); }
+.ab-side dt { font-size: var(--fs-11); color: var(--faint); }
+.ab-side dd {
+  margin: 2px 0 0; font-family: var(--mono); font-size: var(--fs-12); color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.ab-side-links { display: flex; flex-direction: column; gap: 9px; }
+.ab-side-links a {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: var(--fs-13); color: var(--ink-2); text-decoration: none;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+.ab-side-links a:hover { color: var(--amber); }
+.ab-side-foot { margin: var(--sp-4) 0 0; font-size: var(--fs-12); line-height: 1.7; color: var(--faint); }
+
+/* 窄屏降级成单列:竖线改成横向分隔、取消吸底(单列里吸底会把右栏顶到屏幕外) */
+@media (max-width: 1080px) {
+  .ab-inner { min-height: 0; }
+  .ab-colophon { margin-top: 0; }
+  .ab-side { border-left: 0; padding-left: 0; border-top: 1px solid var(--line); padding-top: var(--sp-5); }
+}
 
 /* —— 卡片内的行 / 头部 / 表头 —— */
 .st-card-head { display: flex; align-items: center; gap: var(--sp-2); }
@@ -373,3 +475,12 @@
   transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out),
     transform var(--dur-fast) var(--ease-out);
 }
+
+/* —— 「关于」页的外链(项目地址 / 去下载)—— 新窗口打开,故用普通 <a>。
+   其余页面里的链接都走 markdown 渲染,不共用这套 —— */
+.st-link {
+  font-size: var(--fs-12); color: var(--amber); text-decoration: none; cursor: pointer;
+  border-bottom: 1px solid transparent;
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+.st-link:hover { border-bottom-color: currentColor; }

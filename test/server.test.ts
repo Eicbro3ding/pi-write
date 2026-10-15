@@ -2669,3 +2669,49 @@ describe("WriterServer · 换模型/思考等级广播到编剧与舞台会话",
 		expect(body.hosts.every((h) => h.ok)).toBe(true);
 	});
 });
+
+/**
+ * GET /api/about(2026-10-14):设置页「关于」分类的应用信息。
+ *
+ * 接口本身很薄,但有一个跨进程的坑必须钉住:**打包后 bundle 里读不到
+ * package.json**,版本只能由宿主(Electron 主进程)显式注入 app.getVersion()
+ * —— 注入必须优先于读文件,否则 CI 产物上「关于」页会显示 0.0.0
+ * (与 webDistDir 是同一类坑)。
+ */
+describe("GET /api/about(「关于」页的应用信息)", () => {
+	let server: WriterServer;
+	let base: string;
+
+	beforeAll(async () => {
+		const fake = fakeHost();
+		server = new WriterServer({
+			host: "127.0.0.1",
+			port: 0,
+			sessionHost: fake.host as never,
+			webDistDir: join(tmp, "no-such-dist"),
+			appVersion: "9.9.9",
+			edition: "electron",
+		});
+		const { port } = await server.start();
+		base = `http://127.0.0.1:${port}`;
+	});
+
+	afterAll(async () => {
+		await server.stop();
+	});
+
+	it("宿主注入的版本优先,并回作者/仓库地址/运行形态", async () => {
+		const res = await fetch(`${base}/api/about`);
+		expect(res.status).toBe(200);
+		const { about } = (await res.json()) as {
+			about: { name: string; version: string; author: string; repository: string; homepage: string; edition: string };
+		};
+		// appVersion 覆盖 package.json 里的真实版本(0.3.3)—— 这正是打包场景
+		expect(about.version).toBe("9.9.9");
+		expect(about.name).toBe("pi-writer");
+		expect(about.edition).toBe("electron");
+		// 仓库地址已规范化:可直接给浏览器打开,不带 git+ / .git
+		expect(about.repository).toMatch(/^https:\/\/[^/]+\/[^/]+\/[^/]+$/);
+		expect(about.repository).not.toContain(".git");
+	});
+});

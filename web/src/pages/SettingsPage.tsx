@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { ApiError, type ApiClient } from "../api/client.ts";
 import { formatProviderRefreshErrors, friendlyError } from "../errors.ts";
-import { IMAGE_SIZE_PX_TEXT, type BuiltinPromptsDto, type ConversationScopeDto, type ThinkingHostResult, type ImageProviderDto, type ImageSizeDto, type PluginInfoDto, type ResolvedShellDto, type ShellDialectDto, type ShellKindDto, type UserThemeInfo, type WorldDataDto, type WriterSettingsDto } from "../types.ts";
+import { IMAGE_SIZE_PX_TEXT, type AboutDto, type BuiltinPromptsDto, type ConversationScopeDto, type ThinkingHostResult, type ImageProviderDto, type ImageSizeDto, type PluginInfoDto, type ResolvedShellDto, type ShellDialectDto, type ShellKindDto, type UpdateCheckDto, type UserThemeInfo, type WorldDataDto, type WriterSettingsDto } from "../types.ts";
 import type { EnterBehavior } from "../settings.ts";
 import { buildThemeFamilies, NIGHT_THEME, themeFamilyPick, themeLabelFromCss, themeStarterCss, USER_THEME_PREFIX, userThemeFile, type ThemeId } from "../themes.ts";
 import { applyTheme, currentTheme } from "../theme.ts";
+import { renderMarkdown } from "../markdown.ts";
 import { ProviderList } from "../components/ProviderList.tsx";
 import { CreationModeCards } from "../components/CreationModeCards.tsx";
 import { ConversationScopeCards } from "../components/ConversationScopeCards.tsx";
@@ -49,6 +50,7 @@ const LuLayout = ({ size = 15 }: { size?: number }) => <Lu icon="layout-dashboar
 const LuBookOpen = ({ size = 15 }: { size?: number }) => <Lu icon="book-open" size={size} />;
 const LuPuzzle = ({ size = 15 }: { size?: number }) => <Lu icon="puzzle" size={size} />;
 const LuWrench = ({ size = 15 }: { size?: number }) => <Lu icon="wrench" size={size} />;
+const LuInfo = ({ size = 15 }: { size?: number }) => <Lu icon="info" size={size} />;
 const LuWand = ({ size = 15 }: { size?: number }) => <Lu icon="wand-sparkles" size={size} />;
 
 /**
@@ -64,6 +66,8 @@ const SETTING_CATS = [
 	{ id: "integrations", label: "集成", icon: LuPuzzle },
 	{ id: "experimental", label: "实验", icon: LuWand },
 	{ id: "advanced", label: "高级", icon: LuWrench },
+	// 「关于」放最后:它不改变任何行为,是查东西的地方,不该挡在会改行为的开关前面
+	{ id: "about", label: "关于", icon: LuInfo },
 ] as const;
 type SettingCat = (typeof SETTING_CATS)[number]["id"];
 /** 插件动态分类 id(plugin:<id>);类型上并入 SettingCat 判断分支。 */
@@ -80,6 +84,8 @@ const CAT_HEAD: Record<string, { title: string; desc: string }> = {
 		desc: "尚未稳定的能力。开启前请理解它会改变 AI 的行为，并可能产生第三方费用。",
 	},
 	advanced: { title: "高级", desc: "会改变 AI 在你机器上行为的选项。这类设置的影响范围超出 pi-writer 自己,请在开启前读完说明。" },
+	// 「关于」不写页头说明:这一页自己就把版本/作者/许可证摊开了,再压一行小字只是重复
+	about: { title: "关于", desc: "" },
 };
 
 /**
@@ -104,6 +110,7 @@ const PHONE_PAGES: Record<string, { cat: string; cards: string[]; title: string 
 	deps: { cat: "advanced", cards: ["deps", "wizard"], title: "依赖与配置向导" },
 	mcp: { cat: "integrations", cards: ["mcp"], title: "MCP 服务器" },
 	plugins: { cat: "integrations", cards: ["plugins"], title: "插件" },
+	about: { cat: "about", cards: ["about-version", "about-notes"], title: "关于" },
 };
 
 /** 解析手机端子页 id:插件分类(`plugin:<id>`)动态取插件名,其余查 PHONE_PAGES。 */
@@ -115,6 +122,153 @@ function resolvePhonePage(id: string, plugins: PluginInfoDto[] | null): { cat: s
 		return { cat: id, cards: ["plugin"], title: p?.name ?? "插件设置" };
 	}
 	return null;
+}
+
+/** 仓库地址去掉协议头 —— 链接本身仍指向完整地址,只是显示短一点。 */
+export function repositoryLabel(url: string): string {
+	return url.replace(/^https?:\/\//, "");
+}
+
+/**
+ * 「关于」页版本卡的视图(纯函数,便于钉住措辞与按钮组)。
+ *
+ * 三种「没有新版本」必须分清,否则用户会误判:`ok=false` 是**没查成**,
+ * `latest === null` 是**上游压根没发过版**,其余才是真的「已是最新」。
+ * `u === null`(还没查过)也走这里 —— 版本行任何时候都不能是空的。
+ *
+ * 界面按这个结构分三种形状渲染(与设计稿的三态一一对应):
+ *   已是最新 → 绿勾状态行 + 「检查更新」
+ *   有新版本 → 琥珀徽标 + 主按钮「前往下载」
+ *   查不到   → 红框 + 原样带出服务端那句人话 + 「重试」
+ */
+export interface UpdateView {
+	tone: "ok" | "warn" | "err";
+	/** 版本行左侧标签:当前版本 / 最新版本。 */
+	versionLabel: string;
+	/** 版本行右侧的值(已带 v 前缀)。 */
+	version: string;
+	/** 有新版本时的徽标文字;其余状态为 null。 */
+	chip: string | null;
+	/** 状态行(绿勾那一行 / 「你现在是 …」);无话可说时为空串。 */
+	status: string;
+	/** 有新版本时的下载地址(Release 页)。 */
+	download: string | null;
+	/** 次要动作按钮文案:检查更新 / 重试。 */
+	action: string;
+	/** 查不到时服务端给的原因(原样展示,不再改写)。 */
+	error: string | null;
+	/** 更新说明的版本区间(如 `v0.3.3 → v0.3.4`);推不出就是 null。 */
+	range: string | null;
+	/** 说明属于哪个版本(`v0.3.3`)。 */
+	notesVersion: string | null;
+	/**
+	 * 是否渲染「更新说明」卡。**只有真有新版时才开** —— 设计稿的状态 01
+	 * （已是最新）只留版本卡 + 版权页,说明卡属状态 02（检测到新版本）。
+	 * 已是最新时还把上游那份说明摆出来,读者会以为「更新说明」讲的是自己
+	 * **该装**的版本(标题写着「更新说明」,内容却是自己已经有的那个版本)。
+	 * 想看历史说明走右栏「相关 → 更新日志」。
+	 */
+	showNotes: boolean;
+}
+
+export function updateView(u: UpdateCheckDto | null, currentVersion: string): UpdateView {
+	if (!u) {
+		return {
+			tone: "ok",
+			versionLabel: "当前版本",
+			version: `v${currentVersion || "—"}`,
+			chip: null,
+			status: "",
+			download: null,
+			action: "检查更新",
+			error: null,
+			range: null,
+			notesVersion: null,
+			showNotes: false,
+		};
+	}
+	if (!u.ok) {
+		return {
+			tone: "err",
+			versionLabel: "当前版本",
+			version: `v${u.current}`,
+			chip: null,
+			status: "",
+			download: null,
+			action: "重试",
+			error: u.error ?? "检查失败。",
+			range: null,
+			notesVersion: null,
+			showNotes: false,
+		};
+	}
+	if (u.latest === null) {
+		// 查成了,只是上游没有可比对的版本 —— 与「已是最新」分开说,别让用户以为
+		// 自己拿着最新的包(其实是压根没法比)。
+		return {
+			tone: "warn",
+			versionLabel: "当前版本",
+			version: `v${u.current}`,
+			chip: null,
+			status: "上游还没有发布过可下载的版本,暂时没法比对。",
+			download: null,
+			action: "检查更新",
+			error: null,
+			range: null,
+			notesVersion: null,
+			showNotes: false,
+		};
+	}
+	if (u.hasUpdate) {
+		return {
+			tone: "warn",
+			versionLabel: "最新版本",
+			version: `v${u.latest}`,
+			chip: "有新版本",
+			status: `你现在是 v${u.current}`,
+			download: u.url || null,
+			action: "检查更新",
+			error: null,
+			range: `v${u.current} → v${u.latest}`,
+			notesVersion: `v${u.latest}`,
+			showNotes: true,
+		};
+	}
+	return {
+		tone: "ok",
+		versionLabel: "当前版本",
+		version: `v${u.current}`,
+		chip: null,
+		status: "已是最新",
+		download: null,
+		action: "检查更新",
+		error: null,
+		range: null,
+		notesVersion: `v${u.latest}`,
+		showNotes: false,
+	};
+}
+
+/** 版权行的许可证段(如 `MIT · © 2026 Eicbro3ding`);缺项自动略掉,不留裸分隔符。 */
+export function copyrightLine(license: string, author: string): string {
+	const parts: string[] = [];
+	if (license) parts.push(license);
+	if (author) parts.push(`© ${new Date().getFullYear()} ${author}`);
+	return parts.join(" · ");
+}
+
+/** ISO 时间 → `2026-10-14`(界面只到日)。**按本机时区**算 —— 发布时刻在 UTC
+ *  深夜时,用 toISOString 会显示成前一天。取不到回空串。 */
+export function dayLabel(iso: string | null): string {
+	if (!iso) return "";
+	const t = Date.parse(iso);
+	return Number.isNaN(t) ? "" : stampLabel(new Date(t)).slice(0, 10);
+}
+
+/** 紧凑时间戳 `2026-10-15 22:31`(状态行「已是最新 · …」用本机时间)。 */
+export function stampLabel(d: Date): string {
+	const p = (n: number) => String(n).padStart(2, "0");
+	return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 /**
@@ -490,6 +644,15 @@ export function SettingsPage({
 	const [worldReloadKey, setWorldReloadKey] = useState(0);
 	/** 最近一次加载/保存成功时磁盘 world.json mtime(If-Match 条件写;0 = 未知)。 */
 	const lastWorldMtimeRef = useRef(0);
+	/** 「关于」:应用信息(纯读,挂载拉一次)与检查更新状态。 */
+	const [about, setAbout] = useState<AboutDto | null>(null);
+	const [aboutErr, setAboutErr] = useState<string | null>(null);
+	const [updateBusy, setUpdateBusy] = useState(false);
+	/** 检查更新结果;null = 还没查过。失败也是结果(看 ok/error),不留空。 */
+	const [update, setUpdate] = useState<UpdateCheckDto | null>(null);
+	/** 上一次查完的时刻(本机时间)。状态行的「已是最新 · 2026-10-15 22:31」用它 ——
+	 *  服务端日志或真实发布时间都答不了「你什么时候查的」这个问题。 */
+	const [checkedAt, setCheckedAt] = useState<Date | null>(null);
 
 	/** 拉取模型列表/当前模型/思考等级并归一;返回解析结果供调用方直接使用。 */
 	const load = useCallback(async (): Promise<{
@@ -557,6 +720,54 @@ export function SettingsPage({
 			cancelled = true;
 		};
 	}, [client, slug, worldReloadKey]);
+
+	// 「关于」信息:挂载拉一次(纯读、不随书变化)。失败只影响这一张卡,
+	// 所以错误单独存,不塞进页面顶部的 notices。
+	useEffect(() => {
+		let cancelled = false;
+		void client
+			.getAbout()
+			.then((a) => {
+				if (cancelled) return;
+				setAbout(a);
+				setAboutErr(null);
+			})
+			.catch((e) => {
+				if (cancelled) return;
+				setAboutErr(`应用信息加载失败: ${friendlyError(e)}`);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [client]);
+
+	/**
+	 * 检查更新。这是本页唯一会主动出网的动作,所以**只在点击时跑**,不自动触发
+	 * (每次开设置页都联网既慢又烦)。服务端把「没网/限流/上游没发版」都归成
+	 * 200 + 业务结果,所以这里的 catch 只兜「服务端自己不可达」那一类。
+	 */
+	async function runUpdateCheck() {
+		if (updateBusy) return;
+		setUpdateBusy(true);
+		setUpdate(null);
+		try {
+			setUpdate(await client.checkUpdate());
+		} catch (e) {
+			setUpdate({
+				ok: false,
+				current: about?.version ?? appVersion ?? "",
+				latest: null,
+				hasUpdate: false,
+				url: about?.repository ?? "",
+				notes: null,
+				publishedAt: null,
+				error: friendlyError(e),
+			});
+		} finally {
+			setCheckedAt(new Date());
+			setUpdateBusy(false);
+		}
+	}
 
 	/** 切换注入开关:改本地 world → putWorld 整体保存;失败回滚并显示错误。 */
 	async function toggleInjection(key: "notice" | "storyline", checked: boolean) {
@@ -1115,6 +1326,23 @@ export function SettingsPage({
 	/** 插件设置分类 id → 插件(左栏第二组)。 */
 	const pluginCatItems = (pluginCats ?? []).map((p) => ({ id: `${pluginCatPrefix}${p.id}`, label: p.name }));
 
+	/** 「关于」页版本卡的视图(未查过时也要出一版:版本行不能是空的)。 */
+	const aboutView = updateView(update, about?.version ?? appVersion ?? "");
+	/** 「版本页」目标:仓库的 Releases 列表(单个 Release 页由 aboutView.download 给)。 */
+	const releasesUrl = about?.repository ? `${about.repository}/releases` : null;
+	/** 「相关」整组是否显示:三条链接都由仓库地址推导,推不出就不显示这组。 */
+	const hasAboutLinks = !!(about?.links.changelog || about?.links.thirdParty || about?.links.issues);
+	/** 侧栏「相关」的一条外链;地址为空就不渲染(不留死链)。 */
+	function aboutLink(label: string, url: string | null | undefined) {
+		if (!url) return null;
+		return (
+			<a href={url} target="_blank" rel="noreferrer">
+				{label}
+				<Lu icon="arrow-up-right" size={12} />
+			</a>
+		);
+	}
+
 	/** 分类导航按钮(组内复用)。 */
 	function catButton(id: string, label: string, Icon: (p: { size?: number }) => ReactElement) {
 		return (
@@ -1359,6 +1587,19 @@ export function SettingsPage({
 				...(pluginCats ?? []).map((pl) => ({ key: `plugin:${pl.id}`, icon: "puzzle" as LucideName, label: pl.name, page: `${pluginCatPrefix}${pl.id}` })),
 			],
 		},
+		{
+			title: "关于",
+			rows: [
+				{
+					key: "about",
+					icon: "info",
+					label: "关于 pi-writer",
+					sub: "版本 · 作者 · 项目地址",
+					value: `v${about?.version ?? appVersion ?? "—"}`,
+					page: "about",
+				},
+			],
+		},
 	];
 
 	if (isPhone && phoneCat === null) {
@@ -1496,11 +1737,12 @@ export function SettingsPage({
 				)}
 			</aside>
 			<main className={isPhone && phonePage ? "settings-main m-focus" : "settings-main"}>
-				<div className="settings-inner">
-					{/* 页头:标题 + 分类说明 */}
+				{/* ab-inner:「关于」页要撑满可视高度,版权页才吸得住底(见 settings.css) */}
+				<div className={cat === "about" ? "settings-inner ab-inner" : "settings-inner"}>
+					{/* 页头:标题 + 分类说明(「关于」没有说明——它自己就把版本/作者/许可证摊开了) */}
 					<header className="st-head">
 						<h1 className="st-head-title">{headOf(cat).title}</h1>
-						<p className="st-head-desc">{headOf(cat).desc}</p>
+						{headOf(cat).desc && <p className="st-head-desc">{headOf(cat).desc}</p>}
 					</header>
 
 					{/* 全局提示(加载/操作错误、成功通知):所有分类顶部可见 */}
@@ -1953,6 +2195,165 @@ export function SettingsPage({
 									<div className="s-card-head">依赖</div>
 									<div className="s-card-desc">「执行命令」需要本机已装好的 shell;「插件」与「MCP」在「集成」分类里。</div>
 								</section>
+							</aside>
+						</div>
+					)}
+
+					{cat === "about" && (
+						/* 这一页当书末版权页排:身份块挂顶、版权页吸底、卡片只留两处。
+						   间距靠留白与细分隔线,不用装饰去填(2026-10-15 按设计稿重排)。 */
+						<div className="st-cols st-cols-about">
+							<div className="st-col-main">
+								{/* 身份区:logo + 词标 + 一句 tagline,**不入卡** —— 它是这一页的身份,不是一条设置 */}
+								<div className="ab-masthead">
+									<img className="ab-logo" src="/logo.png" alt="pi-writer" width={64} height={64} />
+									<div className="ab-masthead-text">
+										<div className="ab-wordmark">
+											pi<i>·writer</i>
+										</div>
+										<p className="ab-tagline">AI 原生的长篇创作环境</p>
+									</div>
+								</div>
+
+								<section className={cardClass("about-version")}>
+									<div className="st-card-head">
+										<div className="s-card-head">版本与更新</div>
+										<div className="st-card-meta">
+											{aboutView.download && (
+												<a className="btn-primary" href={aboutView.download} target="_blank" rel="noreferrer">
+													<Lu icon="download" size={14} />
+													前往下载
+												</a>
+											)}
+											{aboutView.download && releasesUrl ? (
+												<a className="btn-ghost" href={releasesUrl} target="_blank" rel="noreferrer">
+													版本页
+												</a>
+											) : (
+												<button
+													type="button"
+													className="btn-ghost"
+													disabled={updateBusy || about === null}
+													onClick={() => void runUpdateCheck()}
+												>
+													{updateBusy ? "检查中…" : aboutView.action}
+												</button>
+											)}
+										</div>
+									</div>
+									{aboutErr && <div className="notice err">{aboutErr}</div>}
+									<div className="ab-ver-row">
+										<span className="ab-ver-label">{aboutView.versionLabel}</span>
+										<span className="ab-ver-value">{aboutView.version}</span>
+										{aboutView.chip && <span className="ab-chip">{aboutView.chip}</span>}
+									</div>
+									{aboutView.error ? (
+										<div className="notice err">
+											<Lu icon="triangle-alert" size={14} />
+											<span>{aboutView.error}</span>
+										</div>
+									) : aboutView.status ? (
+										<p className={aboutView.tone === "ok" ? "ab-status is-ok" : "ab-status"}>
+											{aboutView.tone === "ok" && <Lu icon="check" size={14} />}
+											{aboutView.status}
+											{aboutView.tone === "ok" && checkedAt && (
+												<>
+													{" · "}
+													<span className="st-mono">{stampLabel(checkedAt)}</span>
+												</>
+											)}
+										</p>
+									) : null}
+								</section>
+
+								{/* 更新说明:搬进正文宽度并真排版(此前挤在 300px 窄栏、生 markdown 直出)。
+								    只在**真有新版**时出现(aboutView.showNotes)—— 已是最新时摆出上游那份说明
+								    会让人以为那就是自己该装的版本(设计稿状态 01 也没有这张卡)。 */}
+								{aboutView.showNotes && update?.notes && (
+									<section className={cardClass("about-notes")}>
+										<div className="st-card-head">
+											<div className="s-card-head">更新说明</div>
+										</div>
+										<p className="ab-notes-meta">
+											{(aboutView.range ?? aboutView.notesVersion) && (
+												<>
+													<span className="st-mono">{aboutView.range ?? aboutView.notesVersion}</span>
+													{" · "}
+												</>
+											)}
+											发布于 {dayLabel(update.publishedAt) || "—"}
+										</p>
+										<div
+											className="record-md ab-notes-body"
+											dangerouslySetInnerHTML={{ __html: renderMarkdown(update.notes) }}
+										/>
+										{about?.links.changelog && (
+											<div className="ab-notes-foot">
+												<a className="st-link" href={about.links.changelog} target="_blank" rel="noreferrer">
+													完整更新记录
+												</a>
+												<Lu icon="arrow-up-right" size={12} />
+											</div>
+										)}
+									</section>
+								)}
+
+								{/* 版权页:定义列表,不入卡。吸到内容列底部 —— 它本来就在最后 */}
+								<div className="ab-colophon">
+									<div className="ab-colophon-title">版权</div>
+									<dl>
+										<div className="ab-crow">
+											<dt>著者</dt>
+											<dd>{about?.author || "—"}</dd>
+										</div>
+										<div className="ab-crow">
+											<dt>项目地址</dt>
+											<dd>
+												{about?.repository ? (
+													<a className="st-link" href={about.repository} target="_blank" rel="noreferrer">
+														{repositoryLabel(about.repository)}
+													</a>
+												) : (
+													"—"
+												)}
+											</dd>
+										</div>
+										<div className="ab-crow">
+											<dt>许可证</dt>
+											<dd>{copyrightLine(about?.license ?? "", about?.author ?? "") || "—"}</dd>
+										</div>
+									</dl>
+								</div>
+							</div>
+
+							{/* 右栏:本机(数据落在哪) + 相关。本地优先的工具,「我的数据在哪」是第二该答的 */}
+							<aside className="st-col-side">
+								<div className="ab-side">
+									<div className="ab-side-group">
+										<div className="ab-side-label">本机</div>
+										<dl>
+											<div>
+												<dt>数据目录</dt>
+												<dd>{about?.dataDir || "—"}</dd>
+											</div>
+											<div>
+												<dt>书稿目录</dt>
+												<dd>{about?.booksDir || "—"}</dd>
+											</div>
+										</dl>
+										<p className="ab-side-foot">数据只在本机,联网只发生在「检查更新」。</p>
+									</div>
+									{hasAboutLinks && (
+										<div className="ab-side-group">
+											<div className="ab-side-label">相关</div>
+											<div className="ab-side-links">
+												{aboutLink("更新日志", about?.links.changelog)}
+												{aboutLink("第三方许可", about?.links.thirdParty)}
+												{aboutLink("问题反馈", about?.links.issues)}
+											</div>
+										</div>
+									)}
+								</div>
 							</aside>
 						</div>
 					)}

@@ -32,6 +32,7 @@ import {
 import { getPluginFrontendPath, listPlugins, loadPlugins, pluginExists, readPluginSettings, removePlugin, writePluginEnabled, writePluginSettings, writePluginTrusted, type PluginRouteDef, type PluginRuntimeInfo, type PluginWebCommandHandler } from "../plugin-loader.ts";
 import { MAX_PLUGIN_ZIP_BYTES, readPluginZip, writePluginFiles, type PluginZipImport } from "./plugin-zip.ts";
 import { getAgentDir, getBookDir, getThemesDir, getWriterDir, VERSION } from "../config.ts";
+import { aboutInfo, checkForUpdate, type AboutInfo, type Edition } from "../about.ts";
 import { atomicWriteFile } from "../atomic-write.ts";
 import {
 	customModelIds,
@@ -116,6 +117,15 @@ export interface WriterServerOptions {
 	 * 同等受鉴权、回环 Host 校验与统一错误体约束。
 	 */
 	extraRoutes?: Route[];
+	/**
+	 * 应用版本(「关于」页显示 / 检查更新的比对基准)。Electron 壳必须显式传
+	 * `app.getVersion()`:打包后 bundle 里的 import.meta.url 是**构建机**路径,
+	 * 从它出发探测 package.json 在用户机器上必然落空(与 webDistDir 同一类坑)。
+	 * 缺省回 package.json 的 VERSION(开发期与 npm 安装形态)。
+	 */
+	appVersion?: string;
+	/** 运行形态(影响「关于」页的措辞与检查更新的建议)。缺省 "web"。 */
+	edition?: Edition;
 }
 
 /** 静态文件 MIME 表(按扩展名);未列出的默认 text/plain;charset=utf-8。 */
@@ -884,6 +894,12 @@ export class WriterServer {
 			// prompt-defaults(内置系统提示词原文;设置页「查看内置」弹层用。
 			//  提示词本体打包在 bundle 里,前端拿不到,只能由服务端渲染后下发)
 			{ method: "GET", segments: ["prompt-defaults"], handler: (ctx) => this.handleGetPromptDefaults(ctx) },
+			// about(应用信息:版本/作者/仓库;纯读、不联网,打开设置页即可拉)
+			{ method: "GET", segments: ["about"], handler: (ctx) => this.handleGetAbout(ctx) },
+			// update/check(检查更新:**唯一一处会主动出网的读接口**,故用 POST ——
+			//  它不是幂等取数,而是一次"动作",且可能耗时数秒;失败也回 200,
+			//  业务结果在 body 里(同 models/refresh 的口径))
+			{ method: "POST", segments: ["update", "check"], handler: (ctx) => this.handlePostUpdateCheck(ctx) },
 			// 插件路由预留(构造参数;追加在内置路由之后)
 			...(this.options.extraRoutes ?? []),
 		];
@@ -3094,16 +3110,18 @@ export class WriterServer {
 	 */
 	private async handleGetSettings(ctx: RouteContext): Promise<void> {
 		const settings = await readWriterSettings();
-		// appVersion:包版本(package.json),设置页页脚展示用 —— 前端没有别的来源,
-		// 而排障时「用户报的是哪个版本」是第一个要问的问题
-		this.send(ctx.res, 200, { settings, shell: resolveWriterShell(settings), appVersion: VERSION });
+		// appVersion:应用版本,设置页页脚与「关于」页展示用 —— 前端没有别的来源,
+		// 而排障时「用户报的是哪个版本」是第一个要问的问题。取值走 aboutInfo:
+		// 宿主显式注入的 app.getVersion() 优先于 package.json(打包后后者读不到)
+		this.send(ctx.res, 200, { settings, shell: resolveWriterShell(settings), appVersion: this.aboutInfo().version });
 	}
 
 	/**
 	 * GET /api/prompt-defaults:内置系统提示词的**渲染后原文**(2026-10-10)。
 	 *
-	 * 设置页的「查看内置」弹层要显示内置提示词全文,但 `prompts/*.md` 打包在
-	 * bundle 里、前端没有读取途径,所以由服务端渲染后下发(见 buildBuiltinPromptText)。
+	 * 设置页的「查看内置」弹层要显示内置提示词全文,但 `prompts/*.md` 是服务端
+	 * **运行时从磁盘 / asar 读**的(见 `resolvePromptsDir`),浏览器没有读取途径,
+	 * 所以由服务端渲染后下发(见 buildBuiltinPromptText)。
 	 *
 	 * 渲染口径与真实装配一致:按当前 settings 的 conversationScope + 解析出的 shell
 	 * 方言,把 `{SHELL_LINE}` / 对话范围占位替换掉 —— 用户看到的是「AI 实际拿到的那份」,
@@ -3121,6 +3139,35 @@ export class WriterServer {
 			writer: { text: writerText, chars: writerText.length },
 			editor: { text: editorText, chars: editorText.length },
 		});
+	}
+
+	/**
+	 * GET /api/about —— 应用信息(版本 / 作者 / 仓库地址)。
+	 *
+	 * 纯读、不联网:这些字段打开设置页就要立刻可见,不该等一个网络往返。
+	 * 检查更新是另一条路由(POST /api/update/check),用户点了才发生动作。
+	 */
+	private async handleGetAbout(ctx: RouteContext): Promise<void> {
+		this.send(ctx.res, 200, { about: this.aboutInfo() });
+	}
+
+	/**
+	 * POST /api/update/check —— 查上游最新版本。
+	 *
+	 * **失败也回 200**:没网、被限流、仓库没有发布过 Release,都是「检查」这件事
+	 * 的正常结局,不是 HTTP 层的错误 —— 结果是业务数据(body 里的 ok/error),
+	 * 由前端决定怎么说(与 models/refresh 把 errors 放 body 同一口径)。
+	 * 真出网,故在 checkForUpdate 里设了超时。
+	 */
+	private async handlePostUpdateCheck(ctx: RouteContext): Promise<void> {
+		const info = this.aboutInfo();
+		const update = await checkForUpdate(info.version, { repository: info.repository, edition: info.edition });
+		this.send(ctx.res, 200, { update });
+	}
+
+	/** 「关于」信息的唯一组装点(两条路由共用 —— 各拼一份迟早漂移)。 */
+	private aboutInfo(): AboutInfo {
+		return aboutInfo({ version: this.options.appVersion, edition: this.options.edition ?? "web" });
 	}
 
 	/**

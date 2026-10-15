@@ -5,16 +5,30 @@ import { fileURLToPath } from "node:url";
 
 interface PackageJson {
 	version?: string;
+	/** npm 允许字符串或 { name, email, url }。 */
+	author?: string | { name?: string };
+	/** npm 允许字符串或 { type, url }。 */
+	repository?: string | { url?: string };
+	homepage?: string;
+	/** SPDX 标识符(本项目为 MIT);「关于」页版权行用。 */
+	license?: string;
 }
 
 let pkg: PackageJson = {};
 try {
-	// Bun-compiled binaries have no package.json next to the bundle; prefer
-	// the copy shipped next to the executable, then the source tree.
-	const exePackage = join(dirname(process.execPath), "package.json");
-	const sourcePackage = fileURLToPath(new URL("../package.json", import.meta.url));
-	const packagePath = existsSync(exePackage) ? exePackage : sourcePackage;
-	pkg = JSON.parse(readFileSync(packagePath, "utf-8")) as PackageJson;
+	// 打包产物里没有与 bundle 同级的 package.json,按优先级探测三种布局:
+	//   1. bun 单文件 exe 旁(exe 名即包名,package.json 随发行物一起放)
+	//   2. Electron 打包后:package.json 在 asar 内(electron-builder files 白名单收录)
+	//   3. 源码树(开发期 / tsc 产物)
+	// 第 2 条不能省:打包后 import.meta.url 被烘焙成**构建机**的源码路径,
+	// 在用户机器上必然读不到(与 webDistDir 显式注入是同一类坑)。
+	const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+	const packagePath = [
+		join(dirname(process.execPath), "package.json"),
+		join(resourcesPath ?? "", "app.asar", "package.json"),
+		fileURLToPath(new URL("../package.json", import.meta.url)),
+	].find((p) => existsSync(p));
+	if (packagePath) pkg = JSON.parse(readFileSync(packagePath, "utf-8")) as PackageJson;
 } catch {
 	// Not present in some bundled contexts; fall back to defaults below.
 }
@@ -195,3 +209,40 @@ export function applyCacheRetention(value: string | undefined, env: Record<strin
 
 /** Version string; read from package.json (lockstep with the monorepo). */
 export const VERSION: string = pkg.version || "0.0.0";
+
+/**
+ * 作者(package.json 的 author)。规范上是字符串,但 npm 也允许 `{ name, email }`,
+ * 两种都收;读不到回空串(「关于」页据此显示占位,而不是编一个名字出来)。
+ */
+export function packageAuthor(): string {
+	const a = pkg.author;
+	if (typeof a === "string") return a.trim();
+	if (a && typeof a === "object" && typeof a.name === "string") return a.name.trim();
+	return "";
+}
+
+/**
+ * 仓库地址(package.json 的 repository)。同样两种形态(字符串 / `{ url }`),
+ * 原样返回,规范化交给调用方(见 src/about.ts 的 repositoryUrl)。
+ */
+export function packageRepository(): string {
+	const r = pkg.repository;
+	if (typeof r === "string") return r.trim();
+	if (r && typeof r === "object" && typeof r.url === "string") return r.url.trim();
+	return "";
+}
+
+/**
+ * 许可证(package.json 的 license)。只取 SPDX 标识符这一种形态 ——
+ * npm 也允许 `{ type, url }` 的老写法,但本项目用的是字符串,读不到就回空串
+ * (「关于」页宁可少一行,也不显示一个编出来的许可证)。
+ */
+export function packageLicense(): string {
+	const l = pkg.license;
+	return typeof l === "string" ? l.trim() : "";
+}
+
+/** 项目主页(package.json 的 homepage);缺省回空串。 */
+export function packageHomepage(): string {
+	return (pkg.homepage ?? "").trim();
+}

@@ -6,7 +6,7 @@
  * 浏览器、窗口关闭时停服退出。
  */
 
-import { app, BrowserWindow, dialog, shell } from "electron";
+import { app, BrowserWindow, dialog, session, shell } from "electron";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -150,9 +150,30 @@ async function createWindow(url: string): Promise<void> {
 	});
 }
 
+/**
+ * 把系统代理(Clash Verge 之类)写进环境变量,供服务端的「检查更新」用。
+ *
+ * 为什么必须做:从桌面图标启动时读不到 shell 里的 HTTPS_PROXY(GUI 不读 .zshrc),
+ * 而 api.github.com 在国内直连通常不通 —— 不打通这条,「检查更新」在桌面版上
+ * 就是永远失败。只在用户没显式设过时写,绝不覆盖已有配置;socks 代理跳过
+ * (服务端只实现了 http 代理隧道),探测失败就直连。
+ */
+async function inheritSystemProxy(): Promise<void> {
+	if (process.env.HTTPS_PROXY || process.env.https_proxy) return;
+	try {
+		const resolved = await session.defaultSession.resolveProxy("https://api.github.com");
+		// 形态:"PROXY 127.0.0.1:7897" / "SOCKS5 127.0.0.1:7897" / "DIRECT"
+		const m = resolved.match(/(?:^|;)\s*PROXY\s+([^\s;]+)/i);
+		if (m) process.env.HTTPS_PROXY = `http://${m[1]}`;
+	} catch {
+		/* 探测失败:照常直连,失败文案里会提示怎么手配代理 */
+	}
+}
+
 async function main(): Promise<void> {
 	try {
 		const { startWebServer } = await loadServerBundle();
+		await inheritSystemProxy();
 		const base: Omit<WebCliOptions, "port"> = {
 			noBrowser: true,
 			electron: true,
@@ -162,6 +183,9 @@ async function main(): Promise<void> {
 			// 显式传 asar 内前端目录(web/dist 打进 asar;resolveWebDistDir 的
 			// import.meta.url 烘焙路径只对构建机有效,CI 产物在用户机器上会 404)
 			webDistDir: join(app.getAppPath(), "web", "dist"),
+			// 同一条显式注入的路子:打包后 bundle 里读不到 package.json,
+			// 「关于」页的版本号只能由这里给(app.getVersion 读 asar 内的那份)
+			appVersion: app.getVersion(),
 		};
 		// 备用端口:按序尝试;EADDRINUSE 且占用者是 pi-writer 残留实例 → 杀掉重试,
 		// 否则换下一端口(不误杀其他程序)
