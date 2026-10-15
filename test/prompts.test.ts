@@ -129,6 +129,21 @@ describe("开篇纪律(新书还没定风格时的一次性提议)", () => {
 		}
 	});
 
+	it("画像(user.md)有写入触发纪律:两个入口都给出「换一本书还算不算数」的判据", () => {
+		// 回归 2026-10-15:「长期偏好必须落盘」此前只有「写进世界书」这一个出口,
+		// 而 user.md 有说明段(怎么用)、memory 工具描述有写法,却**没有任何一句**
+		// 说什么时候该往里写 —— 实测后果是 AI 一直写 memory.md、从不写画像。
+		// 判据必须落在提示词里,否则又会漂回去(提示词没有别的测试钉)。
+		for (const f of ["writer-main.md", "writer-editor.md"]) {
+			const text = loadPromptText(f);
+			expect(text, f).toContain("换一本书");
+			expect(text, f).toContain('target="user"');
+			expect(text, f).toContain("不是只读的");
+			// 另一侧出口仍在(立约束),否则会矫枉过正成「什么都写画像」
+			expect(text, f).toContain("style_update");
+		}
+	});
+
 	it("{STYLE_SETUP_PATH} 渲染成真实存在的剧本，且导演的 RoleSpec 里确实渲染过", async () => {
 		const { directorRole, styleSetupScriptPath } = await import("../src/stage/stage-extension.ts");
 		const p = styleSetupScriptPath();
