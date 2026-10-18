@@ -1,6 +1,6 @@
 {
   "name": "pi-writer",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Standalone creative writing agent built on pi: book/chapter sessions, world-book tree, writer tools",
   "type": "module",
   "bin": {
@@ -35,6 +35,7 @@
     "build:web": "node scripts/web-build.mjs",
     "make:plugin-zips": "node scripts/make-plugin-zips.mjs",
     "web": "node scripts/check-web-fresh.mjs && node dist/web/server.cjs",
+    "ui:preview": "node scripts/ui-preview.mjs",
     "electron": "electron dist/electron/main.cjs",
     "build:electron": "bun build electron/main.ts --outfile dist/electron/main.cjs --external \"electron*\" --target node --format cjs && bun build electron/preload.ts --outfile dist/electron/preload.js --target node --format cjs",
     "postinstall": "node scripts/apply-patches.mjs"

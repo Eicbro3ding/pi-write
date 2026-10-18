@@ -5,19 +5,9 @@ import { App } from "./App.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { initTheme } from "./theme.ts";
 import { DEBUG_LOCK_COMMAND, DEBUG_UNLOCK_COMMAND, disableDebugMode, enableDebugMode } from "./settings.ts";
-import "./styles.css";
-// 分页样式:按此顺序在 styles.css 之后加载,同名选择器后者胜
-import "./styles/world.css";
-import "./styles/stage.css";
-import "./styles/settings.css";
-import "./styles/wizard.css";
-import "./styles/dialog.css";
-// 手机端样式:必须排在各页样式之后加载,才能压过 .stage-head、.w-bar 等
-import "./styles/mobile.css";
-// UI 房(调试模式的组件陈列室):自带 uiroom- 前缀类,不与其他页抢选择器
-import "./styles/uiroom.css";
-// 退场层(useExitPresence 的 .is-closing):必须最后,才能压过各页入场 animation
-import "./styles/presence.css";
+// 样式统一从 styles.ts 进(那是唯一的样式入口):顺序与取舍写在那个文件里,
+// 组件预览页也按同一份闭包取 CSS,少一处「main.tsx 里有、预览页里没有」的分叉。
+import "./styles.ts";
 
 initTheme(); // 首帧应用持久化主题,避免闪烁
 

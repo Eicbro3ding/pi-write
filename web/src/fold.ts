@@ -4,15 +4,25 @@
  * 原来 diff / 命令输出的 max-height 是写死的(240 / 220),短内容被无谓地截断、
  * 长内容又看不到全貌,「展开」入口也没意义。改成分档:
  * - 短(≤12 行):全部展开,不折叠;
- * - 中(13-40 行)与长(>40 行):收到 12 行 + 底部渐隐 + 「展开全部(共 N 行)」,
- *   展开后最高 480px、块内滚动。
+ * - 长(>12 行):收到**一行**
+ *   + 「展开全部(共 N 行)」,展开后最高 480px、块内滚动。
+ *
+ * **折叠不截断文本**(2026-10-17):这里只给出行数与上限两个常量,具体怎么收
+ * 由样式表的 `.fold-body` 用 max-height 过渡表达(折叠 1 行 ↔ 展开 480px)。
+ * 此前有一个 `collapsedText()` 把内容裁到 12 行再替换,已删——那套做法让开合
+ * 变成"换文本 = 硬切",收起的第一帧就少几百行,动画看起来像塌陷。
+ * **不要为了省 DOM 把文本截断加回来**:要省,收的是渲染出来的高度,不是数据。
+ *
+ * 折叠态的底部渐隐遮罩(fold-mask)随「收到一行」一并删除:一行就是全部可见内容,
+ * 再罩一层渐变等于把它糊掉;「还有更多」由「展开全部(共 N 行)」按钮说清楚。
  *
  * 文件末尾另有「预览卡默认折叠」的体量判据(previewWeight/shouldAutoFold)。
  */
 import type { PreviewData } from "./preview.ts";
 
 export const FOLD_SHORT_MAX = 12;
-export const FOLD_COLLAPSED_LINES = 12;
+/** 折叠态可见行数:一行。 */
+export const FOLD_COLLAPSED_LINES = 1;
 export const FOLD_EXPANDED_MAX_PX = 480;
 
 /** 行数(空文本算 0 行)。 */
@@ -24,12 +34,6 @@ export function countLines(text: string): number {
 /** 是否需要折叠(超过短内容档)。 */
 export function isFoldable(lineCount: number): boolean {
 	return lineCount > FOLD_SHORT_MAX;
-}
-
-/** 折叠态显示的文本:保留前 12 行。 */
-export function collapsedText(text: string, lines = FOLD_COLLAPSED_LINES): string {
-	const parts = text.split("\n");
-	return parts.length <= lines ? text : parts.slice(0, lines).join("\n");
 }
 
 /** 展开入口文案。 */
@@ -70,6 +74,10 @@ export function previewWeight(data: PreviewData): number {
 	if (data.kind === "script") {
 		return data.script.text.shared.beats.length * 3;
 	}
+	// 记忆:条目级 diff 的行数就是渲染行数(与草稿同口径)
+	if (data.kind === "memory") {
+		return data.diff.length;
+	}
 	if (data.mode === "graph") {
 		const d = data.worldDiff;
 		return (
@@ -107,6 +115,7 @@ export function previewFoldSummary(data: PreviewData): string {
 	if ("error" in data) return "";
 	if (data.kind === "draft") return `共 ${previewWeight(data)} 行 diff`;
 	if (data.kind === "script") return `共 ${data.script.text.shared.beats.length} 个节拍`;
+	if (data.kind === "memory") return `共 ${data.diff.length} 行记忆变更`;
 	if (data.mode === "graph") return `共 ${previewWeight(data)} 处变更`;
 	return `共 ${data.entries.length} 个词条`;
 }

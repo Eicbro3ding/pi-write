@@ -184,24 +184,13 @@ function ChatErrorCard({
 }
 
 /**
- * 工具状态标签文案:状态不再靠整行变色表达,
- * 收进行尾一颗方括号标签——成功绿、失败红、运行中琥珀。
- */
-const STATE_LABEL: Record<"run" | "ok" | "err", string> = {
-	run: "【运行中】",
-	ok: "【成功】",
-	err: "【失败】",
-};
-
-/** 工具调用卡片:名称 + 参数 + 运行中/完成/失败状态。 */
-/**
- * 工具卡片(调试形态 / bash US):单行(状态点 + 名称 + 参数 + 状态胶囊),
- * 细节在 title 里;**bash(外部命令)把命令与输出都摊开**——它是唯一能越过书目录
- * 边界的工具,运行中的 stdout/stderr 经 tool_execution_update 实时流进来(见 store
- * 的归约),结束后把最终输出留在卡片上供回看。运行中自动滚到底(输出是快照替换)。
+ * 工具卡片(调试形态 / bash US):单行(图标 + 名称 + 参数),细节在 title 里;
+ * **bash(外部命令)把命令与输出留在卡上**——它是唯一能越过书目录边界的工具,
+ * 运行中的 stdout/stderr 经 tool_execution_update 实时流进来(见 store 的归约),
+ * 结束后把最终输出留在卡片上供回看。运行中自动滚到底(输出是快照替换)。
  *
- * 四张卡统一外壳;状态改胶囊;**工具卡正文不再是绿色**
- * (绿色是状态色,不是装饰色)。
+ * **卡面不写状态的文字**(2026-10-18):见 ToolActionRow 的同名说明——
+ * 状态只由图标与颜色表达,成功不落一个字。
  */
 function ToolCard({ t }: { t: ToolCallInfo }) {
 	const isShell = t.name === "bash";
@@ -220,9 +209,9 @@ function ToolCard({ t }: { t: ToolCallInfo }) {
 				<ToolIcon kind={toolIcon(t.name)} />
 				<span className="tool-name">{t.name}</span>
 				<span className="tool-args">{t.args}</span>
-				<span className={`act-state ${state}`}>{STATE_LABEL[state]}</span>
+				<StatusTail state={state} />
 			</div>
-			{/* bash 始终摊开输出;其他工具只在流式期间显示(结束后单行更省地方)。
+			{/* bash 把输出留在卡上(>12 行折叠成一行,见 FoldablePre);其他工具只在流式期间显示(结束后单行更省地方)。
 			    流式中不折叠(折叠会把最新几行藏起来,而运行中要看的正是尾部),
 			    结束后才按行数分档(见 FoldablePre) */}
 			{detail !== null && detail !== "" && (isShell || running) &&
@@ -260,6 +249,28 @@ function errorDetailLine(result: string | null): string | null {
 }
 
 /**
+ * 行尾的状态位:**只有失败才落字,而且只有两个字「失败」**。
+ *
+ * - 成功 = 什么都没有。不写「【成功】」,也不写「· 完成」——
+ *   成功是默认值,一行在一屏里占的每一个字都应该带信息,而「这个没出事」
+ *   不需要读,它只需要**不被写成事故**。行首的 ✓ / 动词的完成时已经说完了。
+ * - 运行中 = 什么都不写,只有一个转圈。它自己就是「还在动」,
+ *   配一句「【运行中】」等于给一个动画配字幕。
+ * - 失败 = 「失败」两个字,红色。这是唯一需要你抬眼的态,**且不能只是红**:
+ *   红色对色弱是灰的,所以字必须在。
+ *
+ * `margin-left: auto` 把失败位推到最右,与动作行的宾语占位方式一致(见 .act-state)。
+ */
+function StatusTail({ state }: { state: "run" | "ok" | "err" }) {
+	if (state !== "err") return null;
+	return (
+		<span className="act-state err" role="status">
+			失败
+		</span>
+	);
+}
+
+/**
  * 读取型工具的**一行**:不是
  * 「什么都不显示」,而是把工具调用压成一行可读的动作——**带宾语**(在改哪个文件)、
  * **不用 emoji**。
@@ -269,7 +280,12 @@ function errorDetailLine(result: string | null): string | null {
  * (行有了位置,要省地方自己折)。
  *
  * **状态表达(2026-09-22)**:不再整行变色(动词/宾语跟着状态红/琥珀,整行看着像
- * 在报错)——图标、动作、文件保持原样,状态收进行尾一颗方括号标签:成功绿、失败红;
+ * 在报错)——图标、动作、文件保持原样。
+ *
+ * **成功不留一个字(2026-10-18,两轮)**:第一版只砍掉了「【成功】」,留了「【运行中】」;
+ * 他的第二句话把这条推到彻底:「成功不要有任何提示……只有失败了才会标红」。
+ * 于是现在**行尾只有失败会落字**(两个字「失败」+ 红),运行中只剩一个转圈,
+ * 成功什么都不加 —— 行还在(完成的行留在流水里),只是不喊。
  * 失败时下方再缩进一行错误详情,给出真正的失败原因(如 `pandoc: command not found`)。
  */
 function ToolActionRow({ t }: { t: ToolCallInfo }) {
@@ -284,7 +300,7 @@ function ToolActionRow({ t }: { t: ToolCallInfo }) {
 				</span>
 				<span className="act-verb">{r.verb}</span>
 				{r.object && <span className="act-object">{r.object}</span>}
-				<span className={`act-state ${state}`}>{STATE_LABEL[state]}</span>
+				<StatusTail state={state} />
 			</div>
 			{detail && (
 				<div className="act-error" title={t.result ?? undefined}>
@@ -592,7 +608,7 @@ function Message({
 			<div className="record error">
 				<ChatErrorCard
 					info={m.error}
-					// 「重试」只在卡片**绑定了失败回合**时才画(2026-10 审计 BUG-014):
+					// 「重试」只在卡片**绑定了失败回合**时才画:
 					// m.retry 是创建这张卡时写下的稳定目标。没有它就没有可靠的重放对象,
 					// 画一颗会去猜「当前最后一条消息」的按钮等于给用户埋一个跨回合重发的坑。
 					onRetry={onRetry && m.retry ? () => onRetry(m) : undefined}

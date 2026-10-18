@@ -29,18 +29,23 @@ function makeWorld(titles: string[]): WorldDataDto {
 function makeClient() {
 	let world = makeWorld([]);
 	const drafts = new Map<string, string>();
+	const memories = new Map<string, string>();
 	return {
 		world,
 		setWorld(w: WorldDataDto) {
 			world = w;
 		},
 		drafts,
+		memories,
 		client: {
 			async getWorld() {
 				return { world };
 			},
 			async getDraft(path: string) {
 				return { text: drafts.get(path) ?? "" };
+			},
+			async getMemory(target: "memory" | "user") {
+				return { text: memories.get(target) ?? "" };
 			},
 		} as never,
 	};
@@ -144,10 +149,56 @@ describe("createEditCapture", () => {
 				calls.push([path, slug]);
 				return { text: "基线" };
 			},
+			async getMemory() {
+				return { text: "" };
+			},
 		} as never;
 		const capture = createEditCapture(client, () => null);
 		capture.prefetchBaseline("draft/ch01.md", "book-9");
 		await capture.handleStart("t8", "write", { path: "draft/ch01.md" });
 		expect(calls).toEqual([["draft/ch01.md", "book-9"]]);
+	});
+
+	it("memory 写本书记忆:条目级 diff 与展示路径", async () => {
+		const m = makeClient();
+		m.memories.set("memory", "阿澈怕水。\n");
+		const capture = createEditCapture(m.client as never, () => "book-1");
+		// start:记忆还是旧的一行
+		expect(capture.handleStart("m1", "memory", { target: "memory", action: "add", content: "阿澈左手有疤。" })).toBe("memory");
+		m.memories.set("memory", "阿澈怕水。\n阿澈左手有疤。\n");
+		const edit = await capture.handleEnd("m1", false);
+		expect(edit).not.toBeNull();
+		expect(edit!.kind).toBe("memory");
+		expect(edit!.memoryTarget).toBe("memory");
+		expect(edit!.before).toBe("阿澈怕水。\n");
+		expect(edit!.data).toMatchObject({ kind: "memory", target: "memory", path: "memory.md" });
+		const diff = (edit!.data as { diff: Array<{ kind: string; text: string }> }).diff;
+		expect(diff.some((l) => l.kind === "add" && l.text.includes("左手有疤"))).toBe(true);
+	});
+
+	it("memory 写作者画像:target=user 走书外路径,缺省目标按 memory 算", async () => {
+		const m = makeClient();
+		const capture = createEditCapture(m.client as never, () => "book-1");
+		expect(capture.handleStart("m2", "memory", { target: "user", action: "add", content: "作者偏好电报体。" })).toBe("memory");
+		m.memories.set("user", "作者偏好电报体。\n");
+		const edit = await capture.handleEnd("m2", false);
+		expect(edit).not.toBeNull();
+		expect(edit!.memoryTarget).toBe("user");
+		expect(edit!.data).toMatchObject({ kind: "memory", target: "user", path: "~/.pi/writer/user.md" });
+
+		// 缺 target:默认本书记忆(与工具参数的缺省语义一致)
+		expect(capture.handleStart("m3", "memory", { action: "add", content: "x" })).toBe("memory");
+		m.memories.set("memory", "x\n");
+		const edit2 = await capture.handleEnd("m3", false);
+		expect(edit2!.memoryTarget).toBe("memory");
+	});
+
+	it("memory 没有实质变化(超预算被拒)→ 不出卡", async () => {
+		const m = makeClient();
+		m.memories.set("memory", "原样。\n");
+		const capture = createEditCapture(m.client as never, () => "book-1");
+		capture.handleStart("m4", "memory", { action: "add", content: "写不进去" });
+		const edit = await capture.handleEnd("m4", false);
+		expect(edit).toBeNull();
 	});
 });

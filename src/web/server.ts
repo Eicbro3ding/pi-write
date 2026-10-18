@@ -31,7 +31,7 @@ import {
 } from "../book-manager.ts";
 import { getPluginFrontendPath, listPlugins, loadPlugins, pluginExists, readPluginSettings, removePlugin, writePluginEnabled, writePluginSettings, writePluginTrusted, type PluginRouteDef, type PluginRuntimeInfo, type PluginWebCommandHandler } from "../plugin-loader.ts";
 import { MAX_PLUGIN_ZIP_BYTES, readPluginZip, writePluginFiles, type PluginZipImport } from "./plugin-zip.ts";
-import { getAgentDir, getBookDir, getThemesDir, getWriterDir, VERSION } from "../config.ts";
+import { getAgentDir, getBookDir, getThemesDir, getUserProfilePath, getWriterDir, VERSION } from "../config.ts";
 import { aboutInfo, checkForUpdate, type AboutInfo, type Edition } from "../about.ts";
 import { atomicWriteFile } from "../atomic-write.ts";
 import {
@@ -55,6 +55,7 @@ import {
 	type ModelsConfig,
 } from "../custom-models.ts";
 import { WriteQueue } from "../write-queue.ts";
+import { withWorldLock } from "../world-lock.ts";
 import {
 	SETUP_VERSION,
 	defaultSetupState,
@@ -393,7 +394,7 @@ async function readModelsConfig(): Promise<ModelsConfig> {
 /**
  * models.json 不可安全改写时抛出。
  *
- * 2026-10 审计 BUG-010:写入路径不能再把「读不懂」当「空配置」,否则原文件会被
+ * 写入路径不能再把「读不懂」当「空配置」,否则原文件会被
  * 空快照覆盖(用户已有 provider/model 与未知字段静默丢失)。
  * - `invalid`:JSON 语法坏 / 顶层不是对象 / providers 形状不对 → 409,让用户先去修文件
  * - `io`:权限、IO 错误 → 500(与「没有配置」区分开)
@@ -443,7 +444,7 @@ function modelsConfigHttpError(err: unknown): never {
 }
 
 /**
- * models.json 的只读诊断(2026-10 审计 BUG-010 / BUG-017):
+ * models.json 的只读诊断:
  * - 文件存在但读不懂 → 一条「请修复」提示(写入路径会拒绝写入,UI 该提前说)
  * - 历史重复的模型条目 → 逐条列出(vendor 只认第一条,不静默删除用户数据)
  * 只读路径容错:任何异常都退化成空数组,不因为诊断失败而让 GET 失败。
@@ -481,7 +482,7 @@ function readThinkingFormat(body: unknown): ThinkingFormat | null | undefined {
 function optionalPositiveInt(body: unknown, key: string): number | undefined {
 	const value = (body as Record<string, unknown> | null)?.[key];
 	if (value === undefined || value === null) return undefined;
-	// 只接受数字与数字字符串(2026-10 审计 BUG-018:布尔/数组/对象经 Number() 会被
+	// 只接受数字与数字字符串(布尔/数组/对象经 Number() 会被
 	// 悄悄换算成 1 / NaN,属于「用户填错了」,必须当场拒绝而不是落盘成非法配置)
 	if (typeof value !== "number" && typeof value !== "string") {
 		throw new HttpError(400, "bad_request", `字段 ${key} 必须是正整数`);
@@ -663,7 +664,7 @@ export class WriterServer {
 	 */
 	private switchQueue: Promise<void> = Promise.resolve();
 	/**
-	 * 最近一次背景包装配的裁切摘要(2026-10-04,T4),键 = `slug/chapterFile`。
+	 * 最近一次背景包装配的裁切摘要,键 = `slug/chapterFile`。
 	 *
 	 * 为什么缓存在这里而不是现算:装配发生在 injectChapterContext(可能只在
 	 * 切章时跑一次),而查询发生在用户打开页面/拉 /context 时。不缓存就要么
@@ -672,7 +673,7 @@ export class WriterServer {
 	 */
 	private readonly lastTrim = new Map<string, TrimSummary>();
 	/**
-	 * 最近一次背景包装配的分段占用快照(2026-10-04,T5 上下文可视化),
+	 * 最近一次背景包装配的分段占用快照,
 	 * 键与 lastTrim 相同(`slug/chapterFile`)。
 	 *
 	 * 与 lastTrim 同源同一次装配 —— 分两个 Map 而不是合成一个对象,是因为
@@ -697,7 +698,7 @@ export class WriterServer {
 	 */
 	private readonly lastPackWorldMtime = new Map<string, number>();
 	/**
-	 * models.json 读-改-写串行队列(2026-10 审计 BUG-011):并发新增/编辑/删除
+	 * models.json 读-改-写串行队列:并发新增/编辑/删除
 	 * 自定义 provider/model 时,各自「读旧快照 → 改 → 原子写」会互相覆盖。
 	 * 同一文件的操作排成一条链,锁内**重新读取**最新文件再变更。
 	 * 只覆盖单进程;多进程竞争需文件锁/CAS,见 WriteQueue 注释。
@@ -722,7 +723,7 @@ export class WriterServer {
 					this.broadcast({ type: "stage_system", slug, chapterFile: event.chapterFile, text: event.text });
 				} else if (event.type === "director_event") {
 					// 导演会话事件全量透传(与 writer_event 同款):前端复用
-					// processAgentEvent 归约 + MessageList 渲染(2026-08-11 统一重构)
+					// processAgentEvent 归约 + MessageList 渲染
 					this.broadcast({ type: "stage_director_event", slug, chapterFile: event.chapterFile, event: event.event });
 				} else if (event.type === "script_confirm") {
 					// 剧本待确认:前端以卡片展示剧本并询问用户是否修改
@@ -838,6 +839,9 @@ export class WriterServer {
 			{ method: "POST", segments: ["ask-user", "cancel"], handler: (ctx) => this.handlePostAskCancel(ctx) },
 			{ method: "GET", segments: ["draft"], handler: (ctx) => this.handleGetDraft(ctx) },
 			{ method: "PUT", segments: ["draft"], handler: (ctx) => this.handlePutDraft(ctx) },
+			// 长期记忆(只读取数 + 回退写回;两个目标都是固定位置,不接任意路径)
+			{ method: "GET", segments: ["memory"], handler: (ctx) => this.handleGetMemory(ctx) },
+			{ method: "PUT", segments: ["memory"], handler: (ctx) => this.handlePutMemory(ctx) },
 			// mcp(静态段 raw 必须在参数段 :name 之前)
 			{ method: "GET", segments: ["mcp"], handler: (ctx) => this.handleGetMcp(ctx) },
 			{ method: "POST", segments: ["mcp"], handler: (ctx) => this.handlePostMcp(ctx) },
@@ -1114,7 +1118,7 @@ export class WriterServer {
 	}
 
 	/**
-	 * 取某会话最近一次的分段占用快照,用法与 lastTrimSummary 一致(2026-10-04,T5)。
+	 * 取某会话最近一次的分段占用快照,用法与 lastTrimSummary 一致。
 	 *
 	 * 未装配过时返回空数组 —— 面板据此显示「本章还没有注入过背景包」,
 	 * 而不是编一份看起来像真的数据。
@@ -1675,7 +1679,7 @@ export class WriterServer {
 			const message = err instanceof Error ? err.message : String(err);
 			process.stderr.write(`[server] chat 发送失败: ${message}\n`);
 			// text:这条路径多在**写用户消息之前**失败,transcript 里没有可定位的 entry;
-			// 报错卡的「重试」只能靠这份原文原样重放(2026-10 审计 BUG-014)
+			// 报错卡的「重试」只能靠这份原文原样重放
 			this.broadcast({ type: "chat_error", message, text });
 		});
 		this.send(ctx.res, 202, { ok: true });
@@ -1786,10 +1790,10 @@ export class WriterServer {
 			models,
 			current,
 			thinking: state.thinkingLevel,
-			// 2026-10 审计 BUG-017:历史 models.json 里的重复模型条目只**报告**不静默删除
+			// 历史 models.json 里的重复模型条目只**报告**不静默删除
 			// (vendor 合成目录按首项替换,第二条是隐藏/歧义配置)。前端可选择提示。
 			configWarnings: await modelsConfigWarnings(),
-			// 2026-10 审计 BUG-012:当前模型**实际支持**的思考档位(null = 拿不到,前端展示全量)
+			// 当前模型**实际支持**的思考档位(null = 拿不到,前端展示全量)
 			thinkingLevels: this.options.sessionHost.thinkingLevels?.() ?? null,
 		});
 	}
@@ -1797,7 +1801,7 @@ export class WriterServer {
 	/**
 	 * POST /api/models/refresh:联网刷新模型目录(远程 catalog / 动态 provider),返回最新模型列表。
 	 *
-	 * 2026-10 审计 BUG-005:不能只刷主会话。每个会话宿主在装配时各建一份 ModelRuntime,
+	 * 不能只刷主会话。每个会话宿主在装配时各建一份 ModelRuntime,
 	 * 只刷主会话时设置页/主会话看得见新模型,而已建的编剧、舞台会话仍解析不到它。
 	 * 现在三处宿主都刷,并按宿主回报结果(部分失败不再伪装成全成功)。
 	 */
@@ -1827,7 +1831,7 @@ export class WriterServer {
 	}
 
 	/**
-	 * 模型目录刷新协调器(2026-10 审计 BUG-005):主会话 + 常驻编剧 + 舞台三处宿主逐个刷新。
+	 * 模型目录刷新协调器:主会话 + 常驻编剧 + 舞台三处宿主逐个刷新。
 	 *
 	 * 返回每个宿主的结果与错误,不把部分成功说成全成功。某个宿主失败/未装配不阻塞其余
 	 * (它下次新建会话时本来就会读最新目录)。
@@ -1861,7 +1865,7 @@ export class WriterServer {
 	}
 
 	/**
-	 * models.json 的**唯一读-改-写入口**(2026-10 审计 BUG-010 / BUG-011)。
+	 * models.json 的**唯一读-改-写入口**。
 	 *
 	 * 锁内重新读取最新文件 → 纯函数变更(mutate)→ 原子写 → 热重载模型目录。
 	 * 三件事都在同一队列任务里,因此:
@@ -1945,13 +1949,13 @@ export class WriterServer {
 		if (!/^https?:\/\//.test(baseUrl)) {
 			throw new HttpError(400, "bad_request", "baseUrl 必须是 http(s) 地址(如 http://127.0.0.1:8787/v1)");
 		}
-		// 正整数校验与 PUT 共用(2026-10 审计 BUG-018):此前后端各写一套,POST 直接
+		// 正整数校验与 PUT 共用:此前后端各写一套,POST 直接
 		// `Number(...)` 收下 0/负数/小数/非数字字符串,NaN 经 JSON.stringify 落盘成 null,
 		// vendor schema 拒绝后模型从目录里消失。缺省值只在**未提供**时兜底。
 		const contextWindow = optionalPositiveInt(body, "contextWindow") ?? 32000;
 		const maxTokens = optionalPositiveInt(body, "maxTokens") ?? 4096;
 		await this.updateModelsConfig("添加模型", async (cfg) => {
-			// 同 provider 同 id 重复必须拒绝(2026-10 审计 BUG-017):此前后直接追加,
+			// 同 provider 同 id 重复必须拒绝:此前后直接追加,
 			// vendor 合成目录时同 provider 同 id 按首项替换,第二条成为隐藏/歧义配置,
 			// 后续编辑删除也只命中首条 —— 界面与磁盘内容对不上。
 			if (hasModel(cfg, providerId, modelId)) {
@@ -2123,7 +2127,7 @@ export class WriterServer {
 	 * 1. vendor 的 setThinkingLevel 按模型能力 clamp(getSupportedThinkingLevels 对
 	 *    `reasoning:false` 的模型只给 off)—— 只回 {ok:true} 会把「被回落到 off」显示成
 	 *    「已切换成 high」(2026-10-04);
-	 * 2. 2026-10 审计 BUG-013:此前响应只回**主会话**的档位,而编剧/舞台会话的模型能力
+	 * 2. 此前响应只回**主会话**的档位,而编剧/舞台会话的模型能力
 	 *    可能不同,各自 clamp 到别的档位 —— 前端据此提示「已切换」等于骗人。现在逐个宿主
 	 *    回报实际档位、是否被回落、谁失败了;舞台演员的档位**故意**不跟随(角色设计),
 	 *    以 `actorsOmitted` 明示。
@@ -2395,8 +2399,73 @@ export class WriterServer {
 		this.send(ctx.res, 200, { ok: true, mtime });
 	}
 
-	// ---- mcp 路由 ----
+	/**
+	 * GET /api/memory?target=memory|user&slug=...
+	 *
+	 * 只读,给前端预览卡算 diff(before/after 各读一次)。target=memory 取本书
+	 * `memory.md`(需要 slug 或会话书);target=user 取全局 `~/.pi/writer/user.md`
+	 * ——**后者在书目录之外**,所以走不了 `/api/draft` 的路径校验,这里单独开一条。
+	 * 两个目标都是固定位置,不接受调用方给任意路径(不给书外文件开读口子)。
+	 * 文件不存在 → 空串(记忆惰性创建,与草稿同口径)。
+	 */
+	private async handleGetMemory(ctx: RouteContext): Promise<void> {
+		const target = ctx.url.searchParams.get("target");
+		if (target !== "memory" && target !== "user") {
+			throw new HttpError(400, "bad_request", "target 必须是 memory 或 user");
+		}
+		let abs: string;
+		if (target === "user") {
+			abs = getUserProfilePath();
+		} else {
+			const bookSlug = ctx.url.searchParams.get("slug") ?? this.options.sessionHost.getState().bookSlug;
+			if (!bookSlug) throw new HttpError(404, "not_found", "没有当前书");
+			abs = join(getBookDir(bookSlug), "memory.md");
+		}
+		let text = "";
+		let mtime = 0;
+		try {
+			text = await readFile(abs, "utf-8");
+			mtime = safeStat(abs)?.mtimeMs ?? 0;
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+		}
+		this.send(ctx.res, 200, { text, mtime });
+	}
 
+	/**
+	 * PUT /api/memory {target, text, slug?}
+	 *
+	 * 只给「回退」用:把记忆文件写回编辑前的内容。与 memory 工具**同一把文件锁**
+	 * (`withWorldLock`)——否则用户点回退与 agent 下一次 memory 调用会互相覆盖,
+	 * 而记忆是每轮都进上下文的,写坏了要等下一章才被发现。
+	 */
+	private async handlePutMemory(ctx: RouteContext): Promise<void> {
+		const body = await readJsonBody(ctx.req);
+		const target = requireString(body, "target");
+		if (target !== "memory" && target !== "user") {
+			throw new HttpError(400, "bad_request", "target 必须是 memory 或 user");
+		}
+		const text = requireString(body, "text", true);
+		let abs: string;
+		if (target === "user") {
+			abs = getUserProfilePath();
+		} else {
+			const rawSlug = (body as Record<string, unknown> | null)?.slug;
+			const bookSlug =
+				typeof rawSlug === "string" && rawSlug.length > 0
+					? rawSlug
+					: this.options.sessionHost.getState().bookSlug;
+			if (!bookSlug) throw new HttpError(404, "not_found", "没有当前书");
+			abs = join(getBookDir(bookSlug), "memory.md");
+		}
+		await mkdir(dirname(abs), { recursive: true });
+		await withWorldLock(abs, async () => {
+			await atomicWriteFile(abs, text);
+		});
+		this.send(ctx.res, 200, { ok: true });
+	}
+
+	// ---- mcp 路由 ----
 	/** GET /api/mcp:服务器配置 + 连接状态(设置页渲染列表;未装配时 404)。 */
 	private async handleGetMcp(ctx: RouteContext): Promise<void> {
 		const mgr = this.options.mcpHost;
@@ -2802,7 +2871,7 @@ export class WriterServer {
 		void writer.chat(ctx.params.slug!, text, ref.chapterFile, ref.conversation).catch((err) => {
 			const message = err instanceof Error ? err.message : String(err);
 			// 与事件转发同款帧构造:book 模式的会话要带 conversation,前端才知道是哪段对话出错。
-			// text 一并带上(2026-10 审计 BUG-014):这条路径在写用户消息之前就抛了,
+			// text 一并带上:这条路径在写用户消息之前就抛了,
 			// 报错卡要能原样重放这句,而不是让前端拿「当前最后一条消息」去猜。
 			this.broadcastWriterEvent(ctx.params.slug!, ref.chapterFile ?? null, { type: "chat_error", message, text }, ref.conversation);
 		});
@@ -2906,7 +2975,7 @@ export class WriterServer {
 
 	/**
 	 * GET /api/writer/:slug/inspect?chapterFile=&conversation=:上下文检视面板数据
-	 * (2026-10-04,T5;纯读,不创建会话)。
+	 * (纯读,不创建会话)。
 	 *
 	 * 数据来源是 lastSections —— 即**最近一次真正注入**的分段占用,而不是现算。
 	 * 理由与 T4 的 lastTrim 完全相同:两次装配之间世界书可能已被 AI 改过,

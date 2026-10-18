@@ -696,14 +696,14 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .tool-head svg { flex: none; color: var(--muted); }
 .tool-name { font-weight: 500; flex: none; color: var(--ink); }
 .tool-args { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%; }
-/* 状态标签:行尾一颗方括号标签,推到最右。
-   状态不再靠整行/整块变色表达——工具卡与动作行共用这一颗 */
+/* 行尾的状态位(见 MessageList 的 StatusTail):**只有失败会出现在这里**。
+   成功/运行中都不落字,所以这里只剩两种态。
+   注意别把 margin-left:auto 只挂在 .err 上——那会让「失败」贴着宾语而不是推到最右,
+   一屏里失败的位置忽左忽右。 */
 .act-state {
   margin-left: auto; flex: none; font-size: 11px; font-weight: 600; line-height: 1;
   letter-spacing: 0.02em;
 }
-.act-state.ok { color: var(--green); }
-.act-state.run { color: var(--amber); }
 .act-state.err { color: var(--red); }
 /* 外部命令(bash)的流式输出:快照整段替换,运行中自动滚到底(见 ToolCard)。
    运行中边框转暖金,提示「正在跑」;结束后回落普通边框,内容留作回看 */
@@ -714,13 +714,12 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .tool[data-live="1"] { border-color: var(--amber-tint-strong); }
-.tool[data-live="1"] .act-state { color: var(--amber); }
 .tool[data-live="1"] .tool-stream { border-color: var(--amber-tint-strong); }
 
 /* —— 简化输出的工具动作流 ——
    行高 26 · 行间距 2 · 无卡片外框(比工具卡轻一档);
    图标 13 随状态着色(✓ $green / spinner $amber / ✕ $red),动词与宾语保持中性;
-   状态收进行尾方括号标签(见 .act-state),失败另起一行缩进给原因(见 .act-error)。 */
+   行尾只有失败落字(见 .act-state),失败另起一行缩进给原因(见 .act-error)。 */
 .act-flow { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
 .act-row { display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 0 2px; }
 .act-icon { flex: none; display: inline-flex; align-items: center; color: var(--green); }
@@ -730,7 +729,7 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .act-spin, .compact-spin { animation: act-rotate 900ms linear infinite; }
 @keyframes act-rotate { to { transform: rotate(360deg); } }
 /* 动词与宾语**不随状态变色**——
-   状态全部交给行尾的 .act-state;进行中只把动词微提亮,当「这事还没完」的弱提示 */
+   成功与运行中都不落任何文字,进行中只把动词微提亮,当「这事还没完」的弱提示 */
 .act-verb { flex: none; font-size: 12px; font-weight: 500; color: var(--muted); }
 .act-row[data-state="run"] .act-verb { color: var(--ink-2); }
 .act-object {
@@ -856,14 +855,25 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .ask-recap-a.empty { color: var(--faint); }
 
 /* —— 长内容折叠分档 ——
-   短内容不折叠(组件侧直接铺开);中/长内容收到 12 行 + 底部渐隐 + 展开入口,
-   展开后最高 480px、块内滚动 */
+   短内容不折叠(组件侧直接铺开);长内容收到**一行** + 展开入口
+   (2026-10-18 从 12 行收紧),展开后最高 480px、块内滚动。
+   底部渐隐遮罩(.fold-mask)已随「收到一行」删除:一行就是全部可见内容,
+   再罩渐变等于把它糊掉;「还有更多」由「展开全部(共 N 行)」按钮说清楚。 */
 .fold { position: relative; }
-.fold.open { overflow-y: auto; }
-.fold-mask {
-  position: absolute; left: 0; right: 0; bottom: 26px; height: 40px; pointer-events: none;
-  background: linear-gradient(to bottom, transparent, var(--bg-elev));
+/* 折叠体:高度走 max-height 过渡(真折叠动画)。
+   折叠高度 = --fold-lines 行 × **内容自己的行高**(1lh),所以 diff(12px/1.55)、
+   卡片 diff(13px/1.7)、命令输出(11px/1.55)三种行高都自动算对。
+   注意 1lh 取的是**该元素**的行高:命令输出把 .fold-body 直接挂在 <pre> 上
+   (见 FoldablePre),中间多套一层 div 会继承外层 14px/1.65,1 行就算成 23px 一行。
+   内容**不按行截断**:折叠态保留全量 DOM,靠 overflow 裁——
+   换文本会让收起动画在首帧就少几百行,看起来像塌陷而不是收起。 */
+.fold .fold-body {
+  max-height: calc(var(--fold-lines, 12) * 1lh);
+  overflow: hidden;
+  transition: max-height var(--dur-base) var(--ease-inout);
 }
+.fold.open .fold-body { max-height: var(--fold-max, 480px); overflow-y: auto; }
+.fold.open .fold-body::-webkit-scrollbar-thumb { background-clip: padding-box; border: 2px solid transparent; }
 .fold-more {
   display: block; width: 100%; padding: 5px 0 2px; margin-top: 2px;
   font-size: 11px; color: var(--muted); text-align: center;
@@ -2180,17 +2190,19 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 .preview-counts .add { color: var(--green); }
 .preview-counts .del { color: var(--red); }
 /* 智能折叠:默认收起时补一行摘要,说明「收了多少」(否则用户只知道被收了) */
-.preview-folded-note { padding: 0 12px 8px; color: var(--faint); font-size: 11px; line-height: 1.6; }
+.preview-folded-note { padding: 6px 12px 9px; color: var(--faint); font-size: 11px; line-height: 1.6; }
 .preview-body { border-top: 1px solid var(--line); overflow: hidden; }
 .preview-diff { font-family: var(--mono); font-size: 12px; line-height: 1.55; background: var(--bg); }
 /* diff 配色走主题 token(原先是写死的深底 + 硬编码色,浅色主题要另开覆盖块) */
 .preview-diff .diff-add { background: var(--green-tint); color: var(--green); }
 .preview-diff .diff-remove { background: var(--red-tint); color: var(--red); }
 .preview-diff .diff-context { color: var(--faint); }
-/* diff 折叠容器:>12 行折到 12 行 */
+/* diff 折叠容器:>12 行折到一行;高度过渡与 .fold 同一套(见上)。
+   overflow 必须在这里显式给:.diff-fold 不带 .fold 类,那条 .fold .fold-body
+   的 overflow:hidden/投影裁切对它不生效——漏了就会整叠行从折叠盒里溢出来 */
 .diff-fold { position: relative; }
-.diff-fold.open { overflow-y: auto; }
-.diff-fold .fold-mask { bottom: 24px; }
+.diff-fold .fold-body { max-height: calc(var(--fold-lines, 12) * 1lh); overflow: hidden; }
+.diff-fold.open .fold-body { max-height: var(--fold-max, 480px); overflow-y: auto; }
 .preview-error { padding: 10px 12px; color: var(--faint); font-size: 12px; }
 .preview-summary { padding: 6px 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .preview-graph { height: 220px; }
@@ -2545,9 +2557,18 @@ select option, select optgroup { background: var(--bg); color: var(--ink); }
 
 /* —— 编剧编辑确认卡(锚定在编剧对话流中,与预览卡同布局) —— */
 .confirm-card { margin: 6px 0; background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
-.confirm-card .cc-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; font-size: 13px; color: var(--ink-2); border-bottom: 1px solid var(--line); }
+.confirm-card .cc-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 10px 12px; font-size: 13px; color: var(--ink-2); border-bottom: 1px solid var(--line);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.confirm-card .cc-head:hover { background: var(--hover-tint); }
 .confirm-card .cc-title { flex: none; }
 .confirm-card .cc-file { font-family: var(--mono); font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 折叠头里的增删统计:与预览卡 .preview-counts 同形,但不吸到最右(右边还有状态胶囊) */
+.confirm-card .cc-counts { flex: none; display: inline-flex; gap: 6px; font-family: var(--mono); font-size: 11px; margin-left: auto; }
+.confirm-card .cc-counts .add { color: var(--green); }
+.confirm-card .cc-counts .del { color: var(--red); }
 /* 状态胶囊:待确认 / 已应用 */
 .confirm-card .cc-state {
   margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 5px;

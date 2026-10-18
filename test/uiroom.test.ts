@@ -238,3 +238,55 @@ describe("uiroom: 分组文件齐全", () => {
 		}
 	});
 });
+
+/**
+ * 动作行的状态位(2026-10-18,两轮)。
+ *
+ * 第一版来自一句「像这种已经列出还是没有什么提示的必要」——截图里四行
+ * `✓ 已列出 draft 【成功】` 全在喊「我成功了」,所以砍掉了成功标签。
+ * 他的第二句把判据推到彻底:「成功不要有任何提示,只有失败了才会标红」——
+ * 于是**运行中的「【运行中】」也一并去掉**:转圈自己就是「还在动」,
+ * 给一个动画配字幕同样是废话。
+ *
+ * 所以现在的规则是:**行尾只有失败落字**(两个字「失败」),其余两态什么都不加。
+ * 用真实组件渲染来钉(而不是钉常量):常量对了不代表组件用对了 ——
+ * 第一版的病灶恰恰是「组件无条件渲染标签」。
+ *
+ * ⚠️ 钉的是**行尾那个位置**(`.act-state`)与那两个字,而不是 `【失败】` 这个旧写法:
+ * 旧写法改了文案,用例得跟着改,否则守的是一个已经不存在的东西。
+ */
+describe("uiroom: 动作行只在失败时落字", () => {
+	it("成功零标签;运行中零标签;失败两个字「失败」", async () => {
+		const { CHAT_SECTION } = await import("../web/src/uiroom/chat.tsx");
+		const variants = CHAT_SECTION["message-stream"] ?? [];
+		const variant = (label: string) => {
+			const v = variants.find((x) => x.label === label);
+			if (!v) throw new Error(`message-stream 少了「${label}」这一档 —— 用例的前提没了`);
+			return v;
+		};
+		const htmlOf = (label: string) =>
+			renderToStaticMarkup(createElement(UIRoomRuntimeProvider, { value: demoRuntime() }, createElement(variant(label).render)));
+
+		const ok = htmlOf("对话");
+		expect(ok).toContain('data-state="ok"'); // 前提:这一档里确实有完成态的动作行
+		expect(ok, "成功行不该有任何状态文字").not.toContain("【成功】");
+		expect(ok, "成功行不该有任何状态文字").not.toContain("【运行中】");
+		expect(ok, "成功行本身当然还在(只是不再喊)").toContain("已阅读");
+		// 完成态那一行里不许出现状态位元素(整档里只允许失败行有它)
+		const okRows = ok.match(/<div class="act-row" data-state="ok"[\s\S]*?<\/div>/g) ?? [];
+		expect(okRows.length, "这一档应当至少有完成态动作行").toBeGreaterThan(0);
+		for (const row of okRows) expect(row, "完成态动作行不许带状态位").not.toContain('class="act-state');
+
+		const live = htmlOf("流式中");
+		expect(live, "运行中不该再写【运行中】").not.toContain("【运行中】");
+		expect(live, "运行中仍然不该落字").not.toContain('class="act-state');
+		// 这一档的「运行中」是 bash 卡(terminal 形态)—— 它靠左侧的实时边框表达,不是转圈
+		expect(live, "运行中的 bash 卡仍要有实时边标记").toContain('data-live="1"');
+
+		const err = htmlOf("报错卡");
+		expect(err, "失败行必须落字:只有失败才配占用行尾").toContain('class="act-state err"');
+		expect(err, "失败行的原文就是这两个字,不带方括号").toContain(">失败<");
+		// 但整档不许出现旧的方括号写法,免得文案悄悄回潮
+		expect(err).not.toContain("【失败】");
+	});
+});

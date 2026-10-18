@@ -529,7 +529,19 @@ export function App() {
 						<button
 							type="button"
 							className={view === "uiroom" ? "top-entry active" : "top-entry"}
-							onClick={() => setView("uiroom")}
+							// 普通点击开 UI 房;Ctrl/⌘ + 点击开**单格组件预览**
+							// (scripts/ui-preview.mjs,另起在 8950,不动当前这本书的任何状态)。
+							// 为什么挂在同一个按钮上而不是多一个顶栏项:预览页是开发脚手架,
+							// 它不该在界面里再占一个常驻位置;但「想单独看一个组件」这个念头
+							// 恰恰是在 UI 房里点开一格时才冒出来的,所以放在这里最顺手。
+							onClick={(e) => {
+								if (e.metaKey || e.ctrlKey) {
+									window.open("http://127.0.0.1:8950/", "_blank", "noopener");
+									return;
+								}
+								setView("uiroom");
+							}}
+							title="组件陈列室(调试模式);Ctrl/⌘ + 点击:另开单格组件预览(需先跑 npm run ui:preview)"
 						>
 							<Lu icon="layout-grid" size={15} />
 							<span className="top-entry-label">UI 房</span>

@@ -75,18 +75,26 @@ function ExhibitCell({
 	variants,
 	frameSize,
 	isolated,
+	picked: pickedProp,
+	hideHead = false,
 }: {
 	entry: UIRoomEntry;
 	variants: readonly UIRoomVariant[];
 	frameSize: FrameSize;
 	isolated: boolean;
+	/** 受控状态档(预览入口从 URL 直接指到某一档时用;缺省自管)。 */
+	picked?: number;
+	/** 单格模式:格头不画(预览页只关心那一个组件,标题是给人看的、不是给眼睛要的)。 */
+	hideHead?: boolean;
 }) {
-	const [picked, setPicked] = useState(0);
+	const [pickedSelf, setPickedSelf] = useState(0);
+	const picked = pickedProp ?? pickedSelf;
+	const setPicked = setPickedSelf;
 	const current = variants[picked] ?? variants[0];
 	const width = entry.frame ? (FRAME_SIZES.find((s) => s.id === frameSize)?.width ?? null) : null;
 	return (
-		<article className="uiroom-cell" id={`exhibit-${entry.id}`}>
-			<header className="uiroom-cell-head">
+		<article className={`uiroom-cell${hideHead ? " uiroom-cell--solo" : ""}`} id={`exhibit-${entry.id}`}>
+			<header className="uiroom-cell-head" hidden={hideHead}>
 				<div className="uiroom-cell-title">
 					<h3>{entry.title}</h3>
 					<code>{entry.id}</code>
@@ -146,12 +154,22 @@ export function UIRoom({
 	library,
 	nav,
 	classicMode = false,
+	focus,
 }: {
 	client: ApiClient;
 	slug: string | null;
 	library: Library;
 	nav?: { view: string; onNavigate: (view: string) => void };
 	classicMode?: boolean;
+	/**
+	 * 只看一格(组件预览页用):给定展项 id 时只渲染那一格、不画层头层脚,
+	 * 并把状态档钉在 `variant` 那一档(按文案认,认不到就退第一档)。
+	 *
+	 * 为什么不是「另写一个只渲染那一格的页面」:展项表(uiroom-types.ts + 六个分组文件)
+	 * 是契约,`test/uiroom.test.ts` 钉着它。预览页若另有一份渲染入口,两份就会漂移 ——
+	 * 预览里看到的是 A,点进 UI 房里是 B。这里只是**同一张表的另一个视图**。
+	 */
+	focus?: { exhibit: string; variant?: string };
 }) {
 	const isPhone = useIsPhone();
 	const [query, setQuery] = useState("");
@@ -172,6 +190,27 @@ export function UIRoom({
 
 	const stats = uiroomStats(ALL_ENTRIES);
 	const unwired = ALL_ENTRIES.filter((e) => (SECTION[e.id]?.length ?? 0) === 0);
+
+	// 单格模式(预览页):命中展项就直接返回那一格,不做搜索/分组/统计那一套
+	const focused = focus ? ALL_ENTRIES.find((e) => e.id === focus.exhibit) : undefined;
+	if (focus && focused) {
+		const variants = SECTION[focused.id] ?? [];
+		const picked = focus.variant ? variants.findIndex((v) => v.label === focus.variant) : -1;
+		return (
+			<div className="uiroom uiroom--solo">
+				<UIRoomRuntimeProvider value={runtime}>
+					<ExhibitCell
+						entry={focused}
+						variants={variants}
+						frameSize="auto"
+						isolated={isolated}
+						picked={picked >= 0 ? picked : 0}
+						hideHead
+					/>
+				</UIRoomRuntimeProvider>
+			</div>
+		);
+	}
 	const visible = ALL_ENTRIES.filter((e) => (group === "all" || e.group === group) && matchesQuery(e, SECTION[e.id] ?? [], query));
 
 	return (

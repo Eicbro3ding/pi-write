@@ -4,20 +4,31 @@
  */
 import type { StageScriptDto, WorldDataDto, WorldEntryDto, WorldRelationDto } from "./types.ts";
 
-/** 预览类型:draft = 草稿文档 diff;world = 世界树关系图。 */
-export type PreviewKind = "draft" | "world";
+/** 预览类型:draft = 草稿文档 diff;world = 世界树关系图;memory = 长期记忆条目 diff。 */
+export type PreviewKind = "draft" | "world" | "memory";
 
 /**
  * 判定工具调用是否生成预览及类型。
- * write/edit 的目标以 args.path(相对书目录)判定;world_update 无条件算 world。
+ * write/edit 的目标以 args.path(相对书目录)判定;world_update 无条件算 world;
+ * memory 无条件算 memory(它的目标由 args.target 决定,不体现在 path 上)。
+ *
+ * `memory` 是本函数的例外:它**不改文件树里的既有产物**,写的是
+ * `memory.md`(书根)/ `~/.pi/writer/user.md`(书外)。2026-10-17 起纳入预览家族
+ * ——此前它完全不在分类里,所以 AI 改记忆时界面上什么都不发生。
  */
 export function classifyToolCall(toolName: string, path: string | undefined): PreviewKind | null {
 	if (toolName === "world_update") return "world";
+	if (toolName === "memory") return "memory";
 	if ((toolName === "write" || toolName === "edit") && typeof path === "string") {
 		if (path === "world.json" || path.endsWith("/world.json")) return "world";
 		if (path.startsWith("draft/")) return "draft";
 	}
 	return null;
+}
+
+/** memory 工具的目标(缺省 memory:本书)。 */
+export function memoryTargetOf(args: Record<string, unknown> | null): "memory" | "user" {
+	return args?.target === "user" ? "user" : "memory";
 }
 
 /** 工具 args 可能是字符串(JSON)或对象;统一为对象,非法输入返回 null。 */
@@ -148,6 +159,16 @@ export type PreviewData =
 			sceneId: string;
 			script: StageScriptDto;
 	  }
+	// 长期记忆(2026-10-17):memory 工具的条目级 diff。展示路径与草稿不同
+	// (memory.md 在书根、user.md 在书外),所以带自己的 path,target 决定标题。
+	| {
+			kind: "memory";
+			toolName: "memory";
+			target: "memory" | "user";
+			/** 展示用路径(不含主机绝对路径):`memory.md` / `~/.pi/writer/user.md`。 */
+			path: string;
+			diff: DiffLine[];
+	  }
 	| { kind: "draft" | "world"; error: true; toolName: string; path: string | null };
 
 /**
@@ -159,17 +180,31 @@ export function isLegacyConfirmCard(c: { toolCallId?: unknown }): boolean {
 	return typeof c.toolCallId !== "string" || c.toolCallId.length === 0;
 }
 
-/** 草稿预览的折叠头统计:首个文件路径 + 全部 section 的增删行数。 */export function draftDiffStats(data: PreviewData): { path: string; add: number; del: number } | null {
-	if ("error" in data || data.kind !== "draft" || data.sections.length === 0) return null;
+/**
+ * 预览的折叠头统计:展示路径 + 增删行数。草稿取首个 section,记忆取自身,
+ * 其余类型(世界树/剧本/错误)没有行级 diff → null(折叠头改用标题)。
+ */
+export function previewDiffStats(data: PreviewData): { path: string; add: number; del: number } | null {
+	if ("error" in data) return null;
+	let path: string;
+	let lines: readonly DiffLine[];
+	if (data.kind === "draft") {
+		if (data.sections.length === 0) return null;
+		path = data.sections[0]!.path;
+		lines = data.sections.flatMap((s) => s.diff);
+	} else if (data.kind === "memory") {
+		path = data.path;
+		lines = data.diff;
+	} else {
+		return null;
+	}
 	let add = 0;
 	let del = 0;
-	for (const s of data.sections) {
-		for (const l of s.diff) {
-			if (l.kind === "add") add++;
-			else if (l.kind === "remove") del++;
-		}
+	for (const l of lines) {
+		if (l.kind === "add") add++;
+		else if (l.kind === "remove") del++;
 	}
-	return { path: data.sections[0]!.path, add, del };
+	return { path, add, del };
 }
 
 /**

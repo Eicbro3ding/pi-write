@@ -101,3 +101,21 @@
     animation: none;
   }
 }
+
+/* —— 组件预览页(scripts/ui-preview.mjs,开发脚手架)——
+   单格模式:不画层头层脚、不留页面内边距,那一格就是整页;
+   索引模式:一行一个展项,状态档跟在后面点。两者只在预览页出现 */
+.uiroom--solo { display: block; padding: 0; }
+.uiroom--solo .uiroom-cell {
+  border: 0; border-radius: 0; background: transparent; padding: 16px 18px; margin: 0;
+}
+.uiroom--solo .uiroom-stage { padding-top: 0; }
+.pv-index { padding: 20px 24px; }
+.pv-index h1 { font-size: 15px; margin: 0 0 4px; color: var(--ink); }
+.pv-note { margin: 0 0 14px; font-size: 12px; color: var(--muted); }
+.pv-entry { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; padding: 4px 0; font-size: 12px; }
+.pv-entry > a { color: var(--ink-2); text-decoration: none; border-bottom: 1px dashed var(--line-strong); }
+.pv-entry > a:hover { color: var(--amber); }
+.pv-variants { display: inline-flex; gap: 8px; }
+.pv-variants a { font-size: 11px; color: var(--faint); text-decoration: none; }
+.pv-variants a:hover { color: var(--amber); }

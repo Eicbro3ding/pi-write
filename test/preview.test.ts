@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyToolCall, parseToolArgs, pathFromArgs } from "../web/src/preview.ts";
+import { classifyToolCall, memoryTargetOf, parseToolArgs, pathFromArgs } from "../web/src/preview.ts";
 
 describe("classifyToolCall", () => {
 	it("write/edit 到 draft/*.md → draft", () => {
@@ -8,6 +8,15 @@ describe("classifyToolCall", () => {
 	});
 	it("world_update → world(无 path)", () => {
 		expect(classifyToolCall("world_update", undefined)).toBe("world");
+	});
+	it("memory → memory(目标在 args.target,不看 path)", () => {
+		expect(classifyToolCall("memory", undefined)).toBe("memory");
+	});
+	it("memory 目标解析:缺省 memory,只有 'user' 取 user", () => {
+		expect(memoryTargetOf({ target: "user" })).toBe("user");
+		expect(memoryTargetOf({ target: "memory" })).toBe("memory");
+		expect(memoryTargetOf({})).toBe("memory");
+		expect(memoryTargetOf(null)).toBe("memory");
 	});
 	it("write/edit 直写 world.json → world", () => {
 		expect(classifyToolCall("write", "world.json")).toBe("world");

@@ -2,7 +2,7 @@
  * 「UI 房」消息流分组(chat)—— 思考块 / 消息流 / 预览卡家族 / 确认卡 / 提问卡 /
  * 输入条 / 约束 / 备忘录 / 会话用量。
  *
- * 这一组回答的问题是「AI 说的话到底长什么样」:思考胶囊、动作行、摊开几十行输出的
+ * 这一组回答的问题是「AI 说的话到底长什么样」:思考胶囊、动作行、带折叠输出的
  * 工具卡、预览与确认卡、问答记录,以及贴在对话旁边的三张面板。状态档渲染的都是各页
  * 真实在用的组件(同一个文件、同一套 props),演示数据照 DTO 形状手写。
  *
@@ -552,6 +552,22 @@ const CONFIRM_CARDS: ReadonlyArray<ConfirmCardItem> = [
 	},
 ];
 
+/** 记忆写入(2026-10-17):memory 工具的条目级 diff。条目 = 一行,所以与草稿
+ *  共用 diff 渲染;区别只在路径(memory.md 在书根、user.md 在书外)。 */
+const MEMORY_PREVIEW: PreviewData = {
+	kind: "memory",
+	toolName: "memory",
+	target: "memory",
+	path: "memory.md",
+	diff: [
+		{ kind: "context", text: "阿澈怕水,过桥时总走内侧。" },
+		{ kind: "context", text: "旧宅在西岸,二楼窗户朝北。" },
+		{ kind: "remove", text: "阿澈对旧宅没有印象。" },
+		{ kind: "add", text: "阿澈七岁那年在旧宅住过,左手留了疤。" },
+		{ kind: "add", text: "旧宅钥匙一直挂在阿澈身上,他没告诉任何人。" },
+	],
+};
+
 const PREVIEW_SLOTS: ReadonlyMap<string, PreviewCardSlot> = new Map([
 	[TOOL_WRITE.id, { data: SMALL_DRAFT }],
 	[TOOL_WORLD_UPDATE.id, { data: WORLD_GRAPH }],
@@ -773,7 +789,7 @@ export const CHAT_ENTRIES: readonly UIRoomEntry[] = [
 		title: "消息流",
 		module: "components/MessageList.tsx",
 		symbols: ["MessageList"],
-		note: "一个真实回合的完整形态:思考胶囊 + 动作行 + 摊开几十行输出的工具卡 + 预览卡 + 确认卡 + 问答记录 + markdown 正文;另有流式、空态、压缩、报错、调试原始卡,以及气泡下缘的消息版本切换器(「‹ n / N ›」)。",
+		note: "一个真实回合的完整形态:思考胶囊 + 动作行 + 折叠输出的工具卡 + 预览卡 + 确认卡 + 问答记录 + markdown 正文;另有流式、空态、压缩、报错、调试原始卡,以及气泡下缘的消息版本切换器(「‹ n / N ›」)。",
 		variants: ["对话", "流式中", "空态", "压缩中", "报错卡", "调试原始卡", "多版本"],
 	},
 	{
@@ -818,8 +834,8 @@ export const CHAT_ENTRIES: readonly UIRoomEntry[] = [
 		title: "编剧确认卡",
 		module: "components/ConfirmCard.tsx",
 		symbols: ["ConfirmCard"],
-		note: "待确认(确认 / 回退两颗按钮)与免确认模式下的已应用态;体内复用预览正文,不再有第二套渲染。",
-		variants: ["待确认", "已归档"],
+		note: "待确认(确认 / 回退两颗按钮)与免确认模式下的已应用态;体内复用预览正文,不再有第二套渲染。收起的卡片按体量判据自动折叠(与预览卡同一套 fold.ts)。",
+		variants: ["待确认", "已归档", "记忆"],
 	},
 	{
 		id: "ask-user",
@@ -1065,6 +1081,10 @@ function ConfirmPending() {
 
 function ConfirmApplied() {
 	return <ConfirmCard data={SMALL_DRAFT} onConfirm={noop} onRevert={noop} auto />;
+}
+
+function ConfirmMemory() {
+	return <ConfirmCard data={MEMORY_PREVIEW} onConfirm={noop} onRevert={noop} />;
 }
 
 /* —— 提问卡 —— */
@@ -1375,6 +1395,7 @@ export const CHAT_SECTION: UIRoomSection = {
 	"confirm-card": [
 		{ label: "待确认", note: "确认 / 回退两颗按钮", render: ConfirmPending },
 		{ label: "已归档", note: "auto:编辑已落盘,只读展示", render: ConfirmApplied },
+		{ label: "记忆", note: "memory 工具:条目级 diff,路径 memory.md", render: ConfirmMemory },
 	],
 	"ask-user": [
 		{ label: "已回答记录", note: "折在工具块里的问答(两问两答)", render: AskAnswered },

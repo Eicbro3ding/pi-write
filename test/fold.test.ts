@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collapsedText, countLines, FOLD_COLLAPSED_LINES, FOLD_SHORT_MAX, foldLabel, isFoldable } from "../web/src/fold.ts";
+import { countLines, FOLD_SHORT_MAX, foldLabel, isFoldable } from "../web/src/fold.ts";
 import {
 	PREVIEW_AUTO_FOLD_WEIGHT,
 	previewDefaultOpen,
@@ -28,16 +28,6 @@ describe("长内容折叠分档(03-组件规范/04)", () => {
 	it("中档/长档(>12 行)折叠", () => {
 		expect(isFoldable(13)).toBe(true);
 		expect(isFoldable(120)).toBe(true);
-	});
-	it("折叠态只保留前 12 行", () => {
-		const text = lines(30);
-		const shown = collapsedText(text).split("\n");
-		expect(shown).toHaveLength(FOLD_COLLAPSED_LINES);
-		expect(shown[0]).toBe("第 1 行");
-		expect(shown[11]).toBe("第 12 行");
-	});
-	it("不足 12 行时原样返回", () => {
-		expect(collapsedText(lines(5))).toBe(lines(5));
 	});
 	it("展开入口文案带总行数", () => {
 		expect(foldLabel(28)).toBe("展开全部(共 28 行)");
@@ -108,6 +98,20 @@ describe("预览卡智能折叠:体量判据", () => {
 		expect(previewWeight(script(7))).toBe(21);
 		expect(previewWeight({ kind: "draft", error: true, toolName: "write", path: null })).toBe(0);
 		expect(shouldAutoFold({ kind: "world", error: true, toolName: "world_update", path: null })).toBe(false);
+	});
+
+	it("记忆:体量 = 条目 diff 行数(与草稿同口径)", () => {
+		const mem = (n: number): PreviewData => ({
+			kind: "memory",
+			toolName: "memory",
+			target: "memory",
+			path: "memory.md",
+			diff: diff(n),
+		});
+		expect(previewWeight(mem(6))).toBe(6);
+		expect(shouldAutoFold(mem(6))).toBe(false);
+		expect(shouldAutoFold(mem(PREVIEW_AUTO_FOLD_WEIGHT + 1))).toBe(true);
+		expect(previewFoldSummary(mem(9))).toBe("共 9 行记忆变更");
 	});
 
 	it("小预览默认展开,大预览默认折叠(阈值处恰好不折)", () => {

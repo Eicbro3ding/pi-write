@@ -2386,6 +2386,67 @@ describe("WriterServer · /api/books/:slug/files(工作区文件清单)", () => 
 	});
 });
 
+describe("WriterServer · /api/memory(长期记忆读写)", () => {
+	let server: WriterServer;
+	let base = "";
+	let slug = "";
+
+	beforeAll(async () => {
+		const fake = fakeHost();
+		server = new WriterServer({ host: "127.0.0.1", port: 0, sessionHost: fake.host, webDistDir: join(tmp, "no-such-dist") });
+		const { port } = await server.start();
+		base = `http://127.0.0.1:${port}`;
+		const created = (await (
+			await fetch(`${base}/api/books`, { method: "POST", headers: json, body: JSON.stringify({ title: "记忆之书" }) })
+		).json()) as { book: { slug: string } };
+		slug = created.book.slug;
+	});
+
+	afterAll(async () => {
+		await server.stop();
+	});
+
+	it("target 非法 → 400", async () => {
+		const res = await fetch(`${base}/api/memory?target=nope`);
+		expect(res.status).toBe(400);
+		expect(await res.json()).toMatchObject({ error: { code: "bad_request" } });
+	});
+
+	it("本书 memory.md:不存在返回空串,PUT 后可读回,落在书根", async () => {
+		const empty = (await (await fetch(`${base}/api/memory?target=memory&slug=${encodeURIComponent(slug)}`)).json()) as {
+			text: string;
+		};
+		expect(empty.text).toBe("");
+
+		const put = await fetch(`${base}/api/memory`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ target: "memory", slug, text: "阿澈怕水。\n" }),
+		});
+		expect(put.status).toBe(200);
+
+		const after = (await (await fetch(`${base}/api/memory?target=memory&slug=${encodeURIComponent(slug)}`)).json()) as {
+			text: string;
+		};
+		expect(after.text).toBe("阿澈怕水。\n");
+		// 记忆在书根,不是 draft/ 下 —— 前端预览卡按这个位置算 diff
+		expect(existsSync(join(getBookDir(slug), "memory.md"))).toBe(true);
+		expect(existsSync(join(getBookDir(slug), "draft", "memory.md"))).toBe(false);
+	});
+
+	it("user 目标写全局 user.md(书外,不带 slug)", async () => {
+		const put = await fetch(`${base}/api/memory`, {
+			method: "PUT",
+			headers: json,
+			body: JSON.stringify({ target: "user", text: "作者偏好电报体。\n" }),
+		});
+		expect(put.status).toBe(200);
+		const got = (await (await fetch(`${base}/api/memory?target=user`)).json()) as { text: string };
+		expect(got.text).toBe("作者偏好电报体。\n");
+		expect(existsSync(join(getWriterDir(), "user.md"))).toBe(true);
+	});
+});
+
 describe("WriterServer · /api/books/:slug/file(工作区文件预览)", () => {
 	let server: WriterServer;
 	let base = "";

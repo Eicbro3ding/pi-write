@@ -1,6 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { draftDiffStats, type DiffLine, type PreviewData } from "../preview.ts";
+import { previewDiffStats, type DiffLine, type PreviewData } from "../preview.ts";
 import type { WorldDiff } from "../preview.ts";
 import { DUR, EASE, EDGE_IN } from "../motion.ts";
 import {
@@ -29,24 +29,29 @@ export function worldSummary(diff: WorldDiff): string | null {
 }
 
 /** diff 行:按行数分档折叠(写死 max-height 时短内容被截、
- *  长内容看不到全貌,展开入口也没意义)。>12 行折到 12 行 + 底部渐隐 + 展开入口。 */
+ *  长内容看不到全貌,展开入口也没意义)。>12 行折到**一行** + 展开入口。
+ *  高度过渡交给 `.fold-body`(见 styles.css):折叠态保留全部行,靠 overflow 裁,
+ *  否则收起的第一帧就少几百行,动画看着像塌陷。
+ *  底部渐隐遮罩已随「收到一行」删除:一行就是全部可见内容,再罩渐变等于把它糊掉。 */
 function DiffLines({ lines }: { lines: DiffLine[] }) {
 	const [open, setOpen] = useState(false);
 	const foldable = isFoldable(lines.length);
-	const shown = foldable && !open ? lines.slice(0, FOLD_COLLAPSED_LINES) : lines;
+	const rows = lines.map((l, j) => (
+		<div key={j} className={`diff-${l.kind}`}>
+			{l.text || "\u00A0"}
+		</div>
+	));
+	if (!foldable) return <div className="diff-fold">{rows}</div>;
+	const vars = {
+		"--fold-lines": FOLD_COLLAPSED_LINES,
+		"--fold-max": `${FOLD_EXPANDED_MAX_PX}px`,
+	} as CSSProperties;
 	return (
-		<div className={`diff-fold${open ? " open" : ""}`} style={open ? { maxHeight: FOLD_EXPANDED_MAX_PX } : undefined}>
-			{shown.map((l, j) => (
-				<div key={j} className={`diff-${l.kind}`}>
-					{l.text || "\u00A0"}
-				</div>
-			))}
-			{foldable && !open && <div className="fold-mask" aria-hidden="true" />}
-			{foldable && (
-				<button type="button" className="fold-more" onClick={() => setOpen((v) => !v)}>
-					{open ? "收起" : foldLabel(lines.length)}
-				</button>
-			)}
+		<div className={`diff-fold${open ? " open" : ""}`} style={vars}>
+			<div className="fold-body">{rows}</div>
+			<button type="button" className="fold-more" onClick={() => setOpen((v) => !v)}>
+				{open ? "收起" : foldLabel(lines.length)}
+			</button>
 		</div>
 	);
 }
@@ -69,6 +74,12 @@ export function PreviewBody({ data }: { data: PreviewData }) {
 		// 剧本确认门(2026-08-11):导演 script_confirm 提交的剧本——预览卡片家族
 		// 的一种,确认/修改动作由调用方经 actions 插槽提供
 		<ScriptView script={data.script} />
+	) : data.kind === "memory" ? (
+		// 长期记忆:与草稿同一套 diff 渲染(条目本就是一行一条),只是路径不同
+		<div className="preview-diff">
+			<div className="preview-file">{data.path}</div>
+			<DiffLines lines={data.diff} />
+		</div>
 	) : data.mode === "graph" ? (
 		<>
 			<PreviewGraph world={data.afterWorld} diff={data.worldDiff} slug={data.slug} />
@@ -131,11 +142,15 @@ export function PreviewCard({
 			? "预览 · 草稿"
 			: data.kind === "script"
 				? "剧本 · 待确认"
-				: data.mode === "graph"
-					? "预览 · 世界树"
-					: "预览 · 词条";
+				: data.kind === "memory"
+					? data.target === "user"
+						? "预览 · 作者画像"
+						: "预览 · 跨章记忆"
+					: data.mode === "graph"
+						? "预览 · 世界树"
+						: "预览 · 词条";
 	// 草稿卡折叠头改成「路径 + 增删行数」,其余类型保留标题
-	const stats = draftDiffStats(data);
+	const stats = previewDiffStats(data);
 	// 收起时在底部补一行摘要,让「收了多少」可见(否则用户只知道被收了)
 	const foldedSummary = !open ? previewFoldSummary(data) : "";
 	return (

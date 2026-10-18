@@ -235,7 +235,7 @@ export class ApiClient {
 
 	/**
 	 * 联网刷新模型目录(远程 catalog / 动态 provider),返回最新模型与可选刷新错误。
-	 * `hosts` 是宿主级结果(2026-10 审计 BUG-005):主会话 / 编剧 / 舞台各自是否刷上。
+	 * `hosts` 是宿主级结果:主会话 / 编剧 / 舞台各自是否刷上。
 	 */
 	async refreshModels(): Promise<{
 		models: unknown[];
@@ -329,7 +329,7 @@ export class ApiClient {
 	 * off),返回值与请求不同 = 被回落了 —— 调用方据此给出解释,别再显示成「已切换」。
 	 */
 	/**
-	 * 切换思考档位。响应**分宿主**回报实际生效的档位(2026-10 审计 BUG-013):
+	 * 切换思考档位。响应**分宿主**回报实际生效的档位:
 	 * `thinking` 是主会话的实际档位(向后兼容),`hosts` 给出编剧/舞台各自的结果,
 	 * `failures` 是没设上的宿主。vendor 会按模型能力 clamp,所以实际值可能低于请求值。
 	 */
@@ -573,6 +573,34 @@ export class ApiClient {
 			body: JSON.stringify({ file, text, ...(slug ? { slug } : {}) }),
 		});
 		return r.mtime ?? 0;
+	}
+
+	/**
+	 * 读取长期记忆文本:target=memory → 本书 `memory.md`(需 slug);
+	 * target=user → 全局作者画像 `~/.pi/writer/user.md`(书外,不带 slug)。
+	 * 文件不存在返回空串(与 getDraft 同口径),供预览卡算 diff。
+	 */
+	async getMemory(target: "memory" | "user", slug?: string): Promise<{ text: string }> {
+		const q = new URLSearchParams({ target });
+		if (slug) q.set("slug", slug);
+		try {
+			const r = await this.request<{ text: string }>(`/api/memory?${q.toString()}`);
+			return { text: r.text };
+		} catch (err) {
+			if (err instanceof ApiError && err.status === 404) return { text: "" };
+			throw err;
+		}
+	}
+
+	/**
+	 * 写回长期记忆(只给预览卡的回退用)。target=memory 需 slug 定位本书。
+	 * 服务端与 memory 工具共用同一把文件锁,避免与 agent 写入交错。
+	 */
+	async putMemory(target: "memory" | "user", text: string, slug?: string): Promise<void> {
+		await this.request<{ ok: boolean }>("/api/memory", {
+			method: "PUT",
+			body: JSON.stringify({ target, text, ...(slug ? { slug } : {}) }),
+		});
 	}
 
 	/** 编剧确认卡(按书+章节持久化;刷新/切章不丢,回退基线随卡保留)。 */
@@ -848,7 +876,7 @@ export class ApiClient {
 	}
 
 	/**
-	 * 上下文检视面板数据(2026-10-04,T5;纯读,不创建会话)。
+	 * 上下文检视面板数据(纯读,不创建会话)。
 	 * `available=false` 表示本章还没有注入过背景包(面板应显示空态而不是一堆 0)。
 	 */
 	async writerInspect(

@@ -647,7 +647,7 @@ function FoldShort() {
 function FoldLong() {
 	return (
 		<div>
-			<DemoNote>55 行 diff:收到 12 行 + 渐隐 + 「展开全部(共 55 行)」。</DemoNote>
+			<DemoNote>55 行 diff:收到一行 + 「展开全部(共 55 行)」。</DemoNote>
 			<FoldablePre text={LONG_DIFF} />
 		</div>
 	);

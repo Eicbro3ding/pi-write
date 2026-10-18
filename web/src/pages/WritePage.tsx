@@ -289,7 +289,7 @@ export function WritePage({
 	const [writerSession, writerDispatch] = useReducer(sessionReducer, undefined, initialSessionState);
 	/** 编剧会话上下文占用(「建议 /compact」提示;agent_settled / 压缩结束 / 对齐时刷新)。 */
 	const [writerUsage, setWriterUsage] = useState<ContextUsageDto | null>(null);
-	/** 最近一次装配的裁切摘要(2026-10-04,T4);null = 未裁切,不显示提示条。 */
+	/** 最近一次装配的裁切摘要;null = 未裁切,不显示提示条。 */
 	const [writerTrim, setWriterTrim] = useState<TrimSummaryDto | null>(null);
 	/** 上下文检视报告(T5,2026-10-04):展开面板时才拉,不在每次 /context 轮询里顺带取 —— 
 	 *  它比 usage/trim 重(含分段与设置项),而用户绝大多数时候不看。 */
@@ -306,7 +306,7 @@ export function WritePage({
 	/** 编剧会话快照 ref:报错卡的「重试」要从 memo 化的卡片里出发(见 MessageList 的
 	 *  retryRef 说明),只能读 ref 拿「是否仍在流式」——直接闭包 writerSession 会在卡片
 	 *  不重渲染时读到旧值。重试**重放哪一句**不再从这里取:它绑在报错卡自己的
-	 *  `retry` 字段上(2026-10 审计 BUG-014,见 retryWriterTurn)。 */
+	 *  `retry` 字段上(见 retryWriterTurn)。 */
 	const writerSessionRef = useRef(writerSession);
 	writerSessionRef.current = writerSession;
 	/** `/node` 世界书缓存(按 slug;收到 world_changed 失效)。 */
@@ -1195,7 +1195,8 @@ export function WritePage({
 		setConfirmCards((prev) => prev.filter((c) => c.id !== id));
 	}
 
-	/** 回退编辑:把编辑前状态写回(草稿 PUT before 文本;世界书 PUT before world)。 */
+	/** 回退编辑:把编辑前状态写回(草稿 PUT before 文本;世界书 PUT before world;
+	 *  记忆 PUT before 文本,按卡上的 target 决定写 memory.md 还是 user.md)。 */
 	async function revertCard(id: string) {
 		const card = confirmCards.find((c) => c.id === id);
 		if (!card) return;
@@ -1206,6 +1207,8 @@ export function WritePage({
 				await client.putDraft(card.path, card.before, slug);
 			} else if (card.kind === "world" && typeof card.before !== "string") {
 				await client.putWorld(card.before, undefined, slug);
+			} else if (card.kind === "memory" && typeof card.before === "string" && card.data.kind === "memory") {
+				await client.putMemory(card.data.target, card.before, slug);
 			}
 			setConfirmCards((prev) => prev.filter((c) => c.id !== id));
 		} catch (err) {
@@ -1285,7 +1288,7 @@ export function WritePage({
 					selectedConversationRef.current === conv
 				) {
 					setWriterUsage(usage);
-					// 裁切摘要(2026-10-04,T4):与服务端缓存的「真正注进去的那一次」
+					// 裁切摘要:与服务端缓存的「真正注进去的那一次」
 					// 同源,不在这里重算。空摘要(null / text 为空)即未裁切。
 					setWriterTrim(trim && trim.text.length > 0 ? trim : null);
 				}
@@ -1411,7 +1414,7 @@ export function WritePage({
 	}
 
 	/**
-	 * 报错卡的「重试」:把**这张卡绑定的那一轮**原样重放一次(2026-10 审计 BUG-014)。
+	 * 报错卡的「重试」:把**这张卡绑定的那一轮**原样重放一次。
 	 *
 	 * 重放目标在**创建卡片时**就绑好了(store 的 retryTargetForError / chat_error 的 text),
 	 * 不再是点击时去 transcript 尾部猜「当前最后一条用户消息」——那会让旧报错卡重发后续
@@ -2100,7 +2103,7 @@ export function WritePage({
 									{writerUsageHint.text}
 								</div>
 							)}
-							{/* 裁切可见(2026-10-04,T4):背景包预算不够时告诉用户省了什么,
+							{/* 裁切可见:背景包预算不够时告诉用户省了什么,
 							    而不是让他以为设定都进去了 —— 与用量提示条同款式。
 							    key 带 text:裁切内容变化时重挂载,重播入场动画(同 writerUsageHint 手法)。
 							    T5 起这条同时是「上下文检视」的入口:点它展开完整面板 —— 看到
