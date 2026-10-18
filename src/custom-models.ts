@@ -23,7 +23,7 @@ export interface CustomModelEntry {
 }
 
 /**
- * vendor 支持的思考参数协议(2026-10 审计 BUG-002)。
+ * vendor 支持的思考参数协议。
  *
  * 与 `vendor/pi-coding-agent/src/core/model-config.ts` 的 `OpenAICompletionsCompatSchema.thinkingFormat`
  * 白名单逐字一致 —— 两边不一致会让 models.json 校验失败。第三方向 OpenAI 兼容服务
@@ -75,7 +75,7 @@ export interface CustomModelPatch {
 	reasoning?: boolean;
 	/**
 	 * 思考参数协议(`compat.thinkingFormat`);`null` = 清掉显式声明,回到 vendor 的自动探测
-	 * (2026-10 审计 BUG-002:第三方兼容服务不能只凭 provider 名推断)。
+	 * (第三方兼容服务不能只凭 provider 名推断)。
 	 */
 	thinkingFormat?: ThinkingFormat | null;
 	newId?: string;
@@ -111,7 +111,7 @@ export type ModelsConfigParse = { ok: true; cfg: ModelsConfig } | { ok: false; m
 /**
  * 校验 models.json 的**形状**(不看语义字段值,只保证结构可安全读改写)。
  *
- * 2026-10 审计 BUG-010:此前 `parseModelsConfig` 把「解析失败」和「顶层不是对象」
+ * 此前 `parseModelsConfig` 把「解析失败」和「顶层不是对象」
  * 一起吞成 `{}`,后续读-改-写就会用空配置覆盖掉用户原来的 provider/model。
  * 写入路径必须能区分「文件不存在(可初始化)」和「文件存在但读不懂(拒绝写入)」。
  *
@@ -163,7 +163,7 @@ export function parseModelsConfigStrict(text: string): ModelsConfigParse {
 /**
  * 同一 provider 下重复的模型 id 清单(历史数据诊断用)。
  *
- * 2026-10 审计 BUG-017:POST 曾允许同 provider 重复 id 落盘,vendor 合成目录时按首项
+ * POST 曾允许同 provider 重复 id 落盘,vendor 合成目录时按首项
  * 替换,后续编辑/删除也按首个命中项操作 —— 第二条成了隐藏/歧义配置。这里只**报告**,
  * 不静默删除用户数据(迁移策略见审计台账)。
  */

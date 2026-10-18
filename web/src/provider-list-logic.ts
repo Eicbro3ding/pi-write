@@ -71,7 +71,7 @@ export function unconfiguredHint(provider: ProviderInfo): string | null {
 }
 
 /**
- * 思考参数协议选项(2026-10 审计 BUG-002)。**必须与 `src/custom-models.ts` 的
+ * 思考参数协议选项。**必须与 `src/custom-models.ts` 的
  * `THINKING_FORMATS` 逐字同序** —— 那份是服务端白名单(与 vendor 的
  * `OpenAICompletionsCompatSchema.thinkingFormat` 一致),这份只用来渲染下拉;
  * `test/provider-list-logic.test.ts` 有护栏比对两份清单,漂移即红。

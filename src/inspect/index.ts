@@ -1,5 +1,5 @@
 /**
- * `/inspect` 入口(2026-10-04,T5)。
+ * `/inspect` 入口。
  */
 
 import type { ExtensionContext } from "../../src/pi-adapter/index.ts";

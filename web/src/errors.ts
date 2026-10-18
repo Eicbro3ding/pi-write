@@ -22,7 +22,7 @@ export function friendlyError(e: unknown): string {
 }
 
 /**
- * 把模型目录刷新的错误列表格式化成一句人话(2026-10 审计 BUG-001)。
+ * 把模型目录刷新的错误列表格式化成一句人话。
  *
  * 服务端与 DTO 给的是 `{ provider, message }` 对象数组;此前调用方直接
  * `errors.join("; ")` —— 对象默认字符串化就是 `[object Object]`,用户既看不到哪个

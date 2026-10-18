@@ -98,13 +98,13 @@ export interface ChapterContextInput {
 	limits?: ContextLimits;
 }
 
-/** 一处因预算被省略的内容(2026-10-04,T4 裁切可见)。 */
+/** 一处因预算被省略的内容。 */
 export interface TrimRecord {
 	/**
 	 * 类别:激活条目 / 已完成里程碑。
 	 *
-	 * `"summary"`(世界观概述)**自 2026-10-11 起不再产生** —— 概述与写作约束
-	 * 一起进了「预算硬保」名单(用户要求:预算满也不许丢)。该取值保留是为了兼容
+	 * `"summary"`(世界观概述)**不再产生** —— 概述与写作约束
+	 * 一起进了「预算硬保」名单(预算满也不许丢)。该取值保留是为了兼容
 	 * 旧缓存的裁切摘要与读它的 UI,别据此以为概述还会被裁。
 	 */
 	kind: "entry" | "summary" | "milestones";
@@ -114,7 +114,7 @@ export interface TrimRecord {
 	tokens: number;
 }
 
-/** 背景包里的一个分段及其占用(2026-10-04,T5 上下文可视化)。 */
+/** 背景包里的一个分段及其占用。 */
 export interface ContextSection {
 	/** 段 id(稳定,供 UI 排序/着色;不用展示名做键,展示名会改)。 */
 	id: "memory" | "summary" | "entries" | "constraints" | "notice" | "storyline";
@@ -139,7 +139,7 @@ export interface ChapterContextResult {
 	 */
 	trimmed: TrimRecord[];
 	/**
-	 * 分段占用(2026-10-04,T5)。`used` 是滚动累加值,拿不到「哪一段花了多少」,
+	 * 分段占用。`used` 是滚动累加值,拿不到「哪一段花了多少」,
 	 * 而 T5 的预算面板恰好只需要这个 —— 因此单独快照一份。
 	 *
 	 * 只含**实际进入上下文**的段;被裁的看 trimmed。
@@ -342,12 +342,12 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 	//
 	// 此前这里是「超预算先把概述整段丢掉、约束保留」(2026-10-04)。那套顺序的代价
 	// 是模型丢掉全局基调后仍按自己的印象写——而基调恰恰是"丢了就会写错"的那类事实。
-	// 用户 2026-10-11 明确要求:预算满时不许丢简要世界观、不许丢约束。
+	// 预算满时不许丢简要世界观、不许丢约束。
 	//
 	// 于是可裁的只剩「世界书·本章相关」与「发展线·已完成」——真正按需的那部分。
 	// 常驻组因此**可能整体超出预算**:这是有意的让步(超一点预算 < 丢掉基调),
 	// 面板上仍按实际占用显示,用户看得到谁在吃预算(见 inspect/report.ts)。
-	// 分段快照(2026-10-04,T5):常驻组里概述与约束都保留原样,各自单独量长度。
+	// 分段快照:常驻组里概述与约束都保留原样,各自单独量长度。
 	// 必须在剪裁之后量,否则面板会把已经丢掉的内容算进预算。
 	addSection({ id: "constraints", label: "写作约束", tokens: estimateTokens(residentConstraints), count: result.included.constraints.length });
 	addSection({ id: "summary", label: "世界观概述", tokens: estimateTokens(overview), count: overview.length > 0 ? 1 : 0 });
@@ -378,7 +378,7 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 		result.activatedIds.push(id);
 		used += tokens;
 	}
-	// 激活组的分段快照(2026-10-04,T5):按已装入的行实际长度量,
+	// 激活组的分段快照:按已装入的行实际长度量,
 	// 不按 ids 重算 —— 装填时 used 已经累加过,这里只需把总量落到面板上。
 	addSection({ id: "entries", label: "世界书·本章相关", tokens: activeParts.reduce((sum, line) => sum + estimateTokens(line), 0), count: activeParts.length });
 
@@ -420,7 +420,7 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 		}
 		tail += storylineBlock;
 	}
-	// 分段快照(2026-10-04,T5):Notice 与发展线为常驻不可裁的尾段,
+	// 分段快照:Notice 与发展线为常驻不可裁的尾段,
 	// 但发展线的「已完成」块仍可能被预算挤掉,故同样在裁剪判定之后量。
 	addSection({ id: "notice", label: "Notice·备忘录", tokens: estimateTokens(noticeBlock), count: noticeItems.length });
 	addSection({ id: "storyline", label: "发展线", tokens: estimateTokens(storylineBlock), count: view ? 1 : 0 });
@@ -458,13 +458,13 @@ export function buildChapterContext(data: WorldData, input: ChapterContextInput)
 		text += `\n(因预算未包含: ${labels};需要可 read world.json)`;
 	}
 	// 记忆段放在最前,故最后回填 —— sections 的展示顺序由 UI 决定(id 稳定),
-	// 这里只需保证「每段都在、量的是实际进上下文的那份」(2026-10-04,T5)。
+	// 这里只需保证「每段都在、量的是实际进上下文的那份」。
 	addSection({ id: "memory", label: "记忆", tokens: estimateTokens(memoryBlock), count: memoryBlock.length > 0 ? 1 : 0 });
 	result.sections = sections;
 	return { ...result, text: text.trim() };
 }
 
-/** 裁切摘要(2026-10-04,T4):把 trimmed 明细摊成人类可读的一行,供 UI 展示。 */
+/** 裁切摘要:把 trimmed 明细摊成人类可读的一行,供 UI 展示。 */
 export interface TrimSummary {
 	/** 被省略的条目数。 */
 	entryCount: number;

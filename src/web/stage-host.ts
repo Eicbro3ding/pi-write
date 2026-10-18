@@ -52,7 +52,7 @@ export type StageHostEvent =
 	| { type: "system"; slug: string; chapterFile: string | null; text: string }
 	| { type: "done"; slug: string; chapterFile: string | null; cmd: string; ok: boolean; text?: string; thinking?: string }
 	// 导演会话事件全量透传(与 writer_event 同款,内层是主会话同款会话事件):
-	// 前端复用 processAgentEvent 归约 + MessageList 渲染(2026-08-11 统一重构);
+	// 前端复用 processAgentEvent 归约 + MessageList 渲染;
 	// 消息/思考/工具卡片/流式全在内层,不再需要独立的 tool_*/director_text 事件
 	| { type: "director_event"; slug: string; chapterFile: string | null; event: AgentSessionEvent }
 	// 剧本待确认(script_confirm 提交):前端以卡片展示剧本 + 确认/修改按钮
@@ -229,7 +229,7 @@ export class StageHost {
 
 	/**
 	 * 换思考档位:编排器里只动导演与收幕编剧,演员档位属于角色设计。
-	 * 返回宿主级结果(2026-10 审计 BUG-013),并报出**故意跳过**的演员数。
+	 * 返回宿主级结果,并报出**故意跳过**的演员数。
 	 */
 	async setThinkingLevel(level: string): Promise<ThinkingSummary & { actorsOmitted: number }> {
 		this.thinkingLevel = level;
@@ -254,7 +254,6 @@ export class StageHost {
 	/**
 	 * models.json 变更后让已建编排器的会话重读模型目录(见 SessionHost.refreshModels)。
 	 * `allowNetwork` 透传:设置页「刷新模型列表」必须让舞台会话也真去拉一次远程目录
-	 * (2026-10 审计 BUG-005)。
 	 */
 	async refreshModels(options?: { allowNetwork?: boolean }): Promise<ModelRefreshSummary> {
 		const errors: Array<{ provider: string; message: string }> = [];

@@ -56,7 +56,7 @@ export type StageEvent =
 	| { type: "phase"; phase: ScenePhase }
 	// 导演会话事件全量透传(与 writer_event 同款,内层是主会话同款会话事件):
 	// 前端复用 processAgentEvent 归约 + MessageList 渲染——导演对话与编剧/主会话
-	// 同一套对话逻辑(2026-08-11 统一重构);silent 回合(收幕自动指令)抑制
+	// 同一套对话逻辑;silent 回合(收幕自动指令)抑制
 	| { type: "director_event"; event: AgentSessionEvent }
 	// 剧本待确认(script_confirm 提交):前端收到后以卡片展示剧本并询问用户是否修改
 	| { type: "script_confirm"; sceneId: string; script: SceneScript }
@@ -536,7 +536,7 @@ export class StageOrchestrator {
 	 * (第一人称思考默认 low 控成本,§10.6;叙述者跟随全局),要改某个演员走
 	 * updateActorSpec 的 thinking 覆盖。
 	 *
-	 * 返回宿主级结果(2026-10 审计 BUG-013):演员**故意**不跟随全局档位,响应里要能
+	 * 返回宿主级结果:演员**故意**不跟随全局档位,响应里要能
 	 * 区分「这里没被改」与「改失败了」。
 	 */
 	async setThinkingLevel(level: string): Promise<ThinkingSummary & { actorsOmitted: number }> {
@@ -554,7 +554,7 @@ export class StageOrchestrator {
 	 * 与编剧会话不同,这里**不释放**空壳会话:导演/演员宿主参与状态机(在建幕中途换掉
 	 * 一个宿主,演出状态与字段就对不上了)。单纯刷新已经足够修「选中新模型不生效」。
 	 *
-	 * `allowNetwork` 透传(2026-10 审计 BUG-005:联网刷新此前只打主会话)。
+	 * `allowNetwork` 透传。
 	 */
 	async refreshModels(options?: { allowNetwork?: boolean }): Promise<ModelRefreshSummary> {
 		const hosts: SessionHost[] = [

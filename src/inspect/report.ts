@@ -1,5 +1,5 @@
 /**
- * `/inspect` 的数据组装(2026-10-04,T5 上下文可视化)。
+ * `/inspect` 的数据组装。
  *
  * 这一层只负责「把已经存在的事实整理成可展示的行」,不碰 TUI,也不碰 HTTP——
  * 两侧(TUI 面板 / Web 面板)共用同一份数据形状,免得到时候两边的口径漂移。
@@ -80,14 +80,14 @@ export interface InspectReport {
 
 const TRIM_IMPACT: Record<TrimRecord["kind"], string> = {
 	entry: "模型看不到这条设定,可能把「没写进世界书」当作事实",
-	summary: "(历史记录)世界观概述曾可被裁掉;2026-10-11 起概述与约束为预算硬保,不会再出现这一条",
+	summary: "(历史记录)世界观概述曾可被裁掉;概述与约束为预算硬保,不会再出现这一条",
 	milestones: "已完成的目标可能被重复推进 —— 这一段装的是「勿再追求」清单",
 };
 
 /**
  * 可被预算挤掉的段 —— 与 buildChapterContext 里的裁剪顺序一致。
  *
- * `summary` **不在其中**(2026-10-11):世界观概述与写作约束进了预算硬保名单,
+ * `summary` **不在其中**:世界观概述与写作约束进了预算硬保名单,
  * 面板上不该再把它标成「可裁」,否则用户会以为调小预算能省掉它。
  */
 const TRIMMABLE: ReadonlySet<ContextSection["id"]> = new Set(["entries", "storyline"]);

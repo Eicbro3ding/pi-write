@@ -13,7 +13,7 @@ function isActorSpec(value: unknown): value is ActorSpec {
 	if (v.character !== undefined && typeof v.character !== "string") return false;
 	if (v.model !== undefined && typeof v.model !== "string") return false;
 	if (v.thinking !== undefined && typeof v.thinking !== "string") return false;
-	// temperature / topP 已不再支持(2026-10 移除采样调节)。旧 cast.json 里若残留这两个
+	// temperature / topP 已不再支持。旧 cast.json 里若残留这两个
 	// 字段,这里**刻意不校验也不报错** —— 宽容忽略,让它自然失效,避免旧书突然打不开。
 	return true;
 }

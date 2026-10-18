@@ -227,7 +227,7 @@ export interface ChatMessage {
 	/** 模型报错内容(仅 role === "error" 有;见 chat-error.ts 的 describeChatError)。 */
 	error?: ChatErrorInfo;
 	/**
-	 * 报错卡的「重试」目标(2026-10 审计 BUG-014):**创建这张卡的那一刻**就绑定的
+	 * 报错卡的「重试」目标:**创建这张卡的那一刻**就绑定的
 	 * 失败回合,而不是点击时再去猜「当前最后一条消息」。
 	 *
 	 * 此前 WritePage 的重试用 `lastUserTurn(messages)` + 全局 `lastSentTextRef` 兜底:
@@ -338,7 +338,7 @@ export interface SessionUsageStatsDto {
 }
 
 /**
- * 最近一次背景包装配的裁切摘要(2026-10-04,T4)。
+ * 最近一次背景包装配的裁切摘要。
  *
  * 此前只有一句「已裁剪 N 条」,用户不知道被省的是哪些设定,也就无从判断
  * 该不该调大 contextBudget —— 裁切完全不可感知。这里是同一份事实的可读版本。
@@ -501,7 +501,7 @@ export type AgentEventDto =
 	// friendlyError 加工成一句人话,而是照实落成一张报错卡(需求 1,见 chat-error.ts)。
 	// `text` 是失败那一刻发出的用户原文:这条路径上服务端在写用户消息之前就抛了
 	// (未配置模型/密钥),对话里没有可定位的 entry,重试只能靠这份原文原样重放
-	// (2026-10 审计 BUG-014:此前由前端全局 lastSentTextRef 猜,旧报错卡会重发错的那句)。
+	// (此前由前端全局 lastSentTextRef 猜,旧报错卡会重发错的那句)。
 	| { type: "chat_error"; message: string; text?: string }
 	| { type: "session_changed"; bookSlug: string | null; chapterFile: string | null }
 	| { type: "world_changed"; slug: string; mtime: number }
@@ -513,7 +513,7 @@ export type AgentEventDto =
 	| { type: "stage_system"; slug: string; chapterFile: string | null; text: string }
 	| { type: "stage_done"; slug: string; chapterFile: string | null; cmd: string; ok: boolean; text?: string; thinking?: string }
 	// 导演会话事件全量透传(与 writer_event 同款,内层是主会话同款会话事件):
-	// 前端复用 processAgentEvent 归约 + MessageList 渲染(2026-08-11 统一重构)
+	// 前端复用 processAgentEvent 归约 + MessageList 渲染
 	| { type: "stage_director_event"; slug: string; chapterFile: string | null; event: WriterSessionEventDto }
 	// 舞台阶段变化(开演/收幕):前端收到后自动刷新快照
 	| { type: "stage_phase"; slug: string; chapterFile: string | null; phase: string }
@@ -956,7 +956,7 @@ export interface ProviderRefreshError {
 }
 
 /**
- * POST /api/thinking 的**宿主级结果**(2026-10 审计 BUG-013)。
+ * POST /api/thinking 的**宿主级结果**。
  *
  * 思考档位由模型能力决定(vendor 会按 getSupportedThinkingLevels clamp),而编剧、舞台
  * 会话可能用不同的模型 —— 只回主会话的值会让用户以为所有窗口都切好了。
@@ -994,7 +994,7 @@ export interface ModelDto {
 	custom?: boolean;
 	/**
 	 * vendor 兼容开关(原样透传自目录)。`thinkingFormat` 是思考参数协议
-	 * (2026-10 审计 BUG-002:第三方兼容服务不能只按 provider 名推断)。
+	 * (第三方兼容服务不能只按 provider 名推断)。
 	 */
 	compat?: { thinkingFormat?: string; [key: string]: unknown };
 }

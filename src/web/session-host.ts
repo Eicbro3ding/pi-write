@@ -83,7 +83,7 @@ export class SessionHost {
 	 */
 	private sessionManager: SessionEntity;
 	/**
-	 * runtime 重建时要恢复的会话级设置(2026-10 审计 BUG-009):
+	 * runtime 重建时要恢复的会话级设置:
 	 * API 切过的模型/思考档位,不能被启动参数在重建后盖回去。
 	 */
 	private runtimeDefaults: RuntimeDefaults = { model: null, thinkingLevel: null };
@@ -123,7 +123,7 @@ export class SessionHost {
 	}
 
 	/**
-	 * 抓一份「当前会话级设置」,用于 runtime 重建后恢复(2026-10 审计 BUG-009)。
+	 * 抓一份「当前会话级设置」,用于 runtime 重建后恢复。
 	 *
 	 * 背景:装配工厂的 `model` / `thinkingLevel` 来自**启动参数**(web.ts 传 opts.model /
 	 * opts.thinking),重建时它们会盖回 API 已经切换过的值 —— 用户切了模型 B、改过思考档位,
@@ -395,7 +395,7 @@ export class SessionHost {
 		if (resolved.model) await rt.session.setModel(resolved.model);
 	}
 	/**
-	 * 当前模型**实际支持**的思考档位(2026-10 审计 BUG-012)。
+	 * 当前模型**实际支持**的思考档位。
 	 *
 	 * vendor 的 `getSupportedThinkingLevels()` 按模型能力给集合(非推理模型只有 off;
 	 * 静态 DeepSeek 映射另有 thinkingLevelMap)。前端此前固定展示 off..max 七档,
@@ -459,10 +459,10 @@ export class SessionHost {
 	 * 「编辑模型 → 打开支持思考 / 改上下文窗口 / 换地址」之后只刷目录不重绑,已建会话就
 	 * 继续按旧能力发请求(用户在设置页看到的是新配置,实际请求用的是旧的)。
 	 *
-	 * 2026-10 审计 BUG-006:此前只比 `reasoning` 与 `thinkingLevelMap`,其它字段变化被
+	 * 此前只比 `reasoning` 与 `thinkingLevelMap`,其它字段变化被
 	 * 整个漏掉;现在用 MODEL_CAPABILITY_FIELDS 全量比较。
 	 *
-	 * 2026-10 审计 BUG-008:重绑走 vendor 的 `resyncModelInstance`(内部维护动作)——
+	 * 重绑走 vendor 的 `resyncModelInstance`(内部维护动作)——
 	 * 普通 `setModel` 会顺手 `setDefaultModelAndProvider`(改写全局默认模型)并追加
 	 * `model_change`(伪造一次用户主动切换),把目录热更新记成用户的模型选择。
 	 * 极小的 fake session 没有该方法时退回旧路径,只为了让既有单测桩继续可用。
@@ -491,7 +491,7 @@ export class SessionHost {
 		const session = this.requireRuntime().session;
 		session.setThinkingLevel(level as ThinkingLevel);
 		// vendor 的 getSupportedThinkingLevels 会按模型能力把档位 clamp 回去
-		// (非推理模型只有 off)。回报**实际**档位,别把回落说成设置成功(2026-10 审计 BUG-013)。
+		// (非推理模型只有 off)。回报**实际**档位,别把回落说成设置成功。
 		const state = (session as { state?: { thinkingLevel?: unknown } }).state;
 		const actual = typeof state?.thinkingLevel === "string" ? state.thinkingLevel : null;
 		return { level: actual, clamped: actual !== null && actual !== level };
@@ -690,7 +690,7 @@ export function usableModelRef(model: unknown): { provider: string; id: string }
 }
 
 /**
- * 影响请求的模型字段清单(2026-10 审计 BUG-006)。
+ * 影响请求的模型字段清单。
  *
  * 会话手里的 `Model` 实例是装配那一刻从目录取的;**目录里同 provider/id 的条目改了
  * 这些字段中的任何一个**,已建会话都必须换成新实例,否则「设置页显示新配置、实际请求
@@ -730,7 +730,7 @@ export function modelCapabilitiesDiffer(live: unknown, fresh: unknown): boolean 
 }
 
 /**
- * 把「在一批会话上设置思考档位」的结果聚合成宿主级摘要(2026-10 审计 BUG-013)。
+ * 把「在一批会话上设置思考档位」的结果聚合成宿主级摘要。
  *
  * 逐个尝试、失败不抛:某个会话临时没有 runtime 不该让其余的也跟着不动,但失败**必须**
  * 出现在 `failed` 里(调用方据此在响应里点名是哪个宿主没设上,而不是一律回 ok)。
@@ -752,7 +752,7 @@ export function collectThinkingSummary(entries: Iterable<SessionHost>, level: st
 }
 
 /**
- * runtime 重建时要恢复的会话级设置(2026-10 审计 BUG-009,见 SessionHost.reloadRuntime)。
+ * runtime 重建时要恢复的会话级设置(见 SessionHost.reloadRuntime)。
  */
 interface RuntimeDefaults {
 	model: { provider: string; id: string } | null;

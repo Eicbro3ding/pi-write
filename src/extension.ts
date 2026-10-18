@@ -364,7 +364,7 @@ async function refreshStatus(ctx: ExtensionContext): Promise<void> {
 
 function writerFactory(pi: ExtensionAPI): void {
 	// Register the writer-only custom tools.
-	// word_count 已于 2026-10-07 摘除:字数改由 write/edit 后的 tool_result 钩子
+	// word_count 已摘除:字数改由 write/edit 后的 tool_result 钩子
 	// 与 read_chapter 头部自动带上(见 write-rails-extension.ts),模型不再需要
 	// 主动去数一次,工具本身成了多余的一步。
 	pi.registerTool(worldUpdateTool);
@@ -753,7 +753,7 @@ function writerFactory(pi: ExtensionAPI): void {
 		},
 	});
 
-	// 上下文检视(2026-10-04,T5):把「这一轮到底看到了什么、还差什么」摊开。
+	// 上下文检视:把「这一轮到底看到了什么、还差什么」摊开。
 	// 复用 switchChapter 那套装配逻辑(同参数、同预算),因此面板里看到的
 	// 就是切章时真正注入的那一份 —— 而不是另起炉灶算一遍。
 	pi.registerCommand("inspect", {
@@ -979,7 +979,7 @@ async function switchChapter(ctx: ExtensionCommandContext, slug: string, file: s
 }
 
 /**
- * 装配一章的背景包(2026-10-04,T5 抽出)。
+ * 装配一章的背景包。
  *
  * 抽出来的原因:`/inspect` 面板必须展示**切章时真正注入的那一份**,而不是
  * 另算一遍。两处各写一份装配参数,迟早会漂移(改了预算忘了改 inspect),

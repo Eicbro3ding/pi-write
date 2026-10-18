@@ -4,7 +4,7 @@
  * - stageEntryText / formatCounts / buildRevisePatch:展示与命令参数构造 helper。
  *
  * 舞台流(feed)两类行:舞台条目(快照/SSE)、系统行(stage_system 与命令结果)。
- * 导演对话(用户/导演气泡)不走 feed——2026-08-11 统一重构后与编剧/主会话同款
+ * 导演对话(用户/导演气泡)不走 feed——与编剧/主会话同款
  * (processAgentEvent + MessageList),StagePage 从 stage_director_event 归约、
  * 快照 directorChat 水合,feed 不再含对话行。
  *
@@ -49,7 +49,7 @@ export function reduceStage(state: StageUiState, action: StageAction): StageUiSt
 		case "snapshot": {
 			// 快照(拉取/重连对齐):舞台条目以快照转录为准整体替换(磁盘是权威);
 			// 导演对话(directorChat)由 StagePage 水合进 directorSession(MessageList),
-			// 不进 feed(2026-08-11 统一重构)。幂等:重复快照按 entry 文本剔除重复行。
+			// 不进 feed。幂等:重复快照按 entry 文本剔除重复行。
 			const entries: StageFeedItem[] = action.snapshot.transcript.map((entry) => ({ type: "entry", entry }));
 			const entryKeys = new Set(entries.map((f) => (f.type === "entry" ? stageEntryText(f.entry) : "")));
 			const local = state.feed.filter((f) => (f.type === "system" ? true : !entryKeys.has(stageEntryText(f.entry))));

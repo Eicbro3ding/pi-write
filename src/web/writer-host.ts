@@ -356,7 +356,7 @@ export class WriterHost {
 	 *  编剧对话按会话键隔离——切章/切对话后各段独立历史与上下文(2026-08-10 起按章)。 */
 	private readonly hosts = new Map<string, SessionHost>();
 	/**
-	 * 创建中的会话(hostKey → Promise);2026-10 审计 BUG-021。
+	 * 创建中的会话(hostKey → Promise)。
 	 *
 	 * 此前 getOrCreate 在 map miss 后先 `await createHost`、完成后才 `hosts.set`,于是同一
 	 * (书, 对话) 的并发首条请求会各自创建并各自 `SessionManager.open` 同一个
@@ -524,7 +524,7 @@ export class WriterHost {
 	 * 换思考档位：未来会话按新值装配 + 已建会话即时生效。
 	 *
 	 * 返回**宿主级结果**(每个会话实际生效的档位):各会话的模型能力不同,可能被 clamp 到
-	 * 不同档位,不能拿主会话的值冒充所有窗口(2026-10 审计 BUG-013)。单个会话失败记进
+	 * 不同档位,不能拿主会话的值冒充所有窗口。单个会话失败记进
 	 * `failed` 而不是抛错,由调用方分宿主报告。
 	 */
 	async setThinkingLevel(level: string): Promise<ThinkingSummary> {
@@ -537,7 +537,7 @@ export class WriterHost {
 	 * 空壳会话直接释放(下次对话按最新目录重新装配,见 refreshModelsOfHosts)。
 	 *
 	 * `allowNetwork` 透传:设置页「刷新模型列表 / 测试连接」必须让编剧会话也真去拉一次
-	 * 远程目录(2026-10 审计 BUG-005:此前联网刷新只打主会话)。
+	 * 远程目录。
 	 */
 	async refreshModels(options?: { allowNetwork?: boolean }): Promise<ModelRefreshSummary> {
 		const { stale, sessions, errors } = await refreshModelsOfHosts(this.hosts, options);

@@ -336,7 +336,7 @@ export function StagePage({
 	const worldEditPendingRef = useRef(false);
 	/** 收幕导演回合是否已结束(agent_settled 置位;收幕提示条据此撤下,不等编剧成文)。 */
 	const [cutDirectorDone, setCutDirectorDone] = useState(false);
-	// ---- 导演会话(2026-08-11 统一重构):与编剧/主会话同款 reducer + MessageList。
+	// ---- 导演会话:与编剧/主会话同款 reducer + MessageList。
 	// stage_director_event 内层是主会话同款事件(processAgentEvent 归约),
 	// 思考折叠/流式/工具卡片零新逻辑;快照 directorChat 水合恢复。
 	const [directorSession, directorDispatch] = useReducer(sessionReducer, undefined, initialSessionState);
@@ -1067,7 +1067,7 @@ export function StagePage({
 								</div>
 							</div>
 						)}
-						{/* 导演对话(2026-08-11 统一重构):与编剧/主会话同款 MessageList——
+						{/* 导演对话:与编剧/主会话同款 MessageList——
 					    思考折叠/流式/工具卡片复用同一套渲染,零新逻辑。
 					    演出中(running/wrapping)隐藏,主区让给舞台流;收幕后恢复 */}
 					{snap?.phase !== "running" && snap?.phase !== "wrapping" && (

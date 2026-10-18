@@ -87,7 +87,7 @@ export function AddModelDialog({
 	/**
 	 * 校验上下文窗口/最大输出;非法时 setErr 并返回 null。
 	 *
-	 * 2026-10 审计 BUG-015:与后端 `optionalPositiveInt` 同语义 —— **正整数或未提供**。
+	 * 与后端 `optionalPositiveInt` 同语义 —— **正整数或未提供**。
 	 * 此前只查 finite + 正数,有限小数(1.5)能提交,后端返回 400,用户看到的是通用
 	 * 「保存失败」而不是字段级提示。这里补 `Number.isInteger`(空串/非数字/0/负数/小数
 	 * 都当场拒绝),后端仍保留最终校验作为安全边界。

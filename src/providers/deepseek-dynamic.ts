@@ -25,7 +25,7 @@ import type { Model } from "../pi-adapter/index.ts";
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 
 /**
- * 动态发现的 DeepSeek 模型的能力推断(2026-10 审计 BUG-003)。
+ * 动态发现的 DeepSeek 模型的能力推断。
  *
  * 背景:`/models` 里出现静态目录没收录的新模型时,旧实现一律写 `reasoning: false` ——
  * 于是刚发布的推理模型在「思考等级」里连 low 都选不到(被 clamp 回 off),而静态目录里的
