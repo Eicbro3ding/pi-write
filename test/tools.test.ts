@@ -130,6 +130,30 @@ describe("applyWorldUpdate", () => {
 		const c = applyWorldUpdate(b, { op: "upsert_entry", type: "world", title: "林婉", body: "同名世界" });
 		expect(c.entries).toHaveLength(2);
 	});
+	it("body_append 追加到原正文末尾,旧内容一行不丢", () => {
+		const w = createEmptyWorld();
+		const a = applyWorldUpdate(w, { op: "upsert_entry", type: "character", title: "林婉", body: "林砚的姐姐" });
+		const b = applyWorldUpdate(a, { op: "upsert_entry", type: "character", title: "林婉", body_append: "第三章:左臂被灼伤,握不稳笔" });
+		expect(b.entries[0]!.body).toBe("林砚的姐姐\n第三章:左臂被灼伤,握不稳笔");
+		// 再追加一次仍是往后接,不是替换上一段
+		const c = applyWorldUpdate(b, { op: "upsert_entry", type: "character", title: "林婉", body_append: "第五章:承认自己撒过谎" });
+		expect(c.entries[0]!.body.split("\n")).toEqual([
+			"林砚的姐姐",
+			"第三章:左臂被灼伤,握不稳笔",
+			"第五章:承认自己撒过谎",
+		]);
+	});
+	it("body_append 用于新条目 → 正文就是它(不会先多一个空行)", () => {
+		const w = createEmptyWorld();
+		const a = applyWorldUpdate(w, { op: "upsert_entry", type: "character", title: "柳三娘", body_append: "船行老板娘" });
+		expect(a.entries[0]!.body).toBe("船行老板娘");
+	});
+	it("body 与 body_append 同给 → 报错(不猜谁先谁后)", () => {
+		const w = createEmptyWorld();
+		expect(() =>
+			applyWorldUpdate(w, { op: "upsert_entry", type: "character", title: "林婉", body: "整段", body_append: "追加" }),
+		).toThrow(/不能同时给/);
+	});
 	it("delete_entry 删除条目", () => {
 		const w = createEmptyWorld();
 		const a = applyWorldUpdate(w, { op: "upsert_entry", type: "character", title: "林婉" });

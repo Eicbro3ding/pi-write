@@ -1,8 +1,8 @@
 /**
  * memory 工具(2026-10-13,Phase 3):让 AI 自主维护两份长期记忆。
  *
- * - `target: "memory"` → 当前书的 `memory.md`(这本书发生了什么:人物状态变化、
- *   用户当场给的细节与纠正)。
+ * - `target: "memory"` → 当前书的 `memory.md`(**工作记忆**,不只是剧情台账:人物状态变化、
+ *   用户当场给的细节与纠正、这一章的写作口径、被否掉的方向、悬着没定的岔路)。
  * - `target: "user"`   → 全局 `user.md`(**跨书共用**:这位作者的语气/文体/禁忌、
  *   怎么跟他讲话)。落在 `~/.pi/writer/user.md`(见 {@link getUserProfilePath})。
  *
@@ -161,14 +161,14 @@ export const memoryTool: ToolDefinition = defineTool({
 	name: "memory",
 	label: "Memory",
 	description:
-		"维护两份跨会话的长期记忆(它们每轮都进上下文,所以**只记高信噪比、长期成立的事实**)。target:'memory' = 当前书的跨章记忆(人物状态变化、用户当场给的细节与纠正);'user' = 全局作者画像(**跨书共用**:作者的语气/文体/禁忌、怎么跟他讲话)。\n\n" +
+		"维护两份跨会话的长期记忆(它们每轮都进上下文,所以每条都要短、要高信噪比)。target:'memory' = 当前书的跨章**工作记忆**——不只装剧情(人物状态变化、用户当场给的细节与纠正),也装这一章的写作口径、被否掉的方向、悬着没定的岔路、下一步要接什么;'user' = 全局作者画像(**跨书共用**:作者的语气/文体/禁忌、怎么跟他讲话)。\n\n" +
 		"动作:'add' 追加一条;'replace' / 'remove' 用 old_text(一条唯一子串)定位已有条目——命中多条会报错列候选,不会乱改第一个。一次要改多处就用 'operations' 批量(原子:要么全成、要么全不动,且只按**最终结果**查容量,所以能在一次调用里删旧的腾地方 + 加新的)。\n\n" +
-		"写成**陈述事实**,不要写成对自己的命令:「作者偏好电报体」✓,「以后都要用电报体」✗——祈使句在以后的会话里会被当成指令、盖过用户当轮的请求。\n\n" +
-		"不要记:任务进度、已完成的工作、临时待办(那些不属于长期记忆);**七天就会过时的东西不要记**。流程性的方法论属于技能,不属于记忆。\n\n" +
+		"**记状态,不记流水账**:一条一事、一行写完;状态变了用 replace 就地改那一条,别追加新行(「陈锋已死」只有一条,不是每天一条);事情了结用 remove 删掉,把容量留给新的。要记的是**结果与现状**,不是过程——第几轮改了什么、推演步骤、临时草稿都不算记忆。\n\n" +
+		"写成**陈述事实**,不要写成对自己的命令:「作者偏好电报体」✓,「以后都要用电报体」✗——祈使句在以后的会话里会被当成指令、盖过用户当轮的请求。流程性的方法论属于技能,不属于记忆。\n\n" +
 		"容量满了会返回现有条目让你**当场精简**(合并/删旧)后重试,别把超限当失败放弃。",
 	parameters: Type.Object({
 		action: Type.Optional(Type.String({ enum: ["add", "replace", "remove"], description: "单发动作;用 operations 批量时省略" })),
-		target: Type.Optional(Type.String({ enum: ["memory", "user"], description: "'memory' = 本书跨章记忆(默认);'user' = 全局作者画像" })),
+		target: Type.Optional(Type.String({ enum: ["memory", "user"], description: "'memory' = 本书跨章记忆/工作记忆(默认);'user' = 全局作者画像" })),
 		content: Type.Optional(Type.String({ description: "条目内容(add / replace 用)" })),
 		old_text: Type.Optional(Type.String({ description: "定位已有条目的唯一子串(replace / remove 用)" })),
 		operations: Type.Optional(

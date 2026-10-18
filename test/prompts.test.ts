@@ -251,3 +251,88 @@ describe("memory.md 纪律(主对话 ⇄ 编辑 对称)", () => {
 		expect(d).toContain("收幕后");
 	});
 });
+
+/**
+ * 回归护栏:记忆勤奋 + 世界书激进写入(2026-10-18 用户点名要求)。
+ *
+ * 背景:此前 memory.md 只在"出事"时写(人物死亡、用户给出长期指示),世界书则一律
+ * 「列建议清单 → 等用户确认」。实际体感是记忆常年近空、设定永远等不到落盘,
+ * memory.md 也退化成一个只装剧情的抽屉。要求三件事:
+ * ① memory.md / user.md 每轮扫一遍,判不准就写;② memory.md 是工作记忆,不只装剧情;
+ * ③ 世界书默认直接写,只有破坏性 / 替故事做决定 / 两处说法打架三类先问。
+ * 这些都只在提示词里,没有别的测试钉 —— 不钉住就会漂回去。
+ */
+describe("记忆勤奋(每轮扫一遍)与世界书激进写入", () => {
+	it("主对话与编剧都有「每轮扫一遍」的收尾动作,不是只在出事时写", () => {
+		for (const f of ["writer-main.md", "writer-editor.md"]) {
+			const text = loadPromptText(f);
+			expect(text, f).toContain("每轮");
+			expect(text, f).toContain("判不准就写");
+			expect(text, f).toContain("流水账");
+		}
+	});
+
+	it("memory.md 被定义为工作记忆,不只装剧情", () => {
+		for (const f of ["writer-main.md", "writer-editor.md", "director.md"]) {
+			expect(loadPromptText(f), f).toContain("工作记忆");
+		}
+	});
+
+	it("世界书默认直接写,不再要求先列建议清单等确认", () => {
+		const main = loadPromptText("writer-main.md");
+		expect(main).toContain("默认直接写");
+		expect(main).toContain("只有三种情况先问");
+		// 旧的「全量确认」写法不能回来
+		expect(main).not.toContain("未经用户确认,不得写入");
+		// 激进写入唯一真正的代价是近似条目 —— 必须先查重
+		expect(main).toContain("查一次重");
+		// 防谎报落盘:说了已写入就必须真的写过
+		expect(main).toContain("必须真的写过");
+		const d = loadPromptText("director.md");
+		expect(d).toContain("当场用 world_update 写进去");
+		expect(d).toContain("必须真的写过");
+	});
+
+	it("讨论态不写正文,但记忆与世界书照写(否则讨论出的结论全丢)", () => {
+		const main = loadPromptText("writer-main.md");
+		expect(main).toContain("记忆与世界书照写");
+		// 旧措辞把讨论轮写成「任何文件都不许写」,与"讨论轮也要沉淀"自相矛盾
+		expect(main).not.toContain("不要创建、写入、清空或覆盖任何文件");
+	});
+});
+
+/**
+ * 回归护栏:正文写后核对 + 条目正文追加(2026-10-18 追加要求)。
+ *
+ * 「正文写了之后一定要检查里面有没有人物或东西没写进世界书、或者信息不是最新的;
+ * 编辑信息要用追加,一个角色/东西的实际信息应该是动态追加的,而不是覆盖。」
+ * 两条都只在提示词里(追加那半另有 `body_append` 的工具实现兜底),不钉就会漂。
+ */
+describe("正文写后核对与条目追加", () => {
+	it("三个角色都要求写完正文回读核对(有没有条目 / 是不是最新)", () => {
+		for (const f of ["writer-main.md", "writer-editor.md", "director.md"]) {
+			const text = loadPromptText(f);
+			expect(text, f).toContain("核对");
+			expect(text, f).toContain("是不是最新");
+		}
+	});
+
+	it("点明 scan 只看得见已登记条目,不能拿它当核对完成", () => {
+		for (const f of ["writer-main.md", "writer-editor.md", "director.md"]) {
+			expect(loadPromptText(f), f).toContain("只看得见");
+		}
+	});
+
+	it("条目正文默认追加(body_append),覆盖是例外", () => {
+		for (const f of ["writer-main.md", "director.md"]) {
+			const text = loadPromptText(f);
+			expect(text, f).toContain("body_append");
+			expect(text, f).toContain("追加");
+			expect(text, f).toContain("覆盖");
+		}
+		// 世界书是账本不是文档:这条比喻是整个追加纪律的锚
+		expect(loadPromptText("writer-main.md")).toContain("账本");
+		// 编剧写不了条目正文,但给导演的建议也必须是「追加到原条目」
+		expect(loadPromptText("writer-editor.md")).toContain("追加到原条目");
+	});
+});

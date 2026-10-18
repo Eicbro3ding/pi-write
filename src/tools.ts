@@ -170,7 +170,7 @@ export async function readCountsForFile(filePath: string): Promise<FileCounts> {
 }
 
 export type WorldUpdateOp =
-	| { op: "upsert_entry"; id?: string; type: EntryType; title: string; keys?: string[]; chapters?: string[]; status?: EntryStatus; parent?: string | null; body?: string; avatar?: string | null; images?: string[] }
+	| { op: "upsert_entry"; id?: string; type: EntryType; title: string; keys?: string[]; chapters?: string[]; status?: EntryStatus; parent?: string | null; body?: string; body_append?: string; avatar?: string | null; images?: string[] }
 	| { op: "delete_entry"; id: string }
 	| { op: "set_status"; id: string; status: EntryStatus }
 	| { op: "append_timeline"; chapter?: string; text: string }
@@ -193,7 +193,7 @@ export type WorldUpdateOp =
 
 /** world_update 的操作联合(schema 唯一真相源;对外暴露的是压平版 WORLD_UPDATE_FLAT)。 */
 const WORLD_UPDATE_UNION = Type.Union([
-	Type.Object({ op: Type.Literal("upsert_entry"), id: Type.Optional(Type.String()), type: Type.String(), title: Type.String(), keys: Type.Optional(Type.Array(Type.String())), chapters: Type.Optional(Type.Array(Type.String())), status: Type.Optional(Type.String()), parent: Type.Optional(Type.Union([Type.String(), Type.Null()])), body: Type.Optional(Type.String()), avatar: Type.Optional(Type.Union([Type.String(), Type.Null()])), images: Type.Optional(Type.Array(Type.String())) }),
+	Type.Object({ op: Type.Literal("upsert_entry"), id: Type.Optional(Type.String()), type: Type.String(), title: Type.String(), keys: Type.Optional(Type.Array(Type.String())), chapters: Type.Optional(Type.Array(Type.String())), status: Type.Optional(Type.String()), parent: Type.Optional(Type.Union([Type.String(), Type.Null()])), body: Type.Optional(Type.String({ description: "整段替换条目正文(会覆盖原文)。只有用户明确要求重写整段时才用;日常更新用 body_append" })), body_append: Type.Optional(Type.String({ description: "把新一段追加到条目正文末尾(换行分隔,原文不动)。人物/物件的信息是动态长出来的,新增的状态、经历、关系都用它" })), avatar: Type.Optional(Type.Union([Type.String(), Type.Null()])), images: Type.Optional(Type.Array(Type.String())) }),
 	Type.Object({ op: Type.Literal("delete_entry"), id: Type.String() }),
 	Type.Object({ op: Type.Literal("set_status"), id: Type.String(), status: Type.String() }),
 	Type.Object({ op: Type.Literal("append_timeline"), chapter: Type.Optional(Type.String()), text: Type.String() }),
@@ -339,7 +339,20 @@ export function applyStyleUpdate(data: WorldData, update: StyleUpdateOp): WorldD
 	}
 }
 
-/** 按传入字段更新条目(仅覆盖显式提供的字段,其余保留);更新 updatedAt。 */function updateEntryFields(e: WorldEntry, update: Extract<WorldUpdateOp, { op: "upsert_entry" }>, now: number): void {
+/** 追加正文:新一段接到末尾(换行分隔),原文一个字不动;空追加是空操作。 */
+function appendBody(current: string, extra: string): string {
+	const add = extra.trim();
+	if (add.length === 0) return current;
+	const base = current.trimEnd();
+	return base.length > 0 ? `${base}\n${add}` : add;
+}
+
+/**
+ * 按传入字段更新条目(仅覆盖显式提供的字段,其余保留);更新 updatedAt。
+ * **正文默认走追加**:`body_append` 接在原文后面,`body` 才是整段替换 ——
+ * 人物的信息是随剧情长出来的,覆盖一次就丢一次旧账。
+ */
+function updateEntryFields(e: WorldEntry, update: Extract<WorldUpdateOp, { op: "upsert_entry" }>, now: number): void {
 	if (update.title !== undefined) e.title = update.title;
 	if (update.type !== undefined) e.type = update.type;
 	if (update.keys !== undefined) e.keys = update.keys;
@@ -347,6 +360,7 @@ export function applyStyleUpdate(data: WorldData, update: StyleUpdateOp): WorldD
 	if (update.status !== undefined) e.status = update.status;
 	if (update.parent !== undefined) e.parent = update.parent;
 	if (update.body !== undefined) e.body = update.body;
+	if (update.body_append !== undefined) e.body = appendBody(e.body, update.body_append);
 	if (update.avatar !== undefined) e.avatar = update.avatar;
 	if (update.images !== undefined) e.images = update.images;
 	e.updatedAt = now;
@@ -400,6 +414,13 @@ export function applyWorldUpdate(data: WorldData, update: WorldUpdateOp): WorldD
 		case "upsert_entry": {
 			// 真 upsert 语义:带 id 时查不到就用该 id 创建;不带 id 时按 (type, title)
 			// 匹配已有条目(存在则更新、保留原 id),都不命中才新建。
+			// 两个正文字段互斥:同给时不知道谁先谁后,与其猜一个不如让模型改对。
+			if (update.body !== undefined && update.body_append !== undefined) {
+				throw new WorldValidationError(
+					"upsert_entry 的 body 与 body_append 不能同时给:body 是整段替换,body_append 是追加。要往后加内容就只给 body_append。",
+				);
+			}
+			const createdBody = update.body ?? update.body_append ?? "";
 			if (update.id) {
 				const e = next.entries.find((x) => x.id === update.id);
 				if (e) {
@@ -415,7 +436,7 @@ export function applyWorldUpdate(data: WorldData, update: WorldUpdateOp): WorldD
 						active: true,
 						parent: update.parent ?? null,
 						tags: [],
-						body: update.body ?? "",
+						body: createdBody,
 						avatar: update.avatar ?? null,
 						images: update.images ?? [],
 						updatedAt: now,
@@ -436,7 +457,7 @@ export function applyWorldUpdate(data: WorldData, update: WorldUpdateOp): WorldD
 						active: true,
 						parent: update.parent ?? null,
 						tags: [],
-						body: update.body ?? "",
+						body: createdBody,
 						avatar: update.avatar ?? null,
 						images: update.images ?? [],
 						updatedAt: now,
@@ -883,7 +904,7 @@ export const worldUpdateTool: ToolDefinition = defineTool({
 	name: "world_update",
 	label: "World Update",
 	description:
-		"更新世界书(world.json):增删改条目、关系、约束、Notice、发展线、采样、简要世界观与时间线。这是修改世界设定的唯一通道;结构性约束(重复 id、悬空引用、多个 in-progress 等)由程序校验。upsert_entry 是真 upsert:带 id 时查不到就按该 id 新建;不带 id 时按 (type, title) 匹配已有条目(存在则更新、保留原 id),都不命中才新建——更新已有条目通常不需要先查 id。关系的 from/to 接受条目 id 或标题(标题自动解析为条目 id;标题匹配到多个条目时返回报错并列出候选 id,请用 world_find 查 id 消歧;成功时返回会回显解析结果 from id(标题) → to id(标题))。枚举只接受英文:type=character/world/timeline/outline;status=alive/dead/unknown/active/archived/draft;关系 arrow=none/single/double;发展线 status=pending/in-progress/done/shelved。注意 status 是条目状态,与条目是否参与上下文注入(active 字段,界面「注入上下文」开关)无关,world_update 不改 active。发展线:节点按数组顺序推进。upsert_storyline_node 创建/更新节点(带 id 时按该 id 更新、查不到则按该 id 新建——id 要写完整,别拿注入块里的短编号当新 id,那会多出一个节点);advance_storyline 推进已有节点的状态,其 id 可填完整 id / 上下文【发展线】块里的短编号 / 节点标题,**查不到一律报错、不再兜底新建**(要建节点用 upsert_storyline_node);delete_storyline_node 删除节点。节点的 next 字段 = 该节点完成后的下一步内容(填标题或描述;也接受已有节点 id,会自动转为该节点标题)。查找条目 id 用 world_find 工具。set_world_summary 覆盖简要世界观概述(常驻注入,每次会话都会读到;建议 1-2 段,≤600 字)。新建条目后若与现有条目存在剧情关联,建议一并创建关系(upsert_relation)。约束的删除(delete_constraint)不可逆:拿不准就 upsert_constraint 带 enabled:false 停用;删用户的规矩只在用户明确要求时做。",
+		"更新世界书(world.json):增删改条目、关系、约束、Notice、发展线、采样、简要世界观与时间线。这是修改世界设定的唯一通道;结构性约束(重复 id、悬空引用、多个 in-progress 等)由程序校验。upsert_entry 是真 upsert:带 id 时查不到就按该 id 新建;不带 id 时按 (type, title) 匹配已有条目(存在则更新、保留原 id),都不命中才新建——更新已有条目通常不需要先查 id。**改条目正文用 body_append(追加),不要用 body**:body 是整段替换、会把原正文冲掉;body_append 把新一段接到原正文末尾(换行分隔),新条目也能用。人物与物件的信息是随剧情长出来的——新增的状态、经历、见过谁、答应过什么,一段一段往后加,旧账不删;只有用户明确要求重写整段时才用 body。两者不能同时给。关系的 from/to 接受条目 id 或标题(标题自动解析为条目 id;标题匹配到多个条目时返回报错并列出候选 id,请用 world_find 查 id 消歧;成功时返回会回显解析结果 from id(标题) → to id(标题))。枚举只接受英文:type=character/world/timeline/outline;status=alive/dead/unknown/active/archived/draft;关系 arrow=none/single/double;发展线 status=pending/in-progress/done/shelved。注意 status 是条目状态,与条目是否参与上下文注入(active 字段,界面「注入上下文」开关)无关,world_update 不改 active。发展线:节点按数组顺序推进。upsert_storyline_node 创建/更新节点(带 id 时按该 id 更新、查不到则按该 id 新建——id 要写完整,别拿注入块里的短编号当新 id,那会多出一个节点);advance_storyline 推进已有节点的状态,其 id 可填完整 id / 上下文【发展线】块里的短编号 / 节点标题,**查不到一律报错、不再兜底新建**(要建节点用 upsert_storyline_node);delete_storyline_node 删除节点。节点的 next 字段 = 该节点完成后的下一步内容(填标题或描述;也接受已有节点 id,会自动转为该节点标题)。查找条目 id 用 world_find 工具。set_world_summary 覆盖简要世界观概述(常驻注入,每次会话都会读到;建议 1-2 段,≤600 字)。新建条目后若与现有条目存在剧情关联,建议一并创建关系(upsert_relation)。约束的删除(delete_constraint)不可逆:拿不准就 upsert_constraint 带 enabled:false 停用;删用户的规矩只在用户明确要求时做。",
 	parameters: Type.Object({
 		update: WORLD_UPDATE_FLAT,
 	}),
