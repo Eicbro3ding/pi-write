@@ -868,6 +868,8 @@ export interface PluginInfoDto {
 	error: string | null;
 	/** 入口文件绝对路径(展示/调试用)。 */
 	path: string;
+	/** 是否存在可加载的前端 JS 入口(manifest 声明或缺省 frontend.mjs)。 */
+	hasFrontend?: boolean;
 	/** 声明式前端贡献(设置菜单 schema / 斜杠命令 / 浮窗 / 前端 JS 入口)。 */
 	frontend?: {
 		slashCommands?: Array<{ trigger: string; hint: string }>;
@@ -901,13 +903,19 @@ export interface PluginSettingsItemDto {
 export interface PluginWindowDto {
 	id: string;
 	title: string;
+	/** 标题下的副标题(弱化展示)。 */
+	subtitle?: string;
 	/** 初始位置百分比(0-100,相对视口)。 */
 	position?: { x: number; y: number };
 	/** 初始尺寸(px)。 */
 	size?: { width?: number; height?: number };
 	fields: PluginSettingsFieldDto[];
-	/** fields = 声明式字段;data = 由 dataSource 路由取数渲染键值表。 */
+	/** data 形态下字段抽屉的标题(缺省「设置」)。 */
+	settingsLabel?: string;
+	/** fields = 声明式字段;data = 由 dataSource 路由取数渲染。 */
 	contentKind?: "fields" | "data";
+	/** data 形态的呈现:cards 卡片组 / 缺省 rows 键值表。 */
+	layout?: "rows" | "cards";
 	/** 取数路径(相对 /api/plugins/<id>/;仅 trusted 插件路由可达)。 */
 	dataSource?: string;
 	closable?: boolean;

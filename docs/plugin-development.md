@@ -42,7 +42,8 @@ export default function myPlugin(pi) {
 }
 ```
 
-重启 pi-writer(Web/TUI)后,插件即被装载;`hello_world` 工具出现在对话工具列表。设置页「集成 → 插件」可查看/安装/启停/删除。
+装进插件目录后在设置页启用即可(Web 端启停/安装/删除都会重新装载并重建会话,
+工具与事件即时生效);TUI 在启动时装载一次。`hello_world` 工具随后出现在对话工具列表。设置页「集成 → 插件」可查看/安装/启停/删除。
 
 ### 安装插件(界面,无需手动放目录)
 
@@ -64,7 +65,7 @@ export default function myPlugin(pi) {
 | `description` | 否 | 一句话描述(设置页列表展示) |
 | `backend` | 否 | 后端入口文件(相对插件目录;**缺省 `index.mjs`**) |
 | `enabled` | 否 | 作者级禁用开关:false 时用户侧无法启用(`manifestDisabled`) |
-| `frontend` | 否 | 声明式前端贡献:`slashCommands`(Web 斜杠命令)+ `ui.settingsItems`(设置菜单字段 schema,见第 7 节) |
+| `frontend` | 否 | 声明式前端贡献:`slashCommands`(Web 斜杠命令)+ `ui.settingsItems`(设置菜单字段 schema,见第 7 节)+ `ui.windows`(浮窗,见第 7.5 节)+ `frontend`(自有前端 JS 入口) |
 
 **manifest 缺失/损坏**:插件仍以目录名兜底列出(version `0.0.0`),入口缺省 `index.mjs`;若也没有入口,列表显示「入口文件缺失」错误。
 
@@ -199,7 +200,7 @@ examples/plugins/dice/
 }
 ```
 
-**字段类型白名单**:`string | number | boolean | select | textarea`。select 必须带 `options`(至少一项);字段 key 须小写字母/数字/连字符/点/下划线。非法字段(未知 type/缺 key/select 无 options)**整条丢弃**,不阻塞插件装载。
+**字段类型白名单**:`string | number | boolean | select | textarea`。select 必须带 `options`(至少一项);字段 key 须小写字母/数字/连字符/点/下划线。非法字段(未知 type/缺 key/select 无 options/**键名含大写**)整条丢弃,不阻塞插件装载 —— 丢弃是静默的,字段既不出现在设置页、也不进写入白名单(`showCurrency` 这类驼峰键会连值都存不进去)。
 
 **读取设置**:插件自己在主进程读 `settings.json`(示例见 dice 的 `readSettings()`);也可在 Web 命令 handler 里读。设置保存后 pi-writer 重建会话(工具即时用新值)。
 
@@ -251,19 +252,37 @@ examples/plugins/dice/
 |---|---|
 | `id` | 窗口标识,须合法(小写字母/数字/连字符/点/下划线),同插件内唯一;用于 localStorage 键与 React key |
 | `title` | 标题栏文字(必填,非空) |
+| `subtitle` | 标题下的副标题(可选,弱化展示;适合写"自动刷新""低于阈值变黄"这类补充说明) |
 | `position` | 左上角位置,**百分比**(0-100),相对全局层;超出会被钳到该范围 |
 | `size` | `width` 像素、`height` 像素(作为 `max-height`);均被钳到 1-2000 |
 | `contentKind` | `"fields"`(默认)或 `"data"` |
+| `layout` | 仅 `data` 生效:`"cards"` 卡片组(第一张为主卡占满整行,其余两列;**状态色**);缺省 `"rows"` 紧凑键值表 |
 | `dataSource` | `contentKind: "data"` 时**必填**,插件路由路径(如 `balance` → `/api/plugins/<id>/balance`);不许含 `..`、不许绝对路径、不许带 `://` |
-| `fields` | 字段形态的字段列表,规则同 `settingsItems`(白名单类型);data 形态可省略 |
+| `fields` | 字段列表,规则同 `settingsItems`(白名单类型)。`contentKind:"fields"` 时整窗就是它;`contentKind:"data"` 时收在卡片下方的抽屉里,保存后立即重新取数 —— 一个面板带一两个参数(阈值/口径)不必再单开一个窗 |
+| `settingsLabel` | data 形态下抽屉的标题(缺省「设置」,如「提醒设置」);`fields` 为空时不渲染抽屉 |
 | `closable` | 默认 `true`;设 `false` 则隐藏关闭按钮、不可关闭 |
+
+**字段值会落盘**:`fields` 形态的窗口与设置页共用 `plugins/<id>/settings.json`,
+窗口底部有「保存」按钮(显式提交,不自动写)。后端白名单 = `settingsItems` 字段
+∪ 所有 `windows` 字段,同 key 只保留第一个;两处写同一份文件时是**合并写**,
+不会互相清空。
+
+`contentKind:"data"` 的窗口也可以带 `fields`:它们不占卡片区,收在底部的
+「提醒设置 / 展开」抽屉里;保存后窗口立刻重新取数(阈值一改,卡片颜色跟着变)。
+所以「看数」和「调参数」不必拆成两个浮窗。
 
 **校验失败即整条丢弃**(与设置项一致),不影响其他窗口或插件装载:`id`/`title` 非法、data 形态缺合法 `dataSource`、fields 形态无任何合法字段 → 该窗口不进列表。
 
 **取数返回体**归一化规则:
+- `layout: "cards"` 且返回 `{ "cards": [{ "label": "...", "value": "...", "hint": "...", "tone": "ok|warn|err" }] }`
+  → 渲染成卡片:`hint` 与 `tone` 可选,`tone` 只认 `ok`/`warn`/`err`(其他值丢弃);
+  `cards` 缺失或为空时**退回键值表**,不让窗口空白;
 - `{ "rows": [{ "label": "...", "value": "..." }] }` → 直接按序渲染;
 - 平铺对象 `{ "余额": "¥12.30", "状态": "正常" }` → 逐键成行;
 - 其他(数组 / 标量 / 嵌套)→ JSON 字符串化兜底,不猜结构。
+
+`data` 形态的窗口标题栏右上角有一个手动刷新按钮(30 秒轮询之外);卡片模式下
+窗口底部会显示"更新于 …"。
 
 **完整示例**见 `examples/plugins/balance/`。
 
@@ -337,7 +356,7 @@ export const webCommands = {
 | 能力 | 说明 |
 |---|---|
 | 后端自定义路由 | 入口 `export const routes = [{ method, segments, handler }]`;自动挂 `/api/plugins/<id>/...`(segments 加插件 id 前缀),**仅 trusted 插件注册** |
-| 前端 JS | 入口 `frontend.mjs`(manifest `frontend.frontend` 可换路径),经 `GET /api/plugins/:id/frontend.mjs` 返回 `text/javascript`,**仅 trusted 插件可加载** |
+| 前端 JS | 入口缺省 `frontend.mjs`(manifest `frontend.frontend` 可换文件名,仍须是 `.mjs`),经 `GET /api/plugins/:id/<入口名>` 返回 `text/javascript`,**仅 trusted 插件可加载**;没有入口的插件前端不会发请求 |
 
 **前端 JS 约定**:
 - 两个挂载点:**设置页插件分类**里每个插件有一张卡 `data-plugin-mount="<pluginId>"`(适合就近放设置相关的自定义界面);**全局层** `[data-plugin-layer]` 铺满视口、盖在编辑页之上(适合浮窗/常驻组件,自身 `pointer-events:none`,子元素自行开 `auto`)。插件 JS 自我管理挂载点下的 DOM(示例:掷骰历史按钮、灵感面板);
@@ -348,14 +367,20 @@ export const webCommands = {
 
 **风险**:trusted 插件与 pi-writer **主进程/渲染进程同权**(可在渲染进程执行任意 JS,并凭同族 HTTP 端点访问本地数据)。开启=用户声明"我信任这个插件的作者"。**仅信任你自己安装的插件**。
 
-**关闭信任**:开关取关即回收(frontend.mjs 的 script 标签移除、路由不注册)。
+**关闭信任**:开关取关即回收(script 标签移除、路由不注册;重新开启会重新执行脚本)。
+注意只能回收**标签**,已经执行过的副作用(定时器、全局事件监听、已插进 DOM 的节点)
+不会自动撤销 —— 要彻底清理请刷新页面。
+
+**删除插件 = 撤销授权**:删除时 `plugin-state.json` 里的条目一并清掉,同 id 重装
+(哪怕是别人打的包)不会继承上一次的「完全信任」。覆盖安装(升级同一个插件)则
+保留启用状态与信任,不用重新配置。
 
 示例见 `examples/plugins/dice/`(index.mjs 的 routes 导出 + frontend.mjs + json 历史演示)。
 
 ## 12. 常见问题(FAQ)
 
 **Q:插件写了但不生效?**
-A:①确认目录在 `~/.pi/writer/plugins/<id>/`(`PI_WRITER_DIR` 覆盖时换路径);②`plugin.json` 的 `id` 与目录名一致;③设置页插件列表看有无错误(入口缺失/工厂抛错);④重启 pi-writer(Web 服务),装载发生在启动时。
+A:①确认目录在 `~/.pi/writer/plugins/<id>/`(`PI_WRITER_DIR` 覆盖时换路径);②`plugin.json` 的 `id` 与目录名一致(不一致会在列表里直接报错);③设置页插件列表看有无错误(入口缺失/工厂抛错);④启停、安装、删除后会重新装载并重建会话,工具与事件即时生效;若仍不出现,再重启一次排除旧实例。
 
 **Q:插件工具 LLM 说不存在?**
 A:工具在「注册成功但初始激活名单外」时可能不出现在系统提示的工具段——内置工具经 `initialActiveToolNames` 激活,插件工具经 vendor 的 `includeAllExtensionTools` 自动激活。若仍不可见,检查工具名冲突(与内置同名的注册被拒绝)。

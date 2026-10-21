@@ -29,7 +29,7 @@ import { loadPlugins } from "./plugin-loader.ts";
 import { createSessionRuntimeFactory } from "./session-factory.ts";
 // 2026-10-04(T6/T7):vendor 接入收口到 pi-adapter。`openSession` 打开会话文件
 // 并直接产出句柄(SessionHost 的契约就是句柄);`ThinkingLevel` 是会话设置类型。
-import { openSession, type ThinkingLevel } from "./pi-adapter/index.ts";
+import { openSession, type ExtensionFactory, type ThinkingLevel } from "./pi-adapter/index.ts";
 import { buildWriterSystemPrompt } from "./prompt.ts";
 import { readWriterSettings } from "./writer-settings.ts";
 import { resolveWriterShell } from "./shell-kind.ts";
@@ -237,10 +237,15 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 		for (const e of errors) process.stderr.write(`[mcp] 配置错误: ${e}\n`);
 	}
 
-	// 外部插件:扫描 ~/.pi/writer/plugins/<id>/ → jiti 动态 import 启用插件 →
+	// 外部插件:扫描 ~/.pi/writer/plugins/<id>/ → 动态 import 启用插件 →
 	// 工厂并入 extensionFactories(单个插件失败隔离,error 经 /api/plugins 展示)
 	const pluginLoad = await loadPlugins();
-	const { factories: pluginFactories } = pluginLoad;
+	/**
+	 * 插件工厂的**可变引用**。server 在启停/安装/删除后经 onPluginFactories 写回,
+	 * createRuntime 每次装配会话时经 getter 读当前值 —— 直接传数组会被工厂闭包
+	 * 永久捕获,重建运行时仍注入旧插件(禁用不生效、新装插件工具不出现)。
+	 */
+	let pluginFactories: ExtensionFactory[] = pluginLoad.factories;
 
 	// createRuntime 工厂:与 cli.ts 共用 session-factory 的装配(隐藏 skill
 	// 命令;工具集为 web 子集;--model/--thinking 解析),只声明 web 差异项。
@@ -251,7 +256,7 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 		// MCP 工具清单不再手工拼 —— 上游 mcp_servers 段/工具声明自动处理(见 prompt.ts 注释)
 		systemPromptOverride: () => buildWriterSystemPrompt([], shellOn ? resolvedShell.dialect : "none"),
 		extensionFactories: [writerExtension, createWriterMcpExtension({ agentDir })],
-		pluginFactories,
+		pluginFactories: () => pluginFactories,
 		model: opts.model,
 		thinkingLevel: opts.thinking as ThinkingLevel | undefined,
 		// shell 方言:path 有值(pwsh/自定义)则写进 vendor settings;null = 清空让 vendor
@@ -319,6 +324,10 @@ export async function startWebServer(opts: WebCliOptions): Promise<{
 		// 运行形态与版本(「关于」页);--electron 即桌面壳,其余都算网页版
 		edition: opts.electron ? "electron" : "web",
 		...(opts.appVersion ? { appVersion: opts.appVersion } : {}),
+		// 插件启停/安装后,server 把新工厂写回上面的可变引用,再重建会话
+		onPluginFactories: (list) => {
+			pluginFactories = list;
+		},
 	});
 	// 插件装载态(错误/声明/命令注册表/trusted 路由)交给 server,GET /api/plugins 合并展示
 	server.setPluginInfos(pluginLoad.infos, pluginLoad.webCommands, pluginLoad.routes);

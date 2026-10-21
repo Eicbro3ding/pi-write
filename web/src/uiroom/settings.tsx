@@ -490,19 +490,21 @@ const PLUGIN_WIN_DATA: PluginInfoDto = {
 };
 
 function PluginWindowsFields() {
+	const { client } = useUIRoomRuntime();
 	const ref = useRef<HTMLDivElement>(null);
 	return (
 		<div ref={ref} className="plugin-layer uiroom-plugin-layer">
-			<PluginWindows plugins={collectWindows([PLUGIN_WIN_FIELDS])} layerRef={ref} />
+			<PluginWindows plugins={collectWindows([PLUGIN_WIN_FIELDS])} layerRef={ref} client={client} />
 		</div>
 	);
 }
 
 function PluginWindowsData() {
+	const { client } = useUIRoomRuntime();
 	const ref = useRef<HTMLDivElement>(null);
 	return (
 		<div ref={ref} className="plugin-layer uiroom-plugin-layer">
-			<PluginWindows plugins={collectWindows([PLUGIN_WIN_DATA])} layerRef={ref} />
+			<PluginWindows plugins={collectWindows([PLUGIN_WIN_DATA])} layerRef={ref} client={client} />
 		</div>
 	);
 }

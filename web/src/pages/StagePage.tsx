@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { bookFileUrl, imageUrl, type ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
+import { PLUGINS_CHANGED_EVENT } from "../plugin-events.ts";
 import type { Library } from "../library.ts";
 import { useMediaQuery, useIsPhone } from "../useMediaQuery.ts";
 import { useDragResize } from "../use-drag-resize.ts";
@@ -609,27 +610,37 @@ export function StagePage({
 		bookDetail,
 		currentChapterFile: currentChapter?.file ?? null,
 	};
-	/** 插件声明的斜杠命令(拉一次;随插件启停重建,运行中新增需重启页面)。 */
+	/** 插件声明的斜杠命令(30s 对账:插件启停/新装后命令菜单跟着变)。 */
 	const [pluginCommands, setPluginCommands] = useState<SlashCommand[] | null>(null);
 	useEffect(() => {
 		let cancelled = false;
-		client
-			.getPlugins()
-			.then((plugins) => {
-				if (cancelled) return;
-				const cmds: SlashCommand[] = [];
-				for (const p of plugins) {
-					for (const c of p.frontend?.slashCommands ?? []) {
-						cmds.push(makePluginCommand({ pluginId: p.id, trigger: c.trigger, hint: c.hint, client }));
+		const load = () => {
+			client
+				.getPlugins()
+				.then((plugins) => {
+					if (cancelled) return;
+					const cmds: SlashCommand[] = [];
+					for (const p of plugins) {
+						// 禁用的插件不留命令:后端 webCommands 也不注册,点了只会 404
+						if (!p.enabled) continue;
+						for (const c of p.frontend?.slashCommands ?? []) {
+							cmds.push(makePluginCommand({ pluginId: p.id, trigger: c.trigger, hint: c.hint, client }));
+						}
 					}
-				}
-				setPluginCommands(cmds);
-			})
-			.catch(() => {
-				if (!cancelled) setPluginCommands([]);
-			});
+					setPluginCommands(cmds);
+				})
+				.catch(() => {
+					if (!cancelled) setPluginCommands([]);
+				});
+		};
+		load();
+		const timer = setInterval(load, 30_000);
+		// 安装 / 启停后立刻刷新命令菜单,不必等 30 秒或刷页面
+		window.addEventListener(PLUGINS_CHANGED_EVENT, load);
 		return () => {
 			cancelled = true;
+			clearInterval(timer);
+			window.removeEventListener(PLUGINS_CHANGED_EVENT, load);
 		};
 	}, [client]);
 

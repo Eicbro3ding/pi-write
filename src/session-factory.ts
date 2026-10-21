@@ -32,6 +32,12 @@ import { writeRailsExtension } from "./write-rails-extension.ts";
 
 type CliModel = ResolveCliModelResult["model"];
 
+/** 插件工厂取值:支持按值数组与动态 getter(见 SessionFactoryOptions.pluginFactories)。 */
+function pluginFactoriesOf(v: SessionFactoryOptions["pluginFactories"]): ExtensionFactory[] {
+	if (!v) return [];
+	return typeof v === "function" ? v() : v;
+}
+
 /** 会话装配参数;三处装配点只声明差异项,共同样板在本模块。 */
 export interface SessionFactoryOptions {
 	/** agent 配置目录(auth/models/settings),传给 createAgentSessionServices。 */
@@ -42,8 +48,10 @@ export interface SessionFactoryOptions {
 	systemPromptOverride: () => string;
 	/** 扩展工厂(writerExtension 等;vendor InlineExtension,含裸函数形式)。 */
 	extensionFactories: InlineExtension[];
-	/** 外部插件工厂(plugin-loader 加载的 ExtensionFactory;追加到 extensionFactories 之后)。 */
-	pluginFactories?: ExtensionFactory[];
+	/** 外部插件工厂(plugin-loader 加载的 ExtensionFactory;追加到 extensionFactories 之后)。
+	 *  传函数时**每次装配会话都重新取值** —— 插件启停/安装后重建运行时才拿得到新工厂
+	 *  (按值传数组会被工厂闭包永久捕获,见 web.ts 的 pluginFactories 注释)。 */
+	pluginFactories?: ExtensionFactory[] | (() => ExtensionFactory[]);
 	/** 是否加载打包自带的 skills/(critique / outline / revise / stage-scripting)。
 	 *  缺省 true —— 只要会话有 read 工具,vendor 就会把 `<available_skills>` 追加进
 	 *  系统提示词(见 sessionSkillDirs)。stage 角色提示词自带技能绝对路径(见
@@ -154,7 +162,7 @@ export function createSessionRuntimeFactory(opts: SessionFactoryOptions): Runtim
 				extensionFactories: [
 					writeRailsExtension,
 					...opts.extensionFactories,
-					...(opts.pluginFactories ?? []),
+					...pluginFactoriesOf(opts.pluginFactories),
 				],
 			},
 		});

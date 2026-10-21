@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { getPluginFrontendPath, getPluginsDir, getPluginStatePath, listPlugins, loadPlugins, readPluginSettings, removePlugin, writePluginEnabled, writePluginSettings, writePluginTrusted } from "../src/plugin-loader.ts";
+import { getPluginFrontendPath, getPluginsDir, getPluginStatePath, collectPluginFieldSpecs, listPlugins, loadPlugins, readPluginSettings, removePlugin, writePluginEnabled, writePluginSettings, writePluginTrusted } from "../src/plugin-loader.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "piw-plugins-"));
 process.env.PI_WRITER_DIR = tmp;
@@ -375,5 +375,117 @@ describe("trusted(完全信任)状态与 merge 语义", () => {
 		expect(getPluginFrontendPath("fe", "custom.mjs")).toBeNull(); // 不存在
 		expect(getPluginFrontendPath("fe", "../x.mjs")).toBeNull(); // 逃逸
 		expect(getPluginFrontendPath("../evil")).toBeNull();
+	});
+});
+
+describe("hasFrontend(前端入口存在性)", () => {
+	it("无 frontend.mjs → false;有 → true;声明自定义名 → true", async () => {
+		writePlugin("nofe", {});
+		writePlugin("withfe", {});
+		writeFileSync(join(root, "withfe", "frontend.mjs"), "// ui");
+		writePlugin("custom", { manifest: { frontend: { frontend: "panel.mjs" } } });
+		writeFileSync(join(root, "custom", "panel.mjs"), "// ui");
+		const list = await listPlugins();
+		expect(list.find((p) => p.id === "nofe")?.hasFrontend).toBe(false);
+		expect(list.find((p) => p.id === "withfe")?.hasFrontend).toBe(true);
+		expect(list.find((p) => p.id === "custom")?.hasFrontend).toBe(true);
+	});
+});
+
+describe("removePlugin(删除即撤销授权)", () => {
+	it("删除后同 id 重装不继承 trusted", async () => {
+		writePlugin("gone", {});
+		await writePluginTrusted("gone", true);
+		expect((await listPlugins())[0].trusted).toBe(true);
+		await removePlugin("gone");
+		writePlugin("gone", {});
+		expect((await listPlugins())[0].trusted).toBe(false);
+	});
+});
+
+describe("manifest.id 与目录名不一致", () => {
+	it("以目录名为准并报错(不造删不掉的幽灵插件)", async () => {
+		writePlugin("real-dir", { manifest: { id: "other-id" } });
+		const list = await listPlugins();
+		expect(list).toHaveLength(1);
+		expect(list[0].id).toBe("real-dir");
+		expect(list[0].error).toContain("与目录名");
+	});
+});
+
+describe("设置写入(设置页与浮窗共用一份)", () => {
+	it("分两次写不同字段 → 合并保留,不互相清空", async () => {
+		writePlugin("shared", {});
+		const fields = [
+			{ key: "threshold", label: "阈值", type: "number" as const },
+			{ key: "showCurrency", label: "币种", type: "boolean" as const },
+		];
+		await writePluginSettings("shared", { threshold: 10 }, fields);
+		await writePluginSettings("shared", { showCurrency: false }, fields);
+		expect(await readPluginSettings("shared")).toEqual({ threshold: 10, showCurrency: false });
+	});
+
+	it("collectPluginFieldSpecs:设置页字段 ∪ 浮窗字段,同 key 只留第一个", async () => {
+		writePlugin("fields", {
+			manifest: {
+				frontend: {
+					ui: {
+						settingsItems: [
+							{
+								title: "S",
+								fields: [
+									{ key: "a", label: "A", type: "string" },
+									{ key: "dup", label: "设置页", type: "string" },
+								],
+							},
+						],
+						windows: [
+							{
+								id: "w",
+								title: "W",
+								fields: [
+									{ key: "dup", label: "浮窗", type: "number" },
+									{ key: "b", label: "B", type: "number" },
+								],
+							},
+						],
+					},
+				},
+			},
+		});
+		const info = (await listPlugins())[0];
+		const specs = collectPluginFieldSpecs(info);
+		expect(specs.map((f) => f.key)).toEqual(["a", "dup", "b"]);
+		expect(specs.find((f) => f.key === "dup")?.label).toBe("设置页");
+	});
+});
+
+describe("data 窗口的参数抽屉", () => {
+	it("settingsLabel 保留;窗口字段进写入白名单", async () => {
+		writePlugin("drawer", {
+			manifest: {
+				frontend: {
+					ui: {
+						windows: [
+							{
+								id: "w",
+								title: "余额",
+								contentKind: "data",
+								layout: "cards",
+								dataSource: "balance",
+								settingsLabel: "提醒设置",
+								fields: [{ key: "threshold", label: "阈值", type: "number" }],
+							},
+						],
+					},
+				},
+			},
+		});
+		const info = (await listPlugins())[0];
+		const win = info.frontend?.ui?.windows?.[0];
+		expect(win?.settingsLabel).toBe("提醒设置");
+		expect(win?.contentKind).toBe("data");
+		expect(win?.fields.map((f) => f.key)).toEqual(["threshold"]);
+		expect(collectPluginFieldSpecs(info).map((f) => f.key)).toEqual(["threshold"]);
 	});
 });

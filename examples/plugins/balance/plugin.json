@@ -1,8 +1,8 @@
 {
   "id": "balance",
   "name": "余额浮窗",
-  "version": "0.1.0",
-  "description": "示例插件:在全局浮窗里显示 DeepSeek / OpenRouter 账户余额。演示声明式 windows(非 trusted 也能开浮窗)+ trusted 后由插件路由取数两种形态。",
+  "version": "0.3.1",
+  "description": "在编辑页浮窗里看模型供应商的账户余额:内置 DeepSeek / OpenRouter 适配器,其余服务用自定义接口路径接入;低于提醒阈值会变黄。",
   "backend": "index.mjs",
   "frontend": {
     "ui": {
@@ -10,54 +10,76 @@
         {
           "id": "balance",
           "title": "账户余额",
-          "position": { "x": 78, "y": 72 },
-          "size": { "width": 260, "height": 220 },
+          "subtitle": "每 30 秒刷新 · 右上角可手动刷新",
+          "position": { "x": 76, "y": 44 },
+          "size": { "width": 280, "height": 420 },
           "contentKind": "data",
+          "layout": "cards",
           "dataSource": "balance",
-          "fields": []
-        },
-        {
-          "id": "watch",
-          "title": "余额提醒设置",
-          "position": { "x": 78, "y": 40 },
-          "size": { "width": 260 },
+          "settingsLabel": "提醒设置",
           "fields": [
             {
               "key": "threshold",
-              "label": "低于多少提醒",
+              "label": "提醒阈值",
               "type": "number",
               "default": 10,
-              "desc": "单位与账户币种一致。"
+              "desc": "可用余额 ≤ 该值时,余额卡变黄。单位与账户币种一致。"
             },
             {
-              "key": "pinned",
-              "label": "常驻显示",
+              "key": "show_currency",
+              "label": "显示币种单位",
               "type": "boolean",
-              "default": true
+              "default": true,
+              "desc": "关闭后只显示数字(如「10.00」而不是「10.00 CNY」)。"
             }
           ]
         }
       ],
       "settingsItems": [
         {
-          "title": "余额浮窗",
-          "description": "选择要查询的供应商;API Key 在「模型」设置里配置,这里只选读哪一家。",
+          "title": "余额查询",
+          "description": "先选供应商,再选适配器。内置适配器只覆盖 DeepSeek / OpenRouter —— 别家的余额接口路径与返回字段各不相同,用「自定义」填;没有余额接口的服务查不了,这是供应商侧的限制。",
           "fields": [
             {
               "key": "provider",
               "label": "供应商",
-              "type": "select",
+              "type": "string",
               "default": "deepseek",
-              "options": [
-                { "value": "deepseek", "label": "DeepSeek" },
-                { "value": "openrouter", "label": "OpenRouter" }
-              ]
+              "desc": "models.json 或 auth.json 里的 provider id(deepseek / openrouter / 你自己加的中转 id)。"
             },
             {
-              "key": "showCurrency",
-              "label": "显示币种单位",
-              "type": "boolean",
-              "default": true
+              "key": "adapter",
+              "label": "适配器",
+              "type": "select",
+              "default": "auto",
+              "options": [
+                { "value": "auto", "label": "自动识别" },
+                { "value": "deepseek", "label": "DeepSeek" },
+                { "value": "openrouter", "label": "OpenRouter" },
+                { "value": "custom", "label": "自定义" }
+              ],
+              "desc": "自动识别只看 provider 名;猜不出时余额窗会提示改用「自定义」。"
+            },
+            {
+              "key": "custom_path",
+              "label": "接口路径",
+              "type": "string",
+              "default": "",
+              "desc": "仅自定义:相对 baseUrl 的路径,如 /user/balance 或 /api/v1/credits。"
+            },
+            {
+              "key": "custom_field",
+              "label": "取值字段",
+              "type": "string",
+              "default": "",
+              "desc": "仅自定义:响应里余额的路径(点分,数组用下标),如 balance_infos.0.total_balance。"
+            },
+            {
+              "key": "custom_label",
+              "label": "主卡标题",
+              "type": "string",
+              "default": "可用余额",
+              "desc": "仅自定义:这张卡叫什么;其余明细属于对方的账户结构,插件不编。"
             }
           ]
         }

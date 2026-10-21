@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.3.7] - 2026-10-21
+
+插件系统补完一轮：启停真的生效了，装完立刻出现在界面上，浮窗能存字段也能画数字卡片，余额插件重做了一遍。
+
+- [fix] **启停/安装插件后工具仍然不变**：`createSessionRuntimeFactory` 按值捕获插件工厂，`reloadPluginRuntime` 只更新了列表/命令/路由，重建出来的会话仍注入旧插件 —— 禁用后工具还在、新装插件工具不出现（只有 web 命令与 trusted 路由即时生效）。工厂改为**每次装配时读取可变引用**（web.ts 持有，server 的 `onPluginFactories` 回写）。
+- [fix] **删除插件不撤销授权**：`plugin-state.json` 的条目从不清，删掉再装同 id 会静默继承上一次的 `trusted`，后端路由与前端 JS 直接解锁。`removePlugin` 现在一并清条目；覆盖安装（升级同一插件）仍保留启用与信任。
+- [fix] **禁用插件的斜杠命令仍在 `/` 菜单**：前后端都按 `enabled` 过滤，命令列表改为 30 秒对账（启用新插件不必刷页面）。
+- [fix] **trusted 插件的前端入口只认 `frontend.mjs`**：manifest 改成别的文件名就 404。路由改为接收任意段、handler 按声明校验；列表新增 `hasFrontend`（按文件存在性算），前端只对真有入口的插件注入 script，加载失败 5 分钟内不重试。
+- [fix] **设置页与浮窗互相清空字段**：`writePluginSettings` 是覆盖写，两处各发自己的字段 → 保存设置会把浮窗阈值抹掉。改为读旧值合并；白名单扩展成 `settingsItems ∪ windows.fields`。
+- [fix] **插件后端路由被前端脚本路由吃掉**：`GET /plugins/:id/:file` 会匹配任意三段（包括插件自己的 `/plugins/<id>/balance`），数据端点一律返回「入口必须是 .mjs」。插件动态路由改为优先匹配，注册期拒绝 `settings`/`command`/`install` 保留段。
+- [fix] **删除失败伪装成 404**：权限不足或磁盘错误会被报成「插件不存在」，现按「不存在 404 / 删不掉 500」分开。
+- [fix] **数字输入框右边挂着白块**：Chromium 的原生微调按钮（spinner）不跟暗色主题，深色输入框旁会露一块浅色底；同理移除了滚动条两端的箭头按钮。数值仍可用键盘 ↑/↓ 调节。
+- [feat] **安装即出现，不必再去设置里点一下**：全新安装会清掉同 id 残留的启用/信任记录与浮窗关闭状态（否则「装了却看不见」），安装/启停/信任/删除后广播一次变更，浮窗与斜杠命令立刻对账，不再等 30 秒轮询。覆盖安装（升级）保留启用、信任与窗口位置。
+- [feat] **浮窗新增 `layout: "cards"`**：第一张卡满宽、其余两列，`value` 大号、`tone`（ok/warn/err）染边与底，`hint` 小字；data 窗口带手动刷新与「更新于」时间戳。
+- [feat] **浮窗 fields 终于会落盘**：此前值只在 React state 里，关窗即丢；现在与设置页共用 `settings.json`，窗口底部有显式「保存」。
+- [feat] **balance 插件 0.3.1 重做**：卡片式余额面板（主数值 + 状态色 + 阈值提醒）与可保存的提醒设置；**余额接口改成适配器制** —— 内置 DeepSeek / OpenRouter 两家，其余服务用「自定义」填接口路径 + 取值字段（点分路径，支持数组下标），卡片内容由适配器决定：`赠金 / 充值` 只属于 DeepSeek 的账户结构，不再当成通用字段；provider 认不出时明说「没有内置适配器，请改自定义」，不再假装「未配置 API Key」。**「余额」与「提醒设置」合成一个浮窗**：data 窗口也可以带字段，收在卡片下方的「提醒设置 / 展开」抽屉里，保存后立即重新取数（阈值一改，卡片颜色跟着变），不再为两个参数单开一个窗。凭据改为 models.json 优先、auth.json 兜底；OpenRouter 的 credits 地址不再拼成 `/api/api/v1/credits`；DeepSeek 余额跟随 baseUrl；`showCurrency` 假开关落地；fetch 加 8 秒超时。字段 key 受白名单约束只能小写，改用 `show_currency`。
+- [change] **Release 页面同时挂示例插件 zip**：`balance` / `dice` / `inspire` 三个包由 CI 一起打包上传，设置页「安装插件」直接选，不必再从仓库里手动找目录。
+- 护栏：`test/plugin-loader.test.ts` 与 `test/plugin-windows-web.test.ts` 新增 10 例（hasFrontend / 删除清授权 / 清单 id 不一致 / 设置合并写 / 字段白名单合并 / cards 归一化 / data 窗口字段抽屉）；全量 98 文件 / 1839 例通过（2 skipped）。
+
 ## [0.3.6] - 2026-10-18
 
 这版把 AI 的手脚放松了：记忆每轮都记一点，世界书有出处就直接写，条目正文只往后追加。规则写进提示词，追加由工具保证。

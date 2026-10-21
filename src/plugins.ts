@@ -63,14 +63,27 @@ export interface PluginWindowSpec {
 	id: string;
 	/** 标题栏文案。 */
 	title: string;
+	/** 标题下的副标题(可选,弱化展示;适合写"更新于 …"这类补充说明)。 */
+	subtitle?: string;
 	/** 初始位置百分比(0-100,相对视口左上;缺省右下角 82/78)。拖动后由前端本地记住。 */
 	position?: { x: number; y: number };
 	/** 初始尺寸(px;缺省 280×自动)。宽高各自可选,超视口由前端钳制。 */
 	size?: { width?: number; height?: number };
-	/** 窗口内展示的字段组(复用设置字段白名单 renderer)。 */
+	/** 窗口内展示的字段组(复用设置字段白名单 renderer;值存 settings.json)。
+	 *  - contentKind:"fields":整窗就是这组字段;
+	 *  - contentKind:"data":字段收进卡片下方的「展开」抽屉,改完即刷新取数 ——
+	 *    一个面板带一两个参数(阈值/口径)不必再单开一个窗。 */
 	fields: PluginSettingsFieldSpec[];
+	/** data 形态下字段抽屉的标题(缺省「设置」;如「提醒设置」)。 */
+	settingsLabel?: string;
 	/** 内容来源:声明式字段(缺省)/ 由插件路由取数渲染(见 windowData)。 */
 	contentKind?: "fields" | "data";
+	/**
+	 * data 形态的呈现方式(仅 contentKind=data 生效):
+	 *  - "cards":卡片组(每张 = 大号数值 + 标签 + 可选提示/状态色),适合余额/统计这类数字面板;
+	 *  - 缺省 "rows":紧凑键值表,适合多行明细。
+	 */
+	layout?: "rows" | "cards";
 	/**
 	 * contentKind=data 时的取数路径(相对 /api/plugins/<id>/);
 	 * 返回 { rows: [{label,value}] } 或纯对象 → 渲染成键值表。仅 trusted 插件的路由可达。

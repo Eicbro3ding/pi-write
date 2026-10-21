@@ -668,7 +668,7 @@ export function App() {
 			    data-plugin-layer 是给 frontend.mjs 的稳定挂载契约 —— 插件不必再
 			    querySelector 猜 DOM,直接往 [data-plugin-layer] 里塞即可。 */}
 			<div className="plugin-layer" data-plugin-layer ref={pluginLayerRef}>
-				<PluginWindows plugins={pluginWindows} layerRef={pluginLayerRef} />
+				<PluginWindows plugins={pluginWindows} layerRef={pluginLayerRef} client={client} />
 			</div>
 			{/* 重运行形态:覆盖层叠加在已挂载页面上,不打断流式状态;建书后刷新书库列表 */}
 			{wizardPresence.mounted && (

@@ -29,7 +29,8 @@ import {
 	setCurrentChapter,
 	updateChapter,
 } from "../book-manager.ts";
-import { getPluginFrontendPath, listPlugins, loadPlugins, pluginExists, readPluginSettings, removePlugin, writePluginEnabled, writePluginSettings, writePluginTrusted, type PluginRouteDef, type PluginRuntimeInfo, type PluginWebCommandHandler } from "../plugin-loader.ts";
+import { clearPluginState, collectPluginFieldSpecs, getPluginFrontendPath, listPlugins, loadPlugins, pluginExists, readPluginSettings, removePlugin, writePluginEnabled, writePluginSettings, writePluginTrusted, type PluginRouteDef, type PluginRuntimeInfo, type PluginWebCommandHandler } from "../plugin-loader.ts";
+import type { ExtensionFactory } from "../pi-adapter/index.ts";
 import { MAX_PLUGIN_ZIP_BYTES, readPluginZip, writePluginFiles, type PluginZipImport } from "./plugin-zip.ts";
 import { getAgentDir, getBookDir, getThemesDir, getUserProfilePath, getWriterDir, VERSION } from "../config.ts";
 import { aboutInfo, checkForUpdate, type AboutInfo, type Edition } from "../about.ts";
@@ -118,6 +119,12 @@ export interface WriterServerOptions {
 	 * 同等受鉴权、回环 Host 校验与统一错误体约束。
 	 */
 	extraRoutes?: Route[];
+	/**
+	 * 插件工厂刷新回调(2026-10-21):启停/安装/删除插件后,重新 loadPlugins 会得到
+	 * 新的工厂列表。调用方(web.ts)把它写回传给 createSessionRuntimeFactory 的
+	 * 可变引用,否则重建出来的会话仍然注入旧插件 —— 表现为"禁用了插件,工具还在"。
+	 */
+	onPluginFactories?: (factories: ExtensionFactory[]) => void;
 	/**
 	 * 应用版本(「关于」页显示 / 检查更新的比对基准)。Electron 壳必须显式传
 	 * `app.getVersion()`:打包后 bundle 里的 import.meta.url 是**构建机**路径,
@@ -853,9 +860,13 @@ export class WriterServer {
 			//   settings/command 为字面段,与 :id 参数段(2 段)段数不同无冲突)
 			{ method: "GET", segments: ["plugins"], handler: (ctx) => this.handleGetPlugins(ctx) },
 			{ method: "POST", segments: ["plugins", "install"], handler: (ctx) => this.handlePostPluginInstall(ctx) },
-			{ method: "GET", segments: ["plugins", ":id", "frontend.mjs"], handler: (ctx) => this.handleGetPluginFrontend(ctx) },
+			// settings 必须排在 ":file" 之前 —— 路由表按注册顺序匹配,否则 GET .../settings
+			// 会被前端脚本的兜底路由先吃掉。
 			{ method: "GET", segments: ["plugins", ":id", "settings"], handler: (ctx) => this.handleGetPluginSettings(ctx) },
 			{ method: "PUT", segments: ["plugins", ":id", "settings"], handler: (ctx) => this.handlePutPluginSettings(ctx) },
+			// 前端 JS 入口:文件名由 manifest 的 frontend.frontend 决定(缺省 frontend.mjs),
+			// 所以这里收任意一段,handler 里再按声明校验。
+			{ method: "GET", segments: ["plugins", ":id", ":file"], handler: (ctx) => this.handleGetPluginFrontend(ctx) },
 			{ method: "POST", segments: ["plugins", ":id", "command", ":name"], handler: (ctx) => this.handlePostPluginCommand(ctx) },
 			{ method: "PUT", segments: ["plugins", ":id"], handler: (ctx) => this.handlePutPlugin(ctx) },
 			{ method: "DELETE", segments: ["plugins", ":id"], handler: (ctx) => this.handleDeletePlugin(ctx) },
@@ -2582,20 +2593,24 @@ export class WriterServer {
 	}
 
 	/**
-	 * GET /api/plugins/:id/frontend.mjs:插件前端 JS(仅 trusted 插件返回)。
+	 * GET /api/plugins/:id/:file:插件前端 JS(仅 trusted 插件返回)。
 	 * 安全:未信任插件的 JS 不加载——渲染进程只执行用户显式「完全信任」的插件代码;
-	 * 路径经 getPluginFrontendPath 防逃逸;manifest 声明入口缺省 frontend.mjs。
+	 * 路径经 getPluginFrontendPath 防逃逸;文件名必须等于 manifest 声明的入口
+	 * (缺省 frontend.mjs),不接受任意外链。
 	 */
 	private async handleGetPluginFrontend(ctx: RouteContext): Promise<void> {
 		const id = ctx.params.id!;
+		const file = ctx.params.file!;
+		if (!file.endsWith(".mjs")) throw new HttpError(404, "not_found", "插件前端入口必须是 .mjs");
 		const infos = await listPlugins();
 		const info = infos.find((p) => p.id === id);
 		if (!info) throw new HttpError(404, "not_found", `插件不存在: ${id}`);
 		if (!info.trusted) {
 			throw new HttpError(404, "not_found", "插件未信任,不提供前端 JS(设置页开启「完全信任」后可用)");
 		}
-		const rel = info.frontend?.frontend;
-		const path = getPluginFrontendPath(id, rel);
+		const declared = info.frontend?.frontend ?? "frontend.mjs";
+		if (file !== declared) throw new HttpError(404, "not_found", `插件未声明前端入口: ${file}`);
+		const path = getPluginFrontendPath(id, declared);
 		if (!path) throw new HttpError(404, "not_found", "插件前端入口不存在");
 		const source = await readFile(path, "utf8");
 		ctx.res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
@@ -2661,6 +2676,11 @@ export class WriterServer {
 			// 写盘失败(磁盘满/权限)照实报;旧版本已由 writePluginFiles 回滚保留
 			throw new HttpError(500, "io", err instanceof Error ? err.message : String(err));
 		}
+		// 全新安装:清掉同 id 可能残留的启用/信任记录(比如手动删了目录再装回来,
+		// 或装的是别人打的同 id 包)。否则会「装上却看不见」——它记着上次被关掉了。
+		// 覆盖安装(升级同一插件)保留状态与信任,不用重新配置。
+		// 清理旧状态失败不该让安装失败(安装本身已经成功)
+		if (!overwritten) await clearPluginState(parsed.id).catch(() => undefined);
 		await this.reloadPluginRuntime();
 		this.send(ctx.res, 200, { ok: true, id: parsed.id, overwritten, plugins: await listPlugins() });
 	}
@@ -2668,10 +2688,13 @@ export class WriterServer {
 	/** DELETE /api/plugins/:id:删除插件目录(移除后重建会话;state 一并清理)。 */
 	private async handleDeletePlugin(ctx: RouteContext): Promise<void> {
 		const id = ctx.params.id!;
+		// 先分「不存在」(404)与「删不掉」(500):此前把任何异常都报 404,
+		// 权限不足 / 被安全策略拦下会伪装成「插件不存在」。
+		if (!pluginExists(id)) throw new HttpError(404, "not_found", `插件不存在: ${id}`);
 		try {
 			await removePlugin(id);
 		} catch (err) {
-			throw new HttpError(404, "not_found", err instanceof Error ? err.message : "插件不存在");
+			throw new HttpError(500, "io", err instanceof Error ? err.message : String(err));
 		}
 		await this.reloadPluginRuntime();
 		this.send(ctx.res, 200, { ok: true, plugins: await listPlugins() });
@@ -2681,10 +2704,13 @@ export class WriterServer {
 	private async reloadPluginRuntime(): Promise<void> {
 		// 同步装载态:重新执行 loadPlugins(启用/禁用/信任变化),把错误挂到列表合并源
 		try {
-			const { infos, webCommands, routes } = await loadPlugins();
+			const { factories, infos, webCommands, routes } = await loadPlugins();
 			this.pluginInfos = infos;
 			this.pluginWebCommands = webCommands;
 			this.pluginRoutes = routes;
+			// 关键:把新工厂交给 createRuntime 的可变引用。缺了这一步,下面的
+			// reloadRuntime 会用旧工厂重建会话 —— 启停对工具/事件层完全无效。
+			this.options.onPluginFactories?.(factories);
 		} catch {
 			this.pluginInfos = null;
 			this.pluginWebCommands = new Map();
@@ -2725,7 +2751,8 @@ export class WriterServer {
 		const info = infos.find((p) => p.id === id);
 		if (!info) throw new HttpError(404, "not_found", `插件不存在: ${id}`);
 		const schema = info.frontend?.ui?.settingsItems ?? [];
-		const fields = schema.flatMap((item) => item.fields);
+		// 白名单 = 设置页字段 ∪ 浮窗字段(共用 settings.json;浮窗值同样要落盘)
+		const fields = collectPluginFieldSpecs(info);
 		const body = (await readJsonBody(ctx.req)) as Record<string, unknown> | null;
 		const values = body?.values;
 		if (typeof values !== "object" || values === null || Array.isArray(values)) {
@@ -3509,9 +3536,15 @@ export class WriterServer {
 			this.openSse(res);
 			return;
 		}
-		// 匹配顺序:内置路由优先,其后是 trusted 插件动态路由(segments 已带插件 id 前缀,
-		// 只追加不改,防插件覆盖内置端点)
-		const matched = matchRoute(method, parts.slice(1), this.routes) ?? matchRoute(method, parts.slice(1), this.pluginRoutes);
+		// 匹配顺序:插件动态路由优先于内置路由 —— 内置的
+		// `GET /plugins/:id/:file`(前端脚本兜底)会匹配任意三段,包括插件自己的
+		// `/plugins/<id>/balance`;不让插件路由先匹配,数据端点会被它整条吃掉。
+		// 保留段(settings/command/install)在插件路由注册期已拒绝,不会抢内置端点。
+		const pluginMatched =
+			parts.length >= 3 && parts[1] === "plugins"
+				? matchRoute(method, parts.slice(1), this.pluginRoutes)
+				: null;
+		const matched = pluginMatched ?? matchRoute(method, parts.slice(1), this.routes);
 		if (!matched) {
 			this.send(res, 404, { error: { code: "not_found", message: "未找到" } });
 			return;

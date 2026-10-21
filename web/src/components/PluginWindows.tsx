@@ -1,20 +1,25 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ApiClient } from "../api/client.ts";
+import { friendlyError } from "../errors.ts";
+import { PLUGINS_CHANGED_EVENT } from "../plugin-events.ts";
 import type { PluginInfoDto, PluginSettingsFieldDto, PluginWindowDto } from "../types.ts";
 import { ToggleSwitch } from "./ToggleSwitch.tsx";
 import { Select } from "./Select.tsx";
 
 /**
- * 声明式浮窗渲染器(2026-10-11):把插件 `plugin.json` 的
+ * 声明式浮窗渲染器:把插件 `plugin.json` 的
  * `frontend.ui.windows` 渲染成挂在全局层 `.plugin-layer` 里的浮窗。
  *
  * 与设置页卡片同一条哲学:插件只声明数据(标题/位置/尺寸/字段),由这里的受信任
  * 渲染器画 —— renderer 不执行任何用户 JS,所以**非 trusted 插件也能开浮窗**。
  *
- * 两种内容形态:
- *  - fields:复用设置字段白名单(string/number/boolean/select/textarea)静态渲染;
- *  - data:按 window.dataSource 调 /api/plugins/<id>/<path> 取数,渲染键值表
- *    (仅 trusted 插件的路由可达,路由由插件后端注册)。
+ * 三种内容形态:
+ *  - fields:复用设置字段白名单(string/number/boolean/select/textarea);
+ *    值**存进 settings.json**(与设置页同一份,保存按钮显式提交);
+ *  - data + layout:"cards":按 `dataSource` 取数,渲染卡片组(大号数值 + 状态色),
+ *    适合余额/统计这类数字面板;
+ *  - data + 缺省 layout:"rows":紧凑键值表,适合多行明细。
+ * data 形态只有 trusted 插件的路由可达(路由由插件后端注册)。
  *
  * 位置/关闭状态存 localStorage(按 pluginId:windowId 键),不落服务端 ——
  * 这是纯前端展示偏好,不值得一次网络往返。
@@ -93,39 +98,61 @@ export function usePluginWindows(client: ApiClient, active: boolean) {
 		};
 		sync();
 		const timer = setInterval(sync, 30_000);
+		// 安装 / 启停 / 信任变更后立刻对账:装完不必等下一轮 30 秒才看见浮窗
+		window.addEventListener(PLUGINS_CHANGED_EVENT, sync);
 		return () => {
 			cancelled = true;
 			clearInterval(timer);
+			window.removeEventListener(PLUGINS_CHANGED_EVENT, sync);
 		};
 	}, [client, active]);
 	return { windows: collectWindows(plugins), layerRef };
 }
 
 /** 浮窗容器:遍历可渲染窗,逐个渲染 PluginWindow(各自持有位置/关闭状态)。 */
-export function PluginWindows({ plugins, layerRef }: { plugins: RenderableWindow[]; layerRef: React.RefObject<HTMLDivElement | null> }) {
+export function PluginWindows({
+	plugins,
+	layerRef,
+	client,
+}: {
+	plugins: RenderableWindow[];
+	layerRef: React.RefObject<HTMLDivElement | null>;
+	client: ApiClient;
+}) {
 	return (
 		<>
 			{plugins.map((w) => (
-				<PluginWindow key={`${w.pluginId}:${w.spec.id}`} pluginId={w.pluginId} pluginName={w.pluginName} spec={w.spec} layerRef={layerRef} />
+				<PluginWindow
+					key={`${w.pluginId}:${w.spec.id}`}
+					pluginId={w.pluginId}
+					pluginName={w.pluginName}
+					spec={w.spec}
+					layerRef={layerRef}
+					client={client}
+				/>
 			))}
 		</>
 	);
 }
 
-/** 单个浮窗:标题栏(可拖拽)+ 内容(fields 或 data)+ 关闭按钮。 */
+/** 单个浮窗:标题栏(可拖拽)+ 内容(fields / data)+ 刷新 / 关闭按钮。 */
 function PluginWindow({
 	pluginId,
 	pluginName,
 	spec,
 	layerRef,
+	client,
 }: {
 	pluginId: string;
 	pluginName: string;
 	spec: PluginWindowDto;
 	layerRef: React.RefObject<HTMLDivElement | null>;
+	client: ApiClient;
 }) {
 	const [local, setLocal] = useState<WindowLocalState>(() => readLocalState(pluginId, spec.id));
 	const [open, setOpen] = useState(() => !readLocalState(pluginId, spec.id).closed);
+	/** 手动刷新计数:data 形态的取数 effect 依赖它,点一次重新拉一次。 */
+	const [refreshTick, setRefreshTick] = useState(0);
 	const ref = useRef<HTMLDivElement>(null);
 	// 拖拽期间的最新位置放 ref,不动 state —— 移动一步就 setState 会让 React 重渲染,
 	// 而「位移换算」其实只需要读写 DOM,不需要参与渲染,节流全靠浏览器合成。
@@ -225,42 +252,193 @@ function PluginWindow({
 			}}
 		>
 			<div className="pw-bar" onPointerDown={startDrag}>
-				<span className="pw-title">{spec.title}</span>
+				<span className="pw-titles">
+					<span className="pw-title">{spec.title}</span>
+					{spec.subtitle && <span className="pw-subtitle">{spec.subtitle}</span>}
+				</span>
 				<span className="pw-from">{pluginName}</span>
+				{spec.contentKind === "data" && (
+					<button
+						type="button"
+						className="pw-refresh"
+						onPointerDown={(e) => e.stopPropagation()}
+						onClick={() => setRefreshTick((t) => t + 1)}
+						title="刷新"
+						aria-label={`刷新 ${spec.title}`}
+					>
+						↻
+					</button>
+				)}
 				{spec.closable !== false && (
-					<button type="button" className="pw-close" onClick={close} aria-label={`关闭 ${spec.title}`}>
+					<button
+						type="button"
+						className="pw-close"
+						onPointerDown={(e) => e.stopPropagation()}
+						onClick={close}
+						aria-label={`关闭 ${spec.title}`}
+					>
 						×
 					</button>
 				)}
 			</div>
-			<div className="pw-body">{spec.contentKind === "data" ? <WindowData pluginId={pluginId} spec={spec} /> : <WindowFields spec={spec} />}</div>
+			<div className="pw-body">
+				{spec.contentKind === "data" ? (
+					<>
+						<WindowData pluginId={pluginId} spec={spec} tick={refreshTick} />
+						{/* data 窗口也可以带字段:收在卡片下方的抽屉里,保存后立刻重新取数。
+						    否则「看数」与「调阈值」要拆成两个浮窗,平白多占一块屏幕。 */}
+						{spec.fields.length > 0 && (
+							<details className="pw-drawer">
+								<summary>{spec.settingsLabel ?? "设置"}</summary>
+								<WindowFields
+									pluginId={pluginId}
+									spec={spec}
+									client={client}
+									onSaved={() => setRefreshTick((t) => t + 1)}
+								/>
+							</details>
+						)}
+					</>
+				) : (
+					<WindowFields pluginId={pluginId} spec={spec} client={client} />
+				)}
+			</div>
 		</div>
 	);
 }
 
-/** fields 形态:静态字段渲染(与设置页同一套控件,只读展示 + 可交互控件)。 */
-function WindowFields({ spec }: { spec: PluginWindowDto }) {
-	const [values, setValues] = useState<Record<string, unknown>>(() => {
+/**
+ * fields 形态:字段渲染 + 读写 settings.json。
+ *
+ * 值不再只活在 React state 里(此前关窗即丢),与设置页共用同一份文件;
+ * 提交是显式的「保存」,不自动写盘 —— 免得拖一个数字滑块就打一次 API。
+ */
+function WindowFields({
+	pluginId,
+	spec,
+	client,
+	onSaved,
+}: {
+	pluginId: string;
+	spec: PluginWindowDto;
+	client: ApiClient;
+	/** 保存成功后回调(data 窗口用它立即重新取数,阈值改了卡片马上变色)。 */
+	onSaved?: () => void;
+}) {
+	const defaults = useMemo(() => {
 		const init: Record<string, unknown> = {};
 		for (const f of spec.fields) if (f.default !== undefined) init[f.key] = f.default;
 		return init;
-	});
+	}, [spec.fields]);
+	const [values, setValues] = useState<Record<string, unknown>>(defaults);
+	const [busy, setBusy] = useState(false);
+	const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+	useEffect(() => {
+		let cancelled = false;
+		client
+			.getPluginSettings(pluginId)
+			.then((r) => {
+				if (cancelled) return;
+				// 只取本窗口声明的键,别把设置页的字段也塞进来
+				const picked: Record<string, unknown> = {};
+				for (const f of spec.fields) if (f.key in r.values) picked[f.key] = r.values[f.key];
+				setValues({ ...defaults, ...picked });
+			})
+			.catch(() => {
+				/* 读失败:先用声明默认值,保存时会报错 */
+			});
+		return () => {
+			cancelled = true;
+		};
+		// 依赖里刻意不放 spec.fields / defaults:浮窗列表 30 秒对账一次,
+		// 字段数组每次都是新引用;跟着重跑会把用户**正在编辑、还没保存**的值冲回旧值。
+		// 字段列表只在插件升级时变化,那种情况刷新页面即可。
+	}, [client, pluginId]);
+
+	async function save() {
+		if (busy) return;
+		setBusy(true);
+		setMsg(null);
+		try {
+			const payload: Record<string, unknown> = {};
+			for (const f of spec.fields) if (f.key in values) payload[f.key] = values[f.key];
+			const saved = await client.putPluginSettings(pluginId, payload);
+			const picked: Record<string, unknown> = {};
+			for (const f of spec.fields) if (f.key in saved) picked[f.key] = saved[f.key];
+			setValues((prev) => ({ ...prev, ...picked }));
+			setMsg({ ok: true, text: "已保存" });
+			setTimeout(() => setMsg(null), 2500);
+			onSaved?.();
+		} catch (e) {
+			setMsg({ ok: false, text: friendlyError(e) });
+		} finally {
+			setBusy(false);
+		}
+	}
+
 	return (
-		<div className="pw-fields">
-			{spec.fields.map((f) => (
-				<div className="pw-field" key={f.key}>
-					<span className="pw-field-label">{f.label}</span>
-					{renderInlineField(f, values[f.key], (v) => setValues((prev) => ({ ...prev, [f.key]: v })))}
-				</div>
-			))}
-		</div>
+		<>
+			<div className="pw-fields">
+				{spec.fields.map((f) => (
+					<div className="pw-field" key={f.key}>
+						<span className="pw-field-label" title={f.desc}>
+							{f.label}
+						</span>
+						{renderInlineField(f, values[f.key], (v) => setValues((prev) => ({ ...prev, [f.key]: v })))}
+					</div>
+				))}
+			</div>
+			<div className="pw-fields-actions">
+				<button type="button" className="btn-ghost" disabled={busy} onClick={() => void save()}>
+					{busy ? "保存中…" : "保存"}
+				</button>
+				{msg && <span className={msg.ok ? "pw-msg ok" : "pw-msg err"}>{msg.text}</span>}
+			</div>
+		</>
 	);
 }
 
-/** data 形态:按 dataSource 取数,渲染键值表。 */
-function WindowData({ pluginId, spec }: { pluginId: string; spec: PluginWindowDto }) {
-	const [rows, setRows] = useState<Array<{ label: string; value: string }> | null>(null);
+/** data 取数结果的两种视图。 */
+export type PluginDataView =
+	| { kind: "cards"; cards: Array<{ label: string; value: string; hint?: string; tone?: "ok" | "warn" | "err" }> }
+	| { kind: "rows"; rows: Array<{ label: string; value: string }> };
+
+/** 卡片状态色白名单(插件只能声明这三种;其他值忽略)。 */
+const TONES = new Set(["ok", "warn", "err"]);
+
+/**
+ * data 形态的结果归一化:
+ *  - layout:"cards" 且返回体含 `cards` 数组 → 卡片组;
+ *  - 其余(含 cards 缺省/空)→ 键值表(不猜结构,见 normalizeRows)。
+ * 导出即为了单测(纯函数,无 DOM 依赖)。
+ */
+export function normalizeData(body: unknown, layout?: "rows" | "cards"): PluginDataView {
+	if (layout === "cards" && typeof body === "object" && body !== null && !Array.isArray(body)) {
+		const raw = (body as Record<string, unknown>).cards;
+		if (Array.isArray(raw)) {
+			const cards = raw
+				.filter((c): c is Record<string, unknown> => typeof c === "object" && c !== null && !Array.isArray(c))
+				.map((c) => {
+					const tone = typeof c.tone === "string" && TONES.has(c.tone) ? (c.tone as "ok" | "warn" | "err") : undefined;
+					return {
+						label: String(c.label ?? ""),
+						value: formatValue(c.value),
+						...(typeof c.hint === "string" && c.hint.length > 0 ? { hint: c.hint } : {}),
+						...(tone ? { tone } : {}),
+					};
+				});
+			if (cards.length > 0) return { kind: "cards", cards };
+		}
+	}
+	return { kind: "rows", rows: normalizeRows(body) };
+}
+
+/** data 形态:按 dataSource 取数,渲染卡片组或键值表。 */
+function WindowData({ pluginId, spec, tick }: { pluginId: string; spec: PluginWindowDto; tick: number }) {
+	const [view, setView] = useState<PluginDataView | null>(null);
 	const [err, setErr] = useState<string | null>(null);
+	const [at, setAt] = useState<number | null>(null);
 
 	useEffect(() => {
 		if (!spec.dataSource) return;
@@ -268,13 +446,14 @@ function WindowData({ pluginId, spec }: { pluginId: string; spec: PluginWindowDt
 		const load = () => {
 			fetch(`/api/plugins/${encodeURIComponent(pluginId)}/${spec.dataSource}`, { headers: { accept: "application/json" } })
 				.then(async (res) => {
-					if (!res.ok) throw new Error(`HTTP ${res.status}`);
+					if (!res.ok) throw new Error(res.status === 404 ? "HTTP 404(未开启完全信任时,取数路由不可用)" : `HTTP ${res.status}`);
 					return (await res.json()) as unknown;
 				})
 				.then((body) => {
 					if (!cancelled) {
-						setRows(normalizeRows(body));
+						setView(normalizeData(body, spec.layout));
 						setErr(null);
+						setAt(Date.now());
 					}
 				})
 				.catch((e) => {
@@ -287,14 +466,30 @@ function WindowData({ pluginId, spec }: { pluginId: string; spec: PluginWindowDt
 			cancelled = true;
 			clearInterval(timer);
 		};
-	}, [pluginId, spec.dataSource]);
+	}, [pluginId, spec.dataSource, spec.layout, tick]);
 
 	if (err) return <div className="pw-err">读取失败: {err}</div>;
-	if (!rows) return <div className="pw-loading">读取中…</div>;
-	if (rows.length === 0) return <div className="pw-loading">暂无数据</div>;
+	if (!view) return <div className="pw-loading">读取中…</div>;
+	if (view.kind === "cards") {
+		return (
+			<>
+				<div className="pw-cards">
+					{view.cards.map((c, i) => (
+						<div className={`pw-card${c.tone ? ` tone-${c.tone}` : ""}`} key={`${c.label}-${i}`}>
+							<span className="pw-card-label">{c.label}</span>
+							<span className="pw-card-value">{c.value}</span>
+							{c.hint && <span className="pw-card-hint">{c.hint}</span>}
+						</div>
+					))}
+				</div>
+				{at !== null && <div className="pw-stamp">更新于 {new Date(at).toLocaleTimeString("zh-CN", { hour12: false })}</div>}
+			</>
+		);
+	}
+	if (view.rows.length === 0) return <div className="pw-loading">暂无数据</div>;
 	return (
 		<div className="pw-rows">
-			{rows.map((r, i) => (
+			{view.rows.map((r, i) => (
 				<div className="pw-row" key={`${r.label}-${i}`}>
 					<span className="pw-row-label">{r.label}</span>
 					<span className="pw-row-value">{r.value}</span>

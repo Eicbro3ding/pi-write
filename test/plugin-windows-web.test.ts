@@ -8,7 +8,7 @@
  * 这两处是浮窗里唯一有「判断」的地方,渲染部分交给实机截图验证。
  */
 import { describe, expect, it } from "vitest";
-import { collectWindows, normalizeRows } from "../web/src/components/PluginWindows.tsx";
+import { collectWindows, normalizeData, normalizeRows } from "../web/src/components/PluginWindows.tsx";
 import type { PluginInfoDto } from "../web/src/types.ts";
 
 /** 造一条插件 DTO(只填测试关心的字段)。 */
@@ -100,5 +100,52 @@ describe("normalizeRows", () => {
 
 	it("rows 里混入非对象项被过滤", () => {
 		expect(normalizeRows({ rows: [{ label: "a", value: 1 }, "junk", null] })).toEqual([{ label: "a", value: "1" }]);
+	});
+});
+
+describe("normalizeData(cards 布局)", () => {
+	it("cards 数组 → 卡片;tone 白名单外的值丢弃", () => {
+		expect(
+			normalizeData(
+				{
+					cards: [
+						{ label: "可用余额", value: 12.3, hint: "CNY", tone: "warn" },
+						{ label: "状态", value: "可用", tone: "ok" },
+						{ label: "杂项", value: 1, tone: "purple" },
+					],
+				},
+				"cards",
+			),
+		).toEqual({
+			kind: "cards",
+			cards: [
+				{ label: "可用余额", value: "12.3", hint: "CNY", tone: "warn" },
+				{ label: "状态", value: "可用", tone: "ok" },
+				{ label: "杂项", value: "1" },
+			],
+		});
+	});
+
+	it("layout 不是 cards 时忽略 cards 字段,走键值表", () => {
+		expect(normalizeData({ cards: [{ label: "a", value: 1 }] })).toEqual({
+			kind: "rows",
+			rows: [{ label: "cards", value: '[{"label":"a","value":1}]' }],
+		});
+	});
+
+	it("cards 缺失/为空 → 退回键值表,不让窗口空白", () => {
+		expect(normalizeData({ rows: [{ label: "余额", value: 1 }] }, "cards")).toEqual({
+			kind: "rows",
+			rows: [{ label: "余额", value: "1" }],
+		});
+		expect(normalizeData({ cards: [] }, "cards").kind).toBe("rows");
+	});
+
+	it("cards 里混入非对象项被过滤;全是垃圾 → 退回 rows", () => {
+		expect(normalizeData({ cards: ["junk", null, { label: "ok", value: 2 }] }, "cards")).toEqual({
+			kind: "cards",
+			cards: [{ label: "ok", value: "2" }],
+		});
+		expect(normalizeData({ cards: ["junk"] }, "cards").kind).toBe("rows");
 	});
 });

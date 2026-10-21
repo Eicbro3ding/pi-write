@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ApiClient } from "../api/client.ts";
 import { friendlyError } from "../errors.ts";
+import { notifyPluginsChanged, resetPluginWindows } from "../plugin-events.ts";
 import type { PluginInfoDto } from "../types.ts";
 import { ToggleSwitch } from "./ToggleSwitch.tsx";
 
@@ -52,13 +53,17 @@ export function PluginList({ client, onChanged }: { client: ApiClient; onChanged
 		try {
 			const { id, overwritten, plugins: list } = await client.installPlugin(file);
 			setPlugins(list);
+			// 全新安装:清掉同 id 可能残留的窗口位置/关闭状态 —— 否则「装上了却看不见」,
+			// 因为 localStorage 里记着上一次被关掉。升级(overwritten)保留用户摆好的位置。
+			if (!overwritten) resetPluginWindows(id);
 			setInstallMsg({
 				ok: true,
 				text: overwritten
-					? `已覆盖安装「${id}」旧版本文件已替换。启用状态与「完全信任」保持不变。`
-					: `已安装「${id}」。在下方列表里启用它(如需后端路由/前端 JS 再单独开「完全信任」)。`,
+					? `已覆盖安装「${id}」,旧版本文件已替换。启用状态与「完全信任」保持不变。`
+					: `已安装「${id}」并启用。如需后端路由 / 前端 JS,在列表里单独开「完全信任」。`,
 			});
 			onChanged?.();
+			notifyPluginsChanged();
 		} catch (e) {
 			setInstallMsg({ ok: false, text: `安装失败: ${friendlyError(e)}` });
 		} finally {
@@ -73,6 +78,7 @@ export function PluginList({ client, onChanged }: { client: ApiClient; onChanged
 		try {
 			setPlugins(await client.setPluginEnabled(p.id, !p.enabled));
 			onChanged?.();
+			notifyPluginsChanged();
 		} catch (e) {
 			setRowErr(`状态切换失败: ${friendlyError(e)}`);
 		} finally {
@@ -88,6 +94,7 @@ export function PluginList({ client, onChanged }: { client: ApiClient; onChanged
 			setPlugins(await client.setPluginTrusted(p.id, !p.trusted));
 			setConfirmTrust(null);
 			onChanged?.();
+			notifyPluginsChanged();
 		} catch (e) {
 			setRowErr(`信任变更失败: ${friendlyError(e)}`);
 		} finally {
@@ -103,6 +110,7 @@ export function PluginList({ client, onChanged }: { client: ApiClient; onChanged
 			setPlugins(await client.deletePlugin(p.id));
 			setConfirmDelete(null);
 			onChanged?.();
+			notifyPluginsChanged();
 		} catch (e) {
 			setRowErr(`删除失败: ${friendlyError(e)}`);
 		} finally {

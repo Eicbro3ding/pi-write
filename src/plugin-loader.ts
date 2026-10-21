@@ -16,7 +16,7 @@
  * 不自动安装/更新;入口路径逃逸在扫描期拒绝。
  */
 
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -56,6 +56,10 @@ export interface PluginRuntimeInfo {
 	error: string | null;
 	/** 入口文件绝对路径(展示/调试用)。 */
 	path: string;
+	/** 是否存在可加载的前端 JS 入口(manifest 声明或缺省 frontend.mjs;不论 trusted)。
+	 *  前端只对 hasFrontend 的插件注入 script —— 没有入口却按缺省拼 URL,
+	 *  会每 30s 打一次 404。 */
+	hasFrontend: boolean;
 	/** 清单声明的插件 UI(设置菜单 schema/斜杠命令/前端 JS;经字段级白名单校验)。 */
 	frontend?: PluginManifest["frontend"];
 }
@@ -198,10 +202,13 @@ function checkWindowSpec(raw: unknown): PluginWindowSpec | null {
 	return {
 		id: w.id,
 		title: w.title.trim(),
+		...(typeof w.subtitle === "string" && w.subtitle.trim().length > 0 ? { subtitle: w.subtitle.trim() } : {}),
+		...(typeof w.settingsLabel === "string" && w.settingsLabel.trim().length > 0 ? { settingsLabel: w.settingsLabel.trim() } : {}),
 		...(x !== undefined && y !== undefined ? { position: { x, y } } : {}),
 		...(width !== undefined || height !== undefined ? { size: { ...(width !== undefined ? { width } : {}), ...(height !== undefined ? { height } : {}) } } : {}),
 		fields,
 		...(contentKind === "data" ? { contentKind: "data" as const, dataSource } : {}),
+		...(w.layout === "cards" ? { layout: "cards" as const } : {}),
 		...(w.closable === false ? { closable: false } : {}),
 	};
 }
@@ -258,10 +265,16 @@ async function readManifest(dir: string): Promise<PluginManifest | null> {
 
 /** 插件入口:manifest.backend 优先,缺省 index.mjs;解析后必须仍在插件目录内。 */
 function resolveEntry(dir: string, manifest: PluginManifest | null): { abs: string; rel: string } | null {
-	const rel = manifest?.backend ?? "index.mjs";
+	// 空串/纯空白按缺省处理(abs === dir 会被当成入口目录,import 必失败)
+	const rel = (manifest?.backend ?? "index.mjs").trim() || "index.mjs";
 	const abs = resolve(dir, rel);
 	if (!abs.startsWith(resolve(dir) + sep) && abs !== resolve(dir)) return null;
-	if (!existsSync(abs)) return null;
+	if (abs === resolve(dir)) return null;
+	try {
+		if (!statSync(abs).isFile()) return null;
+	} catch {
+		return null;
+	}
 	return { abs, rel };
 }
 
@@ -313,6 +326,19 @@ export async function writePluginTrusted(id: string, trusted: boolean): Promise<
 	await writePluginState(id, { trusted });
 }
 
+/**
+ * 删除某插件在 plugin-state.json 里的条目(删除插件时调用)。
+ *
+ * 不清理的后果:删掉插件再装同 id(别人的包、或旧包)会**静默继承**上一次的
+ * trusted —— 后端路由与前端 JS 直接解锁,用户从未对这份代码授权过。
+ */
+export async function clearPluginState(id: string): Promise<void> {
+	const state = await readState();
+	if (!(id in state)) return;
+	delete state[id];
+	await atomicWriteFile(getPluginStatePath(), `${JSON.stringify(state, null, 2)}\n`);
+}
+
 /** 扫描 plugins 目录,返回全量插件信息(id 排序)。目录不存在 = 零插件。 */
 export async function listPlugins(): Promise<PluginRuntimeInfo[]> {
 	const root = getPluginsDir();
@@ -322,15 +348,19 @@ export async function listPlugins(): Promise<PluginRuntimeInfo[]> {
 	const infos: PluginRuntimeInfo[] = [];
 	for (const entry of entries) {
 		const dir = join(root, entry.name);
+		// 目录名即 id:删除 / 前端 JS / 设置文件都按 id 拼路径。以 manifest.id 为准
+		// 会在两者不一致时造出「列表里有、却删不掉也读不到前端」的幽灵插件。
+		const id = entry.name;
 		const manifest = await readManifest(dir);
-		const id = manifest?.id ?? entry.name;
-		if (!isValidPluginId(id)) continue;
 		const entryFile = resolveEntry(dir, manifest);
 		const manifestDisabled = manifest?.enabled === false;
 		// manifest 声明禁用即禁用;否则取用户层状态(缺省启用)
 		const enabled = manifestDisabled ? false : (state[id]?.enabled ?? true);
 		// 完全信任:用户级(缺省 false)
 		const trusted = state[id]?.trusted ?? false;
+		const frontendPath = getPluginFrontendPath(id, manifest?.frontend?.frontend);
+		// 清单 id 必须与目录名一致(文档约定)。不一致时明确报错,不替用户选一个"真相"
+		const idMismatch = manifest !== null && manifest.id !== id;
 		infos.push({
 			id,
 			name: manifest?.name ?? id,
@@ -339,13 +369,54 @@ export async function listPlugins(): Promise<PluginRuntimeInfo[]> {
 			manifestDisabled,
 			enabled,
 			trusted,
-			error: entryFile ? null : "入口文件缺失(缺省 index.mjs)",
+			error: idMismatch
+				? `plugin.json 的 id(${manifest.id})与目录名(${id})不一致`
+				: entryFile ? null : "入口文件缺失(缺省 index.mjs)",
 			path: entryFile?.abs ?? dir,
+			hasFrontend: frontendPath !== null,
 			...(manifest?.frontend ? { frontend: manifest.frontend } : {}),
 		});
 	}
 	return infos.sort((a, b) => a.id.localeCompare(b.id));
 }
+
+/**
+ * 入口模块缓存:id → { stamp, mod }。
+ *
+ * 为什么需要:启停 / 保存插件设置 / 安装等动作都会重新 loadPlugins。若每次都
+ * `?r=随机` 重新 import,插件的模块顶层副作用(定时器、事件监听、模块级缓存)
+ * 会随每次操作再执行一遍,而且旧模块永远不会被回收。
+ * 按「mtime + size」指纹复用:文件没改就沿用同一实例,改了才重新执行。
+ */
+const moduleCache = new Map<string, { stamp: string; mod: Record<string, unknown> }>();
+
+/** 入口文件指纹(取不到时用空串,让 import 自己抛错)。 */
+function entryStamp(abs: string): string {
+	try {
+		const st = statSync(abs);
+		return `${st.mtimeMs}-${st.size}`;
+	} catch {
+		return "";
+	}
+}
+
+/** 取插件入口模块(带指纹缓存);文件未变时复用上次 import 的实例。 */
+async function loadPluginModule(info: PluginRuntimeInfo): Promise<Record<string, unknown>> {
+	const stamp = entryStamp(info.path);
+	const hit = moduleCache.get(info.id);
+	if (hit && hit.stamp === stamp) return hit.mod;
+	// Node 原生 import + 指纹 query:入口约定 .mjs;指纹变化才重新读取文件
+	const mod = (await import(`${pathToFileURL(info.path).href}?v=${encodeURIComponent(stamp)}`)) as Record<string, unknown>;
+	moduleCache.set(info.id, { stamp, mod });
+	return mod;
+}
+
+/**
+ * 插件后端路由的保留段:插件路由现在优先于内置路由匹配,若允许占用这些段,
+ * 一个 `segments: ["settings"]` 就能顶掉插件的设置读写端点。
+ * (只拦精确同名段;`balance` 这种业务名不受影响)
+ */
+const RESERVED_ROUTE_SEGMENTS = new Set(["settings", "command", "install"]);
 
 /**
  * 加载并动态 import 所有启用插件,返回激活工厂 + 全量信息 + Web 命令注册表。
@@ -360,13 +431,13 @@ export async function loadPlugins(): Promise<PluginLoadResult> {
 	const factories: ExtensionFactory[] = [];
 	const webCommands: Map<string, Record<string, PluginWebCommandHandler>> = new Map();
 	const routes: PluginRouteDef[] = [];
+	// 已删除/改名的插件不再占缓存
+	const alive = new Set(infos.map((i) => i.id));
+	for (const id of [...moduleCache.keys()]) if (!alive.has(id)) moduleCache.delete(id);
 	for (const info of infos) {
 		if (!info.enabled || info.error) continue;
 		try {
-			// Node 原生 import + query 刷新:插件入口约定 .mjs(示例/文档同);
-			// 热重载(启用/禁用/信任切换)时重新读取改动后的入口文件
-			// (jiti 在 Node 进程内按文件缓存,改文件后重载仍返回旧代码——2026-09 实测)
-			const mod = (await import(`${pathToFileURL(info.path).href}?r=${Math.random().toString(36).slice(2)}`)) as Record<string, unknown>;
+			const mod = await loadPluginModule(info);
 			const factory = mod?.default as ExtensionFactory;
 			if (typeof factory !== "function") {
 				info.error = "入口未导出工厂函数(default export 必须为 function)";
@@ -393,7 +464,9 @@ export async function loadPlugins(): Promise<PluginLoadResult> {
 							typeof r?.method === "string" &&
 							Array.isArray(r.segments) &&
 							typeof r.handler === "function" &&
-							r.segments.every((s) => typeof s === "string")
+							r.segments.every((s) => typeof s === "string") &&
+							// 保留段不注册(见 RESERVED_ROUTE_SEGMENTS)
+							!r.segments.some((s) => RESERVED_ROUTE_SEGMENTS.has(String(s)))
 						) {
 							routes.push({
 								method: r.method.toUpperCase(),
@@ -425,6 +498,25 @@ export function getPluginFrontendPath(id: string, rel?: string): string | null {
 }
 
 /**
+ * 插件的全部可写设置字段:设置页 settingsItems 的字段 + 各浮窗 fields。
+ *
+ * 两者共用 `plugins/<id>/settings.json`(浮窗里的字段也要落盘 —— 此前只活在
+ * React state 里,关窗即丢)。读写白名单统一以这里为准,同 key 只保留第一个。
+ */
+export function collectPluginFieldSpecs(info: PluginRuntimeInfo): PluginSettingsFieldSpec[] {
+	const seen = new Set<string>();
+	const out: PluginSettingsFieldSpec[] = [];
+	const push = (f: PluginSettingsFieldSpec) => {
+		if (seen.has(f.key)) return;
+		seen.add(f.key);
+		out.push(f);
+	};
+	for (const item of info.frontend?.ui?.settingsItems ?? []) for (const f of item.fields) push(f);
+	for (const win of info.frontend?.ui?.windows ?? []) for (const f of win.fields) push(f);
+	return out;
+}
+
+/**
  * 插件设置值文件读写(声明式设置菜单的持久化)。
  * 校验:写路径只收白名单字段(manifest 声明的 key 且类型匹配),未知键丢弃;
  * 文件损坏时按空设置对待(与 readState 同款容错)。
@@ -443,7 +535,14 @@ export async function readPluginSettings(id: string): Promise<Record<string, unk
  *  布尔字段必须 boolean、数字字段必须 number(字符串数字不收,防误用)。 */
 export async function writePluginSettings(id: string, values: Record<string, unknown>, fields: PluginSettingsFieldSpec[]): Promise<void> {
 	const allowed = new Map(fields.map((f) => [f.key, f.type]));
+	// 读旧值再合并:设置页与浮窗共用同一份 settings.json,两边各发自己渲染的字段,
+	// 覆盖写会把另一边的值清空(保存设置 → 浮窗阈值丢失,反之亦然)。
+	// 只保留仍在白名单里的旧键,插件升级删字段后不留下孤儿值。
+	const prev = await readPluginSettings(id);
 	const out: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(prev)) {
+		if (allowed.has(key)) out[key] = value;
+	}
 	for (const [key, value] of Object.entries(values)) {
 		const type = allowed.get(key);
 		if (!type) continue;
@@ -465,6 +564,8 @@ export async function removePlugin(id: string): Promise<void> {
 	if (!dir.startsWith(root + sep)) throw new Error("插件路径逃逸,拒绝删除");
 	if (!existsSync(dir)) throw new Error(`插件不存在: ${id}`);
 	await rm(dir, { recursive: true, force: true });
+	// 删除即撤销授权:同 id 重装(哪怕是别人打的包)不该继承上一次的 trusted
+	await clearPluginState(id);
 }
 
 /** 插件是否已存在(安装前判断是全新安装还是覆盖;web/plugin-zip.ts 安装前调用)。 */
